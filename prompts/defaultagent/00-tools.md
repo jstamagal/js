@@ -1,0 +1,21 @@
+---
+tools:
+  - read
+  - write
+  - fs_search
+  - sem_search
+  - remove
+  - patch
+  - multi_patch
+  - undo
+  - shell
+  - fetch
+  - todo_*
+  - followup
+  - plan
+  - skill
+  - task
+  - wiki_*
+  - artifact_*
+  - commit
+---

@@ -1,0 +1,203 @@
+# js runtime config — annotated reference.
+#
+# This is the same file `js` writes to the platform config config.toml on first
+# run, expanded with explanations. Copy any block you want into the platform
+# config config.toml (global),
+# project .js/config.toml (committed per-project), or project .js/config.local.toml
+# (uncommitted per-project) and uncomment the keys you want to change.
+#
+# Precedence, lowest to highest:
+#   built-in defaults
+#     < platform config.toml
+#     < project .js/config.toml
+#     < project .js/config.local.toml
+#     < env vars
+#     < --extra CLI flag
+#
+# Tables are deep-merged across layers, so a later file can override a single
+# nested key without replacing the table. Every value shown below is the
+# built-in default; nothing here is required.
+
+
+# ---------------------------------------------------------------------------
+# [model] — which model to call and the per-call knobs around it.
+# ---------------------------------------------------------------------------
+[model]
+# The model id passed to ai-python. An unprefixed id routes through AI Gateway;
+# a `provider:model` id routes to that provider directly. Overridden by env
+# JS_MODEL (or ME_MODEL when JS_MODEL is unset), and by the -m/--model CLI flag
+# for a single run.
+id = "deepseek/deepseek-v4-flash"
+
+# Per-call max output tokens. Unset (the default) means "ask models.dev for the
+# active model limit; if unknown, send no explicit cap."
+# Env: JS_MAX_OUTPUT_TOKENS. CLI: --max-out N.
+max_output_tokens = 65535      # unset
+
+# Thinking / reasoning effort for models that support it (DeepSeek, o1, …).
+# Accepted: off | low | medium | high | max | xhigh. Aliases: max->high,
+# min->low, off/none/0 -> "none" (explicitly disabled).
+# Env: JS_REASONING. CLI: -r/--reasoning.
+#reasoning_effort =        # unset (provider default)
+reasoning_effort = "high"
+
+# ---------------------------------------------------------------------------
+# [limits] — per-call and per-turn safety caps.
+# ---------------------------------------------------------------------------
+[limits]
+# Max tool calls the agent loop will make in a single turn before giving up.
+# Env: JS_MAX_TOOL_ITERATIONS.
+max_tool_iterations = 99
+
+# Hard cap on stdout captured from one shell tool call, in bytes.
+# Env: JS_MAX_BASH_OUTPUT_BYTES.
+max_bash_output_bytes = 2621440
+
+# Hard cap on any single tool result string, in bytes.
+# Env: JS_MAX_TOOL_RESULT_BYTES.
+max_tool_result_bytes = 2621440
+
+# Per-request timeout for the fetch() tool, in seconds. Env: JS_FETCH_TIMEOUT.
+fetch_timeout_s = 15
+
+# Maximum lines returned by the read tool in one call.
+max_read_lines = 4000
+
+# Maximum characters shown per line in read/search output (long lines truncate).
+max_line_chars = 65535
+
+# Maximum file size, in bytes, the filesystem tools will read.
+max_file_bytes = 2000000
+
+# Maximum recursive task/subagent depth. A subagent that itself calls `task`
+# counts one level deeper; the loop refuses past this. Only configurable here or
+# via --extra limits.task_max_depth=N — there is NO env var for this.
+# FIXME: ADD ENV VARIABLE
+task_max_depth = 2
+
+# Seconds to wait for the wiki vault lock before giving up.
+wiki_vault_lock_timeout_s = 30
+
+
+# ---------------------------------------------------------------------------
+# [runtime] — live-runtime toggles.
+# ---------------------------------------------------------------------------
+[runtime]
+# Append a per-event JSONL record to the platform data state/<agent>/debug.log.
+# Env: JS_DEBUG=1. (Distinct from the -d/--debug CLI flag, which streams to the
+# terminal in prompt mode.)
+debug = false
+
+# Pretty-print the live tool-call trace line as the model runs.
+# Env: JS_TRACE=0 to silence it.
+trace = false
+
+
+# ---------------------------------------------------------------------------
+# [provider] — optional explicit ai-python provider configuration.
+# ---------------------------------------------------------------------------
+# Leave all unset to let ai-python route [model].id natively (unprefixed ids go
+# to AI Gateway, `provider:model` ids go to that provider). Set these only to
+# point at a local OpenAI-compatible endpoint or to override a provider's
+# default base URL / API key. There is NO hidden default and NO model-name
+# sniffing.
+[provider]
+# Provider id known to ai-python (e.g. "openai", "anthropic"). Env: JS_PROVIDER.
+#id =                # unset
+
+# Explicit base URL. Env: JS_BASE_URL.
+#base_url =          # unset
+
+# Explicit API key. Env: JS_API_KEY.
+#api_key =           # unset
+
+# `provider.extra` is not supported. Use only the explicit knobs above or the
+# official SDK environment variables that ai-python reads directly.
+
+
+# ---------------------------------------------------------------------------
+# [compact] — cache-first context compaction.
+# ---------------------------------------------------------------------------
+[compact]
+# Enable automatic post-turn compaction when the context fills up.
+auto = true
+
+# Summarizer model. The literal string "same" uses the active session model;
+# otherwise put any model id here to summarize with a cheaper/different model.
+model = "same"
+
+# Context-window size in tokens used for the fullness math. Unset means "ask
+# models.dev for the active model's context window."
+context_window = 262144
+
+# Emit a one-time notice when context reaches this fraction of the window.
+notify_threshold = 0.5
+
+# Auto-compact once context reaches this fraction.
+trigger_threshold = 0.7
+# Force compaction at this fraction even if savings look marginal.
+force_threshold = 0.9
+
+# Token budget for the recent tail kept verbatim after compaction. The boundary
+# backs up so an assistant tool_calls message is never split from its results.
+tail_tokens = 16384
+
+# Skip compaction unless the estimated token savings exceed this.
+min_savings_tokens = 400
+
+# Fallback/self-calibrating characters-per-token estimate for the token math.
+chars_per_token = 4.0
+
+# Optional shell command whose stdout is fed to the summarizer as extra guidance
+# (e.g. "what to keep"). Failures warn but never block compaction.
+#pre_hook =                # unset
+
+
+# ---------------------------------------------------------------------------
+# [wiki] — wiki vault aliases.
+# ---------------------------------------------------------------------------
+# Map short names to vault paths for --vault. Empty by default.
+#[wiki.aliases]
+#creative = "/home/you/wiki-creative"
+#general  = "/home/you/wiki-general"
+
+
+# ---------------------------------------------------------------------------
+# [artifact] — artifact system defaults.
+# ---------------------------------------------------------------------------
+[artifact]
+# Artifact library directory on disk.
+dir = "/srv/artifacts"
+# Base URL the artifact server is reachable at.
+url = "http://localhost"
+# Name of the artifact CLI binary on PATH.
+bin = "artifact"
+
+
+# ---------------------------------------------------------------------------
+# Environment variables (override every config file; --extra wins over env).
+# ---------------------------------------------------------------------------
+# JS_MODEL                  -> model.id            (beats ME_MODEL)
+# ME_MODEL                  -> model.id            (silent alias; used only when JS_MODEL is unset)
+# JS_MAX_OUTPUT_TOKENS      -> model.max_output_tokens
+# JS_REASONING             -> model.reasoning_effort      (off|low|medium|high|max|xhigh)
+# JS_MAX_TOOL_ITERATIONS    -> limits.max_tool_iterations
+# JS_MAX_BASH_OUTPUT_BYTES  -> limits.max_bash_output_bytes
+# JS_MAX_TOOL_RESULT_BYTES  -> limits.max_tool_result_bytes
+# JS_FETCH_TIMEOUT          -> limits.fetch_timeout_s
+# JS_DEBUG                  -> runtime.debug        (1 to enable debug.log)
+# JS_TRACE                  -> runtime.trace        (0 to hide the trace line)
+# JS_PROVIDER               -> provider.id
+# JS_BASE_URL               -> provider.base_url
+# JS_API_KEY                -> provider.api_key
+#
+# Other env vars read directly by the runtime or the SDK (not part of the TOML layer):
+# AI_GATEWAY_API_KEY        -> AI Gateway authentication for unprefixed model ids
+# OPENAI_API_KEY            -> default OpenAI provider API key
+# OPENAI_BASE_URL           -> default OpenAI provider base URL
+# ANTHROPIC_API_KEY         -> default Anthropic provider API key
+# JS_AGENT                  -> default agent id when -a/--agent is omitted
+# JS_SESSION                -> session id/path to resume when -s/--session is omitted
+# JS_VISION                 -> 1/0 force-enable/disable image input for the model
+# JS_ALLOW_INLINE_CODE      -> 1 to allow code-running inline directives
+#                              (set automatically by --dangerously-evaluate-inline-code)
