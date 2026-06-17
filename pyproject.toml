@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "js"
+version = "0.1.0"
+description = "LO-shaped AI SDK agent with hacking tools"
+requires-python = ">=3.12"
+dependencies = [
+    "ai[openai,anthropic]==0.2.0",
+    "prompt_toolkit>=3.0",
+    "PyYAML>=6.0",
+    "textual>=0.85",
+    "tomli_w>=1.0",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.0",
+]
+
+[project.scripts]
+js = "js.cli:main"
+js-drain = "js.drain:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["js*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: exercises a complete user-visible runtime path",
+    "ai_provider: requires configured ai-python provider credentials or local OpenAI-compatible endpoint",
+    "vision: requires a reachable local vision model (ollama gemma4:e4b) and Pillow",
+]
+
+[tool.setuptools.package-data]
+"js.toolkit" = ["tool_descriptions/*.md"]

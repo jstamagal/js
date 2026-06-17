@@ -1,0 +1,9 @@
+---
+tools:
+  - read
+  - write
+  - fs_search
+  - patch
+  - undo
+  - shell
+---
