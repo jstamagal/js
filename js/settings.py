@@ -104,8 +104,7 @@ _KNOWN_KEYS: list[tuple[str, tuple[str, ...], Any, str]] = [
 # coerce as needed (int for the *_BYTES / *_S knobs, etc.).
 _ENV_OVERRIDES: list[tuple[str, tuple[str, ...], str]] = [
     # (env var name, dotted path, description used for the comments)
-    ("JS_MODEL",                 ("model", "id"),                    "env override for [model].id; beats ME_MODEL"),
-    ("ME_MODEL",                 ("model", "id"),                    "env alias; overrides config when JS_MODEL is unset"),
+    ("JS_MODEL",                 ("model", "id"),                    "env override for [model].id"),
     ("JS_MAX_OUTPUT_TOKENS",     ("model", "max_output_tokens"),     "per-call max output tokens"),
     ("JS_REASONING",            ("model", "reasoning_effort"),      "thinking effort: off|low|medium|high|max|xhigh"),
     ("JS_MAX_TOOL_ITERATIONS",   ("limits", "max_tool_iterations"),  "max tool calls per turn"),
@@ -237,24 +236,12 @@ def load_toml_settings(paths: list[Path]) -> dict:
 
 
 def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
-    """Overlay process env vars onto ``settings`` (in place).
-
-    JS_* / OPENAI_API_* vars always win over the config file. Returns the same
-    dict for chaining. ``ME_MODEL`` is a silent env-layer alias: it overrides
-    config files whenever JS_MODEL is unset, and JS_MODEL wins when both exist.
-    """
+    """Overlay process env vars onto ``settings`` (in place)."""
     source = env if env is not None else os.environ
     for var, path, _comment in _ENV_OVERRIDES:
         if var not in source:
             continue
         raw = source[var]
-        if var == "ME_MODEL":
-            # Silent alias: participate in the env override layer whenever
-            # JS_MODEL is unset. JS_MODEL wins when both are present.
-            if "JS_MODEL" in source:
-                continue
-            _set_dotted(settings, path, raw)
-            continue
         coerced = _coerce_known_value(path, raw)
         if coerced is None and raw != "":
             # unknown coercion (e.g. non-integer where an int is expected):
@@ -306,9 +293,8 @@ def collect_settings(
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    # Build the full env layer against the seeded defaults so ME_MODEL and
-    # similar fallbacks can see the current value at the right path. We then
-    # apply the file on top, then env, then CLI extras.
+    # Build the full env layer against the seeded defaults, then apply the
+    # file on top, then CLI extras.
     apply_env_overrides(settings, env=env)  # type: ignore[arg-type]
     file_settings = load_toml_settings(paths)
     # Merge file on top of env so file wins over env, but env wins over the

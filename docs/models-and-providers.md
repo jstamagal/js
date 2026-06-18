@@ -20,7 +20,6 @@ Model env vars:
 
 ```bash
 export JS_MODEL=deepseek/deepseek-v4-flash
-# ME_MODEL is a silent env-layer alias: it overrides config when JS_MODEL is unset.
 ```
 
 Optional explicit provider config:
@@ -107,7 +106,7 @@ js -m "model/id" -p "prompt"
 ```
 
 `-m` / `--model` overrides the effective configured/env model for that run:
-layered config, `ME_MODEL` when `JS_MODEL` is unset, and `JS_MODEL`.
+layered config and `JS_MODEL`.
 
 REPL:
 

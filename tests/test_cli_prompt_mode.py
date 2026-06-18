@@ -8,12 +8,9 @@ from js.config import Config
 from js.memory import load_messages
 from js.toolkit.registry import build_default_registry
 from js.model_client import ModelStreamResult
-import ai
 
 def _fake_stream_result(text: str = "ok"):
     """Return a ModelStreamResult with text, no tool calls, no reasoning."""
-    from js.model_client import ModelStreamResult
-    import ai
     import ai.types.usage
     return ModelStreamResult(
         text=text,
@@ -107,7 +104,6 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     assert exc.value.code == 0
     assert "override configured/env model" in captured.out
     assert "override JS_MODEL" not in captured.out
-    assert "override ME_MODEL" not in captured.out
     assert "Wins over" in captured.out
     assert "all config files" in captured.out
     assert "platform data" in captured.out
@@ -511,7 +507,6 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setenv("ME_MODEL", "from-me-model")
     monkeypatch.setenv("JS_MODEL", "from-js-model")
     config_dir = tmp_path / ".config" / "js"
     config_dir.mkdir(parents=True)

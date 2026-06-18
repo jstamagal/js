@@ -17,7 +17,6 @@ def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
     monkeypatch.delenv("JS_MODEL", raising=False)
-    monkeypatch.delenv("ME_MODEL", raising=False)
     monkeypatch.delenv("JS_PROVIDER", raising=False)
     monkeypatch.delenv("JS_BASE_URL", raising=False)
     monkeypatch.delenv("JS_API_KEY", raising=False)

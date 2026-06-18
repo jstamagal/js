@@ -25,7 +25,7 @@
 [model]
 # The model id passed to ai-python. An unprefixed id routes through AI Gateway;
 # a `provider:model` id routes to that provider directly. Overridden by env
-# JS_MODEL (or ME_MODEL when JS_MODEL is unset), and by the -m/--model CLI flag
+# JS_MODEL, and by the -m/--model CLI flag
 # for a single run.
 id = "deepseek/deepseek-v4-flash"
 
@@ -177,8 +177,7 @@ bin = "artifact"
 # ---------------------------------------------------------------------------
 # Environment variables (override every config file; --extra wins over env).
 # ---------------------------------------------------------------------------
-# JS_MODEL                  -> model.id            (beats ME_MODEL)
-# ME_MODEL                  -> model.id            (silent alias; used only when JS_MODEL is unset)
+# JS_MODEL                  -> model.id
 # JS_MAX_OUTPUT_TOKENS      -> model.max_output_tokens
 # JS_REASONING             -> model.reasoning_effort      (off|low|medium|high|max|xhigh)
 # JS_MAX_TOOL_ITERATIONS    -> limits.max_tool_iterations
