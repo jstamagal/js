@@ -100,7 +100,6 @@ Provider and model:
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `JS_MODEL` | env override for `[model].id` | `deepseek/deepseek-v4-flash` |
-| `ME_MODEL` | silent env-layer alias; overrides config when `JS_MODEL` is unset | unset |
 | `JS_PROVIDER` | env override for `[provider].id` | unset |
 | `JS_BASE_URL` | env override for `[provider].base_url` | unset |
 | `JS_API_KEY` | env override for `[provider].api_key` | unset |
