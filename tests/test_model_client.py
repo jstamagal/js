@@ -312,6 +312,83 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix():
     )
     assert executor.request.params == {"max_tokens": 64}
 
+
+_JS_SAMPLING_ENV = ("JS_TEMP", "JS_TOPP", "JS_TOPK", "JS_REPPEN", "JS_PRPEN")
+
+
+def test_stream_model_applies_js_sampling_env(monkeypatch):
+    """JS_* env vars override sampling: standard knobs top-level, vLLM knobs in extra_body."""
+    monkeypatch.setenv("JS_TEMP", "1.1")
+    monkeypatch.setenv("JS_TOPP", "0.96")
+    monkeypatch.setenv("JS_TOPK", "64")
+    monkeypatch.setenv("JS_REPPEN", "1.05")
+    monkeypatch.setenv("JS_PRPEN", "1.5")
+    executor = _FakeExecutor(_text_events("ok"))
+    model_client.stream_model(
+        model_id="test",
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort=None,
+        on_text=lambda _s: None,
+        executor=executor,
+    )
+    assert executor.request.params == {
+        "max_tokens": 64,
+        "temperature": 1.1,
+        "top_p": 0.96,
+        "presence_penalty": 1.5,
+        "extra_body": {"top_k": 64, "repetition_penalty": 1.05},
+    }
+
+
+def test_stream_model_without_js_sampling_env_sends_no_overrides(monkeypatch):
+    """With no JS_* sampling env set, js defers entirely to the backend/model default."""
+    for name in _JS_SAMPLING_ENV:
+        monkeypatch.delenv(name, raising=False)
+    executor = _FakeExecutor(_text_events("ok"))
+    model_client.stream_model(
+        model_id="test",
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort=None,
+        on_text=lambda _s: None,
+        executor=executor,
+    )
+    assert executor.request.params == {"max_tokens": 64}
+
+
+def test_stream_model_js_topk_merges_with_provider_extra_body(monkeypatch):
+    """A vLLM sampling knob (top_k) merges with, not clobbers, an existing extra_body."""
+    for name in _JS_SAMPLING_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("JS_TOPK", "40")
+    executor = _FakeExecutor(_text_events("ok"))
+    model_client.stream_model(
+        model_id="deepseek-chat",
+        provider_id="deepseek",
+        provider_base_url=None,
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort=None,
+        on_text=lambda _s: None,
+        executor=executor,
+    )
+    assert executor.request.params == {
+        "max_tokens": 64,
+        "extra_body": {"max_reasoning_tokens": 32_000, "top_k": 40},
+    }
+
+
 def test_image_tool_result_becomes_user_file_message_without_persisting_base64(tmp_path):
     image = tmp_path / "img.png"
     image.write_bytes(b"\x89PNGfake")

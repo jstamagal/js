@@ -104,6 +104,24 @@ Provider and model:
 | `JS_BASE_URL` | env override for `[provider].base_url` | unset |
 | `JS_API_KEY` | env override for `[provider].api_key` | unset |
 
+Sampling overrides:
+
+| Variable | Sampling knob | Sent as |
+| --- | --- | --- |
+| `JS_TEMP` | temperature | top-level (OpenAI-standard) |
+| `JS_TOPP` | top_p | top-level (OpenAI-standard) |
+| `JS_PRPEN` | presence_penalty | top-level (OpenAI-standard) |
+| `JS_TOPK` | top_k | `extra_body` (vLLM extension) |
+| `JS_REPPEN` | repetition_penalty | `extra_body` (vLLM extension) |
+
+When **unset**, js sends no sampling params at all and defers to the
+backend/model default (e.g. a local model's `generation_config.json`); this is
+the recommended default. Set any subset to override for a run. `top_k` and
+`repetition_penalty` merge into `extra_body` alongside any provider-specific
+extras (e.g. DeepSeek's `max_reasoning_tokens`). Typical qwen presets —
+coding: `JS_TEMP=0.6 JS_TOPK=20 JS_TOPP=0.95 JS_REPPEN=1.0 JS_PRPEN=0.0`;
+creative: `JS_TEMP=1.0 JS_TOPK=20 JS_TOPP=0.95 JS_REPPEN=1.1 JS_PRPEN=1.5`.
+
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
 do not need to be copied into config.
@@ -116,7 +134,8 @@ remain only for direct tool compatibility and subprocess boundaries.
 Runtime env overrides include `JS_REASONING`, `JS_MAX_OUTPUT_TOKENS`,
 `JS_MAX_TOOL_ITERATIONS`, `JS_MAX_BASH_OUTPUT_BYTES`,
 `JS_MAX_TOOL_RESULT_BYTES`, `JS_FETCH_TIMEOUT`, `JS_DEBUG`, `JS_TRACE`,
-`JS_VISION`, `JS_PROVIDER`, `JS_BASE_URL`, and `JS_API_KEY`.
+`JS_VISION`, `JS_PROVIDER`, `JS_BASE_URL`, `JS_API_KEY`, and the sampling
+overrides `JS_TEMP`, `JS_TOPP`, `JS_TOPK`, `JS_REPPEN`, `JS_PRPEN`.
 
 The byte caps use the canonical `_BYTES` env names only
 (`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter
