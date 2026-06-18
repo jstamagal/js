@@ -204,6 +204,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **`ME_MODEL` env alias.** The silent env-layer alias for `model.id` (applied when `JS_MODEL` was unset) is gone for real — `config.py` explicit-model check, `settings.py` table entry + special-case, and every doc/test reference. A prior pass had renamed it 'silent' instead of deleting; this removes it. Model override is `JS_MODEL` / `-m` only.
 - **LiteLLM.** The `litellm` dependency, the `litellm_proxy` pytest marker, and
   the regenerated `uv.lock` no longer carry LiteLLM or any of its transitive
   dependencies.

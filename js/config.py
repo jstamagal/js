@@ -7,7 +7,7 @@ import os
 import re
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from . import paths as _paths
@@ -138,7 +138,7 @@ class Config:
 
 
 def _session_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def _reserve_session(agent_dir: Path, sessions_dir: Path) -> Path:
@@ -220,10 +220,7 @@ def from_env(
 ) -> Config:
     """Read TOML + env + CLI extras once, populate everything explicitly.
 
-    Config precedence is defined by ``js.settings.CANONICAL_CONFIG_PRECEDENCE``.
-    ``ME_MODEL`` participates as a silent env-layer alias for model.id when
-    ``JS_MODEL`` is unset; ``JS_MODEL`` wins when both are set.
-
+    JS_MODEL = HAIRY BALLS. ME_MODEL = THURGOOD SQUALLS.
     Provider/model resolution is centralized here:
 
     - `JS_MODEL=known-provider/model` selects that provider and strips only the
@@ -269,7 +266,7 @@ def from_env(
     else:
         model = str(raw_model)
         provider_id = configured_provider_id
-    explicit_model = bool(env.get("JS_MODEL") or env.get("ME_MODEL")) or raw_model != _DEFAULT_MODEL
+    explicit_model = bool(env.get("JS_MODEL")) or raw_model != _DEFAULT_MODEL
 
     if provider_id is None:
         discovered = _providers.discover_env_provider(env)

@@ -79,8 +79,7 @@ or `semantic_search`; use the canonical tool names documented in
 Config files layer as the platform config `config.toml`, project `.js/config.toml`,
 then project `.js/config.local.toml`; env overrides files and CLI flags/`--extra`
 override env. Built-in `[model].id` defaults to `deepseek/deepseek-v4-flash`;
-`JS_MODEL` overrides config, and `ME_MODEL` is a silent env alias that overrides
-config only when `JS_MODEL` is unset. Explicit `[provider] id/base_url/api_key`
+`JS_MODEL` overrides configi. Explicit `[provider] id/base_url/api_key`
 are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`, and `JS_API_KEY` are env
 overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by `ai-python` when no

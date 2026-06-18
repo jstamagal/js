@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -255,7 +254,6 @@ def test_main_prefers_js_model_over_me_model_for_auto_budget(tmp_path, monkeypat
         return 123
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("ME_MODEL", "me-model")
     monkeypatch.setenv("JS_MODEL", "js-model")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(drain, "auto_budget_tokens", auto_budget_stub)
@@ -282,7 +280,6 @@ def test_main_uses_layered_config_model_for_auto_budget_when_no_env_or_flag(tmp_
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("JS_MODEL", raising=False)
-    monkeypatch.delenv("ME_MODEL", raising=False)
     monkeypatch.chdir(project)
     monkeypatch.setattr(drain, "auto_budget_tokens", auto_budget_stub)
 
