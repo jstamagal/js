@@ -7,9 +7,9 @@ import fcntl
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 SCHEMA_VERSION = 1
 
@@ -29,7 +29,7 @@ class Record:
         )
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Record | None":
+    def from_dict(cls, d: dict) -> Record | None:
         if d.get("version") != SCHEMA_VERSION:
             return None
         kind = d.get("kind")

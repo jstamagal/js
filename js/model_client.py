@@ -10,12 +10,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 import ai
 
 from . import codex_auth, codex_provider, providers
-import ai.types.events as ai_events
 import ai.types.messages
 import ai.types.tools
 import ai.types.usage

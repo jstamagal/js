@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 import urllib.request
-from pathlib import Path
 
 from .core import Tool, ToolContext
 from .sanitize import int_or_default, text_or_default

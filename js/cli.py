@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ai
 import argparse
-import asyncio
 import contextlib
 import io
 import json
@@ -26,7 +24,6 @@ from . import persona as P
 from . import picker
 from . import providers
 from . import runtime
-from . import settings as _settings
 from .config import Config, from_env, validate_agent_id, _norm_effort
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
@@ -380,15 +377,15 @@ def _set_provider_state(state: dict, provider_id: str) -> None:
 # Banner / help
 # --------------------------------------------------------------------------
 
-BANNER = """\
-{cyan}me — js agent{reset}
-{magenta}agent:{reset}  {{agent}}
-{magenta}model:{reset}  {{model}}
-{magenta}prompt:{reset} {{prompt}}
-{magenta}memory:{reset} {{memory}}
+BANNER = f"""\
+{C.CYAN}me — js agent{C.RESET}
+{C.MAGENTA}agent:{C.RESET}  {{agent}}
+{C.MAGENTA}model:{C.RESET}  {{model}}
+{C.MAGENTA}prompt:{C.RESET} {{prompt}}
+{C.MAGENTA}memory:{C.RESET} {{memory}}
 
-{green}type 'exit' or Ctrl-D to quit. /help for commands.{reset}
-""".format(cyan=C.CYAN, magenta=C.MAGENTA, green=C.GREEN, reset=C.RESET)
+{C.GREEN}type 'exit' or Ctrl-D to quit. /help for commands.{C.RESET}
+"""
 
 
 HELP_TEXT = f"""\

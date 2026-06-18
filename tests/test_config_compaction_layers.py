@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 from js import memory, persona, runtime, settings
 from js.config import Config, from_env

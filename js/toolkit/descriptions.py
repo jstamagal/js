@@ -1,13 +1,13 @@
 """Markdown-backed model-facing tool descriptions."""
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 _DESCRIPTION_DIR = Path(__file__).with_name("tool_descriptions")
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_description(name: str) -> str:
     """Load a non-empty markdown description for a registered tool."""
     path = _DESCRIPTION_DIR / f"{name}.md"

@@ -33,12 +33,12 @@ class ToolRegistry:
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
 
-    def select(self, selectors: Iterable[str] | None) -> "ToolRegistry":
+    def select(self, selectors: Iterable[str] | None) -> ToolRegistry:
         wanted = _selected_names(self, selectors or ())
         selected = tuple(tool for tool in self.tools if tool.name in wanted)
         return _registry_from_tools(selected)
 
-    def aliased(self, profile: dict[str, str] | None) -> "ToolRegistry":
+    def aliased(self, profile: dict[str, str] | None) -> ToolRegistry:
         """Return a registry that also resolves model-facing aliases back to
         canonical handlers.
 

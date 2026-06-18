@@ -28,7 +28,7 @@ def _mask(value: str) -> str:
     return f"{value[:8]}*******{value[-4:]}"
 
 
-def _curses_menu(stdscr: "curses.window", items: list[str], title: str) -> int | None:
+def _curses_menu(stdscr: curses.window, items: list[str], title: str) -> int | None:
     curses.curs_set(0)
     stdscr.keypad(True)
     idx = 0
