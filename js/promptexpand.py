@@ -1,4 +1,4 @@
-"""Inline directive expansion for js system prompts.
+r"""Inline directive expansion for js system prompts.
 
 Three forms are resolved before the assembled system prompt reaches the model:
 
@@ -19,6 +19,17 @@ what an inline is activating. Subsystems are a registry:
 Expansion is a SINGLE pass: a directive's output is never re-scanned, so a value
 (or a command's stdout) that happens to contain another ``!{...}`` / ``{{...}}``
 cannot trigger further expansion. That is the injection guard.
+
+A prompt that documents the directive syntax to itself must be able to show a
+directive without the loader running it. Two ways:
+
+  * a backslash immediately before ANY form -- ``\!{sh ...}``, ``\{{VAR}}``,
+    ``\``` ``!sub`` -- emits the directive verbatim, minus the one escape
+    backslash. This is the universal escape and the only one for fenced blocks.
+  * an inline ``!{...}`` / ``{{...}}`` wrapped in a markdown backtick code span --
+    e.g. ```` `!{sh ...}` ```` -- is left literal, backticks and all. An
+    ergonomic shortcut for prose; only a FULLY wrapped span is protected (a lone
+    leading backtick still expands).
 """
 
 from __future__ import annotations
@@ -44,10 +55,22 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # One combined scanner: fenced block | inline | env shorthand. Matched in this
 # order so a ```!fence wins over the inline form. re.sub replaces each match
 # independently and never re-scans the replacement (single pass / injection-safe).
+#
+# A leading ``bs`` backslash escapes ANY of the three forms: when present the
+# whole match is emitted verbatim minus that backslash (see _resolve) -- the only
+# escape that reaches the fenced block. The inline / env forms additionally carry
+# an optional leading backtick (itick / etick); the trailing ``(?(name)`)``
+# matches a closing backtick ONLY when the leading one was captured, so a directive
+# fully wrapped in a backtick code span is matched as a unit and emitted literally,
+# while a directive with no backticks -- or only a stray leading one -- backtracks
+# to the unwrapped form and expands.
 _DIRECTIVE = re.compile(
+    r"(?P<bs>\\)?"
+    r"(?:"
     r"```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
-    r"|!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}"
-    r"|\{\{(?P<env>[^{}]*?)\}\}",
+    r"|(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
+    r"|(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
+    r")",
     re.DOTALL,
 )
 
@@ -70,8 +93,15 @@ def expand_prompt(
     environ = os.environ if env is None else env
 
     def _resolve(m: re.Match) -> str:
+        # \-escaped directive: emit it verbatim, minus the one escape backslash.
+        if m.group("bs") is not None:
+            return m.group(0)[1:]
         if m.group("fsub") is not None:
             return _run_subsystem(m.group("fsub"), m.group("fbody"), allow_code, environ, timeout_s)
+        # A directive wrapped in a backtick code span is documentation, not a
+        # request to run -- hand it back verbatim (backticks included).
+        if m.group("itick") is not None or m.group("etick") is not None:
+            return m.group(0)
         if m.group("isub") is not None:
             return _run_subsystem(m.group("isub"), (m.group("iargs") or "").strip(), allow_code, environ, timeout_s)
         # {{...}} env shorthand
