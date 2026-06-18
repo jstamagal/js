@@ -77,8 +77,12 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
     assert names(select(["todo_*"])) == ["todo_write", "todo_read"]
     assert names(select(["grep"])) == []
     assert names(select(["read", "Read", "fs_read", "unknown", "read"])) == ["read"]
-    assert names(select(["autocoder", "commit"])) == ["autocoder", "commit"]
-    assert names(select(["auto*"])) == ["autocoder"]
+    # prompt-dir agents are selectable by name and reachable via a prefix glob
+    # (discovered from prompts/, so adding/removing an agent dir never snaps this).
+    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
+    assert prompt_agents, "prompts/ should expose at least one agent dir"
+    assert names(select(prompt_agents)) == prompt_agents
+    assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*"]))
 
 
 def test_frontmatter_tools_are_parsed_and_stripped_from_prompt(tmp_path):

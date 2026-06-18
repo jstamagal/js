@@ -227,6 +227,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Tests no longer snap on operator state.** Prompt-dir agent tests discover `prompts/` dynamically (so agent churn can't break them), and the provider-shortcut test isolates saved logins + env so `/provider ollama` resolves DEFAULTS on any box instead of leaking the operator's saved ollama login.
 - **`js --commit` and all tool use crashed.** `call_tool` was used in the
   runtime tool-dispatch path but never imported, so every tool call raised
   `NameError`, burned the retry limit, and aborted the turn. Importing it
