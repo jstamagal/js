@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   builder). A `mypy` pass was tried and dropped — it flooded the dynamic
   codebase (ToolContext dynamic attrs, `**kwargs` splats, implicit optionals)
   with unactionable errors.
+- **tok/s in the tool-call debug trace.** The `-d`/`--debug` per-call finish line now reports output tokens and tokens/sec (`{out} tok  {tps:.1f} tok/s`) alongside elapsed ms and tool-call count.
 - **The `js` harness.** A terminal LLM agent you run as a bare command from any
   directory: an interactive REPL with slash commands and real arrow-key history,
   a one-shot `js -p "prompt"` mode, stdin piping (`echo prompt | js`), and
