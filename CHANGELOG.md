@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Ruff lint/format dev tooling.** Ruff lives in a `uv` dev dependency-group
+  so `uv sync` puts it on the project venv PATH (agents can call `ruff check` /
+  `ruff format` through the shell tool directly); config in `[tool.ruff]` (line
+  length 100, `js/toolkit/wiki/prompts.py` excluded as a prompt-template
+  builder). A `mypy` pass was tried and dropped — it flooded the dynamic
+  codebase (ToolContext dynamic attrs, `**kwargs` splats, implicit optionals)
+  with unactionable errors.
 - **The `js` harness.** A terminal LLM agent you run as a bare command from any
   directory: an interactive REPL with slash commands and real arrow-key history,
   a one-shot `js -p "prompt"` mode, stdin piping (`echo prompt | js`), and

@@ -38,3 +38,20 @@ markers = [
 
 [tool.setuptools.package-data]
 "js.toolkit" = ["tool_descriptions/*.md"]
+
+# dev tooling for agents hacking this code (and for the justfile quality
+# recipes). synced into the project env by `uv sync`, so ruff lands on the
+# venv PATH and js agents can call it through the shell tool directly.
+[dependency-groups]
+dev = [
+    "ruff>=0.15",
+]
+
+[tool.ruff]
+line-length = 100
+# giant prompt-string template builder; linting it is pure noise.
+extend-exclude = ["js/toolkit/wiki/prompts.py"]
+
+[tool.ruff.lint]
+# defaults already cover E (errors) + F (pyflakes); add pyupgrade.
+extend-select = ["UP"]
