@@ -398,7 +398,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         expires_at: float | None = None,
         account_id: str | None = None,
         base_url: str | None = None,
-        login: "Login | None" = None,
+        login: Login | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not access_token:
@@ -418,7 +418,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         )
 
     @classmethod
-    def from_login(cls, login: "Login") -> "OpenAICodexProvider":
+    def from_login(cls, login: Login) -> OpenAICodexProvider:
         return cls(
             access_token=login.provider_api_key or "",
             refresh_token=login.codex_refresh_token,
@@ -669,7 +669,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             raise ai.ProviderConnectionError(f"OpenAI Codex connection failed: {exc}", provider=_PROVIDER, is_retryable=True) from exc
 
 
-async def fetch_models_for_login(login: "Login") -> list[str]:
+async def fetch_models_for_login(login: Login) -> list[str]:
     provider = OpenAICodexProvider.from_login(await codex_auth.ensure_fresh_login_async(login))
     try:
         return await provider.list_models()

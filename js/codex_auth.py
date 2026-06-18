@@ -96,7 +96,7 @@ def token_profile(access_token: str) -> tuple[str | None, str | None]:
     return (account_id if isinstance(account_id, str) and account_id else None), email
 
 
-def _token_from_response(data: dict[str, Any], *, previous: "CodexToken | None" = None) -> CodexToken:
+def _token_from_response(data: dict[str, Any], *, previous: CodexToken | None = None) -> CodexToken:
     access = data.get("access_token")
     refresh = data.get("refresh_token")
     expires_in = data.get("expires_in")
@@ -125,7 +125,7 @@ def _token_from_response(data: dict[str, Any], *, previous: "CodexToken | None" 
     )
 
 
-def _token_from_login(login: "Login") -> "CodexToken | None":
+def _token_from_login(login: Login) -> CodexToken | None:
     """Snapshot a saved Login as a CodexToken so refreshes can carry forward fields."""
     if not login.codex_refresh_token:
         return None
@@ -138,7 +138,7 @@ def _token_from_login(login: "Login") -> "CodexToken | None":
     )
 
 
-def _post_token_form(data: dict[str, str], *, client: httpx.Client | None = None, previous: "CodexToken | None" = None) -> CodexToken:
+def _post_token_form(data: dict[str, str], *, client: httpx.Client | None = None, previous: CodexToken | None = None) -> CodexToken:
     owns_client = client is None
     if client is None:
         client = httpx.Client(timeout=_TOKEN_TIMEOUT)
@@ -160,7 +160,7 @@ def _post_token_form(data: dict[str, str], *, client: httpx.Client | None = None
             client.close()
 
 
-async def _apost_token_form(data: dict[str, str], *, client: httpx.AsyncClient | None = None, previous: "CodexToken | None" = None) -> CodexToken:
+async def _apost_token_form(data: dict[str, str], *, client: httpx.AsyncClient | None = None, previous: CodexToken | None = None) -> CodexToken:
     owns_client = client is None
     if client is None:
         client = httpx.AsyncClient(timeout=_TOKEN_TIMEOUT)
@@ -212,7 +212,7 @@ def exchange_code_for_token(code: str, verifier: str, redirect_uri: str) -> Code
     )
 
 
-def refresh_token(refresh: str, *, previous: "CodexToken | None" = None) -> CodexToken:
+def refresh_token(refresh: str, *, previous: CodexToken | None = None) -> CodexToken:
     return _post_token_form(
         {
             "grant_type": "refresh_token",
@@ -223,7 +223,7 @@ def refresh_token(refresh: str, *, previous: "CodexToken | None" = None) -> Code
     )
 
 
-async def refresh_token_async(refresh: str, *, client: httpx.AsyncClient | None = None, previous: "CodexToken | None" = None) -> CodexToken:
+async def refresh_token_async(refresh: str, *, client: httpx.AsyncClient | None = None, previous: CodexToken | None = None) -> CodexToken:
     return await _apost_token_form(
         {
             "grant_type": "refresh_token",
@@ -258,7 +258,7 @@ def build_authorize_url(state: str, challenge: str, *, originator: str = "openco
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    server: "_CallbackServer"
+    server: _CallbackServer
 
     def log_message(self, _format: str, *_args: Any) -> None:  # noqa: A003 - stdlib API
         return
@@ -290,10 +290,9 @@ class _CallbackServer(HTTPServer):
     received_error: str | None = None
 
 
-def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> "Login":
+def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> Login:
     """Run the fixed-port browser PKCE OAuth flow and return a saved Login."""
 
-    from .logins import Login
 
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
@@ -319,10 +318,9 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
     return login_from_token(exchange_code_for_token(server.received_code, verifier, CALLBACK_REDIRECT_URI))
 
 
-def login_device(*, open_browser: bool = True) -> "Login":
+def login_device(*, open_browser: bool = True) -> Login:
     """Run the headless Codex device-code OAuth flow and return a saved Login."""
 
-    from .logins import Login
 
     with httpx.Client(timeout=_TOKEN_TIMEOUT) as client:
         response = client.post(
@@ -374,7 +372,7 @@ def login_device(*, open_browser: bool = True) -> "Login":
     raise RuntimeError("OpenAI Codex device authorization timed out")
 
 
-def login_from_token(token: CodexToken) -> "Login":
+def login_from_token(token: CodexToken) -> Login:
     from .logins import Login
 
     return Login(
@@ -389,7 +387,7 @@ def login_from_token(token: CodexToken) -> "Login":
     )
 
 
-def login_needs_refresh(login: "Login", *, now: float | None = None) -> bool:
+def login_needs_refresh(login: Login, *, now: float | None = None) -> bool:
     if not is_codex_provider(login.effective_provider_id):
         return False
     if not login.codex_refresh_token:
@@ -400,21 +398,21 @@ def login_needs_refresh(login: "Login", *, now: float | None = None) -> bool:
     return (now if now is not None else time.time()) >= float(expires) - _REFRESH_SKEW_SECONDS
 
 
-def refreshed_login(login: "Login") -> "Login":
+def refreshed_login(login: Login) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
     return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
 
 
-async def refreshed_login_async(login: "Login", *, client: httpx.AsyncClient | None = None) -> "Login":
+async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = await refresh_token_async(login.codex_refresh_token, client=client, previous=_token_from_login(login))
     return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
 
 
-def ensure_fresh_login(login: "Login", *, persist: bool = True) -> "Login":
+def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     if not login_needs_refresh(login):
         return login
     from . import logins
@@ -425,7 +423,7 @@ def ensure_fresh_login(login: "Login", *, persist: bool = True) -> "Login":
     return refreshed
 
 
-async def ensure_fresh_login_async(login: "Login", *, persist: bool = True, client: httpx.AsyncClient | None = None) -> "Login":
+async def ensure_fresh_login_async(login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None) -> Login:
     if not login_needs_refresh(login):
         return login
     from . import logins

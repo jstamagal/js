@@ -152,6 +152,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Source + tests modernized by ruff safe autofixes.** Dequoted forward-ref annotations, `lru_cache(maxsize=None)`→`cache`, and deprecated-import updates; `js/toolkit/wiki/prompts.py` is excluded as a prompt-template builder.
 - **Replaced LiteLLM with the Vercel AI Python SDK (`ai-python`).** The provider
   boundary now lives in `js/model_client.py`; `js/runtime.py` no longer imports
   `litellm` or any LiteLLM-shaped chunk/exception helpers. The `litellm_proxy`

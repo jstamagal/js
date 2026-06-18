@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY

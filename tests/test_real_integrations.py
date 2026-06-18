@@ -157,7 +157,7 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     where the local model is absent."""
     import urllib.request
 
-    from js import model_client, runtime
+    from js import model_client
     from js.config import vision_enabled_for_model
     from js.toolkit import fs
 
