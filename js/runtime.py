@@ -3,10 +3,8 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 
 from __future__ import annotations
 
-import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
-import os
 import sys
 import subprocess
 from pathlib import Path
@@ -14,7 +12,7 @@ import random
 import time
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from . import model_client
 import ai
@@ -732,8 +730,15 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                                 prompt_tokens=active_context.last_prompt_tokens,
                                 cached_tokens=active_context.last_cached_tokens)
                 if trace:
-                    print(f"  {C.GREY}▸ {int((time.time() - t0) * 1000)}ms  "
-                          f"finish={finish}  tool_calls={len(pending_calls)}{C.RESET}", flush=True)
+                    _elapsed = time.time() - t0
+                    _out_tok = 0
+                    if usage:
+                        _out_tok = int(getattr(usage, "output_tokens", 0)
+                                       or getattr(usage, "completion_tokens", 0) or 0)
+                    _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
+                    print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
+                          f"finish={finish}  tool_calls={len(pending_calls)}  "
+                          f"{_out_tok} tok  {_tps:.1f} tok/s{C.RESET}", flush=True)
                 break
             except ai.ProviderAPIError as e:
                 if e.is_retryable:
