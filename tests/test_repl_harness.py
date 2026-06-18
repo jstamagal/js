@@ -154,7 +154,18 @@ def test_provider_commands_mutate_runtime_state(tmp_path, capsys):
     assert state["provider_api_key"] == "ollama"
 
 
-def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys):
+def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypatch):
+    # /provider <name> must resolve provider DEFAULTS — isolate from the operator's
+    # real saved logins + provider env overrides, or a saved ollama login (e.g. a
+    # Tailscale URL) leaks in and the test snaps on the real box.
+    for var in (
+        "OLLAMA_BASE_URL", "OLLAMA_LOCAL_BASE_URL", "OLLAMA_API_KEY", "OLLAMA_LOCAL_API_KEY",
+        "LLAMACPP_BASE_URL", "LLAMA_CPP_BASE_URL", "LLAMACPP_API_KEY", "LLAMA_CPP_API_KEY",
+        "XIAOMI_TP_BASE_URL", "MIMO_TP_BASE_URL", "XIAOMI_TP_KEY", "MIMO_TP_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(cli.logins, "load_logins", lambda *a, **k: {})
+
     cfg = make_cfg(tmp_path)
     state = {
         "model": cfg.model,

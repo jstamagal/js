@@ -110,15 +110,18 @@ def test_core_tool_schemas_match_forge_surface_names():
 
 def test_named_agent_tools_are_generated_from_prompt_dirs():
     registry = build_default_registry()
+    # discover real agent dirs so adding/removing a prompt agent never snaps this test.
+    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
 
-    for name in {"defaultagent", "autocoder", "commit"}:
+    assert prompt_agents, "prompts/ should expose at least one agent dir"
+    for name in prompt_agents:
         tool = registry.resolve(name)
-        assert tool is not None
+        assert tool is not None, name
         assert tool.name == name
-        assert tool.required == ("tasks",)
-        assert set(tool.params) == {"tasks"}
+        assert tool.required == ("tasks",), name
+        assert set(tool.params) == {"tasks"}, name
 
-    assert [tool.name for tool in registry.select(["autocoder", "commit"]).tools] == ["autocoder", "commit"]
+    assert [tool.name for tool in registry.select(prompt_agents).tools] == prompt_agents
 
 
 def test_wiki_and_artifact_tool_params_have_descriptions():
