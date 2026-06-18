@@ -8,6 +8,7 @@ This is the canonical provider boundary for the migration.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -420,6 +421,31 @@ def stream_model(
             params["extra_body"] = extra_body
         else:
             params.setdefault("max_reasoning_tokens", 32_000)
+
+    # Sampling overrides via env (JS_*): override whatever the backend/model default is.
+    # temperature/top_p/presence_penalty are OpenAI-standard (top-level); top_k and
+    # repetition_penalty are vLLM extensions and must ride in extra_body.
+    def _env(name: str) -> str | None:
+        v = os.environ.get(name)
+        return v if v not in (None, "") else None
+    _temp = _env("JS_TEMP")
+    _topp = _env("JS_TOPP")
+    _topk = _env("JS_TOPK")
+    _reppen = _env("JS_REPPEN")
+    _prpen = _env("JS_PRPEN")
+    if _temp is not None:
+        params["temperature"] = float(_temp)
+    if _topp is not None:
+        params["top_p"] = float(_topp)
+    if _prpen is not None:
+        params["presence_penalty"] = float(_prpen)
+    if _topk is not None or _reppen is not None:
+        _eb = dict(params.get("extra_body") or {})
+        if _topk is not None:
+            _eb["top_k"] = int(_topk)
+        if _reppen is not None:
+            _eb["repetition_penalty"] = float(_reppen)
+        params["extra_body"] = _eb
 
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense
     # that we never rewrite prior assistant/tool messages to satisfy a transport.
