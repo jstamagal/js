@@ -116,8 +116,8 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
     return tuple(meta.named_agent_tool(agent_id) for agent_id in sorted(by_id))
 
 
-def build_default_registry(prompts_root: Path | Sequence[Path] | None = None) -> ToolRegistry:
-    base_tools = fs.tools() + process_net.tools() + meta.tools() + wiki.tools() + artifact.tools()
+def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, flags: tuple[str, ...] = ("model_override",)) -> ToolRegistry:
+    base_tools = fs.tools() + process_net.tools() + meta.tools(flags) + wiki.tools() + artifact.tools()
     reserved = {tool.name for tool in base_tools}
     all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
     return _registry_from_tools(all_tools)

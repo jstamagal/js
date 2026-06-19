@@ -21,7 +21,7 @@ from . import colors as C
 from . import model_metadata
 from . import tools as T
 from .config import Config, vision_enabled_for_model
-from .toolkit.core import call_tool
+from .toolkit.core import call_tool, compact_json
 from .toolkit.registry import ToolRegistry
 
 
@@ -249,6 +249,56 @@ def _repair_jsonish(raw: str) -> dict:
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
     raise ValueError(str(last_error) if last_error else "could not parse arguments")
+
+
+def _canonical_tool_args(raw: str) -> str:
+    """Return tool-call args as a string the `ai` SDK will accept verbatim.
+
+    The model occasionally emits args that are not strictly valid JSON (a
+    trailing comma, an unclosed brace, a double-encoded string) — typically on
+    large `write`/`patch` content payloads. `_dispatch` repairs these for
+    execution via `_repair_jsonish`, but the *history* we resend each turn
+    carries the raw string. The SDK's integrity pass (`ai.types.integrity`)
+    re-validates every prior tool call with `json.loads` and **blanks**
+    unparseable args to ``"{}"`` (logging "invalid-tool-args"), so the model
+    sees its own prior call as empty and flails.
+
+    To keep history and execution consistent we substitute the repaired,
+    canonical JSON *only* when the raw string would otherwise be blanked. Valid
+    args are returned untouched so the model's exact bytes are preserved on the
+    happy path. If even the repair fails, the raw string is returned unchanged
+    (the SDK will blank it — nothing we can recover there).
+    """
+    if not raw:
+        return raw
+    try:
+        json.loads(raw)
+        return raw  # already valid — preserve exact bytes
+    except (json.JSONDecodeError, TypeError):
+        pass
+    try:
+        return compact_json(_repair_jsonish(raw))
+    except (ValueError, TypeError):
+        return raw
+
+
+def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message:
+    """Repair raw tool-call args inside an SDK assistant message before it is
+    resent as history, so the SDK's integrity pass does not blank them to
+    ``{}``. Returns the message unchanged when nothing needs repair (frozen
+    pydantic models require a copy to mutate)."""
+    new_parts: list[Any] = []
+    changed = False
+    for part in msg.parts:
+        if isinstance(part, ai.types.messages.ToolCallPart):
+            fixed = _canonical_tool_args(part.tool_args)
+            if fixed != part.tool_args:
+                part = part.model_copy(update={"tool_args": fixed})
+                changed = True
+        new_parts.append(part)
+    if not changed:
+        return msg
+    return msg.model_copy(update={"parts": new_parts})
 
 
 @dataclass
@@ -767,18 +817,18 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                 assistant_record["reasoning_content"] = reasoning
             assistant_record["tool_calls"] = [
                 {"id": pc.id, "type": "function",
-                 "function": {"name": pc.name, "arguments": pc.arguments()}}
+                 "function": {"name": pc.name, "arguments": _canonical_tool_args(pc.arguments())}}
                 for pc in pending_calls
             ]
             history_assistant_record["tool_calls"] = [
                 {"id": pc.id, "type": "function",
-                 "function": {"name": _canonical_tool_call_name(pc.name, active_registry), "arguments": pc.arguments()}}
+                 "function": {"name": _canonical_tool_call_name(pc.name, active_registry), "arguments": _canonical_tool_args(pc.arguments())}}
                 for pc in pending_calls
             ]
         if reasoning:
             history_assistant_record["reasoning_content"] = reasoning
         assert result is not None
-        ai_convo.append(result.assistant_message)
+        ai_convo.append(_sanitize_assistant_message(result.assistant_message))
         messages.append(history_assistant_record)
 
         if not pending_calls:

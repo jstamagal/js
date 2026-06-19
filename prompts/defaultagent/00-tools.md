@@ -15,7 +15,5 @@ tools:
   - plan
   - skill
   - task
-  - wiki_*
-  - artifact_*
   - commit
 ---

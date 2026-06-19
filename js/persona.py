@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ from .promptexpand import expand_prompt
 class PromptSpec:
     system: str
     tool_selectors: tuple[str, ...]
+    sampling: dict[str, Any] = field(default_factory=dict)
+    model: str = ""              # preferred/primary model for this agent and the subagents it spawns
+    secondary_model: str = ""    # backup model — reserved for a future (non-config) selection flag
 
 
 def _is_zero_file(path: Path) -> bool:
@@ -63,6 +67,42 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return tuple(selectors)
 
 
+# Sampling params an agent may set in its 00-tools.md frontmatter, mapped to the
+# JS_* env knobs model_client already honors. Frontmatter is the BASE; an explicit
+# JS_* env var still overrides it (see _apply_sampling_env).
+_SAMPLING_ENV = {
+    "temperature": "JS_TEMP",
+    "top_p": "JS_TOPP",
+    "top_k": "JS_TOPK",
+    "repetition_penalty": "JS_REPPEN",
+    "presence_penalty": "JS_PRPEN",
+}
+
+
+def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"sampling frontmatter in {path} must be a mapping")
+    out: dict[str, Any] = {}
+    for key, val in raw.items():
+        if key not in _SAMPLING_ENV:
+            raise ValueError(
+                f"unknown sampling key '{key}' in {path}; allowed: {', '.join(_SAMPLING_ENV)}"
+            )
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise ValueError(f"sampling.{key} in {path} must be a number")
+        out[key] = val
+    return out
+
+
+def _apply_sampling_env(sampling: dict[str, Any]) -> None:
+    """Export frontmatter sampling to the JS_* env knobs, without clobbering an
+    explicit env var the operator already set (env wins over frontmatter)."""
+    for key, env_name in _SAMPLING_ENV.items():
+        if key in sampling and not os.environ.get(env_name):
+            os.environ[env_name] = str(sampling[key])
+
 
 def _existing_text_parts(paths: list[Path]) -> list[str]:
     parts: list[str] = []
@@ -97,7 +137,7 @@ def load_agent_prompt_spec(
     if not agents_parts:
         return spec
     system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model)
 
 def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
@@ -113,6 +153,9 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
 
     zero_file = next((p for p in files if _is_zero_file(p)), None)
     selectors: tuple[str, ...] = ()
+    sampling: dict[str, Any] = {}
+    model: str = ""
+    secondary_model: str = ""
     parts: list[str] = []
 
     for path in files:
@@ -122,10 +165,19 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
             frontmatter, body = _split_frontmatter(path, text)
             if frontmatter is not None:
                 selectors = _coerce_tool_selectors(path, frontmatter.get("tools"))
+                sampling = _coerce_sampling(path, frontmatter.get("sampling"))
+                model = str(frontmatter.get("model") or "").strip()
+                secondary_model = str(frontmatter.get("secondary_model") or "").strip()
         if body:
             parts.append(body)
 
-    return PromptSpec(system="\n\n".join(parts) + "\n", tool_selectors=selectors)
+    return PromptSpec(
+        system="\n\n".join(parts) + "\n",
+        tool_selectors=selectors,
+        sampling=sampling,
+        model=model,
+        secondary_model=secondary_model,
+    )
 
 
 
@@ -146,8 +198,13 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
             spec = PromptSpec(
                 system="\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n",
                 tool_selectors=spec.tool_selectors,
+                sampling=spec.sampling,
+                model=spec.model,
+                secondary_model=spec.secondary_model,
             )
-    return _expand_spec(spec, cfg)
+    spec = _expand_spec(spec, cfg)
+    _apply_sampling_env(spec.sampling)
+    return spec
 
 
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
@@ -156,7 +213,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     system = expand_prompt(spec.system, allow_code=allow_code)
     if system == spec.system:
         return spec
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system

@@ -135,6 +135,8 @@ class Config:
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
     wiki_vault_lock_timeout_s: int = _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S
     allow_inline_code: bool = False  # !{sh|python|c ...} inline-code execution (--dangerously-evaluate-inline-code)
+    prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
+    lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
 
 
 def _session_timestamp() -> str:
@@ -315,6 +317,8 @@ def from_env(
     wiki_vault_lock_timeout_s = _numeric_setting(js_root_settings, ("limits", "wiki_vault_lock_timeout_s"), _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S)
     runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
+    prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
+    lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
 
     config_toml_path = _paths.global_config_file()
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
@@ -369,4 +373,6 @@ def from_env(
         task_max_depth=task_max_depth,
         wiki_vault_lock_timeout_s=wiki_vault_lock_timeout_s,
         allow_inline_code=env.get("JS_ALLOW_INLINE_CODE") == "1",
+        prefer_inherit=prefer_inherit,
+        lock_subagent_model=lock_subagent_model,
     )
