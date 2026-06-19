@@ -57,6 +57,49 @@ def test_unknown_subsystem_errors():
     assert "unknown inline subsystem" in str(e.value)
 
 
+# ---- backtick-quoted directives stay literal (documentation, not a request) ----
+
+def test_backtick_wrapped_code_directive_not_evaluated():
+    # the bug: a `!{sh ...}` example in a prompt tripped the code gate at load.
+    text = "Executable directives -- `!{sh ...}`, `!{bash ...}` -- use sparingly."
+    assert expand_prompt(text, allow_code=False) == text
+
+
+def test_backtick_wrapped_readonly_directive_not_blanked():
+    # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
+    text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
+    assert expand_prompt(text, env={}) == text
+
+
+def test_unwrapped_directive_still_expands_next_to_backticks():
+    # a stray leading backtick must NOT suppress a real directive.
+    assert expand_prompt("see `code`: !{env WHO}", env={"WHO": "ape"}) == "see `code`: ape"
+
+
+def test_lone_leading_backtick_does_not_suppress():
+    assert expand_prompt("`!{env WHO}", env={"WHO": "ape"}) == "`ape"
+
+
+# ---- backslash escapes ANY form (the only escape for fenced blocks) ----
+
+def test_backslash_escapes_inline_code_directive():
+    assert expand_prompt(r"run \!{sh echo hi}", allow_code=False) == "run !{sh echo hi}"
+
+
+def test_backslash_escapes_env_shorthand():
+    assert expand_prompt(r"lit \{{FOO}}", env={"FOO": "bar"}) == "lit {{FOO}}"
+
+
+def test_backslash_escapes_fenced_block():
+    text = "show:\n\\```!sh\necho hi\n```\n"
+    assert expand_prompt(text, allow_code=False) == "show:\n```!sh\necho hi\n```\n"
+
+
+def test_unescaped_directive_after_escaped_one_still_runs():
+    out = expand_prompt(r"\!{env WHO} vs !{env WHO}", env={"WHO": "ape"})
+    assert out == "!{env WHO} vs ape"
+
+
 # ---- code subsystems are gated ----
 
 def test_sh_gated_off_errors():

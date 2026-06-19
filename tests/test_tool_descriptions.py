@@ -105,7 +105,7 @@ def test_core_tool_schemas_match_forge_surface_names():
     assert set(write.params) == {"file_path", "content", "overwrite"}
     assert {"-A", "-B", "-C", "-i", "-n", "type"}.issubset(search.params)
     assert task.required == ("tasks", "agent_id")
-    assert set(task.params) == {"tasks", "agent_id", "session_id"}
+    assert set(task.params) == {"tasks", "agent_id", "session_id", "model"}
 
 
 def test_named_agent_tools_are_generated_from_prompt_dirs():

@@ -27,6 +27,11 @@ Inputs:
 - `agent_id` is required and selects the worker persona and selected tools.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
   context. When omitted, a fresh worker session is created.
+<!--if:model_override-->
+- `model` overrides the model the worker runs on. Leave it unset by default — the
+  worker uses its configured model. ONLY set it when the operator explicitly asks
+  for behavior the agent isn't configured for; do not pick a model on your own.
+<!--endif-->
 
 Parallelism:
 - Multiple tasks inside one `task` call run concurrently with a bounded worker

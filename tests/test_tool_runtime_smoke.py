@@ -185,6 +185,82 @@ def test_runtime_repairs_common_jsonish_argument_shapes():
         runtime._repair_jsonish('["not", "an", "object"]')
 
 
+def test_canonical_tool_args_preserves_valid_and_repairs_blankable():
+    # Valid JSON is returned byte-for-byte (model's exact bytes preserved).
+    valid = '{"file_path": "/tmp/out.md", "content": "hi"}'
+    assert runtime._canonical_tool_args(valid) == valid
+
+    # Trailing comma / unclosed brace: js repairs for execution, but the raw
+    # string would be blanked to "{}" by the SDK's integrity pass on resend.
+    # _canonical_tool_args must substitute the repaired, json-decodable form.
+    for bad in ('{"file_path": "/tmp/out.md", "content": "hi",}',
+                '{"file_path": "/tmp/out.md", "content": "hi"'):
+        fixed = runtime._canonical_tool_args(bad)
+        import json as _json
+        assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
+
+
+def test_canonical_tool_args_survives_sdk_integrity_pass():
+    """The end-to-end guarantee: a malformed-but-repairable tool call, once
+    canonicalized and round-tripped through the SDK's integrity pass, retains
+    non-empty json-decodable args instead of being blanked to "{}"."""
+    from ai.types import integrity
+
+    bad = '{"file_path": "/tmp/out.md", "content": "hi",}'  # trailing comma
+    fixed = runtime._canonical_tool_args(bad)
+
+    asst = ai.assistant_message(
+        ai.types.messages.ToolCallPart(
+            tool_call_id="c1", tool_name="write", tool_args=fixed
+        )
+    )
+    tool_res = ai.tool_message(
+        ai.types.messages.ToolResultPart(
+            tool_call_id="c1", tool_name="write", result="ok"
+        )
+    )
+    prepared = integrity.prepare_messages([ai.user_message("hi"), asst, tool_res])
+
+    seen = [
+        part.tool_args
+        for msg in prepared
+        for part in msg.parts
+        if isinstance(part, ai.types.messages.ToolCallPart)
+    ]
+    assert seen, "expected a tool call in the prepared history"
+    import json as _json
+    for args in seen:
+        assert args != "{}", "args were blanked by the integrity pass"
+        assert _json.loads(args) == {"file_path": "/tmp/out.md", "content": "hi"}
+
+
+def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
+    bad = '{"file_path": "/tmp/out.md", "content": "hi"'  # unclosed brace
+    msg = ai.assistant_message(
+        ai.types.messages.ToolCallPart(
+            tool_call_id="c1", tool_name="write", tool_args=bad
+        )
+    )
+    fixed_msg = runtime._sanitize_assistant_message(msg)
+    import json as _json
+    parts = [
+        p for p in fixed_msg.parts
+        if isinstance(p, ai.types.messages.ToolCallPart)
+    ]
+    assert parts and _json.loads(parts[0].tool_args) == {
+        "file_path": "/tmp/out.md",
+        "content": "hi",
+    }
+    # Untouched when already valid: same object back.
+    good = ai.assistant_message(
+        ai.types.messages.ToolCallPart(
+            tool_call_id="c2", tool_name="write",
+            tool_args='{"file_path": "/tmp/out.md", "content": "hi"}',
+        )
+    )
+    assert runtime._sanitize_assistant_message(good) is good
+
+
 def test_retry_metadata_is_appended_and_resets_after_success():
     tracker = runtime.ToolErrorTracker(limit=2)
 

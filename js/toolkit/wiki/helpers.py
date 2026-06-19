@@ -79,9 +79,11 @@ def resolve_vault(vault: str, context: ToolContext) -> Path:
 
 
 def find_vault(path: Path) -> Path | None:
-    """Walk up to the vault root: a dir with PURPOSE.md or inbox/, or named wiki-*."""
+    """Walk up to the vault root: a dir with a PURPOSE.md sentinel, or a wiki-* name.
+    A bare `inbox/` is intentionally NOT a marker — it's too common a directory name
+    and false-positives any home/project dir that happens to have one."""
     for parent in [path, *path.parents]:
-        if (parent / "PURPOSE.md").exists() or (parent / "inbox").is_dir() or parent.name.startswith("wiki-"):
+        if (parent / "PURPOSE.md").exists() or parent.name.startswith("wiki-"):
             return parent
     return None
 
