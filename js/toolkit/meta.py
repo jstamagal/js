@@ -209,6 +209,7 @@ def _run_one_task(
     full_registry: Any,
     agent_id: str,
     global_session_id: str | None,
+    model: str = "",
 ) -> str:
     from .. import memory as M
     from .. import persona as P
@@ -232,6 +233,29 @@ def _run_one_task(
         prompt_spec = P.PromptSpec(system="", tool_selectors=())
     except ValueError as exc:
         return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
+
+    # Subagent model precedence (operator-locked order):
+    #   tool-call model (main agent wins, unless lock_subagent_model) >
+    #   inherit parent (if prefer_inherit) > frontmatter primary (`model:`) >
+    #   parent model as fallback.
+    locked = bool(getattr(parent_cfg, "lock_subagent_model", False))
+    if model and not locked:
+        chosen = model
+    elif getattr(parent_cfg, "prefer_inherit", False):
+        chosen = parent_cfg.model
+    elif getattr(prompt_spec, "model", ""):
+        chosen = prompt_spec.model
+    else:
+        chosen = parent_cfg.model
+    # FUTURE (stub): a non-config runtime flag — not yet built — will select the
+    # agent's secondary model here via prompt_spec.secondary_model. No flag wired
+    # yet, so this stays a no-op.
+    use_secondary = False
+    if use_secondary and getattr(prompt_spec, "secondary_model", ""):
+        chosen = prompt_spec.secondary_model
+    if chosen and chosen != cfg.model:
+        cfg = replace(cfg, model=chosen)
+
     registry = full_registry.select(prompt_spec.tool_selectors)
     system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)
 
@@ -272,10 +296,12 @@ def task(
     tasks: list[Any],
     agent_id: str = "",
     session_id: str | None = None,
+    model: str = "",
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
     agent_id = str(agent_id).strip()
+    model = str(model or "").strip()
     if not agent_id:
         return "ERROR: task requires agent_id"
     if not isinstance(tasks, list):
@@ -311,6 +337,7 @@ def task(
                 full_registry,
                 agent_id,
                 session_id,
+                model,
             )
             futures[future] = idx
 
@@ -346,7 +373,18 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     )
 
 
-def tools() -> tuple[Tool, ...]:
+def _task_params(flags: tuple[str, ...]) -> dict:
+    params = {
+        "tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."},
+        "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
+        "session_id": {"type": "string", "description": "Optional session id for a worker context."},
+    }
+    if "model_override" in flags:
+        params["model"] = {"type": "string", "description": "Model id for the subagent(s). ONLY set this when the operator explicitly asks for behavior the agent isn't configured for; otherwise omit it and the agent's configured model is used."}
+    return params
+
+
+def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
         Tool(
             "todo_write",
@@ -367,13 +405,9 @@ def tools() -> tuple[Tool, ...]:
         Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",)),
         Tool(
             "task",
-            load_description("task"),
+            load_description("task", flags=flags),
             task,
-            {
-                "tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."},
-                "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
-                "session_id": {"type": "string", "description": "Optional session id for a worker context."},
-            },
+            _task_params(flags),
             required=("tasks", "agent_id"),
         ),
     )

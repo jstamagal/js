@@ -32,6 +32,15 @@ from .toolkit.registry import build_default_registry
 
 _FULL_REGISTRY = build_default_registry()
 
+
+def _registry_for(cfg) -> "object":
+    # The default registry exposes the subagent `model` override on the task tool.
+    # When the operator has locked subagent model selection, rebuild without that
+    # flag so the param is gone from both the tool description and its schema.
+    if getattr(cfg, "lock_subagent_model", False):
+        return build_default_registry(cfg.prompt_roots, flags=())
+    return _FULL_REGISTRY
+
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
 # --------------------------------------------------------------------------
@@ -622,7 +631,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
             return 2
         system = prompt_spec.system
-        active_registry = _FULL_REGISTRY.select(prompt_spec.tool_selectors)
+        active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
 
     messages = M.load_messages(cfg.session_file)
     before_len = len(messages)
@@ -1167,7 +1176,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
         return 2
     system = prompt_spec.system
-    active_registry = _FULL_REGISTRY.select(prompt_spec.tool_selectors)
+    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
     session = PromptSession(history=FileHistory(str(cfg.history_file)))
