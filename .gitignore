@@ -14,6 +14,8 @@ CLAUDE.md
 .pi/
 .llxprt/
 .gemini/
+banks
+handoff/
 
 
 # Byte-compiled / optimized / DLL files
