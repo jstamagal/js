@@ -202,6 +202,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Tool descriptions moved** to `js/toolkit/tool_descriptions/` alongside the
   tool implementations, and the autocoder agent prompts were reorganized for
   consistent numbering with a tools definition added.
+- **`banks/` and `handoff/` are git-ignored.** These directories hold per-session
+  runtime state (SQLite DBs, handoff notes, prompt audits) that were never meant
+  to be tracked; accidental commits of local workspace data are now blocked.
 
 ### Removed
 
