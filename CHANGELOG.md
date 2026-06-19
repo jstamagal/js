@@ -152,6 +152,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   agent to write operator-readable changelog entries (lead with what broke, then
   what now works) instead of restating the diff.
 
+- **Deterministic commit helper (`js.commit_helper`).** Two subcommands run from inside a repo: `survey` produces one compact snapshot (branch, porcelain status, every diff hunk numbered per file, untracked files, recent log) so the commit agent reads once instead of probing; `stage <file> <hunks|all>` stages exactly the named hunks via `git apply --cached --recount` (or `git add` for new files), replacing the fragile interactive `git add -p` dance with deterministic git plumbing.
+- **Subagent model control with sampling frontmatter and conditional tool descriptions.** `prefer_inherit` and `lock_subagent_model` config knobs control whether subagents inherit the parent model or use their own frontmatter primary. Agent `00-tools.md` frontmatter gains `sampling:` (temperature, top_p, top_k, repetition_penalty, presence_penalty — exported to `JS_*` env vars, explicit env wins), `model:`, and `secondary_model:` (a marked no-op stub for a future non-config flag). Tool descriptions support `<!--if:FLAG-->...<!--endif-->` conditional blocks so the task tool's `model` section and schema both vanish when subagent model override is locked off. Subagent model precedence: tool-call `model` arg (unless locked) → inherit parent (if `prefer_inherit`) → frontmatter primary → parent model fallback.
+
 ### Changed
 
 - **Source + tests modernized by ruff safe autofixes.** Dequoted forward-ref annotations, `lru_cache(maxsize=None)`→`cache`, and deprecated-import updates; `js/toolkit/wiki/prompts.py` is excluded as a prompt-template builder.
@@ -203,6 +206,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tool implementations, and the autocoder agent prompts were reorganized for
   consistent numbering with a tools definition added.
 
+- **Default agent tools narrowed.** `wiki_*` and `artifact_*` removed from the default agent's tool list; these are specialized modes accessed through dedicated agents or `--wiki`/`--artifact` flags, not everyday toolbelt items.
+
 ### Removed
 
 - **`ME_MODEL` env alias.** The silent env-layer alias for `model.id` (applied when `JS_MODEL` was unset) is gone for real — `config.py` explicit-model check, `settings.py` table entry + special-case, and every doc/test reference. A prior pass had renamed it 'silent' instead of deleting; this removes it. Model override is `JS_MODEL` / `-m` only.
@@ -250,6 +255,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Wiki destructive re-archive.** Orphan detection no longer flags inbox names
   already safe in `Clippings/`, which had been re-archiving and eating
   freshly-staged logs; genuine-orphan self-heal still works.
+
+- **Wiki vault detection no longer false-positives on bare `inbox/` directories.** `find_vault()` walked up to any directory containing an `inbox/` subdirectory, which matched home directories and any project with an inbox folder. Now only a `PURPOSE.md` sentinel or a `wiki-*` directory name marks a vault root.
 
 ### Security
 
