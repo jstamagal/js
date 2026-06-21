@@ -11,6 +11,7 @@ tools:
   - shell
   - fetch
   - todo_*
+  - artifact_*
   - followup
   - plan
   - skill
