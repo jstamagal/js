@@ -85,21 +85,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   heuristic (overridable with `JS_VISION`); when enabled, `read` sends image
   bytes for that one turn while session history keeps only a text stub, so a
   base64 image is billed once instead of resent on every following turn.
-- **Config as a `jsrc` set-script.** One knob registry (`js.settings.REGISTRY`)
-  is the single source of truth for every runtime knob — its dotted path, type,
-  default, env override, empty-state display, and docs. The config file is a
-  script: each line is a `set <key> <value>` command. Files layer
-  lowest-to-highest as built-in defaults, the platform `jsrc`, project
-  `.js/jsrc`, project `.js/jsrc.local`, environment variables, then repeatable
-  CLI `--extra key.path=value`. First run writes a commented `jsrc` template
-  generated from the registry; `/set` and `/show` tune knobs live in the REPL;
-  `js --migrate-config` converts a legacy `config.toml` once. The chosen model
-  is honored everywhere — REPL, one-shot, offline `--compact`, and drain
-  budgeting.
-- **Agent manifests as `00-tools.yaml`.** An agent's tool/model/sampling
-  manifest is a pure-YAML `00-tools.yaml` file (config only, no prompt body);
-  prompt text stays in `01-prompt.md`. A legacy `00-tools.md` frontmatter
-  manifest is still read for two releases with a deprecation note.
+- **Config is a `set`-script now, not TOML.** The whole config system is one
+  mechanism: `set <key> <value>`. Every knob is defined once in a registry in
+  `js/settings.py` — its key, type, default, env var, and how it shows when
+  empty. That one registry builds the env layer, the first-run file, the
+  `set`/`show` commands, and the docs, so they can't fall out of sync. The
+  config file is a plain list of `set` lines read at startup: global
+  `~/.config/js/jsrc`, project `.js/jsrc`, local `.js/jsrc.local` (low to high,
+  then env vars, then `--extra`). TOML is gone — deleted `_KNOWN_KEYS`,
+  `_ENV_OVERRIDES`, the TOML loader, and `docs/config.example.toml`.
+  `js --migrate-config` rewrites an old `config.toml` as a `jsrc` once, then you
+  delete the old file; that flag goes away in 2 releases. The same `set` works
+  live in the REPL (`/set`), and `/show` lists every knob and its current value.
+  Empty states mean what they say: `off` = boolean off, `<none>` = nothing set,
+  `<unset>` = not sent so the provider default wins; `provider.api_key` shows
+  `<set>`, never the key. Registered the knobs the old list never had but the
+  code already reads — `compact.auto`, `compact.model`,
+  `compact.summary_max_tokens`, `subagents.prefer_inherit`,
+  `subagents.lock_model`, `tools.alias_profiles`. Fixed `/set debug`, which used
+  to silently flip `trace` instead.
+- **Agent config out of markdown, into `00-tools.yaml`.** An agent's tools,
+  model, and sampling live in a plain YAML `00-tools.yaml` now — config only, no
+  prompt text. The prompt stays in `01-prompt.md`. An old `00-tools.md` with
+  `---` frontmatter still loads for 2 releases and prints a one-time deprecation
+  note.
 - **Append-only compaction.** `/compact [focus]`, `/compact up to here`, and
   offline `js --compact <session>` append a compaction mark instead of rewriting
   the JSONL; on load the mark rebuilds context as the system prompt, one
