@@ -225,7 +225,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runtime state (SQLite DBs, handoff notes, prompt audits) that were never meant
   to be tracked; accidental commits of local workspace data are now blocked.
 
-- **Default agent tools narrowed.** `wiki_*` and `artifact_*` removed from the default agent's tool list; these are specialized modes accessed through dedicated agents or `--wiki`/`--artifact` flags, not everyday toolbelt items.
+- **Default agent toolbelt: `wiki_*` out, `artifact_*` in.** The default agent doesn't carry `wiki_*` — wiki work goes through `--wiki` or a dedicated wiki agent. `artifact_*` is on the default toolbelt.
+- **Default agent prompt rewritten as the SHE APE persona.** `prompts/defaultagent/01-prompt.md` went from a 40-line generic blurb to KING's full persona (244 lines): conversation-first, a body/emotion barometer, telegraphic voice, separate code/sysop/assistant modes, a writing/character mode for KING's adult-fiction work, and headless + `{reasoning}` scaffolds. It names tools by what they do instead of hardcoding a list and carries no "what you can't do" prose — so the prompt can't claim a tool the agent doesn't have.
+- **`remove` trashes by default and won't follow symlinks.** Targets up to 512 MiB go to `trash`/`trash-put` (undo snapshot taken first); over 512 MiB it stops instead of stuffing trash; `permanent=true` deletes directly. Paths resolve without following symlinks, so a symlink is unlinked as itself, never its target. No `trash` binary → it says so and points at `permanent=true`.
 
 ### Removed
 
@@ -253,6 +255,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Tests no longer snap on operator state.** Prompt-dir agent tests discover `prompts/` dynamically (so agent churn can't break them), and the provider-shortcut test isolates saved logins + env so `/provider ollama` resolves DEFAULTS on any box instead of leaking the operator's saved ollama login.
+- **Double-encoded tool-call args no longer flail the model.** `_canonical_tool_args` keeps the model's raw bytes only when they're already a JSON object; valid-but-double-encoded args (a JSON string wrapping the real object) get repaired to the canonical object, so the history resent each turn matches what actually executed instead of being blanked by the SDK's integrity pass.
 - **`js --commit` and all tool use crashed.** `call_tool` was used in the
   runtime tool-dispatch path but never imported, so every tool call raised
   `NameError`, burned the retry limit, and aborted the turn. Importing it
