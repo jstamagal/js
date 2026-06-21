@@ -13,9 +13,9 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     global_js = config_home / "js"
     global_js.mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
-    (global_js / "config.toml").write_text('[model]\nid="global"\n[limits]\nfetch_timeout_s=20\n', encoding="utf-8")
-    (project / ".js" / "config.toml").write_text('[model]\nid="project"\n[limits]\nmax_tool_iterations=9\n', encoding="utf-8")
-    (project / ".js" / "config.local.toml").write_text('[model]\nid="local"\n', encoding="utf-8")
+    (global_js / "jsrc").write_text("set model.id global\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
+    (project / ".js" / "jsrc").write_text("set model.id project\nset limits.max_tool_iterations 9\n", encoding="utf-8")
+    (project / ".js" / "jsrc.local").write_text("set model.id local\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     monkeypatch.setenv("JS_MODEL", "env")
@@ -36,11 +36,16 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
 def test_default_fetch_timeout_is_15_and_template_exposes_compact_wiki_artifact(tmp_path):
     out = settings.collect_settings(config_paths=[], env={})
     assert out["limits"]["fetch_timeout_s"] == 15
-    target = tmp_path / "config.toml"
+    target = tmp_path / "jsrc"
     settings.write_default_template(target)
     text = target.read_text(encoding="utf-8")
-    for section in ("[compact]", "[wiki]", "[artifact]", "wiki_vault_lock_timeout_s", "context_window", "tail_tokens"):
-        assert section in text
+    for setting_line in (
+        "#set compact.context_window",
+        "#set compact.tail_tokens 16384",
+        "#set wiki.aliases",
+        "#set artifact.dir /srv/artifacts",
+    ):
+        assert setting_line in text
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
@@ -71,12 +76,16 @@ def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
 
 
 def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
-    repo = tmp_path / "repo"; glob = tmp_path / "global"; proj = tmp_path / "project"
+    repo = tmp_path / "repo"
+    glob = tmp_path / "global"
+    proj = tmp_path / "project"
     for root, body in [(repo, "repo"), (glob, "global"), (proj, "project")]:
         (root / "same").mkdir(parents=True)
         (root / "same" / "01.md").write_text(body, encoding="utf-8")
-    (glob / "global_only").mkdir(); (glob / "global_only" / "01.md").write_text("g", encoding="utf-8")
-    (proj / "project_only").mkdir(); (proj / "project_only" / "01.md").write_text("p", encoding="utf-8")
+    (glob / "global_only").mkdir()
+    (glob / "global_only" / "01.md").write_text("g", encoding="utf-8")
+    (proj / "project_only").mkdir()
+    (proj / "project_only" / "01.md").write_text("p", encoding="utf-8")
 
     reg = build_default_registry(prompts_root=[repo, glob, proj])
 

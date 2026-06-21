@@ -23,6 +23,11 @@ def data_dir() -> Path:
 
 
 def global_config_file() -> Path:
+    return config_dir() / "jsrc"
+
+
+def legacy_global_config_file() -> Path:
+    """Pre-jsrc TOML config path, kept only for `js --migrate-config`."""
     return config_dir() / "config.toml"
 
 

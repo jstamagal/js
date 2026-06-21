@@ -243,8 +243,8 @@ def from_env(
         config_paths.append(_paths.global_config_file())
     if not ignore_local_config:
         config_paths.extend([
-            project_dir / ".js" / "config.toml",
-            project_dir / ".js" / "config.local.toml",
+            project_dir / ".js" / "jsrc",
+            project_dir / ".js" / "jsrc.local",
         ])
 
     js_root_settings = _settings.collect_settings(
@@ -320,10 +320,10 @@ def from_env(
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
 
-    config_toml_path = _paths.global_config_file()
+    config_file_path = _paths.global_config_file()
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
     if not ignore_global_config:
-        _settings.write_default_template(config_toml_path)
+        _settings.write_default_template(config_file_path)
 
     sessions_dir = _paths.sessions_root() / agent_id
     sessions_dir.mkdir(parents=True, exist_ok=True)

@@ -8,139 +8,118 @@ frozen `Config` dataclass. CLI flags override individual runs where supported.
 `js` reads config in this order, lowest to highest:
 
 1. built-in defaults
-2. the platform config `config.toml`
-3. project `.js/config.toml`
-4. project `.js/config.local.toml`
-5. environment variables
-6. CLI flags and repeated `--extra key.path=value`
+2. platform `jsrc`
+3. project `.js/jsrc`
+4. project `.js/jsrc.local`
+5. env vars
+6. `--extra` CLI flags (may be repeated)
 
-First run writes the platform config `config.toml` as a fully commented template (every knob,
-each commented out with its default). A fuller annotated reference is checked in
-at [config.example.toml](config.example.toml) — copy blocks from there into any
-of the three config files.
+In one line: built-in defaults < platform `jsrc` < project `.js/jsrc` < project
+`.js/jsrc.local` < env vars < `--extra` CLI flags.
 
-Tables are deep-merged across layers, so a later file can override one nested
-key (for example a single entry in `[model.reasoning_effort]`) without replacing
-the whole table.
+A `jsrc` file is a config script: each non-comment line is
+`set <key> <value>`, using the same dotted keys as the REPL. Comments start with
+`#`. First run writes `~/.config/js/jsrc` as a commented set-script template
+with every registered knob shown beside its default.
 
-Core defaults include:
+Example lines:
 
-```toml
-[model]
-id = "deepseek/deepseek-v4-flash"
-
-[limits]
-max_tool_iterations = 50
-max_bash_output_bytes = 262144
-max_tool_result_bytes = 262144
-fetch_timeout_s = 15
-wiki_vault_lock_timeout_s = 30
-
-[compact]
-auto = true
-model = "same"
-# context_window = unset
-tail_tokens = 16384
-min_savings_tokens = 400
-
-[artifact]
-dir = "/srv/artifacts"
-url = "http://localhost"
-bin = "artifact"
+```text
+set model.id deepseek/deepseek-v4-flash
+set compact.auto off
+set wiki.aliases.creative /path
 ```
 
-`[provider] id`, `[provider] base_url`, and `[provider] api_key` are unset by
-default. When `[provider] id` is set, the provider is constructed explicitly
-with the given base URL and API key; otherwise `ai-python` routes the model id
+Map-valued keys can be extended by setting sub-keys, so
+`set wiki.aliases.creative /path` adds or overrides only that alias.
+
+`provider.id`, `provider.base_url`, and `provider.api_key` are `<none>` by
+default. When `provider.id` is set, the provider is constructed explicitly with
+the given base URL and API key; otherwise `ai-python` routes the model id
 natively through AI Gateway or via `provider:model` syntax for direct providers.
 
 ## Full Key Reference
 
-Every key the harness understands (from `js/settings.py` `_KNOWN_KEYS`). Keys
-shown as `unset` are passed through only when present.
+Every settable key comes from `js/settings.py` `REGISTRY`. The table uses
+dotted `set` names and `show` rendering for defaults. Empty-state rendering uses
+`off` for false booleans, `<none>` for no-value knobs, and `<unset>` for knobs
+that explicitly defer to provider defaults. A set `provider.api_key` is masked
+as `<set>`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `model.id` | `deepseek/deepseek-v4-flash` | Model id; unprefixed ids route through AI Gateway. |
-| `model.max_output_tokens` | unset | Per-call `max_tokens`; unset -> models.dev metadata when known, otherwise no explicit cap is sent. |
-| `model.reasoning_effort` | unset | Thinking effort: `off`/`low`/`medium`/`high`/`max`/`xhigh` (`max`->high, `off`/`none`->disabled). |
+| `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
+| `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
+| `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|xhigh. |
+| `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
+| `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
+| `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
+| `provider.extra` | `<none>` | Free-form extra params passed through to the provider SDK. |
 | `limits.max_tool_iterations` | `50` | Max tool calls per turn before the loop gives up. |
 | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `limits.fetch_timeout_s` | `15` | `fetch()` per-request timeout in seconds. |
-| `limits.max_read_lines` | `2000` | Max lines returned by `read`. |
-| `limits.max_line_chars` | `2000` | Max characters shown per read/search line. |
-| `limits.max_file_bytes` | `2000000` | Max file bytes read by filesystem tools. |
-| `limits.task_max_depth` | `2` | Max recursive task/subagent depth. No env var — set here or via `--extra`. |
+| `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
+| `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
+| `limits.max_line_chars` | `2000` | Maximum characters shown per read/search line. |
+| `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
+| `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
+| `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
 | `limits.wiki_vault_lock_timeout_s` | `30` | Wiki vault lock timeout in seconds. |
-| `runtime.debug` | `false` | Append per-event records to the platform data `state/<agent>/debug.log` (env `JS_DEBUG`). |
-| `runtime.trace` | `true` | Pretty-print the live tool-call trace line (env `JS_TRACE`). |
-| `provider.id` | unset | Explicit `ai-python` provider id (e.g. `openai`, `anthropic`). |
-| `provider.base_url` | unset | Explicit provider base URL; unset = provider default endpoint. |
-| `provider.api_key` | unset | Explicit provider API key; unset = official SDK env var. |
-| `compact.auto` | `true` | Enable automatic cache-first compaction. |
-| `compact.model` | `"same"` | Summarizer model; `"same"` = active session model. |
-| `compact.context_window` | unset | Context-window tokens for fullness math; unset -> models.dev metadata when known. |
-| `compact.notify_threshold` | `0.50` | Notify once when context reaches this fraction. |
-| `compact.trigger_threshold` | `0.80` | Auto-compact at this fullness fraction. |
-| `compact.force_threshold` | `0.90` | Force compaction at this fullness fraction. |
-| `compact.tail_tokens` | `16384` | Recent tail budget kept verbatim after compaction. |
-| `compact.min_savings_tokens` | `400` | Skip compaction unless estimated savings exceed this. |
-| `compact.chars_per_token` | `4.0` | Fallback/self-calibrating char-to-token estimate. |
-| `compact.pre_hook` | unset | Shell command whose stdout guides compaction; failures warn only. |
-| `wiki.aliases` | `{}` | Vault alias map, e.g. `creative = "/path/to/wiki"` (use `[wiki.aliases]`). |
+| `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
+| `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| `compact.auto` | `on` | Automatic cache-aware context compaction. |
+| `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
+| `compact.notify_threshold` | `0.5` | Notify once when context reaches this fraction. |
+| `compact.trigger_threshold` | `0.8` | Auto-compact at this fullness fraction. |
+| `compact.force_threshold` | `0.9` | Force compact at this fullness fraction. |
+| `compact.tail_tokens` | `16384` | Recent tail budget retained after compaction. |
+| `compact.min_savings_tokens` | `400` | Skip compaction unless estimated savings exceeds this. |
+| `compact.chars_per_token` | `4.0` | Fallback/self-calibrating character-to-token estimate. |
+| `compact.model` | `same` | Model used to write the compaction summary; 'same' = active model. |
+| `compact.summary_max_tokens` | `4096` | Max tokens for the compaction summary (hard-capped at 8192). |
+| `compact.pre_hook` | `<none>` | Optional shell command whose stdout guides compaction. |
+| `subagents.prefer_inherit` | `off` | Subagents inherit the parent's model when true; else use the agent's own primary. |
+| `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
+| `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:[...], aliases:{...}}. |
+| `wiki.aliases` | `<none>` | Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`. |
 | `artifact.dir` | `/srv/artifacts` | Artifact library directory. |
 | `artifact.url` | `http://localhost` | Artifact HTTP base URL. |
 | `artifact.bin` | `artifact` | Artifact CLI binary. |
 
 ## Environment Variables
 
-Provider and model:
+Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
+coercion as `set`.
 
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `JS_MODEL` | env override for `[model].id` | `deepseek/deepseek-v4-flash` |
-| `JS_PROVIDER` | env override for `[provider].id` | unset |
-| `JS_BASE_URL` | env override for `[provider].base_url` | unset |
-| `JS_API_KEY` | env override for `[provider].api_key` | unset |
-
-Sampling overrides:
-
-| Variable | Sampling knob | Sent as |
-| --- | --- | --- |
-| `JS_TEMP` | temperature | top-level (OpenAI-standard) |
-| `JS_TOPP` | top_p | top-level (OpenAI-standard) |
-| `JS_PRPEN` | presence_penalty | top-level (OpenAI-standard) |
-| `JS_TOPK` | top_k | `extra_body` (vLLM extension) |
-| `JS_REPPEN` | repetition_penalty | `extra_body` (vLLM extension) |
-
-When **unset**, js sends no sampling params at all and defers to the
-backend/model default (e.g. a local model's `generation_config.json`); this is
-the recommended default. Set any subset to override for a run. `top_k` and
-`repetition_penalty` merge into `extra_body` alongside any provider-specific
-extras (e.g. DeepSeek's `max_reasoning_tokens`). Typical qwen presets —
-coding: `JS_TEMP=0.6 JS_TOPK=20 JS_TOPP=0.95 JS_REPPEN=1.0 JS_PRPEN=0.0`;
-creative: `JS_TEMP=1.0 JS_TOPK=20 JS_TOPP=0.95 JS_REPPEN=1.1 JS_PRPEN=1.5`.
+| Variable | Key | Default | Meaning |
+| --- | --- | --- | --- |
+| `JS_MODEL` | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
+| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
+| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|xhigh. |
+| `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
+| `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
+| `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
+| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | `50` | Max tool calls per turn before the loop gives up. |
+| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
+| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
+| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
+| `JS_JSONL_MAX_LINE_CHARS` | `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
+| `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
+| `JS_TRACE` | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
-do not need to be copied into config.
+do not need to be copied into `jsrc`.
 
 Agent/session env remains accepted for compatibility (`JS_AGENT`, `JS_SESSION`),
 but CLI code threads selected agent/session through `Config` instead of mutating
 `os.environ`. Wiki/artifact mode is threaded through `ToolContext`; env fallbacks
 remain only for direct tool compatibility and subprocess boundaries.
 
-Runtime env overrides include `JS_REASONING`, `JS_MAX_OUTPUT_TOKENS`,
-`JS_MAX_TOOL_ITERATIONS`, `JS_MAX_BASH_OUTPUT_BYTES`,
-`JS_MAX_TOOL_RESULT_BYTES`, `JS_FETCH_TIMEOUT`, `JS_DEBUG`, `JS_TRACE`,
-`JS_VISION`, `JS_PROVIDER`, `JS_BASE_URL`, `JS_API_KEY`, and the sampling
-overrides `JS_TEMP`, `JS_TOPP`, `JS_TOPK`, `JS_REPPEN`, `JS_PRPEN`.
-
 The byte caps use the canonical `_BYTES` env names only
 (`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter
 aliases. Note there is **no** env var for `limits.task_max_depth` — set it in
-config or via `--extra limits.task_max_depth=N`.
+`jsrc` or via `--extra limits.task_max_depth=N`.
 
 `JS_ALLOW_INLINE_CODE=1` permits code-running inline prompt directives; it is set
 automatically by `--dangerously-evaluate-inline-code`. See
@@ -161,12 +140,22 @@ js --reasoning off
 js --max-out 64000
 js --extra limits.task_max_depth=3
 js --dangerously-evaluate-inline-code
+js --migrate-config
 ```
 
 `--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
-all config files. It may be repeated. Values are coerced int -> float ->
+all `jsrc` files. It may be repeated. Values are coerced int -> float ->
 `true`/`false`/`null` -> string; the key splits on the first `=` only, so values
 may contain `=`.
+
+In the REPL, `/set [key [val]]` uses the same registry: `/set` lists knobs,
+`/set key` shows one value, and `/set key value` changes the live setting.
+`/show [key]` lists every current value or only the requested key. Secret values
+such as `provider.api_key` render as `<set>` once set.
+
+`--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
+writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
+temporary and is removed after 2 releases.
 
 `--dangerously-evaluate-inline-code` (alias `--dangerously-evaluate-shell-commands`)
 enables the code-running inline prompt directives. It compiles and runs arbitrary
@@ -196,7 +185,7 @@ Platform config directory:
 
 ```text
 <config-dir>/            # e.g. ~/.config/js
-  config.toml
+  jsrc
   logins.toml
   models-cache.json
   AGENTS.md
@@ -217,7 +206,7 @@ Platform data directory:
     debug.log
 ```
 
-The `config.toml` template is written on first run; the per-agent `sessions/`
+The `jsrc` template is written on first run; the per-agent `sessions/`
 and `state/` directories are created lazily when an agent runs. The agent id is
 validated (`^[A-Za-z0-9_-]+$`) *before* any directory is created, so a bad id
 never leaves stray files.
@@ -304,6 +293,6 @@ the same offline. On load, the mark rebuilds in-memory context as:
 3. a fixed tail (`tail_tokens`, default `16384`) whose boundary backs up so an
 assistant `tool_calls` message is not separated from its tool results.
 
-The summary model is `[compact].model`; literal `same` uses the active session
-model. Optional focus text and `[compact].pre_hook` stdout are supplied as
+The summary model is `compact.model`; literal `same` uses the active session
+model. Optional focus text and `compact.pre_hook` stdout are supplied as
 guidance. Hook failures warn but do not block compaction.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import io
 import json
 import os
@@ -24,6 +25,9 @@ from . import persona as P
 from . import picker
 from . import providers
 from . import runtime
+from . import paths as _paths
+from . import setcmd
+from . import settings
 from .config import Config, from_env, validate_agent_id, _norm_effort
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
@@ -33,7 +37,7 @@ from .toolkit.registry import build_default_registry
 _FULL_REGISTRY = build_default_registry()
 
 
-def _registry_for(cfg) -> "object":
+def _registry_for(cfg) -> object:
     # The default registry exposes the subagent `model` override on the task tool.
     # When the operator has locked subagent model selection, rebuild without that
     # flag so the param is gone from both the tool description and its schema.
@@ -121,23 +125,6 @@ def _read_stdin_if_piped() -> str:
         return ""
 
 
-KNOBS: dict[str, dict] = {
-    "debug": {
-        "type": bool,
-        "label": "tool-call debug",
-        "key": "trace",       # runtime config key
-    },
-    "reasoning": {
-        "type": str,
-        "label": "thinking effort: off|low|medium|high|max|xhigh",
-        "key": "reasoning_effort",
-    },
-    "maxout": {
-        "type": int,
-        "label": "max output tokens per call",
-        "key": "max_output_tokens",
-    },
-}
 
 
 def _compact_cfg(cfg: Config, key: str, default):
@@ -285,71 +272,6 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         print(f"{C.ORANGE}(auto-compaction paused after two consecutive turns; resumes when context drops below trigger){C.RESET}")
 
 
-def _show_knobs(state: dict) -> None:
-    for name, meta in KNOBS.items():
-        val = state.get(meta["key"])
-        if meta["type"] is bool:
-            tag = f"{C.GREEN}on{C.RESET}" if val else f"{C.GREY}off{C.RESET}"
-        else:
-            tag = f"{C.CYAN}{val if val is not None else 'off'}{C.RESET}"
-        print(f"  {C.YELLOW}{name}{C.RESET} = {tag}  {C.GREY}({meta['label']}){C.RESET}")
-
-
-def _set_knob(line: str, state: dict) -> bool:
-    """Handle /set [name [value]]. Returns True if it was a /set command."""
-    parts = line.split()
-    # parts[0] == "/set"
-    if len(parts) == 1:
-        # bare /set — show all knobs
-        _show_knobs(state)
-        return True
-
-    name = parts[1].lower()
-    if name not in KNOBS:
-        print(f"{C.ORANGE}unknown knob: {name}{C.RESET}")
-        return True
-
-    meta = KNOBS[name]
-    key = meta["key"]
-
-    if len(parts) == 2:
-        # /set debug — show just this one
-        val = state.get(key)
-        if meta["type"] is bool:
-            tag = f"{C.GREEN}on{C.RESET}" if val else f"{C.GREY}off{C.RESET}"
-        else:
-            tag = f"{C.CYAN}{val if val is not None else 'off'}{C.RESET}"
-        print(f"  {C.YELLOW}{name}{C.RESET} = {tag}  {C.GREY}({meta['label']}){C.RESET}")
-        return True
-
-    # /set debug on — set it
-    raw_val = " ".join(parts[2:])
-    if meta["type"] is bool:
-        parsed = _parse_bool(raw_val)
-        if parsed is None:
-            print(f"{C.ORANGE}{name} expects on/off, got: {raw_val}{C.RESET}")
-            return True
-        state[key] = parsed
-        tag = f"{C.GREEN}on{C.RESET}" if parsed else f"{C.GREY}off{C.RESET}"
-        print(f"  {C.YELLOW}{name}{C.RESET} = {tag}")
-    elif meta["type"] is int:
-        if raw_val.lower() in {"auto", "off", "default"}:
-            state[key] = None
-            print(f"  {C.YELLOW}{name}{C.RESET} = {C.CYAN}auto{C.RESET}")
-            return True
-        try:
-            state[key] = int(raw_val)
-        except ValueError:
-            print(f"{C.ORANGE}{name} expects an integer or 'auto', got: {raw_val}{C.RESET}")
-            return True
-        print(f"  {C.YELLOW}{name}{C.RESET} = {C.CYAN}{state[key]}{C.RESET}")
-    else:
-        if name == "reasoning":
-            raw_val = _norm_effort(raw_val)
-        state[key] = raw_val
-        shown = raw_val if raw_val is not None else "off"
-        print(f"  {C.YELLOW}{name}{C.RESET} = {C.CYAN}{shown}{C.RESET}")
-    return True
 
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
@@ -400,6 +322,8 @@ BANNER = f"""\
 HELP_TEXT = f"""\
 {C.MAGENTA}commands:{C.RESET}
   {C.YELLOW}/help{C.RESET}            show this message
+  {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
+  {C.YELLOW}/show [key]{C.RESET}      list every knob and its current value
   {C.YELLOW}/model <name>{C.RESET}    switch model for this session
   {C.YELLOW}/model{C.RESET}             open interactive provider/model picker
   {C.YELLOW}/pick-model{C.RESET}       open interactive provider/model picker
@@ -525,6 +449,46 @@ def _force_refresh_model_catalog() -> bool:
     return True
 
 
+def _flatten_toml(data: dict, prefix: str = "") -> list[tuple[str, str]]:
+    """Flatten a nested TOML dict into (dotted_key, scalar_str) set-line pairs.
+    Tables recurse; lists / arrays-of-tables become a JSON value."""
+    out: list[tuple[str, str]] = []
+    for key, value in data.items():
+        dotted = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.extend(_flatten_toml(value, prefix=f"{dotted}."))
+        elif isinstance(value, bool):
+            out.append((dotted, "on" if value else "off"))
+        elif isinstance(value, (list, tuple)):
+            out.append((dotted, json.dumps(value)))
+        else:
+            out.append((dotted, str(value)))
+    return out
+
+
+def _run_migrate_config() -> int:
+    """One-shot: convert a legacy config.toml into a jsrc set-script, then exit."""
+    import tomllib
+
+    legacy = _paths.legacy_global_config_file()
+    target = _paths.global_config_file()
+    if not legacy.exists():
+        print(f"{C.ORANGE}no legacy config at {legacy}{C.RESET}", file=sys.stderr)
+        return 1
+    if target.exists():
+        print(f"{C.ORANGE}{target} already exists; remove it first to re-migrate{C.RESET}", file=sys.stderr)
+        return 1
+    with legacy.open("rb") as fp:
+        data = tomllib.load(fp)
+    lines = ["# migrated from config.toml by `js --migrate-config`", ""]
+    lines.extend(f"set {key} {value}" for key, value in _flatten_toml(data))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{C.GREEN}wrote {target}{C.RESET} from {legacy}")
+    print(f"{C.GREY}review it, then delete {legacy} when satisfied (this flag is removed after 2 releases){C.RESET}")
+    return 0
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in {"exit", "quit", ":q"}:
@@ -536,8 +500,13 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/refresh-model-catalog":
         _force_refresh_model_catalog()
         return True
-    if line.startswith("/set"):
-        return _set_knob(line, state)
+    if line.startswith(("/set", "/show")):
+        result = setcmd.run_repl_command(state["settings"], line)
+        if result.error:
+            print(f"{C.ORANGE}{result.error}{C.RESET}")
+        for out in result.lines:
+            print(out)
+        return True
     if line.startswith("/model "):
         model_value = line[len("/model "):].strip()
         parsed_provider_id, parsed_model = providers.parse_model_prefix(model_value)
@@ -1032,8 +1001,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
-    parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/config.toml and .js/config.local.toml")
-    parser.add_argument("--ignore-global", action="store_true", help="ignore the platform config.toml")
+    parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
+    parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
+    parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
     parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
     parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
@@ -1125,6 +1095,9 @@ def main(argv: list[str] | None = None) -> int:
                              reasoning=args.reasoning, maxout=args.max_out,
                              extras=args.extras)
 
+    if args.migrate_config:
+        return _run_migrate_config()
+
     if args.commit:
         if args.agent:
             print(f"{C.ORANGE}error: --commit always uses the built-in commit agent; omit --agent{C.RESET}", file=sys.stderr)
@@ -1186,6 +1159,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
     M.append_mark(cfg.session_file, "session_start")
 
+    live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
+    if args.reasoning is not None:
+        settings.set_dotted(live_settings, ("model", "reasoning_effort"), _norm_effort(args.reasoning))
+    if args.max_out is not None:
+        settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     state = {
         "running": True,
         "messages": messages,
@@ -1195,9 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider_base_url": cfg.provider_base_url,
         "provider_api_key": cfg.provider_api_key,
         "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
-        "trace": cfg.trace,
-        "reasoning_effort": _norm_effort(args.reasoning) if args.reasoning is not None else cfg.reasoning_effort,
-        "max_output_tokens": args.max_out if args.max_out is not None else cfg.max_output_tokens,
+        "settings": live_settings,
         "tool_registry": active_registry,
         "compact_notified": False,
         "compact_consecutive": 0,
@@ -1226,9 +1202,9 @@ def main(argv: list[str] | None = None) -> int:
             turn_cfg = _cfg_for_active_model(cfg, state)
             runtime.run_turn(turn_cfg, state["system"], state["messages"],
                              telemetry,
-                             trace_override=state["trace"],
-                             reasoning_effort_override=state["reasoning_effort"],
-                             max_output_override=state["max_output_tokens"],
+                             trace_override=bool(settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)),
+                             reasoning_effort_override=settings.get_dotted(state["settings"], ("model", "reasoning_effort")),
+                             max_output_override=settings.get_dotted(state["settings"], ("model", "max_output_tokens")),
                              tool_registry=state["tool_registry"])
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:

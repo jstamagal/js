@@ -62,10 +62,10 @@ def make_cfg(tmp_path: Path, agent: str, prompts: Path) -> Config:
     )
 
 
-def prompt_dir(tmp_path: Path, agent: str, manifest: str = "---\ntools: []\n---\n", body: str = "WORKER\n") -> Path:
+def prompt_dir(tmp_path: Path, agent: str, manifest: str = "tools: []\n", body: str = "WORKER\n") -> Path:
     prompts = tmp_path / "prompts" / agent
     prompts.mkdir(parents=True)
-    (prompts / "00-tools.md").write_text(manifest, encoding="utf-8")
+    (prompts / "00-tools.yaml").write_text(manifest, encoding="utf-8")
     (prompts / "01-body.md").write_text(body, encoding="utf-8")
     return prompts
 
@@ -101,7 +101,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     ):
         worker = root / "worker"
         worker.mkdir(parents=True)
-        (worker / "00-tools.md").write_text(f"---\ntools:\n  - {tool}\n---\n", encoding="utf-8")
+        (worker / "00-tools.yaml").write_text(f"tools:\n  - {tool}\n", encoding="utf-8")
         (worker / "01-body.md").write_text(body, encoding="utf-8")
 
     def from_env_stub(*, save_session: bool = True):
@@ -147,7 +147,7 @@ def test_task_rejects_non_string_task_items(tmp_path):
 
 
 def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools: []\n---\n", "WORKER\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools: []\n", "WORKER\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path)
     parent.task_depth = 1
@@ -161,7 +161,7 @@ def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_
     assert "recursion depth limit reached (1)" not in actual
 
 def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - undo\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "owned.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -189,7 +189,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
 
 
 def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - write\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - write\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "guard.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -216,7 +216,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
 
 
 def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - todo_write\n  - fs_search\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_write\n  - fs_search\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
@@ -245,7 +245,7 @@ def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
 
 
 def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "workerx", "---\ntools:\n  - todo_read\n---\n", "WORKERX SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - todo_read\n", "WORKERX SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen: dict[str, object] = {}
 
@@ -268,7 +268,7 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
 
 
 def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - todo_read\n---\n", "WORKER SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n", "WORKER SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     registry = build_default_registry(prompts_root=prompts.parent)
     tool = registry.resolve("worker")
@@ -293,7 +293,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
 
 
 def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - todo_read\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen_tools: list[list[str]] = []
     seen_message_counts: list[int] = []
@@ -336,7 +336,7 @@ def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
 
 
 def test_two_concurrent_workers_have_no_todo_state_bleed(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - todo_write\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_write\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     tool_results: list[str] = []
     lock = threading.Lock()
@@ -381,7 +381,7 @@ def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_pat
 
 
 def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "---\ntools:\n  - todo_read\n---\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path)
     parent.tool_registry = select(["shell", "write"])

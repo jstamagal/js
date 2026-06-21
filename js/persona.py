@@ -1,8 +1,9 @@
-"""Load agent prompts and optional tool-surface frontmatter."""
+"""Load agent prompts and optional YAML tool manifests."""
 
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,42 @@ class PromptSpec:
 def _is_zero_file(path: Path) -> bool:
     stem = path.stem
     return stem == "00" or stem.startswith("00-") or stem.startswith("00_")
+
+
+_DEPRECATED_MD_MANIFEST_NOTES: set[Path] = set()
+
+
+def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
+    candidates = sorted(p for p in prompts_dir.glob("00*.yaml") if _is_zero_file(p))
+    preferred = prompts_dir / "00-tools.yaml"
+    if preferred in candidates:
+        return preferred
+    return candidates[0] if candidates else None
+
+
+def _load_yaml_manifest(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML manifest in {path}: {exc}") from exc
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML manifest in {path} must be a mapping")
+    return data
+
+
+def _emit_deprecated_md_manifest_note(path: Path) -> None:
+    key = path.resolve()
+    if key in _DEPRECATED_MD_MANIFEST_NOTES:
+        return
+    _DEPRECATED_MD_MANIFEST_NOTES.add(key)
+    print(
+        "NOTE: 00-tools.md frontmatter manifests are deprecated in favor of "
+        f"00-tools.yaml (sunset after 2 releases): {path}",
+        file=sys.stderr,
+    )
 
 
 def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
@@ -67,9 +104,9 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return tuple(selectors)
 
 
-# Sampling params an agent may set in its 00-tools.md frontmatter, mapped to the
-# JS_* env knobs model_client already honors. Frontmatter is the BASE; an explicit
-# JS_* env var still overrides it (see _apply_sampling_env).
+# Sampling params an agent may set in its YAML manifest, mapped to the JS_* env
+# knobs model_client already honors. The manifest is the BASE; an explicit JS_*
+# env var still overrides it (see _apply_sampling_env).
 _SAMPLING_ENV = {
     "temperature": "JS_TEMP",
     "top_p": "JS_TOPP",
@@ -97,8 +134,8 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
 
 
 def _apply_sampling_env(sampling: dict[str, Any]) -> None:
-    """Export frontmatter sampling to the JS_* env knobs, without clobbering an
-    explicit env var the operator already set (env wins over frontmatter)."""
+    """Export manifest sampling to the JS_* env knobs, without clobbering an
+    explicit env var the operator already set (env wins over the manifest)."""
     for key, env_name in _SAMPLING_ENV.items():
         if key in sampling and not os.environ.get(env_name):
             os.environ[env_name] = str(sampling[key])
@@ -118,7 +155,9 @@ def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_age
     """Resolve project > global > repo prompt roots for one agent id."""
     for root in (project_agents_root, global_agents_root, repo_prompts_root):
         candidate = root / agent_id
-        if candidate.is_dir() and any(candidate.glob("*.md")):
+        if not candidate.is_dir():
+            continue
+        if any(candidate.glob("*.md")) or _find_yaml_zero_file(candidate) is not None:
             return candidate
     return repo_prompts_root / agent_id
 
@@ -143,25 +182,37 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
         raise FileNotFoundError(
             f"prompts directory missing at {prompts_dir}. "
-            f"Drop .md files in there to set the system prompt."
-        )
-    files = sorted(prompts_dir.glob("*.md"))
-    if not files:
-        raise FileNotFoundError(
-            f"prompts directory {prompts_dir} has no .md files."
+            f"Drop .md prompt files and an optional 00-tools.yaml manifest in there."
         )
 
-    zero_file = next((p for p in files if _is_zero_file(p)), None)
+    md_files = sorted(prompts_dir.glob("*.md"))
+    yaml_zero_file = _find_yaml_zero_file(prompts_dir)
+    if not md_files and yaml_zero_file is None:
+        raise FileNotFoundError(
+            f"prompts directory {prompts_dir} has no .md prompt files or 00*.yaml manifest."
+        )
+
+    markdown_zero_file = next((p for p in md_files if _is_zero_file(p)), None)
     selectors: tuple[str, ...] = ()
     sampling: dict[str, Any] = {}
     model: str = ""
     secondary_model: str = ""
     parts: list[str] = []
 
-    for path in files:
+    if yaml_zero_file is not None:
+        manifest = _load_yaml_manifest(yaml_zero_file)
+        selectors = _coerce_tool_selectors(yaml_zero_file, manifest.get("tools"))
+        sampling = _coerce_sampling(yaml_zero_file, manifest.get("sampling"))
+        model = str(manifest.get("model") or "").strip()
+        secondary_model = str(manifest.get("secondary_model") or "").strip()
+
+    for path in md_files:
+        if yaml_zero_file is not None and _is_zero_file(path):
+            continue
         text = path.read_text(encoding="utf-8")
         body = text.rstrip()
-        if path == zero_file:
+        if yaml_zero_file is None and path == markdown_zero_file:
+            _emit_deprecated_md_manifest_note(path)
             frontmatter, body = _split_frontmatter(path, text)
             if frontmatter is not None:
                 selectors = _coerce_tool_selectors(path, frontmatter.get("tools"))

@@ -94,7 +94,7 @@ def test_memory_append_mark_append_message_and_wipe_rotate_session(tmp_path):
     assert memory.load_messages(actual_backup) == expected_messages
 
 
-def test_from_env_toml_boolean_numeric_settings_fall_back_to_defaults(monkeypatch, tmp_path):
+def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_SESSION", raising=False)
     for name in (
@@ -107,19 +107,17 @@ def test_from_env_toml_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
         monkeypatch.delenv(name, raising=False)
     config_dir = tmp_path / ".config" / "js"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text(
-        """[model]
-max_output_tokens = true
-[limits]
-max_tool_iterations = true
-max_bash_output_bytes = true
-max_tool_result_bytes = true
-fetch_timeout_s = true
-max_read_lines = true
-max_line_chars = true
-max_file_bytes = true
-task_max_depth = true
-wiki_vault_lock_timeout_s = true
+    (config_dir / "jsrc").write_text(
+        """set model.max_output_tokens true
+set limits.max_tool_iterations true
+set limits.max_bash_output_bytes true
+set limits.max_tool_result_bytes true
+set limits.fetch_timeout_s true
+set limits.max_read_lines true
+set limits.max_line_chars true
+set limits.max_file_bytes true
+set limits.task_max_depth true
+set limits.wiki_vault_lock_timeout_s true
 """,
         encoding="utf-8",
     )
