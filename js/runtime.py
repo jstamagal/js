@@ -263,17 +263,18 @@ def _canonical_tool_args(raw: str) -> str:
     unparseable args to ``"{}"`` (logging "invalid-tool-args"), so the model
     sees its own prior call as empty and flails.
 
-    To keep history and execution consistent we substitute the repaired,
-    canonical JSON *only* when the raw string would otherwise be blanked. Valid
-    args are returned untouched so the model's exact bytes are preserved on the
-    happy path. If even the repair fails, the raw string is returned unchanged
-    (the SDK will blank it — nothing we can recover there).
+    To keep history and execution consistent we return the raw bytes untouched
+    only when they are already a JSON *object*. Otherwise — unparseable args, or
+    args that are valid JSON of the wrong shape (a double-encoded string wrapping
+    the real object) — we substitute the repaired, canonical object so history
+    matches what executed. If even the repair fails, the raw string is returned
+    unchanged (the SDK will blank it — nothing we can recover there).
     """
     if not raw:
         return raw
     try:
-        json.loads(raw)
-        return raw  # already valid — preserve exact bytes
+        if isinstance(json.loads(raw), dict):
+            return raw  # already a valid object — preserve exact bytes
     except (json.JSONDecodeError, TypeError):
         pass
     try:

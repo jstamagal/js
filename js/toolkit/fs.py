@@ -36,6 +36,69 @@ _IMAGE_MIME_BY_EXT = {
     ".gif": "image/gif",
 }
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
+_TRASH_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str]) -> Path:
+    path = Path(os.path.expanduser(str(raw)))
+    if not path.is_absolute():
+        path = context.cwd / path
+    return Path(os.path.abspath(path))
+
+
+def _path_size_no_follow(path: Path, *, cap: int = _TRASH_MAX_BYTES + 1) -> int:
+    try:
+        if path.is_symlink() or path.is_file():
+            return path.lstat().st_size
+        total = path.lstat().st_size
+        if path.is_dir():
+            for root, dirs, files in os.walk(path, followlinks=False):
+                for name in (*dirs, *files):
+                    try:
+                        total += (Path(root) / name).lstat().st_size
+                    except OSError:
+                        continue
+                    if total > cap:
+                        return total
+        return total
+    except OSError:
+        return cap
+
+
+def _trash_command() -> str | None:
+    for command in ("trash", "trash-put"):
+        found = shutil.which(command)
+        if found:
+            return found
+    return None
+
+
+def _snapshot_remove_target(context: ToolContext, target: Path) -> None:
+    if target.is_symlink():
+        context.snapshots.setdefault(target, []).append({"kind": "symlink", "target": os.readlink(target)})
+        return
+    context.snapshot(target)
+
+
+def _delete_target_no_follow(target: Path) -> None:
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+
+def _trash_target(target: Path, context: ToolContext) -> str | None:
+    command = _trash_command()
+    if not command:
+        return "ERROR: trash command not found; pass permanent=true to delete without trash."
+    rc, _out, err = run([command, str(target)], context=context, timeout=120)
+    if rc != 0:
+        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}"
+    return None
+
+
 
 
 
@@ -257,17 +320,23 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
-def remove(path: str, context: ToolContext | None = None) -> str:
+def remove(path: str, permanent: bool | None = False, context: ToolContext | None = None) -> str:
     assert context is not None
-    target = context.resolve_path(path)
-    if not target.exists():
+    target = _resolve_path_no_follow(context, path)
+    if not target.exists() and not target.is_symlink():
         return f"ERROR: no such path: {target}"
     try:
-        context.snapshot(target)
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
+        size = _path_size_no_follow(target)
+        if not permanent and size > _TRASH_MAX_BYTES:
+            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with KING and pass permanent=true to delete directly."
+        _snapshot_remove_target(context, target)
+        if not permanent:
+            error = _trash_target(target, context)
+            if error:
+                context.snapshots.get(target, []).pop()
+                return error
+            return f"trashed {target}"
+        _delete_target_no_follow(target)
     except OSError as exc:
         return f"ERROR: {exc}"
     return f"removed {target}"
@@ -281,11 +350,19 @@ def undo(path: str, context: ToolContext | None = None) -> str:
         return f"ERROR: no snapshot available for {target}"
     previous = stack.pop()
     try:
-        if isinstance(previous, dict) and previous.get("kind") == "directory":
-            if target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
+        if isinstance(previous, dict) and previous.get("kind") == "symlink":
+            if target.is_symlink() or target.is_file():
                 target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(previous["target"])
+            return f"restored symlink {target}"
+        if isinstance(previous, dict) and previous.get("kind") == "directory":
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
             target.mkdir(parents=True, exist_ok=True)
             entries = previous.get("entries", {})
             for rel, data in entries.items():
@@ -297,10 +374,10 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     child.write_bytes(data or b"")
             return f"restored directory {target}"
         if previous is None:
-            if target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
+            if target.is_symlink() or target.is_file():
                 target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
             return f"restored deletion state for {target}"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(previous)
@@ -747,7 +824,7 @@ def tools() -> tuple[Tool, ...]:
             {"queries": {"type": "array", "items": {"type": "object"}, "description": "Natural-language query strings or objects with query/use_case/path/glob/limit."}},
             required=("queries",),
         ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}}, required=("path",)),
+        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after KING confirms permanent deletion."}}, required=("path",)),
         Tool(
             "patch",
             load_description("patch"),

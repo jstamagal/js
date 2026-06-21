@@ -52,6 +52,24 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert not hasattr(actual, "memory_file")
 
 
+def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+
+    personal_default = tmp_path / ".config" / "js" / "agents" / "defaultagent"
+    personal_default.mkdir(parents=True)
+    (personal_default / "00-tools.md").write_text("---\ntools: []\n---\n", encoding="utf-8")
+    (personal_default / "01-prompt.md").write_text("personal defaultagent\n", encoding="utf-8")
+
+    from js.config import from_env
+
+    actual = from_env(save_session=False)
+
+    assert actual.agent_id == "defaultagent"
+    assert actual.prompts_dir == personal_default
+
+
 def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)

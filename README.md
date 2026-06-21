@@ -74,6 +74,7 @@ docs/                             full user and technical documentation
 Do not reintroduce legacy aliases such as `fs_read`, `fs_write`, `cat`, `grep`,
 or `semantic_search`; use the canonical tool names documented in
 [docs/tools-reference.md](docs/tools-reference.md).
+FIXME: fs_read seems pretty live to me?
 
 ## Config And Model Defaults
 Config files layer as the platform config `config.toml`, project `.js/config.toml`,

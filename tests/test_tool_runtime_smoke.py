@@ -86,7 +86,7 @@ def test_remove_directory_snapshot_can_be_restored_by_undo(tmp_path):
     (root / "top.txt").write_text("top\n", encoding="utf-8")
     (nested / "child.txt").write_text("child\n", encoding="utf-8")
 
-    remove_result = fs.remove("tree", context=context)
+    remove_result = fs.remove("tree", permanent=True, context=context)
     undo_result = fs.undo("tree", context=context)
 
     assert remove_result == f"removed {root}"
@@ -94,6 +94,62 @@ def test_remove_directory_snapshot_can_be_restored_by_undo(tmp_path):
     assert (root / "top.txt").read_text(encoding="utf-8") == "top\n"
     assert (nested / "child.txt").read_text(encoding="utf-8") == "child\n"
 
+
+def test_remove_small_file_uses_trash_by_default(tmp_path, monkeypatch):
+    context = ToolContext(cwd=tmp_path)
+    target = tmp_path / "small.txt"
+    target.write_text("small\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(command, context, timeout):
+        calls.append(command)
+        target.unlink()
+        return 0, "", ""
+
+    monkeypatch.setattr(fs, "_trash_command", lambda: "/usr/bin/trash")
+    monkeypatch.setattr(fs, "run", fake_run)
+
+    result = fs.remove("small.txt", context=context)
+
+    assert result == f"trashed {target}"
+    assert calls == [["/usr/bin/trash", str(target)]]
+    assert not target.exists()
+
+
+def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatch):
+    context = ToolContext(cwd=tmp_path)
+    target = tmp_path / "big.log"
+    target.write_text("not actually big\n", encoding="utf-8")
+
+    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path: fs._TRASH_MAX_BYTES + 1)
+
+    result = fs.remove("big.log", context=context)
+
+    assert result == (
+        f"ERROR: target is over the 512 MiB trash limit ({fs._TRASH_MAX_BYTES + 1} bytes); "
+        "confirm with KING and pass permanent=true to delete directly."
+    )
+    assert target.exists()
+    assert not context.snapshots.get(target)
+
+
+def test_remove_symlink_does_not_follow_target_and_undo_restores_link(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "keep.txt"
+    kept.write_text("keep\n", encoding="utf-8")
+    link = tmp_path / "link"
+    link.symlink_to(outside, target_is_directory=True)
+
+    remove_result = fs.remove("link", permanent=True, context=context)
+    undo_result = fs.undo("link", context=context)
+
+    assert remove_result == f"removed {link}"
+    assert kept.read_text(encoding="utf-8") == "keep\n"
+    assert undo_result == f"restored symlink {link}"
+    assert link.is_symlink()
+    assert link.readlink() == outside
 
 def test_fs_search_negative_bounds_are_ignored(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
@@ -198,6 +254,19 @@ def test_canonical_tool_args_preserves_valid_and_repairs_blankable():
         fixed = runtime._canonical_tool_args(bad)
         import json as _json
         assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
+
+
+def test_canonical_tool_args_unwraps_double_encoded_object():
+    # O2: a double-encoded payload — valid JSON, but a STRING wrapping the real
+    # object — is what local OpenAI-shaped servers (vLLM/llama.cpp/qwen) tend to
+    # emit. Execution unwraps it via _repair_jsonish; history must match, or the
+    # model is shown its own prior call as a quoted blob and imitates it. The bug
+    # was returning the raw string untouched because it happens to be valid JSON.
+    import json as _json
+    double = '"{\\"file_path\\": \\"/tmp/out.md\\", \\"content\\": \\"hi\\"}"'
+    fixed = runtime._canonical_tool_args(double)
+    assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
+    assert isinstance(_json.loads(fixed), dict)
 
 
 def test_canonical_tool_args_survives_sdk_integrity_pass():
