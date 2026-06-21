@@ -92,10 +92,10 @@ REPL commands:
 /login <id> [url] [key]        shorthand for /provider + /baseurl + /apikey
 /logout                        clear provider/baseurl/apikey for this session
 /models [max]                  list available models from the active provider
-/set
-/set debug on|off
-/set reasoning off|low|medium|high|max|xhigh
-/set maxout <tokens>|auto
+/set [key [val]]              list knobs, show one, or change one
+/show [key]                   list all current config values or one key
+/set model.reasoning_effort high
+/set compact.auto off
 /turns
 /persona
 /session
@@ -155,10 +155,15 @@ js -p "prompt" --debug
 js -p "prompt" --debug-file /tmp/js-debug.log
 js -p "prompt" --reasoning off
 js -p "prompt" --max-out 64000
+js --migrate-config
 ```
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
 file and keeps stdout clean. They are mutually exclusive.
+
+`--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
+[Configuration And Sessions](configuration-and-sessions.md) for the file-level
+details.
 
 ## Pipe Mode
 
@@ -327,5 +332,5 @@ The memory layer is append-only JSONL plus control marks:
 
 Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. Automatic cache-aware
-compaction is controlled by `[compact].auto` and the `[compact]` thresholds in
-the platform config `config.toml` / project `.js/config.toml`.
+compaction is controlled by `set compact.auto` and the `set compact.*` knobs in
+platform `jsrc` or project `.js/jsrc`.

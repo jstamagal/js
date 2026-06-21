@@ -47,7 +47,7 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     latest = json.loads((expected_agent_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
     # First-run template is written to the platform config dir.
-    assert (tmp_path / ".config" / "js" / "config.toml").exists()
+    assert (tmp_path / ".config" / "js" / "jsrc").exists()
 
     assert not hasattr(actual, "memory_file")
 
@@ -528,7 +528,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
     monkeypatch.setenv("JS_MODEL", "from-js-model")
     config_dir = tmp_path / ".config" / "js"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[model]\nid = "from-config"\n', encoding="utf-8")
+    (config_dir / "jsrc").write_text("set model.id from-config\n", encoding="utf-8")
     session_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-env-model.jsonl"

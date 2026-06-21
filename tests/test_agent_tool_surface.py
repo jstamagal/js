@@ -50,11 +50,16 @@ def cfg(tmp_path: Path, prompts: Path) -> Config:
     )
 
 
-def write_prompt_dir(tmp_path: Path, zero: str | None, *rest: tuple[str, str]) -> Path:
+def write_prompt_dir(
+    tmp_path: Path,
+    zero: str | None,
+    *rest: tuple[str, str],
+    zero_name: str = "00-tools.yaml",
+) -> Path:
     prompts = tmp_path / "prompts"
     prompts.mkdir(parents=True)
     if zero is not None:
-        (prompts / "00-tools.md").write_text(zero, encoding="utf-8")
+        (prompts / zero_name).write_text(zero, encoding="utf-8")
     for name, text in rest:
         (prompts / name).write_text(text, encoding="utf-8")
     return prompts
@@ -85,10 +90,17 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
     assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*"]))
 
 
-def test_frontmatter_tools_are_parsed_and_stripped_from_prompt(tmp_path):
+def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
     prompts = write_prompt_dir(
         tmp_path,
-        "---\ntools:\n  - todo_*\n---\n00 body\n",
+        (
+            "tools:\n"
+            "  - todo_*\n"
+            "model: primary-model\n"
+            "secondary_model: backup-model\n"
+            "sampling:\n"
+            "  temperature: 0.2\n"
+        ),
         ("01-first.md", "FIRST\n"),
         ("02-second.md", "SECOND\n"),
     )
@@ -96,26 +108,67 @@ def test_frontmatter_tools_are_parsed_and_stripped_from_prompt(tmp_path):
     spec = persona.load_prompt_spec(prompts)
 
     assert spec.tool_selectors == ("todo_*",)
-    assert spec.system == "00 body\n\nFIRST\n\nSECOND\n"
-    assert "---" not in spec.system
+    assert spec.model == "primary-model"
+    assert spec.secondary_model == "backup-model"
+    assert spec.sampling == {"temperature": 0.2}
+    assert spec.system == "FIRST\n\nSECOND\n"
+    assert "tools:" not in spec.system
 
 
-def test_frontmatter_only_absent_tools_empty_list_and_missing_00_default_none(tmp_path):
-    frontmatter_only = write_prompt_dir(tmp_path / "front", "---\ntools: []\n---\n", ("01.md", "BODY\n"))
-    no_tools_key = write_prompt_dir(tmp_path / "nokey", "---\nname: x\n---\nBODY\n")
+def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
+    prompts = write_prompt_dir(
+        tmp_path,
+        "tools:\n  - todo_read\n",
+        ("01.md", "BODY\n"),
+    )
+    (prompts / "00-tools.md").write_text(
+        "---\ntools:\n  - shell\n---\nLEGACY BODY\n",
+        encoding="utf-8",
+    )
+
+    spec = persona.load_prompt_spec(prompts)
+
+    assert spec.tool_selectors == ("todo_read",)
+    assert spec.system == "BODY\n"
+    assert capsys.readouterr().err == ""
+
+
+def test_yaml_manifest_absent_tools_empty_list_and_missing_00_default_none(tmp_path):
+    manifest_only = write_prompt_dir(tmp_path / "manifest", "tools: []\n", ("01.md", "BODY\n"))
+    no_tools_key = write_prompt_dir(tmp_path / "nokey", "name: x\n", ("01.md", "BODY\n"))
     missing_zero = write_prompt_dir(tmp_path / "missing", None, ("01.md", "BODY\n"))
 
-    assert persona.load_prompt_spec(frontmatter_only).tool_selectors == ()
-    assert persona.load_prompt_spec(frontmatter_only).system == "BODY\n"
+    assert persona.load_prompt_spec(manifest_only).tool_selectors == ()
+    assert persona.load_prompt_spec(manifest_only).system == "BODY\n"
     assert persona.load_prompt_spec(no_tools_key).tool_selectors == ()
     assert persona.load_prompt_spec(missing_zero).tool_selectors == ()
 
 
-def test_frontmatter_malformed_yaml_fails_clear(tmp_path):
-    prompts = write_prompt_dir(tmp_path, "---\ntools: [\n---\nBODY\n")
+def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
+    prompts = write_prompt_dir(tmp_path, "tools: [\n", ("01.md", "BODY\n"))
 
-    with pytest.raises(ValueError, match="invalid YAML frontmatter"):
+    with pytest.raises(ValueError, match="invalid YAML manifest"):
         persona.load_prompt_spec(prompts)
+
+
+def test_legacy_frontmatter_zero_file_still_loads_tools_once(tmp_path, capsys):
+    prompts = write_prompt_dir(
+        tmp_path,
+        "---\ntools:\n  - shell\n---\nLEGACY BODY\n",
+        ("01.md", "BODY\n"),
+        zero_name="00-tools.md",
+    )
+
+    spec = persona.load_prompt_spec(prompts)
+
+    assert spec.tool_selectors == ("shell",)
+    assert spec.system == "LEGACY BODY\n\nBODY\n"
+    first_note = capsys.readouterr().err
+    assert "00-tools.md frontmatter manifests are deprecated" in first_note
+    assert "00-tools.yaml" in first_note
+
+    persona.load_prompt_spec(prompts)
+    assert capsys.readouterr().err == ""
 
 
 def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path):

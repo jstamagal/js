@@ -5,7 +5,7 @@ from pathlib import Path
 
 import ai
 
-from js import cli, providers
+from js import cli, providers, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 
@@ -91,16 +91,28 @@ def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
     assert load_messages(cfg.session_file.with_suffix(".jsonl.bak.1")) == [{"role": "user", "content": "second"}]
 
 
-def test_set_commands_parse_power_user_knobs(capsys):
-    state = {"trace": False, "reasoning_effort": None, "max_output_tokens": None}
+def test_set_commands_parse_power_user_knobs():
+    live_settings = settings.seed_defaults()
 
-    assert cli._set_knob("/set debug on", state) is True
-    assert cli._set_knob("/set reasoning max", state) is True
-    assert cli._set_knob("/set maxout 64000", state) is True
-    assert cli._set_knob("/set maxout auto", state) is True
+    trace = setcmd.run_repl_command(live_settings, "/set runtime.trace on")
+    assert trace.error is None
+    assert trace.lines == ["runtime.trace = on"]
+    assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
 
-    assert state == {"trace": True, "reasoning_effort": "high", "max_output_tokens": None}
-    assert "maxout" in capsys.readouterr().out
+    reasoning = setcmd.run_repl_command(live_settings, "/set model.reasoning_effort max")
+    assert reasoning.error is None
+    assert reasoning.lines == ["model.reasoning_effort = max"]
+    assert settings.get_dotted(live_settings, ("model", "reasoning_effort")) == "max"
+
+    maxout = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens 64000")
+    assert maxout.error is None
+    assert maxout.lines == ["model.max_output_tokens = 64000"]
+    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
+
+    cleared = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
+    assert cleared.error is None
+    assert cleared.lines == ["model.max_output_tokens = <none>"]
+    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
 
 
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):

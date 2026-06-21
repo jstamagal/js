@@ -77,14 +77,18 @@ or `semantic_search`; use the canonical tool names documented in
 FIXME: fs_read seems pretty live to me?
 
 ## Config And Model Defaults
-Config files layer as the platform config `config.toml`, project `.js/config.toml`,
-then project `.js/config.local.toml`; env overrides files and CLI flags/`--extra`
-override env. Built-in `[model].id` defaults to `deepseek/deepseek-v4-flash`;
-`JS_MODEL` overrides configi. Explicit `[provider] id/base_url/api_key`
-are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`, and `JS_API_KEY` are env
-overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by `ai-python` when no
-explicit provider config is set.
+Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
+applied at startup. Files layer lowest-to-highest as the platform `jsrc`,
+project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
+CLI `--extra key=value` overrides env. First run writes a commented `jsrc`
+template covering every knob in the `js.settings` registry. Built-in `model.id`
+defaults to `deepseek/deepseek-v4-flash`; `JS_MODEL` overrides it. Explicit
+`set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
+and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
+`ai-python` when no explicit provider config is set. Tune any knob live with
+`/set <key> <value>` (and list them with `/show`); convert a legacy
+`config.toml` once with `js --migrate-config`.
 
 Config, logins, and the model cache live in the platform config dir; saved
 sessions live at the platform data `sessions/<agent_id>/<session>.jsonl`, and

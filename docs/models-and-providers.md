@@ -10,11 +10,11 @@ to the named provider.
 Configuration precedence is:
 
 1. built-in defaults
-2. the platform config `config.toml`
-3. project `.js/config.toml`
-4. project `.js/config.local.toml`
-5. environment variables
-6. CLI flags / repeated `--extra key.path=value`
+2. platform `jsrc`
+3. project `.js/jsrc`
+4. project `.js/jsrc.local`
+5. env vars
+6. `--extra` CLI flags (may be repeated)
 
 Model env vars:
 
@@ -22,32 +22,31 @@ Model env vars:
 export JS_MODEL=deepseek/deepseek-v4-flash
 ```
 
-Optional explicit provider config:
+Optional explicit provider config in `jsrc`:
 
-```toml
-[provider]
-id = "openai"
-base_url = "http://127.0.0.1:8317/v1"
-api_key = "sk-local"
+```text
+set provider.id openai
+set provider.base_url http://127.0.0.1:8317/v1
+set provider.api_key sk-local
 ```
 
-When `[provider] id` is set, the provider is constructed explicitly with the
-given base URL and API key. When unset, `ai.get_model(model_id)` is called and
-`ai-python` routes unprefixed ids through AI Gateway, while `provider:model`
-ids (e.g. `openai:gpt-4o`) go to the named provider using its default endpoint
-and official SDK env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
+When `provider.id` is set, the provider is constructed explicitly with the given
+base URL and API key. When unset, `ai.get_model(model_id)` is called and
+`ai-python` routes unprefixed ids through AI Gateway, while `provider:model` ids
+(e.g. `openai:gpt-4o`) go to the named provider using its default endpoint and
+official SDK env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
 
-Provider env overrides (always win over config files):
+Provider env overrides (always win over `jsrc` files):
 
 | Variable | Effect |
 | --- | --- |
-| `JS_PROVIDER` | Overrides `[provider].id` |
-| `JS_BASE_URL` | Overrides `[provider].base_url` |
-| `JS_API_KEY` | Overrides `[provider].api_key` |
+| `JS_PROVIDER` | Overrides `provider.id` |
+| `JS_BASE_URL` | Overrides `provider.base_url` |
+| `JS_API_KEY` | Overrides `provider.api_key` |
 
 Official SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by `ai-python`
-providers and do not need to be copied into `[provider]` config.
+providers and do not need to be copied into `provider.*` config.
 
 ### Login store and REPL model picker
 
@@ -166,9 +165,9 @@ carry tool calls because some reasoning providers require it on the next call.
 
 Order:
 
-1. `--max-out` or `/set maxout`
+1. `--max-out` or `/set model.max_output_tokens <tokens>`
 2. `JS_MAX_OUTPUT_TOKENS`
-3. `[model].max_output_tokens`
+3. `model.max_output_tokens` in `jsrc`
 4. models.dev metadata for the active model/provider
 5. if the catalog has no match, no explicit cap is sent
 

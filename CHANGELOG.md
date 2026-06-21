@@ -85,14 +85,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   heuristic (overridable with `JS_VISION`); when enabled, `read` sends image
   bytes for that one turn while session history keeps only a text stub, so a
   base64 image is billed once instead of resent on every following turn.
-- **Layered TOML config.** Settings layer lowest-to-highest as built-in
-  defaults, the platform `config.toml`, project `.js/config.toml`, project
-  `.js/config.local.toml`, environment variables, then repeatable CLI
-  `--extra key.path=value`. Tables deep-merge so a later file can override one
-  nested key. First run writes a fully commented `config.toml` template covering
-  every model/limits/runtime/provider/compact/wiki/artifact knob. The chosen
-  model is honored everywhere — REPL, one-shot, offline `--compact`, and drain
+- **Config as a `jsrc` set-script.** One knob registry (`js.settings.REGISTRY`)
+  is the single source of truth for every runtime knob — its dotted path, type,
+  default, env override, empty-state display, and docs. The config file is a
+  script: each line is a `set <key> <value>` command. Files layer
+  lowest-to-highest as built-in defaults, the platform `jsrc`, project
+  `.js/jsrc`, project `.js/jsrc.local`, environment variables, then repeatable
+  CLI `--extra key.path=value`. First run writes a commented `jsrc` template
+  generated from the registry; `/set` and `/show` tune knobs live in the REPL;
+  `js --migrate-config` converts a legacy `config.toml` once. The chosen model
+  is honored everywhere — REPL, one-shot, offline `--compact`, and drain
   budgeting.
+- **Agent manifests as `00-tools.yaml`.** An agent's tool/model/sampling
+  manifest is a pure-YAML `00-tools.yaml` file (config only, no prompt body);
+  prompt text stays in `01-prompt.md`. A legacy `00-tools.md` frontmatter
+  manifest is still read for two releases with a deprecation note.
 - **Append-only compaction.** `/compact [focus]`, `/compact up to here`, and
   offline `js --compact <session>` append a compaction mark instead of rewriting
   the JSONL; on load the mark rebuilds context as the system prompt, one
@@ -100,7 +107,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   backs up so an assistant `tool_calls` message is never split from its results.
   Post-turn auto-compaction triggers on context fullness, with stream usage
   capture and cache-token normalization for DeepSeek and OpenAI usage shapes. An
-  optional `[compact].pre_hook` can steer the summary.
+  optional `set compact.pre_hook` can steer the summary.
 - **Layered agent prompts.** Prompt directories are discovered from repo
   `prompts/`, global `agents/` in the platform config dir, and project
   `.js/agents/`, with project scope winning over global winning over repo.
@@ -166,7 +173,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ai[openai,anthropic]==0.2.0`.
 - **No built-in proxy route.** Default model is `deepseek/deepseek-v4-flash`;
   unprefixed model ids route through AI Gateway and `provider:model` ids go
-  directly to the named provider. Explicit `[provider] id/base_url/api_key` is
+  directly to the named provider. Explicit `set provider.id/base_url/api_key` is
   opt-in; otherwise official SDK env vars (`AI_GATEWAY_API_KEY`,
   `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
   the SDK. `JS_MODEL` overrides the configured model and `ME_MODEL` is a silent
@@ -177,7 +184,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sanitizers — so a model passing a mistyped or out-of-range argument no longer
   poisons a run.
 - **Wiki/artifact in-process mode is threaded through `ToolContext`** instead of
-  mutating `os.environ`, and runtime limits are exposed under `[limits]` (fetch
+  mutating `os.environ`, and runtime limits are exposed as `limits.*` knobs (fetch
   timeout defaults to 15s, wiki vault locks to 30s).
 - **Provider reasoning parameters use provider-accepted fields.** DeepSeek gets
   `max_reasoning_tokens=32000` when reasoning is enabled, sent via `extra_body`
@@ -193,7 +200,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is sent.
 - **Claude tool-name handling is opt-in.** The runtime no longer auto-renames
   `read`/`write`/`task` to `Read`/`Write`/`Task` whenever the model id contains
-  "claude"; the rename is now configured via `[[tools.alias_profiles]]`, which
+  "claude"; the rename is now configured via `set tools.alias_profiles`, which
   matches model/provider substrings and rewrites schema names (and backtick
   cross-references) outbound while dispatching the alias back to the canonical
   handler. No profiles ship by default, so default tool names are unchanged.
@@ -217,10 +224,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **LiteLLM.** The `litellm` dependency, the `litellm_proxy` pytest marker, and
   the regenerated `uv.lock` no longer carry LiteLLM or any of its transitive
   dependencies.
-- **Legacy proxy and aliasing config.** Removed `[provider.extra]`,
-  `provider.api_base`, `OPENAI_API_BASE`, and the implicit
-  "model id contains claude" tool-alias magic. Use explicit `[provider]`
-  settings, official SDK env vars, or opt-in `[[tools.alias_profiles]]`.
+- **Legacy proxy and aliasing config.** Removed `provider.api_base`,
+  `OPENAI_API_BASE`, and the implicit "model id contains claude" tool-alias
+  magic. Use explicit `set provider.id/base_url/api_key`, official SDK env vars,
+  or opt-in `set tools.alias_profiles`.
 - **Transitional `fs_*` tool names** retired for the canonical lowercase surface
   during the tool-definitions rework. (Earlier Forge-era aliases such as
   `read_file`/`write_file`/`grep`/`bash` were also dropped.)

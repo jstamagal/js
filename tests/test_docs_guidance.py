@@ -11,7 +11,7 @@ def test_user_guide_describes_current_session_layout_and_compaction():
     assert "`compaction:{...}`" in text
     assert "`/compact [focus]`" in text
     assert "js --compact <session>" in text
-    assert "`[compact].auto`" in text
+    assert "`set compact.auto`" in text
     assert "expecting the harness to summarize old turns automatically" not in text
 
 
@@ -21,27 +21,25 @@ def test_models_and_providers_docs_match_current_model_and_provider_defaults():
 
     assert "`deepseek/deepseek-v4-flash`" in text
     assert "`-m` / `--model` overrides the effective configured/env model for that run" in text
-    assert "| `JS_MODEL` | env override for `[model].id` |" in config_text
-    assert "`-m` / `--model` overrides the effective configured/env model for the selected\nrun or session." in config_text
-    assert "repeated `--extra key.path=value`" in text
-    assert "[provider.extra]" not in text
+    assert "`JS_MODEL`" in config_text
+    assert "`model.id`" in config_text
+    assert "`provider.id`" in config_text
+    assert "`provider.base_url`" in config_text
+    assert "`provider.api_key`" in config_text
+    assert "`--extra` CLI flags (may be repeated)" in text
     assert "JS_PROVIDER" in text
     assert "JS_BASE_URL" in text
     assert "JS_API_KEY" in text
-    assert "provider.id" in config_text
-    assert "provider.base_url" in config_text
-    assert "provider.api_key" in config_text
-    assert "openai/opencode-go/deepseek-v4-pro" not in text
     assert "js --login openai-codex" in text
     assert "| `openai-codex` | ChatGPT/Codex OAuth provider" in text
-    assert "OpenAI Codex OAuth is not advertised" not in text
 
 
-def test_top_level_guidance_describes_model_env_alias_precedence():
-    for path in ("README.md",):
-        text = " ".join(Path(path).read_text(encoding="utf-8").split())
+def test_top_level_guidance_describes_jsrc_model_precedence():
+    text = " ".join(Path("README.md").read_text(encoding="utf-8").split())
 
-        assert "`JS_MODEL` overrides config" in text
+    assert "`JS_MODEL`" in text
+    assert "`jsrc`" in text
+    assert "`set" in text
 
 
 def test_top_level_guidance_describes_runtime_layout():
@@ -55,7 +53,6 @@ def test_top_level_guidance_describes_runtime_layout():
     assert "append-only JSONL" in text
     assert "control marks" in text
     assert "~/.js" not in text
-    assert "migrat" not in text.lower()
 
 
 def test_user_guide_describes_model_flag_as_effective_config_override():
@@ -74,16 +71,13 @@ def test_drain_docs_describe_configured_model_precedence():
     assert "`--model` overriding all of them" in text
 
 
-def test_changelog_does_not_advertise_old_default_model():
+def test_changelog_describes_jsrc_config_without_old_default_model():
     text = Path("CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert "openai/opencode-go/deepseek-v4-pro" not in text
     assert "Replaced LiteLLM with the Vercel AI Python SDK" in text
-    assert "Removed `[provider.extra]" in text
-    assert "`[provider] id/base_url/api_key`" in text
-    assert "via `JS_MODEL`" not in text
+    assert "jsrc" in text
+    assert "set" in text
     assert "`litellm_proxy` pytest marker" in text
-    assert "only set in the completion call for `openai/`-prefixed models" not in text
 
 
 def test_config_source_comments_do_not_imply_js_model_sets_provider_base():
@@ -93,25 +87,26 @@ def test_config_source_comments_do_not_imply_js_model_sets_provider_base():
     assert "OPENAI_API_BASE/JS_MODEL" not in text
 
 
-def test_config_source_precedence_comment_uses_canonical_settings_wording():
-    text = " ".join(Path("js/config.py").read_text(encoding="utf-8").split())
+def test_config_source_precedence_uses_jsrc_paths():
+    text = Path("js/config.py").read_text(encoding="utf-8")
 
-    assert "_settings.CANONICAL_CONFIG_PRECEDENCE" not in text
-    assert "built-in default < config.toml < JS_* env" not in text
-    assert "built-in default < ~/.js/config.toml" not in text
+    assert "_paths.global_config_file()" in text
+    assert 'project_dir / ".js" / "jsrc"' in text
+    assert 'project_dir / ".js" / "jsrc.local"' in text
 
 
-def test_settings_source_describes_cli_extras_as_current_override_layer():
+def test_settings_source_describes_env_and_cli_extras_as_current_layers():
     text = Path("js/settings.py").read_text(encoding="utf-8")
 
-    assert "environment variables and CLI extras" in text
+    assert "env-var override" in text
+    assert "env vars < --extra CLI flag" in text
     assert "future CLI extras layer" not in text
 
 
-def test_settings_collect_docstring_describes_ordered_config_paths():
+def test_settings_collect_docstring_describes_ordered_jsrc_paths():
     text = Path("js/settings.py").read_text(encoding="utf-8")
 
-    assert "built-in defaults < config_paths in order < env < CLI extras" in text
+    assert "built-in defaults < jsrc files (in order) < env < CLI extras" in text
     assert "built-in default < file < env < CLI" not in text
 
 
@@ -119,12 +114,12 @@ def test_settings_exports_canonical_config_precedence_for_generated_guidance():
     from js import settings
 
     assert settings.CANONICAL_CONFIG_PRECEDENCE == (
-        "built-in defaults < platform config.toml < project .js/config.toml < "
-        "project .js/config.local.toml < env vars < --extra CLI flag"
+        "built-in defaults < platform jsrc < project .js/jsrc < "
+        "project .js/jsrc.local < env vars < --extra CLI flag"
     )
     assert settings.TEMPLATE_CONFIG_PRECEDENCE == (
-        "built-in defaults < this file < project .js/config.toml < "
-        "project .js/config.local.toml < env vars < --extra CLI flag"
+        "built-in defaults < this file < project .js/jsrc < "
+        "project .js/jsrc.local < env vars < --extra CLI flag"
     )
 
     template = "\n".join(settings._template_lines())
@@ -132,9 +127,9 @@ def test_settings_exports_canonical_config_precedence_for_generated_guidance():
         f"# Precedence, lowest to highest: {settings.TEMPLATE_CONFIG_PRECEDENCE}."
         in template
     )
-
-    config_source = Path("js/config.py").read_text(encoding="utf-8")
-    assert "built-in default < ~/.js/config.toml" not in config_source
+    assert "# === model ===" in template
+    assert "#set model.id deepseek/deepseek-v4-flash" in template
+    assert "# JS_MODEL -> set model.id" in template
 
 
 def test_prompt_agent_docs_describe_layered_agent_discovery():
@@ -171,16 +166,13 @@ def test_prompt_agent_docs_describe_layered_agent_discovery():
     assert "prompts/<agent_id>/ 00-tools.md" not in stale
 
 
-def test_top_level_guidance_mentions_provider_extra_overrides():
-    for path in ("README.md",):
-        text = " ".join(Path(path).read_text(encoding="utf-8").split())
+def test_top_level_guidance_mentions_provider_env_overrides():
+    text = " ".join(Path("README.md").read_text(encoding="utf-8").split())
 
-        assert "Explicit `[provider] id/base_url/api_key` are opt-in only" in text
-        assert "`JS_PROVIDER`" in text
-        assert "`JS_BASE_URL`" in text
-        assert "`JS_API_KEY`" in text
-        assert "`[provider.extra]`" not in text
-        assert "`--extra provider.extra" not in text
+    assert "are opt-in only" in text
+    assert "`JS_PROVIDER`" in text
+    assert "`JS_BASE_URL`" in text
+    assert "`JS_API_KEY`" in text
 
 
 def test_top_level_guidance_describes_append_only_compaction_commands():

@@ -271,7 +271,7 @@ def test_main_uses_layered_config_model_for_auto_budget_when_no_env_or_flag(tmp_
     vault = tmp_path / "vault"
     (vault / "inbox").mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
-    (project / ".js" / "config.toml").write_text('[model]\nid = "project-model"\n', encoding="utf-8")
+    (project / ".js" / "jsrc").write_text("set model.id project-model\n", encoding="utf-8")
     seen: list[str] = []
 
     def auto_budget_stub(model: str, provider_id: str | None = None) -> int:

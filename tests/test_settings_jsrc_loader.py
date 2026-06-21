@@ -1,4 +1,4 @@
-"""Tests for TOML settings, platform dirs, provider env, and runtime plumbing."""
+"""Tests for jsrc settings, platform dirs, provider env, and runtime plumbing."""
 
 from __future__ import annotations
 
@@ -16,10 +16,9 @@ def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    monkeypatch.delenv("JS_MODEL", raising=False)
-    monkeypatch.delenv("JS_PROVIDER", raising=False)
-    monkeypatch.delenv("JS_BASE_URL", raising=False)
-    monkeypatch.delenv("JS_API_KEY", raising=False)
+    for spec in settings.REGISTRY:
+        if spec.env:
+            monkeypatch.delenv(spec.env, raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     return config_home, data_home
 
@@ -57,63 +56,81 @@ def _build_config(
     )
 
 
-def test_load_toml_settings_returns_empty_dict_when_no_files(tmp_path):
-    assert settings.load_toml_settings([tmp_path / "missing.toml"]) == {}
-
-
-def test_load_toml_settings_merges_later_files_win(tmp_path):
-    a = tmp_path / "a.toml"
-    b = tmp_path / "b.toml"
-    a.write_text("[model]\nid = \"first\"\nmax_output_tokens = 100\n", encoding="utf-8")
-    b.write_text("[model]\nid = \"second\"\n", encoding="utf-8")
-    merged = settings.load_toml_settings([a, b])
-    assert merged["model"]["id"] == "second"
-    assert merged["model"]["max_output_tokens"] == 100
-
-
-def test_load_toml_settings_rejects_non_table_root(monkeypatch):
-    import js.settings as _s
-
-    monkeypatch.setattr(_s.tomllib, "load", lambda _fp: ["not", "a", "dict"])
-    with pytest.raises(ValueError, match="top-level must be a TOML table"):
-        _s.load_toml_settings([Path("/dev/null")])
-
-
 def test_collect_settings_uses_built_in_default_when_no_file_or_env():
     out = settings.collect_settings(config_paths=[], env={})
     assert out["model"]["id"] == settings.DEFAULT_MODEL
     assert out["limits"]["max_tool_iterations"] == settings.DEFAULT_MAX_TOOL_ITERATIONS
 
 
+def test_collect_settings_reads_jsrc_set_lines(tmp_path):
+    cfg = tmp_path / "jsrc"
+    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+
+    out = settings.collect_settings(config_paths=[cfg], env={})
+
+    assert out["model"]["id"] == "file-model"
+
+
 def test_collect_settings_applies_env_after_file(tmp_path):
-    cfg = tmp_path / "config.toml"
-    cfg.write_text("[model]\nid = \"file-model\"\n", encoding="utf-8")
+    cfg = tmp_path / "jsrc"
+    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+
     out = settings.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
+
     assert out["model"]["id"] == "env-model"
 
 
 def test_collect_settings_cli_extras_win_over_env(tmp_path):
-    cfg = tmp_path / "config.toml"
-    cfg.write_text("[model]\nid = \"file-model\"\n", encoding="utf-8")
-    out = settings.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"}, extras=["model.id=cli-model"])
+    cfg = tmp_path / "jsrc"
+    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+
+    out = settings.collect_settings(
+        config_paths=[cfg],
+        env={"JS_MODEL": "env-model"},
+        extras=["model.id=cli-model"],
+    )
+
     assert out["model"]["id"] == "cli-model"
 
 
-def test_write_default_template_creates_file_once(tmp_path):
-    target = tmp_path / "config.toml"
+def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
+    global_cfg = tmp_path / "global" / "jsrc"
+    project_cfg = tmp_path / "project" / ".js" / "jsrc"
+    local_cfg = tmp_path / "project" / ".js" / "jsrc.local"
+    global_cfg.parent.mkdir(parents=True)
+    project_cfg.parent.mkdir(parents=True)
+    global_cfg.write_text("set model.id global-model\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
+    project_cfg.write_text("set model.id project-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
+    local_cfg.write_text("set model.id local-model\n", encoding="utf-8")
+
+    out = settings.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
+
+    assert out["model"]["id"] == "local-model"
+    assert out["limits"]["fetch_timeout_s"] == 20
+    assert out["limits"]["max_tool_iterations"] == 7
+
+
+def test_write_default_template_creates_jsrc_once(tmp_path):
+    target = tmp_path / "jsrc"
+
     assert settings.write_default_template(target) is True
     text = target.read_text(encoding="utf-8")
-    assert "Precedence, lowest to highest: built-in defaults < this file < project .js/config.toml" in text
-    assert "[model]" in text and "[limits]" in text and "[provider]" in text
-    assert "JS_MODEL" in text and "JS_PROVIDER" in text and "JS_BASE_URL" in text and "JS_API_KEY" in text
-    assert "JS_PROVIDER_ID" not in text
-    assert "JS_PROVIDER_BASE_URL" not in text
-    assert "JS_PROVIDER_API_KEY" not in text
-    assert "JS_JSONL_MAX_LINE_CHARS" in text
+
+    assert "# Precedence, lowest to highest: built-in defaults < this file < project .js/jsrc" in text
+    assert "# === model ===" in text
+    assert "# === limits ===" in text
+    assert "# === provider ===" in text
+    assert "#set model.id deepseek/deepseek-v4-flash" in text
+    assert "# JS_MODEL -> set model.id" in text
+    assert "# JS_PROVIDER -> set provider.id" in text
+    assert "# JS_BASE_URL -> set provider.base_url" in text
+    assert "# JS_API_KEY -> set provider.api_key" in text
+    assert "# JS_JSONL_MAX_LINE_CHARS -> set limits.jsonl_max_line_chars" in text
     assert settings.write_default_template(target) is False
+    assert target.read_text(encoding="utf-8") == text
 
 
-def test_from_env_uses_platform_dirs_and_does_not_create_home_dot_js(monkeypatch, tmp_path):
+def test_from_env_uses_platform_dirs_and_writes_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -124,16 +141,29 @@ def test_from_env_uses_platform_dirs_and_does_not_create_home_dot_js(monkeypatch
     assert cfg.provider_api_key == "sk-test"
     assert cfg.reasoning_effort == "xhigh"
     assert cfg.sessions_dir == data_home / "js" / "sessions" / "defaultagent"
-    assert (config_home / "js" / "config.toml").exists()
+    assert (config_home / "js" / "jsrc").exists()
     assert not (tmp_path / "home" / ".js").exists()
+
+
+def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
+    config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
+    global_cfg = config_home / "js" / "jsrc"
+    global_cfg.parent.mkdir(parents=True)
+    global_cfg.write_text("set model.id global-model\nset limits.max_tool_iterations 8\n", encoding="utf-8")
+
+    cfg = from_env(save_session=False)
+
+    assert cfg.model == "global-model"
+    assert cfg.max_tool_iterations == 8
+    assert global_cfg.read_text(encoding="utf-8").startswith("set model.id global-model")
 
 
 def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     project = tmp_path / "project"
-    cfg_path = project / ".js" / "config.toml"
+    cfg_path = project / ".js" / "jsrc"
     cfg_path.parent.mkdir(parents=True)
-    cfg_path.write_text("[model]\nid = \"file-model\"\n[limits]\nmax_tool_iterations = 7\n", encoding="utf-8")
+    cfg_path.write_text("set model.id file-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
     monkeypatch.setenv("JS_MODEL", "env-model")
 
     cfg_env = from_env(cwd=project, save_session=False)
