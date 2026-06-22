@@ -178,22 +178,34 @@ does not have them.
 
 ## Endpoint And Model Overrides
 
-Subagents currently inherit the parent config's provider route and model. The
-child prompt cannot request a different model or endpoint through the `task`
-schema.
+Subagents choose a model in this order:
 
-A future implementation should keep endpoint/model routing server-side, for
-example:
+1. the `task` tool's `model` argument, if the operator has not set
+   `subagents.lock_model`;
+2. the parent turn's current model, when `subagents.prefer_inherit` is true;
+3. the child agent manifest's frontmatter `model:`;
+4. the parent model as the fallback.
 
-```toml
-[agents.commit]
-model = "openai/auto/gpt-5.5"
-api_base = "http://127.0.0.1:8317/v1"
+Put agent defaults in the prompt directory's `00-tools.yaml`:
 
-[agents.research]
-model = "anthropic/claude-sonnet-4"
+```yaml
+# Optional: pin this agent's default model.
+# A provider-prefixed id re-routes the child provider/base/key/headers through
+# the model-route resolver; a bare id keeps the parent's provider route.
+model: anthropic/claude-sonnet-4
+tools:
+  - read
+  - fs_search
 ```
 
-Then the model asks for `agent_id="commit"` and the harness chooses the route.
+Top-level `js --agent <id>` also applies that agent's manifest `model:` through
+the same route resolver. Operator pins win: `-m` / `--model`, `JS_MODEL`, or a
+configured non-default `model.id` leave the agent manifest model unused.
+
+`subagents.lock_model = true` (`Config.lock_subagent_model`) removes the `task`
+tool's `model` parameter from both the model-facing description and the JSON
+schema. The child can still use its own manifest `model:`; the parent model
+just cannot override it through a tool call.
+
 Do not expose raw endpoint URLs as normal model tool arguments unless the goal
 is explicitly to let the model route traffic.

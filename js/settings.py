@@ -443,7 +443,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
     "compact": ["# Cache-first context compaction knobs."],
     "subagents": ["# Subagent model-selection policy."],
     "tools": ["# Model-facing tool aliasing."],
-    "sampling": ["# Per-turn sampling overrides; unset leaves provider/model defaults alone."],
+    "sampling": ["# Per-turn sampling overrides. Default display is <unset>; provider/model defaults win."],
     "wiki": ["# Wiki vault aliases, e.g. `set wiki.aliases.creative /path/to/wiki`."],
     "artifact": ["# Artifact system defaults."],
 }
@@ -452,7 +452,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
 def _template_value(spec: SettingSpec) -> str:
     default = spec.default
     if default is None:
-        return ""
+        return EMPTY_UNSET if spec.empty == EMPTY_UNSET else ""
     if isinstance(default, bool):
         return "on" if default else "off"
     if isinstance(default, (dict, list)):

@@ -107,6 +107,11 @@ js -m "model/id" -p "prompt"
 `-m` / `--model` overrides the effective configured/env model for that run:
 layered config and `JS_MODEL`.
 
+Agent manifests may also declare `model:` in `00-tools.yaml`. `js --agent <id>`
+applies that model unless the operator has pinned one with `-m` / `--model`,
+`JS_MODEL`, or a configured non-default `model.id`. Subagent-specific precedence
+and lock behavior live in [subagents.md](subagents.md).
+
 REPL:
 
 ```text

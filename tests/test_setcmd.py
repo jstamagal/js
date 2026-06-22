@@ -72,6 +72,9 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     assert setcmd.render_value(unset_spec, None) == "<unset>"
     sampling = setcmd.run_repl_command(live_settings, "/show sampling.temperature")
     assert sampling.lines == ["sampling.temperature = <unset>"]
+    template = "\n".join(settings._template_lines())
+    assert "# Per-turn sampling overrides. Default display is <unset>;" in template
+    assert "#set sampling.temperature unset" in template
 
 
 def test_secret_values_are_masked_when_shown():

@@ -137,6 +137,7 @@ class Config:
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
     sampling_cli: Sampling = field(default_factory=Sampling)
+    explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent frontmatter model
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -377,4 +378,5 @@ def from_env(
         artifact_dir=artifact_dir,
         artifact_url=artifact_url,
         artifact_bin=artifact_bin,
+        explicit_model=explicit_model,
     )
