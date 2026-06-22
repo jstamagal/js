@@ -13,6 +13,7 @@ from pathlib import Path
 from . import paths as _paths
 from . import providers as _providers
 from . import settings as _settings
+from . import routing as _routing
 
 _DEFAULT_MODEL = _settings.DEFAULT_MODEL
 _DEFAULT_AGENT_ID = "defaultagent"
@@ -255,53 +256,21 @@ def from_env(
         extras=extras,
     )
     raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or _DEFAULT_MODEL
-    configured_provider_id = _providers.normalize_provider_id(
-        _settings.get_dotted(js_root_settings, ("provider", "id"))
-    )
-    configured_base_url = _settings.get_dotted(js_root_settings, ("provider", "base_url"))
-    configured_api_key = _settings.get_dotted(js_root_settings, ("provider", "api_key"))
-
-    parsed_provider_id, parsed_model = _providers.parse_model_prefix(str(raw_model))
-    if parsed_provider_id is not None and (
-        configured_provider_id is None
-        or parsed_provider_id == configured_provider_id
-    ):
-        model = parsed_model or str(raw_model)
-        provider_id = parsed_provider_id
-    else:
-        model = str(raw_model)
-        provider_id = configured_provider_id
     explicit_model = bool(env.get("JS_MODEL")) or raw_model != _DEFAULT_MODEL
-
-    if provider_id is None:
-        discovered = _providers.discover_env_provider(env)
-        if discovered is not None:
-            provider_id = discovered.id
-
-    provider_base_url = configured_base_url
-    provider_api_key = configured_api_key
-    provider_headers: dict[str, str] = {}
-    saved_login = None
-    if provider_id is not None:
-        try:
-            from . import logins as _logins
-
-            saved_login = _logins.load_logins().get(provider_id)
-        except Exception:  # noqa: BLE001
-            saved_login = None
-    if saved_login is not None:
-        provider_base_url = configured_base_url or saved_login.provider_base_url
-        provider_api_key = configured_api_key or saved_login.provider_api_key
-        provider_headers = dict(saved_login.provider_headers)
-
+    route = _routing.resolve_model_route(
+        raw_model,
+        configured_provider_id=_settings.get_dotted(js_root_settings, ("provider", "id")),
+        configured_base_url=_settings.get_dotted(js_root_settings, ("provider", "base_url")),
+        configured_api_key=_settings.get_dotted(js_root_settings, ("provider", "api_key")),
+        env=env,
+        explicit_model=explicit_model,
+    )
+    model = route.model
+    provider_id = route.provider_id
+    provider_base_url = route.base_url
+    provider_api_key = route.api_key
+    provider_headers = route.headers
     provider_def = _providers.get_provider(provider_id)
-    if provider_def is not None:
-        provider_base_url = _providers.provider_base_url(provider_def, provider_base_url, env)
-        provider_api_key = _providers.provider_api_key(provider_def, provider_api_key, env)
-        if not provider_headers and provider_def.headers:
-            provider_headers = dict(provider_def.headers)
-        if not explicit_model and parsed_provider_id is None:
-            model = _providers.provider_model(provider_def, None, env) or model
 
     reasoning_effort = _settings.get_dotted(js_root_settings, ("model", "reasoning_effort"))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:

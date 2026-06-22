@@ -20,6 +20,7 @@ import ai
 from . import colors as C
 from . import model_metadata
 from . import tools as T
+from . import routing
 from .config import Config, vision_enabled_for_model
 from .toolkit.core import ToolContext, call_tool, compact_json
 from .toolkit.registry import ToolRegistry
@@ -613,17 +614,26 @@ def _summary_prompt(messages: list[dict], focus: str, guidance: str) -> str:
 
 def _summarize_for_compaction(cfg: Config, model: str, messages: list[dict], focus: str, guidance: str) -> str:
     prompt = _summary_prompt(messages, focus, guidance)
+    route = routing.resolve_model_route(
+        model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", None),
+        explicit_model=True,
+        discover_env=False,
+    )
     result = model_client.stream_model(
-        model_id=model,
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
+        model_id=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
         messages=[ai.user_message(prompt)],
         tools=None,
         max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
         reasoning_effort=None,
         on_text=lambda _t: None,
-        provider_headers=getattr(cfg, "provider_headers", None),
+        provider_headers=route.headers,
     )
     text = result.text.strip()
     if not text:

@@ -28,6 +28,7 @@ from . import runtime
 from . import paths as _paths
 from . import setcmd
 from . import settings
+from . import routing
 from .config import Config, from_env, validate_agent_id, _norm_effort
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
@@ -178,46 +179,33 @@ def _compact_thresholds(cfg: Config) -> tuple[float, float, float]:
 
 def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
     model = state.get("model")
-    provider_id = state.get("provider_id", cfg.provider_id)
-    provider_base_url = state.get("provider_base_url", cfg.provider_base_url)
-    provider_api_key = state.get("provider_api_key", cfg.provider_api_key)
-    provider_headers = state.get("provider_headers", getattr(cfg, "provider_headers", {}))
-
-    if isinstance(model, str) and model:
-        parsed_provider_id, parsed_model = providers.parse_model_prefix(model)
-        # A model prefix only routes when no provider is explicitly pinned, or when
-        # it names the same provider. Otherwise (e.g. a gateway/openrouter model id
-        # like "anthropic/claude-..." selected under provider "omp") the prefix must
-        # NOT hijack the chosen provider and inherit its base/api/headers.
-        if parsed_provider_id is not None and (
-            not provider_id
-            or parsed_provider_id == providers.normalize_provider_id(provider_id)
-        ):
-            provider_id = parsed_provider_id
-            model = parsed_model
-    provider_id = providers.normalize_provider_id(provider_id) if provider_id else provider_id
-
-    provider_def = providers.get_provider(provider_id)
-    if provider_def is not None:
-        provider_base_url = providers.provider_base_url(provider_def, provider_base_url, os.environ)
-        provider_api_key = providers.provider_api_key(provider_def, provider_api_key, os.environ)
-        if not provider_headers and provider_def.headers:
-            provider_headers = dict(provider_def.headers)
-
+    if not (isinstance(model, str) and model):
+        model = cfg.model
+    route = routing.resolve_model_route(
+        model,
+        configured_provider_id=state.get("provider_id", cfg.provider_id),
+        configured_base_url=state.get("provider_base_url", cfg.provider_base_url),
+        configured_api_key=state.get("provider_api_key", cfg.provider_api_key),
+        configured_headers=state.get("provider_headers", getattr(cfg, "provider_headers", {})),
+        env=os.environ,
+        explicit_model=True,
+        discover_env=False,
+        use_saved_login=False,
+    )
     if (
-        (isinstance(model, str) and model and model != cfg.model)
-        or provider_id != cfg.provider_id
-        or provider_base_url != cfg.provider_base_url
-        or provider_api_key != cfg.provider_api_key
-        or provider_headers != getattr(cfg, "provider_headers", {})
+        route.model != cfg.model
+        or route.provider_id != cfg.provider_id
+        or route.base_url != cfg.provider_base_url
+        or route.api_key != cfg.provider_api_key
+        or route.headers != getattr(cfg, "provider_headers", {})
     ):
         return replace(
             cfg,
-            model=model if isinstance(model, str) and model else cfg.model,
-            provider_id=provider_id,
-            provider_base_url=provider_base_url,
-            provider_api_key=provider_api_key,
-            provider_headers=provider_headers,
+            model=route.model,
+            provider_id=route.provider_id,
+            provider_base_url=route.base_url,
+            provider_api_key=route.api_key,
+            provider_headers=route.headers,
         )
     return cfg
 
@@ -906,10 +894,48 @@ def _run_commit(target: str | None,
     if not target_dir.is_dir():
         print(f"{C.ORANGE}error: commit target is not a directory: {target_dir}{C.RESET}", file=sys.stderr)
         return 2
-    prompt = f"Commit all work in this target directory: {target_dir}"
+
+    from . import commit_helper
+
+    probe = commit_helper._git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        init = commit_helper._git("init", "-q", "-b", "main", check=False, repo=target_dir)
+        if init.returncode != 0:
+            init = commit_helper._git("init", "-q", check=False, repo=target_dir)
+        if init.returncode != 0:
+            detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
+            print(f"{C.ORANGE}error: git init failed in {target_dir}: {detail}{C.RESET}", file=sys.stderr)
+            return 1
+
+    survey_out = io.StringIO()
+    survey_err = io.StringIO()
+    with contextlib.redirect_stdout(survey_out), contextlib.redirect_stderr(survey_err):
+        survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
+    survey = survey_out.getvalue().rstrip()
+    if survey_rc != 0:
+        detail = survey_err.getvalue().strip() or survey or f"commit_helper survey exited {survey_rc}"
+        print(f"{C.ORANGE}error: commit survey failed for {target_dir}: {detail}{C.RESET}", file=sys.stderr)
+        return 1
+
+    helper_stage = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>"
+    helper_survey = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey"
+    prompt = (
+        f"Commit all work in this target directory: {target_dir}\n\n"
+        "The repository has already been initialized if it was missing. "
+        "Use this deterministic staging helper for every commit unit:\n"
+        f"`{helper_stage}`\n"
+        "Use `all` for whole-file staging or comma-separated hunk numbers from the survey "
+        "for tracked text files. If you need a fresh snapshot after making changes, run:\n"
+        f"`{helper_survey}`\n\n"
+        "Initial deterministic commit_helper survey:\n"
+        "```text\n"
+        f"{survey}\n"
+        "```"
+    )
     if extra_context and extra_context.strip():
         prompt += f"\n\nOperator context:\n{extra_context.strip()}"
-    return _run_prompt(
+
+    return _run_prompt_compat(
         prompt,
         model=model,
         debug=debug,
@@ -921,6 +947,7 @@ def _run_commit(target: str | None,
         reasoning=reasoning,
         maxout=maxout,
         extras=extras,
+        tool_context=ToolContext(cwd=target_dir),
     )
 
 
@@ -1014,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
     parser.add_argument("--wiki", metavar="MODES", help="wiki mode: comma list of ingest,synthesize,query,lint (e.g. --wiki=ingest,synthesize). Built-in wiki prompting; ignores defaultagent unless --agent is also given (persona + wiki).")
     parser.add_argument("--artifact", metavar="MODES", help="artifact mode: comma list of curate,digest,query,lint (e.g. --artifact=digest). Built-in artifact prompting; ignores defaultagent unless --agent is also given.")
-    parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir (default: cwd)")
+    parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
     parser.add_argument("--vault", help="wiki vault: creative|general|path (default: infer from target/cwd, else creative)")
     parser.add_argument("--dangerously-evaluate-inline-code", "--dangerously-evaluate-shell-commands",
