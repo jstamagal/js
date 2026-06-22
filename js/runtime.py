@@ -22,6 +22,7 @@ from . import model_metadata
 from . import tools as T
 from . import routing
 from .config import Config, vision_enabled_for_model
+from .sampling import Sampling
 from .toolkit.core import ToolContext, call_tool, compact_json
 from .toolkit.registry import ToolRegistry
 
@@ -669,7 +670,8 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
              suppress_output: bool = False,
              provider_id_override: str | None = None,
              provider_base_url_override: str | None = None,
-             provider_api_key_override: str | None = None) -> None:
+             provider_api_key_override: str | None = None,
+             sampling: Sampling | None = None) -> None:
     """One user turn → tool-use loop until model produces a stop. Mutates
     `messages` in place so the caller can persist new entries.
 
@@ -779,6 +781,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                     reasoning_effort=effort,
                     on_text=_emit_text,
                     provider_headers=getattr(cfg, "provider_headers", None),
+                    sampling=sampling,
                 )
                 _close_text()
                 text = result.text

@@ -29,6 +29,7 @@ from . import paths as _paths
 from . import setcmd
 from . import settings
 from . import routing
+from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
@@ -212,6 +213,42 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
 
 def _state_value(state: dict, key: str, default):
     return state[key] if key in state else default
+
+def _sampling_for_turn(
+    cfg: Config,
+    prompt_spec,
+    cli_override: Sampling | None = None,
+) -> Sampling:
+    raw_manifest = getattr(prompt_spec, "sampling", {}) if prompt_spec else {}
+    manifest_sampling = Sampling.from_mapping(raw_manifest)
+    return (
+        cfg.sampling_setscript
+        .merge(manifest_sampling)
+        .merge(cfg.sampling_env)
+        .merge(cli_override or Sampling())
+    )
+
+
+def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
+    body = line.strip()
+    if body.startswith("/"):
+        body = body[1:].lstrip()
+    parts = body.split(maxsplit=2)
+    if len(parts) != 3 or parts[0].lower() != "set":
+        return current
+    key = parts[1]
+    if not key.startswith("sampling."):
+        return current
+    field = key.split(".", 1)[1]
+    if field not in Sampling.__dataclass_fields__:
+        return current
+    spec = settings.SPEC_BY_KEY.get(key)
+    if spec is None:
+        return current
+    value, error = settings.coerce_value(spec, parts[2])
+    if error is not None:
+        return current
+    return replace(current, **{field: value})
 
 
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
@@ -493,6 +530,11 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         result = setcmd.run_repl_command(state["settings"], line)
         if result.error:
             print(f"{C.ORANGE}{result.error}{C.RESET}")
+        elif result.changed:
+            state["sampling_cli"] = _sampling_override_after_set(
+                line,
+                state.get("sampling_cli", Sampling()),
+            )
         for out in result.lines:
             print(out)
         return True
@@ -579,6 +621,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
 
+    prompt_spec = None
     if system_override is not None:
         system = system_override
         active_registry = tool_registry or _FULL_REGISTRY
@@ -599,6 +642,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     turn_kwargs = {
         "model_override": model,
         "tool_registry": active_registry,
+        "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
     }
     if reasoning is not None:
         turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
@@ -1206,6 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
         "settings": live_settings,
         "tool_registry": active_registry,
+        "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
         "compact_consecutive": 0,
         "compact_paused": False,
@@ -1231,12 +1276,25 @@ def main(argv: list[str] | None = None) -> int:
         _append_turn(cfg, user_msg)
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
-            runtime.run_turn(turn_cfg, state["system"], state["messages"],
-                             telemetry,
-                             trace_override=bool(settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)),
-                             reasoning_effort_override=settings.get_dotted(state["settings"], ("model", "reasoning_effort")),
-                             max_output_override=settings.get_dotted(state["settings"], ("model", "max_output_tokens")),
-                             tool_registry=state["tool_registry"])
+            runtime.run_turn(
+                turn_cfg,
+                state["system"],
+                state["messages"],
+                telemetry,
+                trace_override=bool(
+                    settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+                ),
+                reasoning_effort_override=settings.get_dotted(
+                    state["settings"],
+                    ("model", "reasoning_effort"),
+                ),
+                max_output_override=settings.get_dotted(
+                    state["settings"],
+                    ("model", "max_output_tokens"),
+                ),
+                tool_registry=state["tool_registry"],
+                sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            )
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:
                 _append_turn(cfg, m)

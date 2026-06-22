@@ -70,6 +70,8 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     assert off.lines == ["runtime.debug = off"]
     assert none.lines == ["provider.id = <none>"]
     assert setcmd.render_value(unset_spec, None) == "<unset>"
+    sampling = setcmd.run_repl_command(live_settings, "/show sampling.temperature")
+    assert sampling.lines == ["sampling.temperature = <unset>"]
 
 
 def test_secret_values_are_masked_when_shown():

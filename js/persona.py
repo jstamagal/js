@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,16 +103,16 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return tuple(selectors)
 
 
-# Sampling params an agent may set in its YAML manifest, mapped to the JS_* env
-# knobs model_client already honors. The manifest is the BASE; an explicit JS_*
-# env var still overrides it (see _apply_sampling_env).
-_SAMPLING_ENV = {
-    "temperature": "JS_TEMP",
-    "top_p": "JS_TOPP",
-    "top_k": "JS_TOPK",
-    "repetition_penalty": "JS_REPPEN",
-    "presence_penalty": "JS_PRPEN",
-}
+# Sampling params an agent may set in its YAML manifest. Transport-specific
+# filtering happens later from the typed Sampling object; loading a prompt spec
+# must never mutate process environment.
+_SAMPLING_KEYS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty",
+    "presence_penalty",
+)
 
 
 def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
@@ -123,9 +122,9 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
         raise ValueError(f"sampling frontmatter in {path} must be a mapping")
     out: dict[str, Any] = {}
     for key, val in raw.items():
-        if key not in _SAMPLING_ENV:
+        if key not in _SAMPLING_KEYS:
             raise ValueError(
-                f"unknown sampling key '{key}' in {path}; allowed: {', '.join(_SAMPLING_ENV)}"
+                f"unknown sampling key '{key}' in {path}; allowed: {', '.join(_SAMPLING_KEYS)}"
             )
         if isinstance(val, bool) or not isinstance(val, (int, float)):
             raise ValueError(f"sampling.{key} in {path} must be a number")
@@ -133,12 +132,6 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
     return out
 
 
-def _apply_sampling_env(sampling: dict[str, Any]) -> None:
-    """Export manifest sampling to the JS_* env knobs, without clobbering an
-    explicit env var the operator already set (env wins over the manifest)."""
-    for key, env_name in _SAMPLING_ENV.items():
-        if key in sampling and not os.environ.get(env_name):
-            os.environ[env_name] = str(sampling[key])
 
 
 def _existing_text_parts(paths: list[Path]) -> list[str]:
@@ -254,7 +247,6 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
                 secondary_model=spec.secondary_model,
             )
     spec = _expand_spec(spec, cfg)
-    _apply_sampling_env(spec.sampling)
     return spec
 
 

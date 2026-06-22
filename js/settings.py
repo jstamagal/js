@@ -191,6 +191,22 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("tools.alias_profiles", "json", None,
                 "Model-facing tool-name alias profiles: list of {match:[...], aliases:{...}}.",
                 empty=EMPTY_NONE),
+    # --- sampling ---
+    SettingSpec("sampling.temperature", "float", None,
+                "Provider-default sampling temperature; unset = do not send.",
+                empty=EMPTY_UNSET),
+    SettingSpec("sampling.top_p", "float", None,
+                "Provider-default nucleus sampling top_p; unset = do not send.",
+                empty=EMPTY_UNSET),
+    SettingSpec("sampling.top_k", "int", None,
+                "Provider-default top_k sampling; unset = do not send.",
+                empty=EMPTY_UNSET),
+    SettingSpec("sampling.repetition_penalty", "float", None,
+                "Provider-default repetition penalty; unset = do not send.",
+                empty=EMPTY_UNSET),
+    SettingSpec("sampling.presence_penalty", "float", None,
+                "Provider-default presence penalty; unset = do not send.",
+                empty=EMPTY_UNSET),
     # --- wiki ---
     SettingSpec("wiki.aliases", "map", {},
                 "Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`.",
@@ -204,7 +220,16 @@ REGISTRY: tuple[SettingSpec, ...] = (
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
 KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
 SECTION_ORDER: tuple[str, ...] = (
-    "model", "provider", "limits", "runtime", "compact", "subagents", "tools", "wiki", "artifact",
+    "model",
+    "provider",
+    "limits",
+    "runtime",
+    "compact",
+    "subagents",
+    "tools",
+    "sampling",
+    "wiki",
+    "artifact",
 )
 
 
@@ -418,6 +443,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
     "compact": ["# Cache-first context compaction knobs."],
     "subagents": ["# Subagent model-selection policy."],
     "tools": ["# Model-facing tool aliasing."],
+    "sampling": ["# Per-turn sampling overrides; unset leaves provider/model defaults alone."],
     "wiki": ["# Wiki vault aliases, e.g. `set wiki.aliases.creative /path/to/wiki`."],
     "artifact": ["# Artifact system defaults."],
 }

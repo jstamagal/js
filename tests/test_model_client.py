@@ -14,6 +14,7 @@ import ai.models
 import pytest
 
 from js import model_client
+from js.sampling import Sampling
 
 
 class _FakeExecutor:
@@ -313,16 +314,18 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix():
     assert executor.request.params == {"max_tokens": 64}
 
 
-_JS_SAMPLING_ENV = ("JS_TEMP", "JS_TOPP", "JS_TOPK", "JS_REPPEN", "JS_PRPEN")
 
-
-def test_stream_model_applies_js_sampling_env(monkeypatch):
-    """JS_* env vars override sampling: standard knobs top-level, vLLM knobs in extra_body."""
-    monkeypatch.setenv("JS_TEMP", "1.1")
-    monkeypatch.setenv("JS_TOPP", "0.96")
-    monkeypatch.setenv("JS_TOPK", "64")
-    monkeypatch.setenv("JS_REPPEN", "1.05")
-    monkeypatch.setenv("JS_PRPEN", "1.5")
+def test_stream_model_applies_sampling_from_env_for_openai():
+    """JS_* env sampling is typed before stream_model; OpenAI only receives supported knobs."""
+    sampling = Sampling.from_env(
+        {
+            "JS_TEMP": "1.1",
+            "JS_TOPP": "0.96",
+            "JS_TOPK": "64",
+            "JS_REPPEN": "1.05",
+            "JS_PRPEN": "1.5",
+        }
+    )
     executor = _FakeExecutor(_text_events("ok"))
     model_client.stream_model(
         model_id="test",
@@ -335,20 +338,18 @@ def test_stream_model_applies_js_sampling_env(monkeypatch):
         reasoning_effort=None,
         on_text=lambda _s: None,
         executor=executor,
+        sampling=sampling,
     )
     assert executor.request.params == {
         "max_tokens": 64,
         "temperature": 1.1,
         "top_p": 0.96,
         "presence_penalty": 1.5,
-        "extra_body": {"top_k": 64, "repetition_penalty": 1.05},
     }
 
 
-def test_stream_model_without_js_sampling_env_sends_no_overrides(monkeypatch):
-    """With no JS_* sampling env set, js defers entirely to the backend/model default."""
-    for name in _JS_SAMPLING_ENV:
-        monkeypatch.delenv(name, raising=False)
+def test_stream_model_without_sampling_sends_no_overrides():
+    """With no Sampling set, js defers entirely to the backend/model default."""
     executor = _FakeExecutor(_text_events("ok"))
     model_client.stream_model(
         model_id="test",
@@ -365,11 +366,8 @@ def test_stream_model_without_js_sampling_env_sends_no_overrides(monkeypatch):
     assert executor.request.params == {"max_tokens": 64}
 
 
-def test_stream_model_js_topk_merges_with_provider_extra_body(monkeypatch):
+def test_stream_model_sampling_topk_merges_with_provider_extra_body():
     """A vLLM sampling knob (top_k) merges with, not clobbers, an existing extra_body."""
-    for name in _JS_SAMPLING_ENV:
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("JS_TOPK", "40")
     executor = _FakeExecutor(_text_events("ok"))
     model_client.stream_model(
         model_id="deepseek-chat",
@@ -382,6 +380,7 @@ def test_stream_model_js_topk_merges_with_provider_extra_body(monkeypatch):
         reasoning_effort=None,
         on_text=lambda _s: None,
         executor=executor,
+        sampling=Sampling(top_k=40),
     )
     assert executor.request.params == {
         "max_tokens": 64,

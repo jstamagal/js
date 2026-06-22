@@ -15,6 +15,8 @@ from . import providers as _providers
 from . import settings as _settings
 from . import routing as _routing
 
+from .sampling import Sampling
+
 _DEFAULT_MODEL = _settings.DEFAULT_MODEL
 _DEFAULT_AGENT_ID = "defaultagent"
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -66,6 +68,14 @@ def _numeric_setting(root: dict, path: tuple[str, ...], default: int | None) -> 
     except (TypeError, ValueError):
         return default
 
+
+def _sampling_from_extras(extras: list[str] | None) -> Sampling:
+    values: dict[str, object] = {}
+    for arg in extras or []:
+        path, value = _settings.parse_extra_arg(arg)
+        if len(path) == 2 and path[0] == "sampling":
+            values[path[1]] = value
+    return Sampling.from_mapping(values)
 
 # Vision-capable model-name fragments the SDK registry does not cover (proxy-
 # and ollama-served ids it has never heard of). Matched case-insensitively as substrings.
@@ -124,6 +134,9 @@ class Config:
     session_file: Path
     prompts_dir: Path
     provider_headers: dict[str, str] = field(default_factory=dict)
+    sampling_setscript: Sampling = field(default_factory=Sampling)
+    sampling_env: Sampling = field(default_factory=Sampling)
+    sampling_cli: Sampling = field(default_factory=Sampling)
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -251,10 +264,18 @@ def from_env(
             project_dir / ".js" / "jsrc.local",
         ])
 
+    jsrc_settings = _settings.collect_settings(
+        config_paths=config_paths,
+        env={},
+        extras=None,
+    )
     js_root_settings = _settings.collect_settings(
         config_paths=config_paths,
         extras=extras,
     )
+    sampling_setscript = Sampling.from_mapping(jsrc_settings.get("sampling", {}))
+    sampling_env = Sampling.from_env(env)
+    sampling_cli = _sampling_from_extras(extras)
     raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or _DEFAULT_MODEL
     explicit_model = bool(env.get("JS_MODEL")) or raw_model != _DEFAULT_MODEL
     route = _routing.resolve_model_route(
@@ -324,6 +345,9 @@ def from_env(
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
         provider_headers=provider_headers,
+        sampling_setscript=sampling_setscript,
+        sampling_env=sampling_env,
+        sampling_cli=sampling_cli,
         reasoning_effort=_norm_effort(reasoning_effort),
         max_output_tokens=max_output_tokens,
         max_tool_iterations=max_tool_iterations,

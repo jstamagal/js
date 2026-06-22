@@ -215,6 +215,7 @@ def _run_one_task(
     from .. import memory as M
     from .. import persona as P
     from ..runtime import Telemetry, run_turn
+    from ..sampling import Sampling
 
     prompt = _task_text(item)
     if not prompt:
@@ -226,10 +227,22 @@ def _run_one_task(
 
     try:
         prompt_spec = P.load_prompt_spec(cfg.prompts_dir)
-        if getattr(cfg, "agents_files", ()):  # global then project AGENTS stack applies to subagents too
-            parts = [p.read_text(encoding="utf-8").rstrip() for p in cfg.agents_files if p.is_file() and p.read_text(encoding="utf-8").strip()]
+        if getattr(cfg, "agents_files", ()):
+            parts = [
+                p.read_text(encoding="utf-8").rstrip()
+                for p in cfg.agents_files
+                if p.is_file() and p.read_text(encoding="utf-8").strip()
+            ]
             if parts:
-                prompt_spec = P.PromptSpec(system="\n\n".join([*parts, prompt_spec.system.rstrip()]).rstrip() + "\n", tool_selectors=prompt_spec.tool_selectors)
+                system = "\n\n".join([*parts, prompt_spec.system.rstrip()])
+                system = system.rstrip() + "\n"
+                prompt_spec = P.PromptSpec(
+                    system=system,
+                    tool_selectors=prompt_spec.tool_selectors,
+                    sampling=prompt_spec.sampling,
+                    model=prompt_spec.model,
+                    secondary_model=prompt_spec.secondary_model,
+                )
     except FileNotFoundError:
         prompt_spec = P.PromptSpec(system="", tool_selectors=())
     except ValueError as exc:
@@ -259,6 +272,12 @@ def _run_one_task(
 
     registry = full_registry.select(prompt_spec.tool_selectors)
     system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)
+    sampling = (
+        cfg.sampling_setscript
+        .merge(Sampling.from_mapping(prompt_spec.sampling))
+        .merge(cfg.sampling_env)
+        .merge(cfg.sampling_cli)
+    )
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
@@ -275,6 +294,7 @@ def _run_one_task(
             tool_registry=registry,
             tool_context=child_context,
             suppress_output=True,
+            sampling=sampling,
         )
     except Exception as exc:  # noqa: BLE001
         messages[:] = messages[:before_len]
