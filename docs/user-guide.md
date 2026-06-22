@@ -19,7 +19,8 @@ js-drain
 `python -m js` also runs the CLI.
 
 ## Basic Configuration
-Builtin default is what I feel like it this week.  Might be deepseek this week. 
+Built-in default model is `deepseek/deepseek-v4-flash`; override it with
+`JS_MODEL`, `model.id` in `jsrc`, or `--model` for one run.
 
 AI Gateway / default routing:
 

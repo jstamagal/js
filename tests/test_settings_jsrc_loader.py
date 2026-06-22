@@ -115,17 +115,22 @@ def test_write_default_template_creates_jsrc_once(tmp_path):
 
     assert settings.write_default_template(target) is True
     text = target.read_text(encoding="utf-8")
+    template_lines = text.splitlines()
+    template_keys = {
+        line.split()[1]
+        for line in template_lines
+        if line.startswith("#set ")
+    }
+    env_keys = {
+        line.removeprefix("# ").split(" -> ", 1)[0]
+        for line in template_lines
+        if line.startswith("# JS_") and " -> set " in line
+    }
 
-    assert "# Precedence, lowest to highest: built-in defaults < this file < project .js/jsrc" in text
-    assert "# === model ===" in text
-    assert "# === limits ===" in text
-    assert "# === provider ===" in text
-    assert "#set model.id deepseek/deepseek-v4-flash" in text
-    assert "# JS_MODEL -> set model.id" in text
-    assert "# JS_PROVIDER -> set provider.id" in text
-    assert "# JS_BASE_URL -> set provider.base_url" in text
-    assert "# JS_API_KEY -> set provider.api_key" in text
-    assert "# JS_JSONL_MAX_LINE_CHARS -> set limits.jsonl_max_line_chars" in text
+    assert {spec.key for spec in settings.REGISTRY} <= template_keys
+    assert {spec.env for spec in settings.REGISTRY if spec.env} <= env_keys
+    rendered = settings.collect_settings(config_paths=[target], env={})
+    assert rendered["model"]["id"] == settings.DEFAULT_MODEL
     assert settings.write_default_template(target) is False
     assert target.read_text(encoding="utf-8") == text
 

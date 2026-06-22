@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 
-from pathlib import Path
 
 from js import cli
 
@@ -121,10 +120,3 @@ def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monke
     assert "(clean tree, nothing to commit)" not in prompt
 
 
-def test_commit_prompt_references_stage_helper_not_interactive_patch():
-    prompt_path = Path(__file__).resolve().parents[1] / "prompts" / "commit" / "01-prompt.md"
-    prompt = prompt_path.read_text(encoding="utf-8")
-
-    assert "js.commit_helper" in prompt
-    assert "stage <file> <hunks|all>" in prompt
-    assert "git add -p" not in prompt

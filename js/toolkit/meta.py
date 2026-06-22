@@ -186,7 +186,6 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
     # .history, and latest.json.
     agents_root = parent_cfg.agent_dir.parent
     prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
-    prompts_root = prompt_roots[-1] if prompt_roots else parent_cfg.prompts_dir.parent
     agent_dir = agents_root / agent
     sessions_dir = agent_dir
     session_file = _session_file_for_id(agent_dir, sessions_dir, session_id) if session_id else _reserve_worker_session(agent_dir, sessions_dir)

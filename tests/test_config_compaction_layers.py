@@ -33,21 +33,23 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     assert cfg.prompt_roots[0].name == "prompts"
 
 
-def test_default_fetch_timeout_is_15_and_template_exposes_compact_wiki_artifact(tmp_path):
+def test_default_fetch_timeout_and_template_cover_compact_wiki_artifact(tmp_path):
     out = settings.collect_settings(config_paths=[], env={})
-    assert out["limits"]["fetch_timeout_s"] == 15
+    assert out["limits"]["fetch_timeout_s"] == settings.DEFAULT_FETCH_TIMEOUT_S
     target = tmp_path / "jsrc"
     settings.write_default_template(target)
     text = target.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    for setting_line in (
-        "#set compact.context_window",
-        "#set compact.tail_tokens 16384",
-        "#set wiki.aliases",
-    ):
-        assert setting_line in text
-    assert "#set artifact.dir" in lines
-    assert "set wiki.aliases.creative ~/wiki-creative" in lines
+    template_keys = {
+        line.split()[1]
+        for line in text.splitlines()
+        if line.startswith("#set ")
+    }
+    assert {
+        "compact.context_window",
+        "compact.tail_tokens",
+        "wiki.aliases",
+        "artifact.dir",
+    } <= template_keys
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):

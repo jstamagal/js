@@ -18,9 +18,13 @@ import urllib.parse
 import webbrowser
 from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from .logins import Login
+
 
 CODEX_PROVIDER_ID = "openai-codex"
 CODEX_DEVICE_PROVIDER_ID = "openai-codex-device"

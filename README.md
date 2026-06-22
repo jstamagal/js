@@ -71,10 +71,9 @@ docs/                             full user and technical documentation
 
 ## Tool Surface
 
-Do not reintroduce legacy aliases such as `fs_read`, `fs_write`, `cat`, `grep`,
-or `semantic_search`; use the canonical tool names documented in
-[docs/tools-reference.md](docs/tools-reference.md).
-FIXME: fs_read seems pretty live to me?
+The public registry exposes canonical tool names only; use the names documented
+in [docs/tools-reference.md](docs/tools-reference.md), not compatibility
+spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 
 ## Config And Model Defaults
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,

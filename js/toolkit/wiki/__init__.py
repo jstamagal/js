@@ -12,8 +12,8 @@ from ..descriptions import load_description
 from .convert import wiki_convert
 from .pages import wiki_write
 from .ops import wiki_purpose, wiki_inbox, wiki_search, wiki_archive, wiki_log, wiki_finish_ingest, wiki_commit
-from .helpers import infer_vault
-from .prompts import build_wiki_system
+from .helpers import infer_vault as infer_vault
+from .prompts import build_wiki_system as build_wiki_system
 
 
 def tools() -> tuple[Tool, ...]:

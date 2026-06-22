@@ -11,7 +11,7 @@ from typing import Any
 from ..sanitize import int_or_default, text_or_default
 from ..core import Tool, ToolContext
 from ..descriptions import load_description
-from .prompts import build_artifact_system
+from .prompts import build_artifact_system as build_artifact_system
 
 ARTIFACT_DIR = Path(os.environ.get("ARTIFACT_DIR", "/srv/artifacts"))
 BASE_URL = os.environ.get("ARTIFACT_URL", "http://localhost")
