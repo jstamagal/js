@@ -113,6 +113,10 @@ def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
     return tools
 
 
+def _is_message_part(value: Any) -> bool:
+    return hasattr(value, "kind")
+
+
 def _coerce_parts(content: Any) -> list[Any]:
     """Build ``ai`` message parts from string content or mixed values."""
     if isinstance(content, str):
@@ -122,12 +126,12 @@ def _coerce_parts(content: Any) -> list[Any]:
         for item in content:
             if isinstance(item, str):
                 parts.append(ai.types.messages.TextPart(text=item))
-            elif isinstance(item, ai.types.messages.Part):
+            elif _is_message_part(item):
                 parts.append(item)
             else:
                 raise ValueError(f"unsupported message content item: {item!r}")
         return parts
-    if isinstance(content, ai.types.messages.Part):
+    if _is_message_part(content):
         return [content]
     raise ValueError(f"unsupported message content: {content!r}")
 
@@ -157,7 +161,11 @@ def history_to_ai_messages(
             out.append(ai.system_message(str(msg.get("content", ""))))
             continue
         if role == "user":
-            out.append(ai.user_message(str(msg.get("content", ""))))
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                out.append(ai.user_message(content))
+            else:
+                out.append(ai.user_message(*_coerce_parts(content)))
             continue
         if role == "assistant":
             parts: list[Any] = []
