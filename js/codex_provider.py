@@ -13,12 +13,15 @@ import platform
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ai
 import httpx
 
 from . import codex_auth
+
+if TYPE_CHECKING:
+    from .logins import Login
 
 _MODEL_PATHS = ("/codex/models", "/models")
 _CLIENT_VERSION = "0.99.0"

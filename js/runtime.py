@@ -102,8 +102,19 @@ def _resolve_max_output(model: str, provider_id: str | None) -> int | None:
     return model_metadata.max_output_tokens(model, provider_id)
 
 
-def _resolve_context_window(model: str, provider_id: str | None) -> int | None:
-    """Per-model context window from models.dev metadata, else unset."""
+def _resolve_context_window(
+    model: str,
+    provider_id: str | None,
+    provider_base_url: str | None = None,
+) -> int | None:
+    """Prefer local server-reported context windows, else models.dev metadata."""
+    probed = model_metadata.probe_local_context_window(
+        model,
+        provider_id,
+        base_url=provider_base_url,
+    )
+    if probed is not None:
+        return probed
     return model_metadata.context_window(model, provider_id)
 
 
@@ -806,9 +817,13 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                         _out_tok = int(getattr(usage, "output_tokens", 0)
                                        or getattr(usage, "completion_tokens", 0) or 0)
                     _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
+                    _cache = ""
+                    if active_context.last_prompt_tokens > 0 and active_context.last_cached_tokens > 0:
+                        _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
+                        _cache = f"  cache {_pct:.0f}%"
                     print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
                           f"finish={finish}  tool_calls={len(pending_calls)}  "
-                          f"{_out_tok} tok  {_tps:.1f} tok/s{C.RESET}", flush=True)
+                          f"{_out_tok} tok  {_tps:.1f} tok/s{_cache}{C.RESET}", flush=True)
                 break
             except ai.ProviderAPIError as e:
                 if e.is_retryable:

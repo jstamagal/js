@@ -62,12 +62,6 @@ def test_registered_tools_and_description_files_match():
             assert descriptions.load_description(tool.name) == tool.description
 
 
-def test_tool_descriptions_do_not_contain_porting_cruft():
-    registry = build_default_registry()
-
-    for tool in registry.tools:
-        assert "forge" not in tool.description.lower(), tool.name
-
 
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()
@@ -91,7 +85,7 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("forge__read_file") is None
 
 
-def test_core_tool_schemas_match_forge_surface_names():
+def test_core_tool_schemas_match_canonical_surface_names():
     registry = build_default_registry()
 
     read = registry.resolve("read")

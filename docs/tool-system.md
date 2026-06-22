@@ -110,7 +110,8 @@ todo_read
 task
 ```
 
-Do not add compatibility aliases for removed names such as:
+The registry intentionally exposes only canonical names. Do not add compatibility
+aliases for these non-canonical spellings:
 
 ```text
 fs_read

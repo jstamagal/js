@@ -18,15 +18,35 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit, urlunsplit
+
+import httpx
 
 import modelsdotdev
 from modelsdotdev._internal import data as modelsdotdev_data
 from modelsdotdev._internal import sync as modelsdotdev_sync
 
-from . import codex_auth, paths, providers
+from . import codex_auth, paths, providers, settings as _settings
 
 _CATALOG_MAX_AGE = timedelta(hours=72)
 _STATUS_VERSION = 1
+_LOCAL_PROBE_TIMEOUT_S = min(float(_settings.DEFAULT_FETCH_TIMEOUT_S), 3.0)
+_LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai"}
+_OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai"}
+_CONTEXT_WINDOW_KEYS = {
+    "context_length",
+    "context_window",
+    "max_context_length",
+    "max_context_window",
+    "max_model_len",
+    "max_model_length",
+    "max_position_embeddings",
+    "max_seq_len",
+    "max_sequence_length",
+    "max_input_tokens",
+    "n_ctx",
+    "num_ctx",
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,7 @@ class _ModelRow:
 def _clear_caches() -> None:
     _all_models.cache_clear()
     lookup_limits.cache_clear()
+    _probe_local_context_window_cached.cache_clear()
 
 
 @lru_cache(maxsize=1)
@@ -107,6 +128,134 @@ def _normalize_request(model_id: str, provider_id: str | None) -> tuple[str, str
     if parsed_provider is not None and parsed_model is not None:
         return parsed_model, parsed_provider
     return model_id, provider_id
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value > 0 else None
+    if isinstance(value, str):
+        normalized = value.strip().replace("_", "")
+        if normalized.isdigit():
+            parsed = int(normalized)
+            return parsed if parsed > 0 else None
+    return None
+
+
+def _context_key_matches(key: Any) -> bool:
+    lowered = str(key).lower()
+    return lowered in _CONTEXT_WINDOW_KEYS or any(
+        lowered.endswith(f".{suffix}") for suffix in _CONTEXT_WINDOW_KEYS
+    )
+
+
+def _extract_context_window(payload: Any) -> int | None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if _context_key_matches(key):
+                parsed = _positive_int(value)
+                if parsed is not None:
+                    return parsed
+        for value in payload.values():
+            parsed = _extract_context_window(value)
+            if parsed is not None:
+                return parsed
+    elif isinstance(payload, list):
+        for item in payload:
+            parsed = _extract_context_window(item)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _join_url(base_url: str, suffix: str) -> str:
+    return f"{base_url.rstrip('/')}/{suffix.lstrip('/')}"
+
+
+def _server_root_url(base_url: str) -> str:
+    split = urlsplit(base_url.rstrip("/"))
+    path = split.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3].rstrip("/")
+    return urlunsplit((split.scheme, split.netloc, path, "", ""))
+
+
+def _request_json(method: str, url: str, *, json_body: dict[str, Any] | None = None) -> Any:
+    with httpx.Client(timeout=_LOCAL_PROBE_TIMEOUT_S) as client:
+        response = client.request(method, url, json=json_body)
+        response.raise_for_status()
+        return response.json()
+
+
+def _models_payload_for_model(payload: Any, model_id: str) -> Any:
+    entries = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return payload
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("id") == model_id:
+            return entry
+    return entries[0] if len(entries) == 1 else None
+
+
+def _probe_openai_context_window(base_url: str, model_id: str) -> int | None:
+    payload = _request_json("GET", _join_url(base_url, "models"))
+    parsed = _extract_context_window(_models_payload_for_model(payload, model_id))
+    if parsed is not None:
+        return parsed
+
+    model_path = quote(model_id, safe="")
+    payload = _request_json("GET", _join_url(base_url, f"models/{model_path}"))
+    return _extract_context_window(payload)
+
+
+def _probe_ollama_context_window(base_url: str, model_id: str) -> int | None:
+    payload = _request_json(
+        "POST",
+        _join_url(_server_root_url(base_url), "api/show"),
+        json_body={"model": model_id},
+    )
+    return _extract_context_window(payload)
+
+
+def _probe_llamacpp_context_window(base_url: str, model_id: str) -> int | None:
+    url = _join_url(_server_root_url(base_url), f"props?model={quote(model_id, safe='')}")
+    payload = _request_json("GET", url)
+    return _extract_context_window(payload)
+
+
+@lru_cache(maxsize=256)
+def _probe_local_context_window_cached(probe_kind: str, base_url: str, model_id: str) -> int | None:
+    try:
+        if probe_kind == "ollama":
+            return _probe_ollama_context_window(base_url, model_id)
+        if probe_kind == "llama.cpp":
+            return _probe_llamacpp_context_window(base_url, model_id)
+        if probe_kind == "openai":
+            return _probe_openai_context_window(base_url, model_id)
+    except Exception:  # noqa: BLE001 - local metadata probes are strictly best-effort
+        return None
+    return None
+
+
+def probe_local_context_window(
+    model_id: str,
+    provider_id: str | None = None,
+    *,
+    base_url: str | None = None,
+) -> int | None:
+    """Best-effort context-window probe for local model servers."""
+    model_id, provider_id = _normalize_request(model_id, provider_id)
+    provider = providers.get_provider(provider_id)
+    if provider is None or provider.transport not in _LOCAL_PROBE_TRANSPORTS:
+        return None
+    resolved_base_url = providers.provider_base_url(provider, base_url)
+    if not resolved_base_url:
+        return None
+    probe_kind = "openai" if provider.transport in _OPENAI_PROBE_TRANSPORTS else provider.transport
+    return _probe_local_context_window_cached(probe_kind, resolved_base_url.rstrip("/"), model_id)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
