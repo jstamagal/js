@@ -161,6 +161,58 @@ OpenAI-shaped reasoning object because its adapter rejects it.
 The runtime round-trips provider reasoning content on assistant messages that
 carry tool calls because some reasoning providers require it on the next call.
 
+## Sampling
+
+Sampling overrides are typed per turn and are never exported back into
+`os.environ`. Leave a value unset to let the provider/model default win.
+
+Config/script and REPL:
+
+```text
+set sampling.temperature 0.6
+set sampling.top_p 0.95
+set sampling.top_k 64
+set sampling.repetition_penalty 1.05
+set sampling.presence_penalty 1.2
+```
+
+Environment:
+
+```bash
+export JS_TEMP=0.6
+export JS_TOPP=0.95
+export JS_TOPK=64
+export JS_REPPEN=1.05
+export JS_PRPEN=1.2
+```
+
+Agent manifests (`00-tools.yaml`) may set the same keys:
+
+```yaml
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+```
+
+Precedence for a turn is:
+
+1. `jsrc` set-script sampling
+2. agent manifest `sampling:`
+3. `JS_*` sampling env vars
+4. CLI/live overrides (`--extra sampling.temperature=...`, REPL `/set ...`)
+
+Wire filtering is provider-family specific:
+
+- Anthropic wires (`anthropic`, `custom_anthropic`) send top-level
+  `temperature`, `top_p`, and `top_k`; penalties are dropped.
+- OpenAI wires (`openai`, `custom_responses`, `codex_oauth`) send top-level
+  `temperature`, `top_p`, and `presence_penalty`; `top_k` and
+  `repetition_penalty` are dropped.
+- OpenAI-compatible wires (`openai_compatible`, `custom_openai`, `deepseek`,
+  `ollama`, `llama.cpp`, `cliproxyapi`) send top-level `temperature`, `top_p`,
+  and `presence_penalty`; `top_k` and `repetition_penalty` go in `extra_body`.
+- Unknown or SDK-gateway transports send no sampling params.
+
 ## Max Output Tokens
 
 Order:
