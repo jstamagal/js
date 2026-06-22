@@ -890,11 +890,11 @@ def test_commit_mode_defaults_to_cwd_and_uses_prompt_as_operator_context(monkeyp
     actual = cli.main(["--commit", "-p", "almost all housekeeping tasks", "-n"])
 
     assert actual == 0
-    assert calls[0]["prompt"] == (
-        f"Commit all work in this target directory: {tmp_path}\n\n"
-        "Operator context:\n"
-        "almost all housekeeping tasks"
-    )
+    prompt = calls[0]["prompt"]
+    assert prompt.startswith(f"Commit all work in this target directory: {tmp_path}")
+    assert "js.commit_helper" in prompt and "stage" in prompt
+    assert "SURVEY" in prompt
+    assert "Operator context:\nalmost all housekeeping tasks" in prompt
     assert calls[0]["agent"] == "commit"
     assert calls[0]["save"] is False
     assert calls[0]["resume_prefix"] == f"js --commit {tmp_path}"
@@ -922,11 +922,10 @@ def test_commit_mode_accepts_target_dir_and_pipe_context(monkeypatch, tmp_path):
     actual = cli.main(["--commit", str(target), "-p", "-"])
 
     assert actual == 0
-    assert calls[0]["prompt"] == (
-        f"Commit all work in this target directory: {target}\n\n"
-        "Operator context:\n"
-        "mostly docs cleanup"
-    )
+    prompt = calls[0]["prompt"]
+    assert prompt.startswith(f"Commit all work in this target directory: {target}")
+    assert "js.commit_helper" in prompt
+    assert "Operator context:\nmostly docs cleanup" in prompt
     assert calls[0]["agent"] == "commit"
 
 
