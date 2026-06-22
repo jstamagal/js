@@ -18,6 +18,16 @@ shared session.
 
 ## Configuration
 
+Persistent artifact locations can be set in `jsrc`:
+
+```text
+set artifact.dir /srv/artifacts
+set artifact.url http://localhost
+set artifact.bin artifact
+```
+
+Environment variables remain supported:
+
 ```bash
 export ARTIFACT_DIR=/srv/artifacts
 export ARTIFACT_URL=http://localhost
@@ -25,7 +35,9 @@ export ARTIFACT_BIN=artifact
 export ARTIFACT_PUSH=auto
 ```
 
-Defaults:
+For `artifact.dir`, `artifact.url`, and `artifact.bin`, resolution is: `jsrc`
+config wins over the matching `ARTIFACT_*` environment variable, which wins over
+the built-in default. Built-in defaults:
 
 - `ARTIFACT_DIR`: `/srv/artifacts`
 - `ARTIFACT_URL`: `http://localhost`

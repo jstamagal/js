@@ -13,7 +13,6 @@ from pathlib import Path
 from ..core import ToolContext
 from ... import colors as C
 
-VAULT_ALIASES = {"creative": "~/wiki-creative", "general": "~/wiki-general"}
 KIND_FOLDER = {
     "source": "sources", "source-summary": "sources",
     "entity": "entities", "concept": "concepts", "synthesis": "synthesis",
@@ -71,7 +70,7 @@ def slugify(text: str) -> str:
 
 
 def resolve_vault(vault: str, context: ToolContext) -> Path:
-    raw = VAULT_ALIASES.get(str(vault).strip().lower(), str(vault))
+    raw = context.vault_aliases.get(str(vault).strip().lower(), str(vault))
     p = Path(os.path.expanduser(raw))
     if not p.is_absolute():
         p = context.cwd / p
@@ -127,8 +126,9 @@ def copy_to_assets(src: Path, vault_path: Path) -> Path:
     return dest
 
 
-def infer_vault(path: str | None, cwd: Path) -> str:
-    """Best-effort vault id (absolute path) from a target path or cwd; else 'creative'."""
+def infer_vault(path: str | None, cwd: Path) -> str | None:
+    """Best-effort vault id (absolute path) from a target path or cwd; None when
+    nothing matches, so the caller can fail closed instead of guessing a vault."""
     for cand in (path, str(cwd)):
         if not cand:
             continue
@@ -141,4 +141,4 @@ def infer_vault(path: str | None, cwd: Path) -> str:
             v = None
         if v:
             return str(v)
-    return "creative"
+    return None

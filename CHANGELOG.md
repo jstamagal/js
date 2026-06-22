@@ -173,6 +173,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Artifact config actually applies.** `set artifact.dir/url/bin` in jsrc now reaches the artifact tools. Precedence: jsrc config → `ARTIFACT_*` env → built-in default (`/srv/artifacts`, `http://localhost`, `artifact`). `Config` carries the fields and `run_turn` copies them onto the tool context — before, they sat unread in the settings dict and the tools always used the env/default.
+- **Wiki vaults fail closed.** No more silent `creative` default. Give a vault with `--vault <alias|path>`, or run inside one (a `PURPOSE.md` sentinel or a `wiki-*` directory, walking up); otherwise the run stops with a clear error. Aliases are config now (`set wiki.aliases.creative /path`) — the hard-coded `creative`/`general` are out of the code and shipped in the stock jsrc instead. `resolve_vault` reads aliases off the tool context; `infer_vault` returns nothing when it can't find a vault.
 - **Source + tests modernized by ruff safe autofixes.** Dequoted forward-ref annotations, `lru_cache(maxsize=None)`→`cache`, and deprecated-import updates; `js/toolkit/wiki/prompts.py` is excluded as a prompt-template builder.
 - **Replaced LiteLLM with the Vercel AI Python SDK (`ai-python`).** The provider
   boundary now lives in `js/model_client.py`; `js/runtime.py` no longer imports

@@ -31,8 +31,9 @@ from . import settings
 from .config import Config, from_env, validate_agent_id, _norm_effort
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
-from .toolkit.wiki.helpers import VAULT_ALIASES
+from .toolkit.wiki.helpers import resolve_vault
 from .toolkit.registry import build_default_registry
+from .toolkit import ToolContext
 
 _FULL_REGISTRY = build_default_registry()
 
@@ -741,7 +742,11 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
         print(f"{C.ORANGE}error: --wiki expects a comma list of {sorted(valid)} (got {wiki_arg!r}){C.RESET}", file=sys.stderr)
         return 2
 
-    vault = vault or infer_vault(target, Path(os.getcwd()))
+    if not vault:
+        vault = infer_vault(target, Path(os.getcwd()))
+    if not vault:
+        print(f"{C.ORANGE}error: no vault given and none inferred; pass --vault <name|path> or cd into a vault (PURPOSE.md sentinel or wiki-* dir){C.RESET}", file=sys.stderr)
+        return 2
 
     # wiki mode runs under its own agent id ('wiki') unless --agent is given;
     # an explicit --agent loads that persona AND prepends it to the wiki prompting.
@@ -778,11 +783,11 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     immediate_file = os.path.abspath(target) if target and os.path.isfile(target) else None
     immediate_unit = None
     if immediate_file:
-        # Resolve the vault the SAME way the wiki toolkit does (aliases + ~ + cwd-relative).
-        raw = VAULT_ALIASES.get(str(vault).strip().lower(), str(vault))
-        vp = Path(os.path.expanduser(raw))
-        if not vp.is_absolute():
-            vp = Path(os.getcwd()) / vp
+        # Resolve the vault the SAME way the wiki toolkit does (config aliases + ~ + cwd-relative).
+        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent)
+        _wiki = (getattr(_alias_cfg, "settings", {}) or {}).get("wiki")
+        _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
+        vp = resolve_vault(vault, ToolContext(cwd=Path(os.getcwd()), vault_aliases=_aliases))
         try:
             rel = Path(immediate_file).resolve().relative_to((vp / "inbox").resolve())
         except ValueError:
@@ -795,7 +800,6 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
             immediate_unit = rel.parts[0]
 
     rc = 0
-    from .toolkit import ToolContext
     for idx, mode in enumerate(modes):
         if immediate_file and mode == "ingest":
             system = persona + build_wiki_system([])

@@ -19,19 +19,19 @@ In one line: built-in defaults < platform `jsrc` < project `.js/jsrc` < project
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. First run writes `~/.config/js/jsrc` as a commented set-script template
-with every registered knob shown beside its default.
+`#`. First run writes `~/.config/js/jsrc` as a set-script template with stock
+defaults and commented reference lines for the remaining registered knobs.
 
-Example lines:
+Stock template lines include:
 
 ```text
 set model.id deepseek/deepseek-v4-flash
-set compact.auto off
-set wiki.aliases.creative /path
+set wiki.aliases.creative ~/wiki-creative
+set wiki.aliases.general ~/wiki-general
 ```
 
 Map-valued keys can be extended by setting sub-keys, so
-`set wiki.aliases.creative /path` adds or overrides only that alias.
+`set wiki.aliases.work /path` adds or overrides only that alias.
 
 `provider.id`, `provider.base_url`, and `provider.api_key` are `<none>` by
 default. When `provider.id` is set, the provider is constructed explicitly with
@@ -82,9 +82,22 @@ as `<set>`.
 | `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
 | `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:[...], aliases:{...}}. |
 | `wiki.aliases` | `<none>` | Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`. |
-| `artifact.dir` | `/srv/artifacts` | Artifact library directory. |
-| `artifact.url` | `http://localhost` | Artifact HTTP base URL. |
-| `artifact.bin` | `artifact` | Artifact CLI binary. |
+| `artifact.dir` | `<none>` | Artifact library directory. |
+| `artifact.url` | `<none>` | Artifact HTTP base URL. |
+| `artifact.bin` | `<none>` | Artifact CLI binary. |
+
+Artifact config values are unset by default in `jsrc`. Artifact helpers resolve
+directory, URL, and binary with this precedence: `set artifact.*` in `jsrc`,
+then the matching `ARTIFACT_*` environment variable, then the built-in default
+(`/srv/artifacts`, `http://localhost`, or `artifact`).
+
+Wiki vault aliases come from config via `set wiki.aliases.<name> <path>`; the
+stock `jsrc` defines `creative` as `~/wiki-creative` and `general` as
+`~/wiki-general`. `--vault` may name a configured alias or a path. Without
+`--vault`, wiki mode infers a vault only by walking up from the target path or
+current directory and finding a `PURPOSE.md` sentinel or a directory whose name
+matches `wiki-*`. If nothing resolves, the run stops with an error. There is no
+default vault.
 
 ## Environment Variables
 

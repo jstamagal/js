@@ -137,6 +137,9 @@ class Config:
     allow_inline_code: bool = False  # !{sh|python|c ...} inline-code execution (--dangerously-evaluate-inline-code)
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
+    artifact_dir: str | None = None  # artifact library dir; None = ARTIFACT_DIR env or built-in default
+    artifact_url: str | None = None  # artifact base URL; None = ARTIFACT_URL env or built-in default
+    artifact_bin: str | None = None  # artifact CLI binary; None = ARTIFACT_BIN env or built-in default
 
 
 def _session_timestamp() -> str:
@@ -319,6 +322,9 @@ def from_env(
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
+    artifact_dir = _settings.get_dotted(js_root_settings, ("artifact", "dir"))
+    artifact_url = _settings.get_dotted(js_root_settings, ("artifact", "url"))
+    artifact_bin = _settings.get_dotted(js_root_settings, ("artifact", "bin"))
 
     config_file_path = _paths.global_config_file()
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
@@ -375,4 +381,7 @@ def from_env(
         allow_inline_code=env.get("JS_ALLOW_INLINE_CODE") == "1",
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
+        artifact_dir=artifact_dir,
+        artifact_url=artifact_url,
+        artifact_bin=artifact_bin,
     )

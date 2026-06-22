@@ -196,9 +196,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`.",
                 empty=EMPTY_NONE),
     # --- artifact ---
-    SettingSpec("artifact.dir", "str", DEFAULT_ARTIFACT_DIR, "Artifact library directory."),
-    SettingSpec("artifact.url", "str", DEFAULT_ARTIFACT_URL, "Artifact HTTP base URL."),
-    SettingSpec("artifact.bin", "str", DEFAULT_ARTIFACT_BIN, "Artifact CLI binary."),
+    SettingSpec("artifact.dir", "str", None, "Artifact library directory (default /srv/artifacts; ARTIFACT_DIR env also honored).", empty=EMPTY_NONE),
+    SettingSpec("artifact.url", "str", None, "Artifact HTTP base URL (default http://localhost; ARTIFACT_URL env also honored).", empty=EMPTY_NONE),
+    SettingSpec("artifact.bin", "str", None, "Artifact CLI binary (default artifact; ARTIFACT_BIN env also honored).", empty=EMPTY_NONE),
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
@@ -444,6 +444,11 @@ def _template_lines() -> list[str]:
         "# command, applied at startup. Uncomment a line and edit the value.",
         "#",
         f"# Precedence, lowest to highest: {TEMPLATE_CONFIG_PRECEDENCE}.",
+        "",
+        "# --- stock defaults (active lines; edit or delete) ---",
+        f"set model.id {DEFAULT_MODEL}",
+        "set wiki.aliases.creative ~/wiki-creative",
+        "set wiki.aliases.general ~/wiki-general",
         "",
     ]
     by_section: dict[str, list[SettingSpec]] = {}

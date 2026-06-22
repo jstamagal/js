@@ -39,13 +39,15 @@ def test_default_fetch_timeout_is_15_and_template_exposes_compact_wiki_artifact(
     target = tmp_path / "jsrc"
     settings.write_default_template(target)
     text = target.read_text(encoding="utf-8")
+    lines = text.splitlines()
     for setting_line in (
         "#set compact.context_window",
         "#set compact.tail_tokens 16384",
         "#set wiki.aliases",
-        "#set artifact.dir /srv/artifacts",
     ):
         assert setting_line in text
+    assert "#set artifact.dir" in lines
+    assert "set wiki.aliases.creative ~/wiki-creative" in lines
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):

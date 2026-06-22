@@ -45,8 +45,8 @@ from . import colors as C
 from . import model_metadata
 from .config import from_env
 from .toolkit import ToolContext
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 from .toolkit.wiki.helpers import resolve_vault
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _BAR_WIDTH = 28
 _CHARS_PER_TOKEN = 4          # rough, tokenizer-free estimate for budgeting
 _FERAL_FRACTION = 0.35        # of context window — distills wander past ~half
@@ -398,13 +398,15 @@ sizing:
     ap.add_argument("-l", "--limit", type=int, metavar="N",
                     help="only run the first N jobs (smoke test; leaves the rest behind)")
     args = ap.parse_args(argv)
-    vault = resolve_vault(args.vault, ToolContext())
+    cfg = from_env(save_session=False)
+    _wiki = (getattr(cfg, "settings", {}) or {}).get("wiki")
+    _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
+    vault = resolve_vault(args.vault, ToolContext(vault_aliases=_aliases))
     inbox = Path(args.source).expanduser().resolve() if args.source else vault / "inbox"
     staging = None if args.ralph_wiggum else Path(tempfile.mkdtemp(prefix="jsdrain-"))
     env = dict(os.environ)
     if not args.archive:
         env["JS_WIKI_NO_ARCHIVE"] = "1"
-    cfg = from_env(save_session=False)
     model = args.model or cfg.model
     budget_tokens = args.budget if args.budget else auto_budget_tokens(model, cfg.provider_id)
     budget_chars = max(1, budget_tokens) * _CHARS_PER_TOKEN

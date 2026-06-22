@@ -122,6 +122,7 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         artifact_dir=getattr(parent, "artifact_dir", None),
         artifact_url=getattr(parent, "artifact_url", None),
         artifact_bin=getattr(parent, "artifact_bin", None),
+        vault_aliases=getattr(parent, "vault_aliases", {}) or {},
     )
     child.tool_registry = registry
     child.agent_id = agent

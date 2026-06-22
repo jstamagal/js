@@ -70,6 +70,7 @@ class ToolContext:
     wiki_vault_lock_timeout_s: int = 30
     wiki_mode: str = ""
     wiki_no_archive: bool = False
+    vault_aliases: dict[str, str] = field(default_factory=dict)  # wiki vault alias -> path, from config
     artifact_dir: Path | None = None
     artifact_url: str | None = None
     artifact_bin: str | None = None
