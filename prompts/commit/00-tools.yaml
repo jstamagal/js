@@ -1,3 +1,4 @@
+# model: anthropic/claude-sonnet-4   # optional: pin this agent's model (provider-prefixed re-routes)
 tools:
   - read
   - write

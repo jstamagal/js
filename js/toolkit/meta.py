@@ -216,6 +216,7 @@ def _run_one_task(
     from .. import persona as P
     from ..runtime import Telemetry, run_turn
     from ..sampling import Sampling
+    from .. import routing
 
     prompt = _task_text(item)
     if not prompt:
@@ -268,7 +269,23 @@ def _run_one_task(
     if use_secondary and getattr(prompt_spec, "secondary_model", ""):
         chosen = prompt_spec.secondary_model
     if chosen and chosen != cfg.model:
-        cfg = replace(cfg, model=chosen)
+        route = routing.resolve_model_route(
+            chosen,
+            configured_provider_id=cfg.provider_id,
+            configured_base_url=cfg.provider_base_url,
+            configured_api_key=cfg.provider_api_key,
+            configured_headers=getattr(cfg, "provider_headers", {}),
+            explicit_model=True,
+            discover_env=False,
+        )
+        cfg = replace(
+            cfg,
+            model=route.model,
+            provider_id=route.provider_id,
+            provider_base_url=route.base_url,
+            provider_api_key=route.api_key,
+            provider_headers=route.headers,
+        )
 
     registry = full_registry.select(prompt_spec.tool_selectors)
     system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)

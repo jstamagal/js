@@ -597,6 +597,31 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     return False
 
 
+def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
+    """Apply the active agent's frontmatter `model:` through the resolver, unless
+    the operator pinned a model with -m / JS_MODEL / config."""
+    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
+    if not agent_model or model is not None or getattr(cfg, "explicit_model", False):
+        return cfg
+    route = routing.resolve_model_route(
+        agent_model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", {}),
+        explicit_model=True,
+        discover_env=False,
+    )
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+    )
+
+
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -633,6 +658,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+        cfg = _apply_agent_model(cfg, prompt_spec, model)
 
     messages = M.load_messages(cfg.session_file)
     before_len = len(messages)
@@ -1225,6 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    cfg = _apply_agent_model(cfg, prompt_spec, args.model)
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
     session = PromptSession(history=FileHistory(str(cfg.history_file)))
