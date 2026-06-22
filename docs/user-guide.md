@@ -185,6 +185,27 @@ When `-p` is also supplied, the final prompt is:
 `-p -` means "read stdin as the prompt/operator context" in the places that
 accept it.
 
+## File Attachments
+
+Attach files to a prompt instead of pasting them:
+
+```bash
+js -p "what's in this chart" -f chart.png
+js -p "summarize" -f notes.md -f appendix.txt
+cat img.png | js -p "describe this" -f -
+```
+
+`-f`/`--file` is repeatable; `-f -` reads bytes from stdin. In the REPL, attach
+with an `@path` token in your line (quote spaces: `@"my file.png"`).
+
+- Text files inline into the prompt (delimited, up to 64 KiB).
+- Images attach as vision input when the active model supports vision; otherwise
+  you get a note that vision is off and the bytes are not sent.
+- Other binaries attach as a short descriptor (path, type, size).
+
+The `fetch` tool covers the network side — methods, headers, raw/JSON body,
+`file://`, downloads to disk, binary descriptors, and image-for-vision.
+
 ## Commit Mode
 
 The built-in commit workflow is a shortcut for the prompt-directory commit

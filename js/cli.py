@@ -17,7 +17,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 
-from . import codex_auth, colors as C
+from . import attach, codex_auth, colors as C
 from . import logins
 from . import memory as M
 from . import model_metadata
@@ -30,7 +30,7 @@ from . import setcmd
 from . import settings
 from . import routing
 from .sampling import Sampling
-from .config import Config, from_env, validate_agent_id, _norm_effort
+from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
 from .toolkit.artifact import build_artifact_system
 from .toolkit.wiki import build_wiki_system, infer_vault
 from .toolkit.wiki.helpers import resolve_vault
@@ -127,6 +127,14 @@ def _read_stdin_if_piped() -> str:
     except (OSError, ValueError):
         return ""
 
+def _read_stdin_attachment_if_piped() -> bytes:
+    if sys.stdin.isatty():
+        return b""
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        return buffer.read()
+    return sys.stdin.read().encode("utf-8")
+
 
 
 
@@ -193,12 +201,14 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         discover_env=False,
         use_saved_login=False,
     )
+    route_vision = vision_enabled_for_model(route.model)
     if (
         route.model != cfg.model
         or route.provider_id != cfg.provider_id
         or route.base_url != cfg.provider_base_url
         or route.api_key != cfg.provider_api_key
         or route.headers != getattr(cfg, "provider_headers", {})
+        or route_vision != cfg.vision_enabled
     ):
         return replace(
             cfg,
@@ -207,6 +217,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
             provider_base_url=route.base_url,
             provider_api_key=route.api_key,
             provider_headers=route.headers,
+            vision_enabled=route_vision,
         )
     return cfg
 
@@ -359,6 +370,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
+  {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
   {C.YELLOW}exit{C.RESET}             quit
 """
 
@@ -620,6 +632,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         provider_base_url=route.base_url,
         provider_api_key=route.api_key,
         provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model),
     )
 
 
@@ -630,8 +643,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 reasoning: str | None = None, maxout: int | None = None,
                 show_continue: bool = True, tool_registry=None,
                 extras: list[str] | None = None, tool_context=None,
-                ignore_local_config: bool = False, ignore_global_config: bool = False) -> int:
-    if not prompt.strip():
+                ignore_local_config: bool = False, ignore_global_config: bool = False,
+                files: list[str] | None = None, stdin_attachment: bytes | None = None) -> int:
+    attachments = list(files or [])
+    if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
         return 2
     try:
@@ -661,10 +676,24 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         cfg = _apply_agent_model(cfg, prompt_spec, model)
 
+    attachment_cfg = (
+        replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model))
+        if model is not None
+        else cfg
+    )
     messages = M.load_messages(cfg.session_file)
     before_len = len(messages)
-    user_msg = {"role": "user", "content": prompt}
-    messages.append(user_msg)
+    try:
+        user_bundle = attach.build_user_message(
+            prompt,
+            attachments,
+            attachment_cfg,
+            stdin_attachment=stdin_attachment,
+        )
+    except attach.AttachmentError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
+    messages.append(user_bundle.runtime_message)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     turn_kwargs = {
         "model_override": model,
@@ -690,6 +719,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
         return 1
 
+    messages[before_len] = user_bundle.history_message
     for message in reversed(messages):
         if message.get("role") == "assistant" and message.get("content"):
             # In debug, run_turn already streamed the answer live to stdout — a
@@ -1091,6 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
     parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
     parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
+    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-d", "--debug", action="store_true", help="show streamed text/tool debug output in prompt mode")
@@ -1179,6 +1210,9 @@ def main(argv: list[str] | None = None) -> int:
     if len(selected_modes) > 1:
         print(f"{C.ORANGE}error: choose only one built-in mode: --wiki, --artifact, --commit, or --compact{C.RESET}", file=sys.stderr)
         return 2
+    if args.files and selected_modes:
+        print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
+        return 2
 
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
@@ -1216,8 +1250,22 @@ def main(argv: list[str] | None = None) -> int:
                            reasoning=args.reasoning, maxout=args.max_out,
                            extra_context=extra_context, extras=args.extras)
 
+    if args.files and args.prompt is None and sys.stdin.isatty():
+        print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
+        return 2
+
     if args.prompt is not None or not sys.stdin.isatty():
-        if args.prompt in {None, "-"}:
+        stdin_attachment = None
+        if "-" in args.files:
+            if args.prompt in {None, "-"}:
+                print(f"{C.ORANGE}error: stdin cannot be both the prompt and an attachment{C.RESET}", file=sys.stderr)
+                return 2
+            if sys.stdin.isatty():
+                print(f"{C.ORANGE}error: -f - requires piped stdin bytes{C.RESET}", file=sys.stderr)
+                return 2
+            stdin_attachment = _read_stdin_attachment_if_piped()
+            prompt = args.prompt or ""
+        elif args.prompt in {None, "-"}:
             prompt = _read_stdin_if_piped()
         elif sys.stdin.isatty():
             prompt = args.prompt
@@ -1230,7 +1278,9 @@ def main(argv: list[str] | None = None) -> int:
                            show_continue=not args.quiet,
                            extras=args.extras,
                            ignore_local_config=args.ignore_local,
-                           ignore_global_config=args.ignore_global)
+                           ignore_global_config=args.ignore_global,
+                           files=args.files,
+                           stdin_attachment=stdin_attachment)
 
     try:
         cfg = _cfg_from_env_compat(
@@ -1298,12 +1348,18 @@ def main(argv: list[str] | None = None) -> int:
         if _handle_command(line, state, cfg):
             continue
 
-        before_len = len(state["messages"])
-        user_msg = {"role": "user", "content": line}
-        state["messages"].append(user_msg)
-        _append_turn(cfg, user_msg)
+        prompt_text, line_attachments = attach.split_repl_attachments(line)
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
+            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+        except attach.AttachmentError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}")
+            continue
+
+        before_len = len(state["messages"])
+        state["messages"].append(user_bundle.runtime_message)
+        _append_turn(cfg, user_bundle.history_message)
+        try:
             runtime.run_turn(
                 turn_cfg,
                 state["system"],
@@ -1323,6 +1379,7 @@ def main(argv: list[str] | None = None) -> int:
                 tool_registry=state["tool_registry"],
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
             )
+            state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:
                 _append_turn(cfg, m)
