@@ -21,7 +21,7 @@ from . import colors as C
 from . import model_metadata
 from . import tools as T
 from .config import Config, vision_enabled_for_model
-from .toolkit.core import call_tool, compact_json
+from .toolkit.core import ToolContext, call_tool, compact_json
 from .toolkit.registry import ToolRegistry
 
 
@@ -690,6 +690,12 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.wiki_vault_lock_timeout_s = getattr(cfg, "wiki_vault_lock_timeout_s", getattr(active_context, "wiki_vault_lock_timeout_s", 30))
+    active_context.artifact_dir = getattr(cfg, "artifact_dir", None)
+    active_context.artifact_url = getattr(cfg, "artifact_url", None)
+    active_context.artifact_bin = getattr(cfg, "artifact_bin", None)
+    _wiki_cfg = (getattr(cfg, "settings", {}) or {}).get("wiki")
+    _aliases = _wiki_cfg.get("aliases") if isinstance(_wiki_cfg, dict) else None
+    active_context.vault_aliases = _aliases if isinstance(_aliases, dict) else {}
     active_context.vision_enabled = vision_enabled_for_model(model)
     trace = trace_override if trace_override is not None else cfg.trace
     if trace:

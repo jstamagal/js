@@ -835,7 +835,9 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
         prompts_dir=tmp_path / "prompts",
     ))
 
-    wiki_rc = cli.main(["--wiki=ingest", "--debug-file", str(tmp_path / "wiki.log"), "-r", "off", "--max-out", "111", "-m", "model-a", "-n", str(tmp_path)])
+    vault = tmp_path / "wiki-forward"
+    vault.mkdir()
+    wiki_rc = cli.main(["--wiki=ingest", "--vault", str(vault), "--debug-file", str(tmp_path / "wiki.log"), "-r", "off", "--max-out", "111", "-m", "model-a", "-n", str(tmp_path)])
     artifact_rc = cli.main(["--artifact=query", "--debug-file", str(tmp_path / "artifact.log"), "-r", "low", "--max-out", "222", "-m", "model-b", "-n", "find thing"])
 
     assert wiki_rc == 0
@@ -1049,14 +1051,16 @@ def test_wiki_continue_hint_preserves_model_override(monkeypatch, tmp_path, caps
 
     monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
 
-    actual = cli.main(["--wiki=ingest", "--model", "wiki-model"])
+    vault = tmp_path / "wiki-hints"
+    vault.mkdir()
+    actual = cli.main(["--wiki=ingest", "--vault", str(vault), "--model", "wiki-model"])
 
     output = capsys.readouterr().out
     session_file = next((tmp_path / ".local" / "share" / "js" / "sessions" / "wiki").glob("*.jsonl"))
     assert actual == 0
     assert output == (
         "WIKI_MODEL_HINT_OK\n"
-        f"Continue: js --wiki=ingest --vault=creative --model wiki-model --session {session_file.stem}\n"
+        f"Continue: js --wiki=ingest --vault={vault} --model wiki-model --session {session_file.stem}\n"
     )
 
 

@@ -19,15 +19,19 @@ session.
 
 ## Vaults
 
-Aliases:
+Pass a vault as `--vault <alias|path>`. Aliases are config knobs; the stock
+`jsrc` defines:
 
 ```text
-creative -> ~/wiki-creative
-general  -> ~/wiki-general
+set wiki.aliases.creative ~/wiki-creative
+set wiki.aliases.general ~/wiki-general
 ```
 
-Any path can also be passed as `--vault`. When omitted, the CLI tries to infer a
-vault from the target path or current directory, then falls back to `creative`.
+Any configured alias or filesystem path can be passed. When `--vault` is
+omitted, the CLI tries to infer a vault from the target path or current
+directory by walking upward and accepting only a `PURPOSE.md` sentinel or a
+directory whose name matches `wiki-*`. If nothing resolves, the run stops with
+an error. There is no default vault.
 
 Expected vault shape:
 
