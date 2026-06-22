@@ -42,6 +42,7 @@ def resolve_model_route(
     configured_headers: Mapping[str, str] | None = None,
     env: Mapping[str, str] | None = None,
     explicit_model: bool = False,
+    prefix_overrides_provider: bool = False,
     discover_env: bool = True,
     use_saved_login: bool = True,
 ) -> ModelRoute:
@@ -50,6 +51,9 @@ def resolve_model_route(
     - A ``provider/model`` prefix selects that provider, but only when no
       provider is pinned or the prefix names the same one (so a gateway id like
       ``anthropic/claude-...`` under provider ``omp`` does not hijack routing).
+    - ``prefix_overrides_provider``: let a known prefix route even when a different
+      provider is pinned (for explicit agent/subagent `model:` choices); the
+      pinned provider's base/key/headers are then dropped for the new provider.
     - ``discover_env``: when no provider is set, sniff provider-specific env vars
       (e.g. ``DEEPSEEK_API_KEY``) so a fresh shell works without ``js --login``.
     - ``use_saved_login``: fill base/key/headers from a saved login when the
@@ -61,9 +65,12 @@ def resolve_model_route(
     configured_provider_id = providers.normalize_provider_id(configured_provider_id)
 
     parsed_provider_id, parsed_model = providers.parse_model_prefix(str(requested_model))
-    if parsed_provider_id is not None and (
-        configured_provider_id is None or parsed_provider_id == configured_provider_id
-    ):
+    routes_by_prefix = parsed_provider_id is not None and (
+        prefix_overrides_provider
+        or configured_provider_id is None
+        or parsed_provider_id == configured_provider_id
+    )
+    if routes_by_prefix:
         model = parsed_model or str(requested_model)
         provider_id = parsed_provider_id
     else:
@@ -75,9 +82,13 @@ def resolve_model_route(
         if discovered is not None:
             provider_id = discovered.id
 
-    base_url = configured_base_url
-    api_key = configured_api_key
-    headers: dict[str, str] = dict(configured_headers or {})
+    # When a prefix switched to a DIFFERENT provider than the one configured, the
+    # configured base/key/headers belong to the old provider — start fresh so the
+    # new provider's saved login / env / defaults fill them in.
+    switched = routes_by_prefix and configured_provider_id is not None and parsed_provider_id != configured_provider_id
+    base_url = None if switched else configured_base_url
+    api_key = None if switched else configured_api_key
+    headers: dict[str, str] = {} if switched else dict(configured_headers or {})
 
     if use_saved_login and provider_id is not None:
         try:

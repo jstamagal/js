@@ -610,6 +610,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         configured_api_key=cfg.provider_api_key,
         configured_headers=getattr(cfg, "provider_headers", {}),
         explicit_model=True,
+        prefix_overrides_provider=True,
         discover_env=False,
     )
     return replace(

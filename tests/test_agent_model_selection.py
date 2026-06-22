@@ -103,7 +103,13 @@ def _make_cfg(
     )
 
 
-def _capture_single_task_route(monkeypatch, tmp_path: Path, cfg: Config) -> dict[str, object]:
+def _capture_single_task_route(
+    monkeypatch,
+    tmp_path: Path,
+    cfg: Config,
+    *,
+    model_arg: str = "",
+) -> dict[str, object]:
     seen: dict[str, object] = {}
 
     def stream_stub(**kwargs):
@@ -115,7 +121,7 @@ def _capture_single_task_route(monkeypatch, tmp_path: Path, cfg: Config) -> dict
 
     context = ToolContext(cwd=tmp_path)
     context.config = cfg
-    actual = task(["do the child work"], agent_id="worker", context=context)
+    actual = task(["do the child work"], agent_id="worker", model=model_arg, context=context)
 
     assert "CHILD_OK" in actual
     return seen
@@ -202,6 +208,39 @@ def test_subagent_prefixed_model_reroutes_and_bare_model_keeps_parent_provider(m
     assert bare["provider_headers"] == {"x-parent": "1"}
 
 
+def test_subagent_model_precedence_tool_arg_then_prefer_inherit(monkeypatch, tmp_path):
+    prompts = _write_agent_dir(
+        tmp_path / "precedence" / "prompts",
+        manifest="model: deepseek/frontmatter-model\ntools: []\n",
+    )
+    cfg = _make_cfg(tmp_path, prompts, provider_id=None)
+
+    tool_arg = _capture_single_task_route(
+        monkeypatch,
+        tmp_path,
+        cfg,
+        model_arg="deepseek/tool-call-model",
+    )
+
+    assert tool_arg["model_id"] == "tool-call-model"
+    assert tool_arg["provider_id"] == "deepseek"
+
+    inherit_cfg = replace(
+        cfg,
+        model="parent-inherited-model",
+        provider_id="ollama",
+        provider_base_url=OLLAMA_BASE_URL,
+        provider_api_key="parent-key",
+        prefer_inherit=True,
+    )
+
+    inherited = _capture_single_task_route(monkeypatch, tmp_path, inherit_cfg)
+
+    assert inherited["model_id"] == "parent-inherited-model"
+    assert inherited["provider_id"] == "ollama"
+    assert inherited["provider_base_url"] == OLLAMA_BASE_URL
+
+
 def test_lock_subagent_model_removes_task_model_schema_property(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "parent", "tools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
@@ -232,3 +271,36 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
     assert seen["provider_id"] == "deepseek"
     assert "PARENT AGENTS INSTRUCTIONS" in system
     assert "WORKER BODY" in system
+
+def test_prefixed_model_overrides_pinned_parent_provider():
+    from js.routing import resolve_model_route
+
+    # An explicit agent/subagent prefixed model overrides a differently-pinned
+    # parent provider, and does NOT inherit the parent's base/key.
+    route = resolve_model_route(
+        "deepseek/deepseek-v4-flash",
+        configured_provider_id="ollama",
+        configured_base_url=OLLAMA_BASE_URL,
+        configured_api_key="ollama-parent-key",
+        explicit_model=True,
+        discover_env=False,
+        use_saved_login=False,
+        prefix_overrides_provider=True,
+    )
+    assert route.provider_id == "deepseek"
+    assert route.model == "deepseek-v4-flash"
+    assert route.base_url != OLLAMA_BASE_URL
+    assert route.api_key != "ollama-parent-key"
+
+    # Without the override flag the pinned provider wins (gateway/omp protection).
+    kept = resolve_model_route(
+        "deepseek/deepseek-v4-flash",
+        configured_provider_id="ollama",
+        configured_base_url=OLLAMA_BASE_URL,
+        configured_api_key="ollama-parent-key",
+        explicit_model=True,
+        discover_env=False,
+        use_saved_login=False,
+    )
+    assert kept.provider_id == "ollama"
+    assert kept.base_url == OLLAMA_BASE_URL
