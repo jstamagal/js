@@ -276,6 +276,7 @@ def _run_one_task(
             configured_api_key=cfg.provider_api_key,
             configured_headers=getattr(cfg, "provider_headers", {}),
             explicit_model=True,
+            prefix_overrides_provider=True,
             discover_env=False,
         )
         cfg = replace(
