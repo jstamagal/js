@@ -94,6 +94,13 @@ def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp
     assert settings.get_dotted(cfg.settings, ("tools", "alias_profiles")) == expected
 
 
+def test_extra_tools_alias_profiles_rejects_non_list_json():
+    raw = 'tools.alias_profiles={"match":["offline-test-model"],"aliases":{"read":"r"}}'
+
+    with pytest.raises(ValueError, match="--extra tools\\.alias_profiles: expected a JSON list"):
+        settings.parse_extra_arg(raw)
+
+
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
     with pytest.raises(ValueError):
         settings.parse_extra_arg("limits.task_max_depth")  # no '='
