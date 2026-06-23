@@ -107,26 +107,9 @@ quit
 :q
 ```
 
-Inside the `/model` picker, press `:` for command mode. The picker lists saved
-logins, not every possible SDK provider. `js --logout <provider>` removes that
-provider and its cached models from the picker.
-
-
-```text
-:/provider my-proxy
-:/key sk-...
-:/url http://127.0.0.1:11434/v1
-:/openai-completions
-:/openai-responses
-:/anthropic
-:/codex
-:/ollama
-:/llama.cpp
-:/mimo
-:/mimo-token-plan
-:/fetch
-:/login
-```
+The `/model` picker lists your saved logins, not every possible SDK provider.
+`js --logout <provider>` removes that provider and its cached models from the
+picker.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
@@ -156,11 +139,39 @@ js -p "prompt" --debug
 js -p "prompt" --debug-file /tmp/js-debug.log
 js -p "prompt" --reasoning off
 js -p "prompt" --max-out 64000
+js -p "prompt" --quiet
 js --migrate-config
 ```
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
 file and keeps stdout clean. They are mutually exclusive.
+
+`-q` / `--quiet` suppresses the `Continue: ...` resume hint that one-shot mode
+prints after a saved turn. The session is still written; only the hint is
+silenced.
+
+## Working Directory And Config Scoping
+
+These flags bind where `js` runs and which config files it reads. They apply to
+every mode (`-p`, REPL, `--commit`, `--wiki`, ...):
+
+```bash
+js -C /path/to/repo -p "summarize this repo"
+js --ignore-local -p "prompt"
+js --ignore-global -p "prompt"
+```
+
+`-C <dir>` runs as if launched from `<dir>` (like `git -C`): it changes into the
+directory before doing anything, so the working directory, project config
+lookup, and tools all see `<dir>`. The directory must exist — a missing or
+non-directory target prints an error and exits.
+
+`--ignore-local` ignores the project config files `.js/jsrc` and
+`.js/jsrc.local`.
+
+`--ignore-global` ignores the platform `jsrc`. With this flag `js` also skips
+writing the default config template, so it will not create the platform config
+file on first run.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
 [Configuration And Sessions](configuration-and-sessions.md) for the file-level
