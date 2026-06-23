@@ -609,7 +609,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         result = setcmd.run_repl_command(state["settings"], line, context=context)
         if result.error:
             print(f"{C.ORANGE}{result.error}{C.RESET}")
-        elif result.changed:
+        if result.changed:
             if setcmd.is_repl_command(line, "/set"):
                 state["sampling_cli"] = _sampling_override_after_set(
                     line,
