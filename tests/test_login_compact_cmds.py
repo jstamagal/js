@@ -63,6 +63,23 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     assert seen_focus == ["please"]
 
 
+def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    seen_models: list[str | None] = []
+
+    def compact_stub(compact_cfg, system, messages, *, focus="", forced=False):
+        seen_models.append(settings.get_dotted(compact_cfg.settings, ("compact", "model")))
+        return "ok"
+
+    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+
+    assert cli._handle_command("/set compact.model compact-live-model", state, cfg) is True
+    assert cli._handle_command("/compact", state, cfg) is True
+
+    assert seen_models == ["compact-live-model"]
+
+
 def test_compact_auto_bad_arg_usage(tmp_path):
     cfg = make_cfg(tmp_path)
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}

@@ -753,7 +753,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         if forced:
             focus = ""
         try:
-            compact_cfg = _cfg_for_active_model(cfg, state)
+            compact_cfg = replace(_cfg_for_active_model(cfg, state), settings=state["settings"])
             result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
