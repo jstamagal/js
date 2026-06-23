@@ -726,7 +726,16 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
     def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
         if event_hooks is None:
             return []
-        return event_hooks.emit(event, **payload).hooks
+        emission = event_hooks.emit(event, **payload)
+        for result in emission.results:
+            if result.error:
+                telemetry.event(
+                    "event_handler_error",
+                    event=emission.event,
+                    handler=result.hook.handler,
+                    error=result.error,
+                )
+        return emission.hooks
 
     def _end_turn(reason: str) -> None:
         _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id)
