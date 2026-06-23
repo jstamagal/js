@@ -287,6 +287,19 @@ def test_unknown_knob_returns_error_without_mutating_settings():
     assert live_settings == before
 
 
+@pytest.mark.parametrize("key", ["model.id.foo", "provider.id.foo", "limits.fetch_timeout_s.foo"])
+def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: str):
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+
+    result = setcmd.run_repl_command(live_settings, f"/set {key} value")
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == f"unknown knob: {key}"
+    assert live_settings == before
+
+
 def test_map_sub_key_updates_parent_map_and_shows_parent():
     live_settings = settings.seed_defaults()
 
