@@ -140,7 +140,7 @@ def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, c
     seen: list[str] = []
 
     class PromptSessionStub:
-        def __init__(self, history):
+        def __init__(self, history, **kwargs):
             self.lines = iter(["/compact", "exit"])
 
         def prompt(self, *_args, **_kwargs):
@@ -166,7 +166,7 @@ def test_interactive_cli_model_flag_overrides_banner_model(monkeypatch, tmp_path
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
     class PromptSessionStub:
-        def __init__(self, history):
+        def __init__(self, history, **kwargs):
             pass
 
         def prompt(self, *_args, **_kwargs):

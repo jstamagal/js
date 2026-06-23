@@ -122,7 +122,7 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     append_message(cfg.session_file, {"role": "user", "content": "existing"})
 
     class SessionStub:
-        def __init__(self, history=None):
+        def __init__(self, history=None, **kwargs):
             self.lines = iter(["cause failure", "exit"])
 
         def prompt(self, *args, **kwargs):
