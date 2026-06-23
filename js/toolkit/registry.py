@@ -54,7 +54,8 @@ class ToolRegistry:
         names = self.by_name
         for canonical, alias in profile.items():
             key = str(alias).strip().lower()
-            if canonical in names and key:
+            existing = merged.get(key)
+            if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
         return ToolRegistry(tools=self.tools, aliases=merged)
 
