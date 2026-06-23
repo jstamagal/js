@@ -166,13 +166,14 @@ In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
 `show [key]` lists every current value or only the requested key. Secret values
 such as `provider.api_key` render as `<set>` once set.
 
-The `set` and `show` verbs work slashless: `js/setcmd.py` `_normalize` strips a
-single optional leading `/`, so `set` and `/set` (and `show`/`/show`) dispatch
-identically in the REPL. The same `setcmd` runner backs both REPL commands and
-`jsrc` config loading, so `jsrc` lines are the bare `set <key> <value>` form (a
-leading `/` is tolerated but unnecessary). `jsrc` accepts only `set`: it is the
-sole verb `apply_config_line` recognizes and it requires both a key and a value,
-so `show` is REPL-only.
+The command runner works slashless: `js/setcmd.py` `_normalize` strips a single
+optional leading `/`, so `set` and `/set` (and `show`/`/show`) dispatch
+identically in the REPL. The same runner backs REPL commands, `jsrc` config
+loading, and `/load`ed runtime scripts, but the accepted verb set differs by
+entry point. `jsrc` lines are the bare `set <key> <value>` form and accept only
+`set`; `apply_config_line` rejects every other verb. Runtime scripts loaded with
+`/load <file>` currently accept `set`, `show`, nested `load`, and `on`, with
+nested script paths resolved relative to the file that contains them.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
