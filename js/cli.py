@@ -299,7 +299,7 @@ def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> 
     if raw is missing:
         return default
     if raw is None:
-        return None
+        return default
     if isinstance(raw, str):
         return _norm_effort(raw)
     return default
