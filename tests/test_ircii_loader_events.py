@@ -51,6 +51,19 @@ def test_repl_load_applies_slashless_script_lines(tmp_path):
     assert result.lines[-1] == f"loaded {script}"
 
 
+def test_script_load_treats_bare_slash_line_as_noop(tmp_path):
+    script = tmp_path / "bare-slash.irc"
+    script.write_text("/\nset compact.auto off\n", encoding="utf-8")
+    live_settings = settings.seed_defaults()
+    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+
+    result = setcmd.run_repl_command(live_settings, "/load bare-slash.irc", context=ctx)
+
+    assert result.error is None
+    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    assert result.lines == ["compact.auto = off", f"loaded {script}"]
+
+
 def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
