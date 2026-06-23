@@ -340,6 +340,44 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
+def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypatch, tmp_path):
+    calls: list[dict] = []
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs)
+        return model_text_result("OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = offline_config(
+        tmp_path,
+        model="openai-test",
+        settings={
+            "tools": {
+                "alias_profiles": [
+                    {"match": "openai", "aliases": {"read": "write"}},
+                    {"match": "openai", "aliases": {"read": "Read"}},
+                ],
+            },
+        },
+    )
+    registry = build_default_registry().select(["read", "write"])
+    messages = [{"role": "user", "content": "Use tools if needed."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=registry,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert [spec.name for spec in calls[0]["tools"]] == ["Read", "write"]
+    assert messages[-1] == {"role": "assistant", "content": "OK"}
+
+
 def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tmp_path):
     calls: list[dict] = []
 
