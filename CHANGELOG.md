@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **REPL Tab completion.** Tab completes by prefix (never fuzzy) with a rotating menu: commands at line-start (a slashless word gets an implicit `/`, so `comp`→`/compact`), `/set`/`/show` knob keys, `/login`/`/provider` names, file paths for `/…`/`@…` tokens, and hunspell spelling suggestions for prose words. Tab-triggered only (`complete_while_typing=False`).
+- **`/login <name> [apikey] [baseurl] [provider]`.** Build and persist a named login inline — a custom name with an explicit transport (e.g. a local vLLM endpoint as `openai`), or a known provider that infers its own type. Bare `/login <name>` still loads a saved login.
+- **`/compact-auto on|off`.** Real handler that toggles `compact.auto` live (it was advertised in help with no handler before).
 - **Ruff lint/format dev tooling.** Ruff lives in a `uv` dev dependency-group
   so `uv sync` puts it on the project venv PATH (agents can call `ruff check` /
   `ruff format` through the shell tool directly); config in `[tool.ruff]` (line
@@ -173,6 +176,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Docs reconciled with shipped behavior.** `fetch` documented as the full HTTP client it is (method/headers/body/json_body/save/download, `file://`, 32 MiB cap); `remove` documented with trash-by-default, the `permanent` flag, and the 512 MiB guard; the `-C`, `-q`/`--quiet`, `--ignore-local`, `--ignore-global` flags, the `commit_helper` CLI, and slashless `set`/`show`; plus the `minimax`, `omp`, `cliproxyapi`, `ollama-cloud` providers and the `DEEPSEEK_API_KEY` auto-select (`reasoning_effort=xhigh`).
 - **Artifact config actually applies.** `set artifact.dir/url/bin` in jsrc now reaches the artifact tools. Precedence: jsrc config → `ARTIFACT_*` env → built-in default (`/srv/artifacts`, `http://localhost`, `artifact`). `Config` carries the fields and `run_turn` copies them onto the tool context — before, they sat unread in the settings dict and the tools always used the env/default.
 - **Wiki vaults fail closed.** No more silent `creative` default. Give a vault with `--vault <alias|path>`, or run inside one (a `PURPOSE.md` sentinel or a `wiki-*` directory, walking up); otherwise the run stops with a clear error. Aliases are config now (`set wiki.aliases.creative /path`) — the hard-coded `creative`/`general` are out of the code and shipped in the stock jsrc instead. `resolve_vault` reads aliases off the tool context; `infer_vault` returns nothing when it can't find a vault.
 - **Source + tests modernized by ruff safe autofixes.** Dequoted forward-ref annotations, `lru_cache(maxsize=None)`→`cache`, and deprecated-import updates; `js/toolkit/wiki/prompts.py` is excluded as a prompt-template builder.
@@ -241,6 +245,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- **Stale docs/comment.** The picker `:` command-mode vocabulary (`:/provider`, `:/key`, … — never implemented; `picker.py` has no `:` binding) is cut from the user guide, and the `JS_MODEL`/`ME_MODEL` troll line in `config.py`'s `from_env` docstring is gone (it was a one-off troll, done).
 - **`ME_MODEL` env alias.** The silent env-layer alias for `model.id` (applied when `JS_MODEL` was unset) is gone for real — `config.py` explicit-model check, `settings.py` table entry + special-case, and every doc/test reference. A prior pass had renamed it 'silent' instead of deleting; this removes it. Model override is `JS_MODEL` / `-m` only.
 - **LiteLLM.** The `litellm` dependency, the `litellm_proxy` pytest marker, and
   the regenerated `uv.lock` no longer carry LiteLLM or any of its transitive
@@ -264,6 +269,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`/compact-auto` no longer misroutes into `/compact`.** REPL command dispatch matches `/compact` exactly (`== "/compact"` or a `"/compact "` prefix) instead of `startswith("/compact")`, so `/compact-auto on` reaches its own handler instead of firing a compaction with a garbage `"-auto on"` focus.
 - **Tests no longer snap on operator state.** Prompt-dir agent tests discover `prompts/` dynamically (so agent churn can't break them), and the provider-shortcut test isolates saved logins + env so `/provider ollama` resolves DEFAULTS on any box instead of leaking the operator's saved ollama login.
 - **Double-encoded tool-call args no longer flail the model.** `_canonical_tool_args` keeps the model's raw bytes only when they're already a JSON object; valid-but-double-encoded args (a JSON string wrapping the real object) get repaired to the canonical object, so the history resent each turn matches what actually executed instead of being blanked by the SDK's integrity pass.
 - **`js --commit` and all tool use crashed.** `call_tool` was used in the
