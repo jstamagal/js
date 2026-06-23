@@ -183,6 +183,26 @@ def test_tools_alias_profiles_rejects_invalid_canonical_names():
     assert config_settings == config_before
 
 
+def test_tools_alias_profiles_rejects_subkey_updates():
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    key = "tools.alias_profiles.foo"
+
+    result = setcmd.run_repl_command(live_settings, f"/set {key} bar")
+    config_settings = settings.seed_defaults()
+    config_before = copy.deepcopy(config_settings)
+    config_result = setcmd.apply_config_line(config_settings, f"set {key} bar")
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == f"unknown knob: {key}"
+    assert live_settings == before
+    assert config_result.handled is True
+    assert config_result.changed is False
+    assert config_result.error == f"unknown knob: {key}"
+    assert config_settings == config_before
+
+
 def test_provider_extra_rejects_non_object_json():
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)

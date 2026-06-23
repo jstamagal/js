@@ -96,9 +96,9 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
 # set
 # ---------------------------------------------------------------------------
 
-def _map_prefix_spec(key: str) -> _s.SettingSpec | None:
+def _prefix_spec(key: str) -> _s.SettingSpec | None:
     for spec in _s.REGISTRY:
-        if spec.type == "map" and key.startswith(spec.key + "."):
+        if key.startswith(spec.key + "."):
             return spec
     return None
 
@@ -119,9 +119,13 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
         )
 
     # sub-keys of a map knob (wiki.aliases.creative) or other keys within a known
-    # section (provider.extra.*) — stored with loose scalar coercion.
+    # section — stored with loose scalar coercion. Children of registered
+    # non-map knobs are rejected so structured settings keep their validated shape.
     path = tuple(p for p in key.split(".") if p)
-    if _map_prefix_spec(key) is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
+    prefix_spec = _prefix_spec(key)
+    if prefix_spec is not None and prefix_spec.type != "map":
+        return CommandResult(handled=True, error=f"unknown knob: {key}")
+    if prefix_spec is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
         value = _s.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
