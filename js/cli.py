@@ -1723,14 +1723,8 @@ def main(argv: list[str] | None = None) -> int:
                 trace_override=bool(
                     settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
                 ),
-                reasoning_effort_override=settings.get_dotted(
-                    state["settings"],
-                    ("model", "reasoning_effort"),
-                ),
-                max_output_override=settings.get_dotted(
-                    state["settings"],
-                    ("model", "max_output_tokens"),
-                ),
+                reasoning_effort_override=turn_cfg.reasoning_effort,
+                max_output_override=turn_cfg.max_output_tokens,
                 tool_registry=state["tool_registry"],
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
                 event_hooks=state.get("events"),
