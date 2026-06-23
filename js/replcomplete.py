@@ -23,11 +23,15 @@ from collections.abc import Callable, Iterable
 
 from prompt_toolkit.completion import Completer, Completion
 
+from . import events
+
 # Real REPL commands only — what _handle_command / _handle_provider_command actually dispatch.
 COMMANDS: tuple[str, ...] = (
     "/help",
     "/set",
     "/show",
+    "/load",
+    "/on",
     "/model",
     "/pick-model",
     "/provider",
@@ -51,6 +55,8 @@ COMMANDS: tuple[str, ...] = (
 
 _SET_CMDS = ("/set", "/show")
 _NAME_CMDS = ("/login", "/provider")
+_ON_CMDS = ("/on",)
+_PATH_ARG_CMDS = ("/load",)
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 
@@ -86,6 +92,13 @@ def path_candidates(token: str) -> list[str]:
         return []
     prefix = "@" if at else ""
     return [prefix + (h + "/" if os.path.isdir(h) else h) for h in sorted(hits)]
+
+
+def event_candidates(token: str) -> list[str]:
+    suppress = token.startswith("^")
+    raw = token[1:] if suppress else token
+    prefix = "^" if suppress else ""
+    return [prefix + event for event in _prefix(events.CANONICAL_EVENT_NAMES, raw)]
 
 
 def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
@@ -146,6 +159,10 @@ class JsCompleter(Completer):
         if norm in _NAME_CMDS:
             names = list(self._names()) if self._names else []
             return _prefix(names, token), len(token)
+        if norm in _ON_CMDS:
+            return event_candidates(token), len(token)
+        if norm in _PATH_ARG_CMDS:
+            return path_candidates(token), len(token)
         if self._spell is not None:
             return self._spell(token), len(token)
         return [], len(token)
