@@ -170,9 +170,49 @@ def apply_on(context: CommandContext | None, event_token: str, handler: str) -> 
     )
 
 
+def _strip_load_comment(raw: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    at_word_start = True
+    seen_word = False
+    for index, char in enumerate(raw):
+        if escaped:
+            escaped = False
+            at_word_start = False
+            seen_word = True
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            at_word_start = False
+            seen_word = True
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            at_word_start = False
+            seen_word = True
+            continue
+        if not in_single and not in_double:
+            if char == "#":
+                if at_word_start and seen_word:
+                    return raw[:index].rstrip()
+                at_word_start = False
+                seen_word = True
+                continue
+            if char.isspace():
+                at_word_start = True
+                continue
+        at_word_start = False
+        seen_word = True
+    return raw
+
+
 def _split_load_arg(raw: str) -> tuple[str | None, str | None]:
     try:
-        parts = shlex.split(raw)
+        parts = shlex.split(_strip_load_comment(raw))
     except ValueError as e:
         return None, str(e)
     if len(parts) != 1:

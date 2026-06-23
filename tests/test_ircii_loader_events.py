@@ -79,6 +79,21 @@ def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123
 
 
+def test_script_load_allows_comment_after_nested_load_path(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "inner.irc").write_text("set compact.auto off\n", encoding="utf-8")
+    outer = scripts / "outer.irc"
+    outer.write_text("load inner.irc # shared event/settings bootstrap\n", encoding="utf-8")
+    live_settings = settings.seed_defaults()
+    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+
+    result = setcmd.run_repl_command(live_settings, f"/load {outer}", context=ctx)
+
+    assert result.error is None
+    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+
+
 def test_script_load_reports_read_errors_without_raising(tmp_path):
     script = tmp_path / "bad.irc"
     script.write_bytes(b"\xff")
