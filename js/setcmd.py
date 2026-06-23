@@ -204,7 +204,14 @@ def run_script_file(settings: dict, raw_path: str, context: CommandContext | Non
     lines: list[str] = []
     changed_keys: list[str] = []
     changed = False
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        script_lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as e:
+        return CommandResult(
+            handled=True,
+            error=f"failed to read script: {path}: {type(e).__name__}: {e}",
+        )
+    for lineno, raw in enumerate(script_lines, 1):
         result = apply_script_line(settings, raw, context=child)
         if result.error:
             return CommandResult(
