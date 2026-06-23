@@ -190,7 +190,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 empty=EMPTY_OFF),
     # --- tools ---
     SettingSpec("tools.alias_profiles", "json", None,
-                "Model-facing tool-name alias profiles: list of {match:[...], aliases:{...}}.",
+                "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
                 empty=EMPTY_NONE),
     # --- sampling ---
     SettingSpec("sampling.temperature", "float", None,
