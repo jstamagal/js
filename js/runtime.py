@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import events as event_mod
 from . import model_client
 import ai
 
@@ -682,7 +683,8 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
              provider_id_override: str | None = None,
              provider_base_url_override: str | None = None,
              provider_api_key_override: str | None = None,
-             sampling: Sampling | None = None) -> None:
+             sampling: Sampling | None = None,
+             event_hooks: event_mod.EventHooks | None = None) -> None:
     """One user turn → tool-use loop until model produces a stop. Mutates
     `messages` in place so the caller can persist new entries.
 
@@ -720,6 +722,22 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
     _aliases = _wiki_cfg.get("aliases") if isinstance(_wiki_cfg, dict) else None
     active_context.vault_aliases = _aliases if isinstance(_aliases, dict) else {}
     active_context.vision_enabled = vision_enabled_for_model(model)
+
+    def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
+        if event_hooks is None:
+            return []
+        return event_hooks.emit(event, **payload).hooks
+
+    def _end_turn(reason: str) -> None:
+        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id)
+
+    _emit_event(
+        "turn_start",
+        model=model,
+        provider_id=provider_id,
+        message_count=len(messages),
+    )
+
     trace = trace_override if trace_override is not None else cfg.trace
     if trace:
         if provider_id:
@@ -750,9 +768,10 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
     text_started = {"value": False}
 
     def _emit_text(t: str) -> None:
-        if suppress_output:
-            return
         if not t:
+            return
+        _emit_event("stream", text=t)
+        if suppress_output:
             return
         if not text_started["value"]:
             sys.stdout.write(C.WHITE)
@@ -781,6 +800,13 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
             try:
                 specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
                 ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
+                _emit_event(
+                    "prompt",
+                    model=model,
+                    provider_id=provider_id,
+                    message_count=len(ai_convo),
+                    tool_count=len(specs),
+                )
                 result = model_client.stream_model(
                     model_id=model,
                     provider_id=provider_id,
@@ -830,18 +856,22 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                     telemetry.event("retriable_error", model=model,
                                     error=f"{type(e).__name__}: {e}", attempt=attempt)
                     if attempt == 2:
+                        _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                         raise
                     time.sleep(_backoff(attempt))
                 else:
                     telemetry.event("fatal_error", model=model,
                                     error=f"{type(e).__name__}: {e}")
+                    _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
                     raise
             except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
                 telemetry.event("fatal_error", model=model,
                                 error=f"{type(e).__name__}: {e}")
+                _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
                 raise
         else:
             print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
+            _end_turn("retry_budget_exhausted")
             return
 
         # --- Record the assistant turn ---
@@ -865,14 +895,24 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
         assert result is not None
         ai_convo.append(_sanitize_assistant_message(result.assistant_message))
         messages.append(history_assistant_record)
+        if text:
+            _emit_event("response", text=text, finish_reason=finish)
 
         if not pending_calls:
+            _end_turn("stop")
             return
 
         # --- Dispatch tools, append result messages ---
         # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
         # turn; messages — persisted and replayed on every future turn — carries the
         # dehydrated stub so base64 is billed once.
+        for pc in pending_calls:
+            _emit_event(
+                "tool_call",
+                id=pc.id,
+                name=_canonical_tool_call_name(pc.name, active_registry),
+                arguments=_canonical_tool_args(pc.arguments()),
+            )
         dispatch_records = _dispatch_tool_calls(
             pending_calls,
             telemetry,
@@ -885,11 +925,18 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
         followup = False
         for pc, _args, result_value in dispatch_records:
             canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
+            _emit_event(
+                "tool_result",
+                id=pc.id,
+                name=canonical_pc.name,
+                result=result_value,
+            )
             tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
             ai_convo.extend(tool_msgs)
             messages.extend(_history_tool_result_message(canonical_pc, result_value))
             followup = followup or result_value.startswith("FOLLOWUP_REQUIRED")
         if followup:
+            _end_turn("followup_required")
             return
         if error_tracker.limit_reached():
             name, last_error = next(
@@ -902,6 +949,9 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
             final_error = {"role": "assistant", "content": failure}
             ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
             messages.append(final_error)
+            _emit_event("error", error=failure, retryable=False)
+            _end_turn("tool_error_limit")
             return
 
     print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
+    _end_turn("max_iterations")
