@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import ai
@@ -9,6 +10,11 @@ from js import cli, events, providers, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.sampling import Sampling
+
+
+def _debug_records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
 
 def make_cfg(tmp_path: Path) -> Config:
     return Config(
@@ -194,6 +200,72 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
     assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
+
+
+def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
+    debug_log = tmp_path / "debug.log"
+    cfg = replace(make_cfg(tmp_path), debug_log=debug_log)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input echo nope", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    records = _debug_records(debug_log)
+    assert actual == 0
+    assert {
+        "kind": "event_handler_error",
+        "event": "input",
+        "handler": "echo nope",
+        "error": "unsupported event handler command: echo",
+    }.items() <= records[0].items()
+
+
+def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
+    debug_log = tmp_path / "debug.log"
+    cfg = replace(make_cfg(tmp_path), debug_log=debug_log)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on cancel echo nope", "interrupt me", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    records = _debug_records(debug_log)
+    assert actual == 0
+    assert {
+        "kind": "event_handler_error",
+        "event": "cancel",
+        "handler": "echo nope",
+        "error": "unsupported event handler command: echo",
+    }.items() <= records[0].items()
 
 
 def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):

@@ -278,6 +278,27 @@ def _event_results_changed_sampling(results: list[events.EventHandlerResult]) ->
     return any(_changed_sampling_key(result.changed_keys) for result in results)
 
 
+def _emit_repl_event(
+    state: dict,
+    telemetry: runtime.Telemetry,
+    event: str,
+    **payload,
+) -> events.EventEmission:
+    hook_table = state.get("events")
+    if hook_table is None:
+        return events.EventEmission(event=event, payload=dict(payload), hooks=[])
+    emission = hook_table.emit(event, **payload)
+    for result in emission.results:
+        if result.error:
+            telemetry.event(
+                "event_handler_error",
+                event=emission.event,
+                handler=result.hook.handler,
+                error=result.error,
+            )
+    return emission
+
+
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
     provider_id = providers.normalize_provider_id(provider_name) or provider_name
     login = logins.load_logins().get(provider_id)
@@ -1448,7 +1469,13 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
-        input_event = state["events"].emit("input", text=prompt_text, attachments=line_attachments)
+        input_event = _emit_repl_event(
+            state,
+            telemetry,
+            "input",
+            text=prompt_text,
+            attachments=line_attachments,
+        )
         if _event_results_changed_sampling(input_event.results):
             state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         try:
@@ -1489,7 +1516,7 @@ def main(argv: list[str] | None = None) -> int:
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-            state["events"].emit("cancel", reason="keyboard_interrupt")
+            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
