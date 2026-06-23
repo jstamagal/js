@@ -95,8 +95,11 @@ REPL commands:
 /models [max]                  list available models from the active provider
 /set [key [val]]              list knobs, show one, or change one
 /show [key]                   list all current config values or one key
+/load <file>                  load a slashless ircII-style runtime script
+/on [event handler]           list or register event hooks
 /set model.reasoning_effort high
 /set compact.auto off
+/on ^tool_call echo denied
 /turns
 /persona
 /session
@@ -110,6 +113,13 @@ quit
 The `/model` picker lists your saved logins, not every possible SDK provider.
 `js --logout <provider>` removes that provider and its cached models from the
 picker.
+
+`/load` reads script files relative to the current project directory; nested
+`load other.irc` lines resolve relative to the script that contains them. The
+foundation verbs are `set`, `show`, `load`, and `on`. `on` stores typed event
+hooks such as `turn_start`, `tool_call`, and `tool_result` against the emitted
+runtime event stream. Handler execution is the next runtime layer, so today those
+hooks are registered and inspectable.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
