@@ -56,6 +56,19 @@ def test_parse_extra_arg_coerces_float_then_bool_then_string():
     assert settings.parse_extra_arg("model.id=some-model")[1] == "some-model"
 
 
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("runtime.trace=maybe", "expected on/off"),
+        ("limits.fetch_timeout_s=abc", "expected an integer"),
+        ("compact.notify_threshold=abc", "expected a number"),
+    ],
+)
+def test_extra_registered_scalar_keys_use_registry_validation(raw, message):
+    with pytest.raises(ValueError, match=f"--extra .*: {message}"):
+        settings.parse_extra_arg(raw)
+
+
 @pytest.mark.parametrize("alias", ["off", "none", "0"])
 def test_extra_reasoning_effort_disable_aliases_use_registry(alias, monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
