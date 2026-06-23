@@ -193,7 +193,7 @@ def test_repl_at_file_attaches_text_file(monkeypatch, tmp_path, capsys):
     seen: list[str] = []
 
     class SessionStub:
-        def __init__(self, history=None):
+        def __init__(self, history=None, **kwargs):
             self.lines = iter([f"summarize @{note}", "exit"])
 
         def prompt(self, *args, **kwargs):
