@@ -270,12 +270,31 @@ def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
     return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
 
 
+def _model_from_live_settings(live_settings: dict) -> str | None:
+    raw = settings.get_dotted(live_settings, ("model", "id"), None)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def _sync_model_from_live_settings(state: dict) -> None:
+    model = _model_from_live_settings(state["settings"])
+    if model is not None:
+        state["model"] = model
+
+
+def _changed_model_key(keys: list[str]) -> bool:
+    return "model.id" in keys
+
+
 def _changed_sampling_key(keys: list[str]) -> bool:
     return any(key.startswith("sampling.") for key in keys)
 
 
 def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
     return any(_changed_sampling_key(result.changed_keys) for result in results)
+
+
+def _event_results_changed_model(results: list[events.EventHandlerResult]) -> bool:
+    return any(_changed_model_key(result.changed_keys) for result in results)
 
 
 def _emit_repl_event(
@@ -615,6 +634,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                 )
             elif _changed_sampling_key(result.changed_keys):
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+            if _changed_model_key(result.changed_keys):
+                _sync_model_from_live_settings(state)
         for out in result.lines:
             print(out)
         if result.error:
@@ -1478,6 +1499,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if _event_results_changed_sampling(input_event.results):
             state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+        if _event_results_changed_model(input_event.results):
+            _sync_model_from_live_settings(state)
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
@@ -1490,6 +1513,7 @@ def main(argv: list[str] | None = None) -> int:
         _append_turn(cfg, user_bundle.history_message)
         try:
             before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+            before_turn_model = _model_from_live_settings(state["settings"])
             runtime.run_turn(
                 turn_cfg,
                 state["system"],
@@ -1513,6 +1537,9 @@ def main(argv: list[str] | None = None) -> int:
             after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             if after_turn_sampling != before_turn_sampling:
                 state["sampling_cli"] = after_turn_sampling
+            after_turn_model = _model_from_live_settings(state["settings"])
+            if after_turn_model != before_turn_model:
+                _sync_model_from_live_settings(state)
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:
@@ -1523,6 +1550,8 @@ def main(argv: list[str] | None = None) -> int:
             cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             if _event_results_changed_sampling(cancel_event.results):
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+            if _event_results_changed_model(cancel_event.results):
+                _sync_model_from_live_settings(state)
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
