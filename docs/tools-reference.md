@@ -67,12 +67,15 @@ Requires a prior `read`. The file is snapshotted once before writing.
 
 ### `remove`
 
-Deletes a file or directory.
+Trashes or removes a file or directory.
 
 Parameters:
 
 - `path`
+- `permanent`: delete directly instead of trashing (default `false`)
 
+Default sends targets to `trash`/`trash-put`; targets over 512 MiB are refused
+unless `permanent=true`. Symlinks are removed as symlinks (not followed).
 Snapshots the prior file bytes or directory tree for `undo`.
 
 ### `undo`
@@ -138,15 +141,22 @@ Use `cwd` instead of writing `cd ... && ...` in the command.
 
 ### `fetch`
 
-Fetches HTTP/HTTPS content.
+Fetches HTTP/HTTPS or `file://` content.
 
 Parameters:
 
 - `url`
 - `raw`
+- `method`
+- `headers`: object of name→value or a list of `"Name: value"` strings
+- `body`
+- `json_body`
+- `save` or `download`: path to write the response body to instead of returning
+  it inline
 
-HTML is converted to text unless `raw=true`. Output is capped by
-`max_tool_result_bytes`.
+HTML is converted to text unless `raw=true`. Inline output is capped by
+`max_tool_result_bytes`; downloads are capped at 32 MiB and return
+`SAVED_RESPONSE path=... size=...`.
 
 ## Meta Tools
 

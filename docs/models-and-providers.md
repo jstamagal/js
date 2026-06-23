@@ -255,21 +255,34 @@ for providers that need a friendlier first-class login name:
 
 | Provider id | Notes |
 | --- | --- |
-| `deepseek` | DeepSeek direct API. Append-only tool-call history, `max_reasoning_tokens=32000` for reasoning. |
+| `deepseek` | DeepSeek direct API. Append-only tool-call history, `max_reasoning_tokens=32000` for reasoning. `DEEPSEEK_API_KEY` in the environment auto-selects this provider with `deepseek-v4-flash` and `reasoning_effort=xhigh`. |
 | `llama` | Llama API gateway endpoint. |
 | `llama.cpp` / `llamacpp` | Local llama.cpp OpenAI-compatible shortcut at `http://127.0.0.1:8080/v1`. |
 | `opencode-go` | opencode.ai Zen "go" plan over the **OpenAI-compatible** transport (`sdk=openai`, base `https://opencode.ai/zen/go/v1`, key env `OPENCODE_GO_API_KEY`, base env `OPENCODE_GO_BASE_URL`). Model list is filtered to the GLM/Kimi/DeepSeek/MiMo set this transport serves. |
 | `opencode-go-anthropic` | Same Zen "go" plan and API key over the **Anthropic-compatible** transport (`sdk=anthropic`, base `https://opencode.ai/zen/go`, base env `OPENCODE_GO_ANTHROPIC_BASE_URL`). Model list is filtered to the MiniMax/Qwen set this transport serves. |
 | `opencode` | OpenCode Zen registry provider (distinct from the `opencode-go` plan above). |
-| `ollama` | Local Ollama shortcut; user-facing first-class provider backed by the OpenAI-compatible SDK shape at `http://127.0.0.1:11434/v1`. |
-| `ollama-cloud` | Hosted Ollama route. |
-| `minimax` | MiniMax API shape. |
-| `minimax-coding-plan` | MiniMax token-plan route. |
+| `ollama` | Local Ollama shortcut; user-facing first-class provider backed by the OpenAI-compatible SDK shape at `http://127.0.0.1:11434/v1`. Key env `OLLAMA_API_KEY` / `OLLAMA_LOCAL_API_KEY`, base env `OLLAMA_BASE_URL` / `OLLAMA_LOCAL_BASE_URL`, model env `OLLAMA_MODEL` / `OLLAMA_LOCAL_MODEL`. No API key required. |
+| `ollama-cloud` | Hosted Ollama route on the `ollama` transport over the OpenAI SDK shape (`sdk=openai`, base `https://ollama.com/v1`). Key env `OLLAMA_CLOUD_API_KEY`, base env `OLLAMA_CLOUD_BASE_URL`, model env `OLLAMA_CLOUD_MODEL`. |
+| `minimax` | MiniMax direct API over the **Anthropic-compatible** transport (`sdk=anthropic`, base `https://api.minimax.io/anthropic/v1`). Key env `MINIMAX_API_KEY`, base env `MINIMAX_BASE_URL`, model env `MINIMAX_MODEL`. |
 | `mimo` / `xiaomi` | Xiaomi MiMo API endpoint at `https://api.xiaomimimo.com/v1`. |
 | `mimo-token-plan*` / `xiaomi-token-plan-*` | Xiaomi MiMo Token Plan endpoints; SGP is the default shortcut, AMS/CN variants are explicit. |
 | `openai` | Generic OpenAI-compatible endpoint for OpenAI, proxies, and custom compatible servers. |
 | `openai-codex` | ChatGPT/Codex OAuth provider. `js --login openai-codex` opens the browser PKCE flow; `js --login openai-codex-device` uses the device-code flow. Tokens live only in the private login store. Runtime uses the Codex Responses endpoint at `https://chatgpt.com/backend-api/codex/responses`. |
 | `anthropic` | Anthropic direct API. |
+| `omp` | Oh My Pi gateway over the **OpenAI-compatible** transport (`sdk=openai`, no built-in base URL). Key env `OMP_API_KEY` / `OMP_GATEWAY_API_KEY`, base env `OMP_BASE_URL` / `OMP_GATEWAY_BASE_URL`, model env `OMP_MODEL` / `OMP_GATEWAY_MODEL`. No API key required, but a base URL must be set (see below). |
+| `cliproxyapi` | CLIProxyAPI local proxy on its own `cliproxyapi` transport over the OpenAI SDK shape (`sdk=openai`, no built-in base URL, custom login shape). Key env `CLIPROXYAPI_API_KEY` / `CLIPROXY_API_KEY`, base env `CLIPROXYAPI_BASE_URL` / `CLIPROXY_BASE_URL`, model env `CLIPROXYAPI_MODEL` / `CLIPROXY_MODEL`. A base URL must be set (see below). |
+
+The `omp` and `cliproxyapi` provider ids are surfaced through the login store:
+the listed key/base/model environment variables are read in order, first
+non-empty wins. There is no `omp-gateway` provider id — `OMP_GATEWAY_*` is just
+the second-priority env-var family for the single `omp` provider.
+
+Because `omp` and `cliproxyapi` ride another vendor's SDK (`sdk=openai`) under
+their own provider id, js refuses to route them with no base URL. With
+`base_url` unset the OpenAI SDK would silently fall back to its own default
+endpoint (`api.openai.com`) and `OPENAI_API_KEY`, sending the prompt and key to
+the wrong service, so the runtime raises instead and tells you to run
+`js --login <provider>` or set the provider's base-url env var.
 
 `openai-responses` custom logins are still stored as a first-class shape but
 route through the OpenAI-compatible chat-completions adapter in `ai==0.2.0`.
