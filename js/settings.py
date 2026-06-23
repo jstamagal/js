@@ -300,6 +300,13 @@ def _validate_alias_profiles(value: Any) -> str | None:
         aliases = profile.get("aliases")
         if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
             return "expected profiles with match and aliases"
+        seen_aliases: set[str] = set()
+        for alias in aliases.values():
+            key = str(alias).strip().lower()
+            if key in seen_aliases:
+                return "expected unique alias names"
+            if key:
+                seen_aliases.add(key)
     return None
 
 
