@@ -270,6 +270,14 @@ def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
     return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
 
 
+def _changed_sampling_key(keys: list[str]) -> bool:
+    return any(key.startswith("sampling.") for key in keys)
+
+
+def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
+    return any(_changed_sampling_key(result.changed_keys) for result in results)
+
+
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
     provider_id = providers.normalize_provider_id(provider_name) or provider_name
     login = logins.load_logins().get(provider_id)
@@ -586,7 +594,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                     line,
                     state.get("sampling_cli", Sampling()),
                 )
-            else:
+            elif _changed_sampling_key(result.changed_keys):
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         for out in result.lines:
             print(out)
@@ -1399,6 +1407,14 @@ def main(argv: list[str] | None = None) -> int:
         settings.set_dotted(live_settings, ("model", "reasoning_effort"), _norm_effort(args.reasoning))
     if args.max_out is not None:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
+    event_hooks = events.EventHooks()
+    event_hooks.set_dispatcher(
+        setcmd.EventCommandDispatcher(
+            settings=live_settings,
+            cwd=getattr(cfg, "project_dir", Path.cwd()),
+            events=event_hooks,
+        )
+    )
     state = {
         "running": True,
         "messages": messages,
@@ -1409,7 +1425,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider_api_key": cfg.provider_api_key,
         "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
         "settings": live_settings,
-        "events": events.EventHooks(),
+        "events": event_hooks,
         "tool_registry": active_registry,
         "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
@@ -1432,7 +1448,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
-        state["events"].emit("input", text=prompt_text, attachments=line_attachments)
+        input_event = state["events"].emit("input", text=prompt_text, attachments=line_attachments)
+        if _event_results_changed_sampling(input_event.results):
+            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
