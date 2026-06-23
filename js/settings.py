@@ -302,6 +302,8 @@ def _validate_alias_profiles(value: Any) -> str | None:
         aliases = profile.get("aliases")
         if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
             return "expected profiles with match and aliases"
+        if not aliases:
+            return "expected non-empty aliases"
         matches = [match] if isinstance(match, str) else match
         if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
             return "expected non-empty match values"
