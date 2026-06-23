@@ -271,6 +271,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Event hooks close out error and cancel paths.** Fatal model-call errors now emit `turn_end` with an `error` reason after the `error` event, and Ctrl-C during a REPL turn emits `cancel` before rollback, so `/on` hooks can observe cleanup paths instead of only successful turns.
+- **Past-EOF `read` ranges are no longer retriable errors.** Asking `read` for a start line beyond the end of a file now returns a non-error EOF note with the file's total line count instead of `ERROR: invalid line range`, avoiding pointless retry loops during agent inspections.
 - **`/compact-auto` no longer misroutes into `/compact`.** REPL command dispatch matches `/compact` exactly (`== "/compact"` or a `"/compact "` prefix) instead of `startswith("/compact")`, so `/compact-auto on` reaches its own handler instead of firing a compaction with a garbage `"-auto on"` focus.
 - **Tests no longer snap on operator state.** Prompt-dir agent tests discover `prompts/` dynamically (so agent churn can't break them), and the provider-shortcut test isolates saved logins + env so `/provider ollama` resolves DEFAULTS on any box instead of leaking the operator's saved ollama login.
 - **Double-encoded tool-call args no longer flail the model.** `_canonical_tool_args` keeps the model's raw bytes only when they're already a JSON object; valid-but-double-encoded args (a JSON string wrapping the real object) get repaired to the canonical object, so the history resent each turn matches what actually executed instead of being blanked by the SDK's integrity pass.
