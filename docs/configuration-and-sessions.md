@@ -173,7 +173,11 @@ loading, and `/load`ed runtime scripts, but the accepted verb set differs by
 entry point. `jsrc` lines are the bare `set <key> <value>` form and accept only
 `set`; `apply_config_line` rejects every other verb. Runtime scripts loaded with
 `/load <file>` currently accept `set`, `show`, nested `load`, and `on`, with
-nested script paths resolved relative to the file that contains them.
+nested script paths resolved relative to the file that contains them. Registered
+event handlers run through that same runtime-script command surface when an
+event is emitted. Handler failures are recorded on the event emission and in
+debug telemetry rather than raised through the model loop; recursive event
+dispatch from inside a handler is skipped.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
