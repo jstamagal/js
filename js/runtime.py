@@ -71,14 +71,28 @@ def _aliased_tool_specs(specs: list[dict], alias_map: dict[str, str]) -> list[di
     untouched (same object) when ``alias_map`` is empty."""
     if not alias_map:
         return specs
-    desc_subs = {f"`{canon}`": f"`{alias}`" for canon, alias in alias_map.items()}
+    original_name_owners = {
+        fn_name.lower(): fn_name
+        for spec in specs
+        if isinstance((fn := spec.get("function")), dict)
+        and isinstance((fn_name := fn.get("name")), str)
+    }
+    usable_aliases = {
+        canon: alias
+        for canon, alias in alias_map.items()
+        if canon in original_name_owners.values()
+        and (original_name_owners.get(alias.lower()) in (None, canon))
+    }
+    if not usable_aliases:
+        return specs
+    desc_subs = {f"`{canon}`": f"`{alias}`" for canon, alias in usable_aliases.items()}
     transformed: list[dict] = []
     for spec in specs:
         cloned = json.loads(json.dumps(spec))
         fn = cloned.get("function", {})
         name = fn.get("name")
-        if name in alias_map:
-            fn["name"] = alias_map[name]
+        if name in usable_aliases:
+            fn["name"] = usable_aliases[name]
         desc = fn.get("description")
         if isinstance(desc, str) and desc:
             for needle, repl in desc_subs.items():

@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from js import model_client, runtime, tools as runtime_tools
+from js import model_client, runtime, setcmd, settings, tools as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
@@ -580,6 +580,23 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     assert "`Read`" in write_desc and "`read`" not in write_desc
     # Empty alias map is a no-op returning the same object.
     assert runtime._aliased_tool_specs(specs, {}) is specs
+
+
+def test_alias_profile_skips_existing_tool_name_collisions_from_config():
+    live_settings = settings.seed_defaults()
+    result = setcmd.run_repl_command(
+        live_settings,
+        '/set tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
+    )
+    registry = build_default_registry().select(["read", "write"])
+
+    assert result.error is None
+    alias_map = runtime._resolve_alias_profile(live_settings, "openai-test", None)
+    specs = runtime._aliased_tool_specs(registry.openai_specs(), alias_map)
+    aliased_registry = registry.aliased(alias_map)
+
+    assert [spec["function"]["name"] for spec in specs] == ["read", "write"]
+    assert aliased_registry.resolve("WRITE").name == "write"
 
 
 def test_resolve_alias_profile_matches_model_or_provider_substring():
