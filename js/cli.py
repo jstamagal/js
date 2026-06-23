@@ -252,6 +252,7 @@ _LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 
 
 _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("trace", ("runtime", "trace")),
     ("prefer_inherit", ("subagents", "prefer_inherit")),
 )
 
