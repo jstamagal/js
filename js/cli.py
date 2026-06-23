@@ -225,6 +225,39 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
     return cfg
 
 
+_LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("max_tool_iterations", ("limits", "max_tool_iterations")),
+    ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
+    ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
+    ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
+    ("max_read_lines", ("limits", "max_read_lines")),
+    ("max_line_chars", ("limits", "max_line_chars")),
+    ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
+    ("max_file_bytes", ("limits", "max_file_bytes")),
+    ("task_max_depth", ("limits", "task_max_depth")),
+    ("wiki_vault_lock_timeout_s", ("limits", "wiki_vault_lock_timeout_s")),
+)
+
+
+def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
+    raw = settings.get_dotted(live_settings, path, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
+    active = _cfg_for_active_model(cfg, state)
+    live_settings = state["settings"]
+    updates = {"settings": live_settings}
+    for attr, path in _LIVE_LIMIT_FIELDS:
+        updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
+    return replace(active, **updates)
+
+
 def _state_value(state: dict, key: str, default):
     return state[key] if key in state else default
 
@@ -753,7 +786,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         if forced:
             focus = ""
         try:
-            compact_cfg = replace(_cfg_for_active_model(cfg, state), settings=state["settings"])
+            compact_cfg = _cfg_for_live_state(cfg, state)
             result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
@@ -1560,7 +1593,7 @@ def main(argv: list[str] | None = None) -> int:
         if _changed_provider_key(input_changed_keys):
             _sync_provider_from_live_settings(state, input_changed_keys)
         try:
-            turn_cfg = replace(_cfg_for_active_model(cfg, state), settings=state["settings"])
+            turn_cfg = _cfg_for_live_state(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
         except attach.AttachmentError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}")
