@@ -653,6 +653,7 @@ def _summarize_for_compaction(cfg: Config, model: str, messages: list[dict], foc
         reasoning_effort=None,
         on_text=lambda _t: None,
         provider_headers=route.headers,
+        provider_extra=_provider_extra_params(cfg),
     )
     text = result.text.strip()
     if not text:

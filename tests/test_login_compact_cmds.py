@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import ai
+
 from js import cli, providers, settings
 from js.config import Config
 
@@ -78,6 +80,42 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
     assert cli._handle_command("/compact", state, cfg) is True
 
     assert seen_models == ["compact-live-model"]
+
+
+def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    state = {
+        "messages": [{"role": "user", "content": "old context"}],
+        "system": "sys",
+        "settings": settings.seed_defaults(),
+    }
+    params_seen: list[dict] = []
+
+    class FakeProvider:
+        async def aclose(self):
+            return None
+
+    class FakeModel:
+        provider = FakeProvider()
+
+    async def stream_async_stub(*, model, messages, tools, params, executor, on_text):
+        params_seen.append(params)
+        return cli.runtime.model_client.ModelStreamResult(
+            text="Summary",
+            tool_calls=[],
+            reasoning="",
+            usage=None,
+            finish_reason="stop",
+            assistant_message=ai.assistant_message("Summary"),
+        )
+
+    monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
+
+    assert cli._handle_command('/set provider.extra {"extra_body":{"compact_flag":true}}', state, cfg) is True
+    assert cli._handle_command("/compact up to here", state, cfg) is True
+
+    assert params_seen[0]["extra_body"] == {"compact_flag": True}
 
 
 def test_compact_auto_bad_arg_usage(tmp_path):
