@@ -1,0 +1,404 @@
+# ═══════════════════════════════════════════════════════
+#  ircii-dsl test suite — exercises all features
+# ═══════════════════════════════════════════════════════
+
+ECHO ════════════════════════════════════════
+ECHO  ircii-dsl test suite
+ECHO ════════════════════════════════════════
+
+# ── variables: ASSIGN and SET ──────────────────────────
+
+ECHO
+ECHO ── variables ──
+
+ASSIGN name "KING"
+SET count 10
+ASSIGN greeting "hello $name"
+ECHO name: $name
+ECHO count: $count
+ECHO greeting: $greeting
+ECHO deferred: {$name is great}
+
+# ── string operations ──────────────────────────────────
+
+ECHO
+ECHO ── string ops ──
+
+ASSIGN str "Hello World"
+ECHO len: [LEN $str]
+ECHO toupper: [TOUPPER $str]
+ECHO tolower: [TOLOWER $str]
+ECHO substr(0,5): [SUBSTR $str 0 5]
+ECHO mid(6,5): [MID $str 6 5]
+ECHO word(0): [WORD 0 $str]
+ECHO word(1): [WORD 1 $str]
+ECHO nw: [NW $str]
+
+ASSIGN padded "  spaces  "
+ASSIGN stripped [STRIP $padded]
+ECHO strip: <$stripped>
+ECHO cat: [CAT hello " " world]
+
+# ── arithmetic ─────────────────────────────────────────
+
+ECHO
+ECHO ── arithmetic ──
+
+ASSIGN a 7
+ASSIGN b 3
+ECHO $a + $b = [EXPR $a + $b]
+ECHO $a - $b = [EXPR $a - $b]
+ECHO $a * $b = [EXPR $a * $b]
+ECHO $a / $b = [EXPR $a / $b]
+ECHO $a % $b = [EXPR $a % $b]
+ECHO 2 ** 10 = [EXPR 2 ** 10]
+
+# ── comparison operators ───────────────────────────────
+
+ECHO
+ECHO ── comparison ──
+
+ECHO EQ(abc,abc): [EQ abc abc]
+ECHO EQ(abc,xyz): [EQ abc xyz]
+ECHO NEQ(abc,xyz): [NEQ abc xyz]
+ECHO GT(5,3): [GT 5 3]
+ECHO GT(3,5): [GT 3 5]
+ECHO LT(3,5): [LT 3 5]
+ECHO LE(5,5): [LE 5 5]
+ECHO GE(5,5): [GE 5 5]
+ECHO AND(1,1): [AND 1 1]
+ECHO AND(1,0): [AND 1 0]
+ECHO OR(0,1): [OR 0 1]
+ECHO OR(0,0): [OR 0 0]
+ECHO NOT(1): [NOT 1]
+ECHO NOT(0): [NOT 0]
+ECHO IIF(1,yes,no): [IIF 1 yes no]
+ECHO IIF(0,yes,no): [IIF 0 yes no]
+
+# ── IF / ELIF / ELSE ───────────────────────────────────
+
+ECHO
+ECHO ── conditionals ──
+
+ASSIGN x 5
+
+IF {GT $x 3} {
+    ECHO x=$x is greater than 3
+} ELIF {EQ $x 3} {
+    ECHO x equals 3
+} ELSE {
+    ECHO x is less than 3
+}
+
+ASSIGN x 3
+IF {GT $x 3} {
+    ECHO NO: x > 3
+} ELIF {EQ $x 3} {
+    ECHO YES: x equals 3
+} ELSE {
+    ECHO NO: else branch
+}
+
+ASSIGN x 1
+IF {GT $x 3} {
+    ECHO NO: x > 3
+} ELIF {GT $x 2} {
+    ECHO NO: x > 2
+} ELSE {
+    ECHO YES: x is small ($x)
+}
+
+# multi-line IF
+ECHO multi-line IF:
+ASSIGN mode "debug"
+IF {EQ $mode debug} {
+    ECHO   running in debug mode
+}
+
+# ── WHILE loop ─────────────────────────────────────────
+
+ECHO
+ECHO ── while loop ──
+
+ECHO countdown:
+ASSIGN i 5
+WHILE {GT $i 0} {
+    ECHO   ...$i
+    ASSIGN i [EXPR $i - 1]
+}
+ECHO   liftoff!
+
+# ── FE (foreach word) ──────────────────────────────────
+
+ECHO
+ECHO ── FE (foreach word) ──
+
+ECHO fruits:
+FE "apple banana cherry date elderberry" fruit {
+    ECHO   - $fruit
+}
+
+# ── FOREACH (var-first syntax) ─────────────────────────
+
+ECHO
+ECHO ── FOREACH (var-first) ──
+
+ECHO colors:
+FOREACH color "red green blue yellow" {
+    ECHO   * $color
+}
+
+# ── FEC (foreach character) ────────────────────────────
+
+ECHO
+ECHO ── FEC (foreach char) ──
+
+ASSIGN word "APE"
+FEC ch $word {
+    ECHO -\[$ch\]-
+}
+
+# ── nested loops + BREAK ──────────────────────────────
+
+ECHO
+ECHO ── nested loops + BREAK ──
+
+ECHO find first even > 5:
+ASSIGN found 0
+FE "3 7 4 8 6 9 2" n {
+    IF {AND [GT $n 5] [EQ [EXPR $n % 2] 0]} {
+        ECHO   found: $n
+        ASSIGN found $n
+        BREAK
+    }
+}
+ECHO result: $found
+
+# ── CONTINUE ───────────────────────────────────────────
+
+ECHO
+ECHO ── CONTINUE ──
+
+ECHO skip multiples of 3:
+FE "1 2 3 4 5 6 7 8 9 10" n {
+    IF {EQ [EXPR $n % 3] 0} {
+        CONTINUE
+    }
+    ECHO   $n
+}
+
+# ── ALIAS ──────────────────────────────────────────────
+
+ECHO
+ECHO ── aliases ──
+
+ALIAS greet {
+    ECHO Hello, $0! Welcome to $1.
+}
+greet "irc user" "#channel"
+
+ALIAS shout {
+    ECHO [TOUPPER $0]!!!
+}
+shout "hello world"
+
+# ── ALIAS with RETURN ──────────────────────────────────
+
+ECHO
+ECHO ── alias with RETURN ──
+
+ALIAS factorial {
+    ASSIGN n $0
+    IF {EQ $n 0} {
+        RETURN 1
+    }
+    ASSIGN result 1
+    WHILE {GT $n 1} {
+        ASSIGN result [EXPR $result * $n]
+        ASSIGN n [EXPR $n - 1]
+    }
+    RETURN $result
+}
+
+ECHO 5! = [factorial 5]
+ECHO 10! = [factorial 10]
+ECHO 0! = [factorial 0]
+
+# ── ALIAS: Fibonacci (turing completeness test) ────────
+
+ECHO
+ECHO ── fibonacci (turing test) ──
+
+ALIAS fib {
+    ASSIGN n $0
+    IF {LT $n 2} {
+        RETURN $n
+    }
+    ASSIGN a 0
+    ASSIGN b 1
+    ASSIGN i 2
+    WHILE {LE $i $n} {
+        ASSIGN tmp [EXPR $a + $b]
+        ASSIGN a $b
+        ASSIGN b $tmp
+        ASSIGN i [EXPR $i + 1]
+    }
+    RETURN $b
+}
+
+ECHO fib(0) = [fib 0]
+ECHO fib(1) = [fib 1]
+ECHO fib(2) = [fib 2]
+ECHO fib(5) = [fib 5]
+ECHO fib(10) = [fib 10]
+ECHO fib(20) = [fib 20]
+
+# ── EVENTS ─────────────────────────────────────────────
+
+ECHO
+ECHO ── events ──
+
+ON JOIN {
+    ECHO   >> $0 joined $1
+}
+
+ON PRIVMSG {
+    ECHO   <$0> $1
+}
+
+ON KICK {
+    ECHO   !!! $0 kicked $1 from $2 (reason: $3)
+}
+
+TRIGGER JOIN "user123" "#test"
+TRIGGER PRIVMSG "bob" "hello everyone"
+TRIGGER KICK "admin" "troll" "#test" "spamming"
+
+# ── FILTER pattern (foreach + if + string build) ──────
+
+ECHO
+ECHO ── filter pattern ──
+
+ECHO even numbers from 1-20:
+ASSIGN evens ""
+FE "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" n {
+    IF {EQ [EXPR $n % 2] 0} {
+        ASSIGN evens "$evens $n"
+    }
+}
+ECHO [$evens]
+
+# ── MAP pattern (alias + foreach) ──────────────────────
+
+ECHO
+ECHO ── map pattern ──
+
+ALIAS double {
+    RETURN [EXPR $0 * 2]
+}
+
+ECHO doubling 1-5:
+FE "1 2 3 4 5" n {
+    ECHO   $n -> [double $n]
+}
+
+# ── CSV builder ────────────────────────────────────────
+
+ECHO
+ECHO ── csv builder ──
+
+ASSIGN csv ""
+FE "alpha beta gamma delta epsilon" w {
+    IF {EQ $csv ""} {
+        ASSIGN csv $w
+    } ELSE {
+        ASSIGN csv "$csv,$w"
+    }
+}
+ECHO csv: $csv
+
+# ── REVERSE string (FEC) ──────────────────────────────
+
+ECHO
+ECHO ── reverse string ──
+
+ASSIGN input "GORILLA"
+ASSIGN reversed ""
+FEC ch $input {
+    ASSIGN reversed "$ch$reversed"
+}
+ECHO $input reversed = $reversed
+
+# ── INLINE conditionals ───────────────────────────────
+
+ECHO
+ECHO ── inline if (IIF) ──
+
+ASSIGN age 25
+ECHO status: [IIF [GT $age 18] adult minor]
+ECHO abs(-5): [IIF [LT -5 0] [EXPR -1 * -5] -5]
+
+# ── NESTED alias calling alias ─────────────────────────
+
+ECHO
+ECHO ── nested aliases ──
+
+ALIAS exclaim {
+    RETURN "$0!"
+}
+
+ALIAS greet_loud {
+    ASSIGN msg "Hello, $0"
+    RETURN [exclaim $msg]
+}
+
+ECHO [greet_loud "beautiful ape"]
+
+# ── MULTI-LINE block ───────────────────────────────────
+
+ECHO
+ECHO ── multi-line blocks ──
+
+ASSIGN report ""
+ASSIGN report "$report  Line 1: system nominal"
+ASSIGN report "$report  Line 2: all tests passing"
+ASSIGN report "$report  Line 3: ape strong"
+ECHO $report
+
+# ── TRACE (walk every char in string) ──────────────────
+
+ECHO
+ECHO ── char trace ──
+
+ASSIGN trace ""
+FEC c "IRCII" {
+    ASSIGN trace "$trace\[$c\]"
+}
+ECHO $trace
+
+# ── DIGITAL root (sum digits until single digit) ──────
+
+ECHO
+ECHO ── digital root ──
+
+ALIAS digital_root {
+    ASSIGN n $0
+    WHILE {GT $n 9} {
+        ASSIGN sum 0
+        FEC d $n {
+            ASSIGN sum [EXPR $sum + $d]
+        }
+        ASSIGN n $sum
+    }
+    RETURN $n
+}
+
+ECHO digital_root(9999) = [digital_root 9999]
+ECHO digital_root(12345) = [digital_root 12345]
+
+# ═══════════════════════════════════════════════════════
+
+ECHO
+ECHO ════════════════════════════════════════
+ECHO  all tests complete
+ECHO ════════════════════════════════════════
