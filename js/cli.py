@@ -1471,6 +1471,7 @@ def main(argv: list[str] | None = None) -> int:
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+            state["events"].emit("cancel", reason="keyboard_interrupt")
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
