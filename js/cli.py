@@ -254,6 +254,7 @@ _LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("trace", ("runtime", "trace")),
     ("prefer_inherit", ("subagents", "prefer_inherit")),
+    ("lock_subagent_model", ("subagents", "lock_model")),
 )
 
 
@@ -343,6 +344,11 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     for attr, path in _LIVE_BOOL_FIELDS:
         updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
     return replace(active, **updates)
+
+
+def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
+    selectors = state.get("tool_selectors", ())
+    state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors)
 
 
 def _state_value(state: dict, key: str, default):
@@ -456,6 +462,10 @@ def _changed_provider_key(keys: list[str]) -> bool:
 
 def _changed_sampling_key(keys: list[str]) -> bool:
     return any(key.startswith("sampling.") for key in keys)
+
+
+def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
+    return "subagents.lock_model" in keys
 
 
 def _event_result_changed_keys(results: list[events.EventHandlerResult]) -> list[str]:
@@ -811,6 +821,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                 _sync_model_from_live_settings(state)
             if _changed_provider_key(result.changed_keys):
                 _sync_provider_from_live_settings(state, result.changed_keys)
+            if _changed_lock_subagent_model_key(result.changed_keys):
+                _sync_tool_registry_from_live_settings(cfg, state)
         for out in result.lines:
             print(out)
         if result.error:
@@ -1644,6 +1656,7 @@ def main(argv: list[str] | None = None) -> int:
         "settings": live_settings,
         "events": event_hooks,
         "tool_registry": active_registry,
+        "tool_selectors": prompt_spec.tool_selectors,
         "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
         "compact_consecutive": 0,
@@ -1680,6 +1693,8 @@ def main(argv: list[str] | None = None) -> int:
         input_changed_keys = _event_result_changed_keys(input_event.results)
         if _changed_provider_key(input_changed_keys):
             _sync_provider_from_live_settings(state, input_changed_keys)
+        if _changed_lock_subagent_model_key(input_changed_keys):
+            _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
             turn_cfg = _cfg_for_live_state(cfg, state)
@@ -1695,6 +1710,11 @@ def main(argv: list[str] | None = None) -> int:
             before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             before_turn_model = _model_from_live_settings(state["settings"])
             before_turn_provider = _provider_from_live_settings(state["settings"])
+            before_turn_lock = _live_bool_setting(
+                state["settings"],
+                ("subagents", "lock_model"),
+                cfg.lock_subagent_model,
+            )
             runtime.run_turn(
                 turn_cfg,
                 state["system"],
@@ -1723,6 +1743,13 @@ def main(argv: list[str] | None = None) -> int:
                 _sync_model_from_live_settings(state)
             after_turn_provider = _provider_from_live_settings(state["settings"])
             _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+            after_turn_lock = _live_bool_setting(
+                state["settings"],
+                ("subagents", "lock_model"),
+                cfg.lock_subagent_model,
+            )
+            if after_turn_lock != before_turn_lock:
+                _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
@@ -1739,6 +1766,8 @@ def main(argv: list[str] | None = None) -> int:
             cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
             if _changed_provider_key(cancel_changed_keys):
                 _sync_provider_from_live_settings(state, cancel_changed_keys)
+            if _changed_lock_subagent_model_key(cancel_changed_keys):
+                _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
