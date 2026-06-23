@@ -93,6 +93,59 @@ def test_on_rejects_unknown_event_without_registering():
     assert hooks.handlers_for("nope") == []
 
 
+def test_event_hook_dispatches_setcmd_handler_against_live_settings(tmp_path):
+    hooks = events.EventHooks()
+    live_settings = settings.seed_defaults()
+    hooks.set_dispatcher(
+        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
+    )
+    hooks.add("turn_start", "set compact.auto off")
+
+    emission = hooks.emit("turn_start", model="offline-test-model")
+
+    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    assert emission.dispatch_skipped is False
+    assert len(emission.results) == 1
+    assert emission.results[0].changed is True
+    assert emission.results[0].error is None
+    assert emission.results[0].lines == ["compact.auto = off"]
+
+
+def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
+    hooks = events.EventHooks()
+    live_settings = settings.seed_defaults()
+    hooks.set_dispatcher(
+        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
+    )
+    hooks.add("turn_start", "echo nope")
+
+    emission = hooks.emit("turn_start")
+
+    assert emission.results[0].error == "unsupported event handler command: echo"
+    assert settings.get_dotted(live_settings, ("compact", "auto")) is True
+
+
+def test_event_hooks_skip_recursive_dispatch():
+    hooks = events.EventHooks()
+    calls: list[str] = []
+
+    def recursive_dispatch(hook: events.EventHook, emission: events.EventEmission):
+        calls.append(f"{emission.event}:{hook.handler}")
+        nested = hooks.emit("turn_start", nested=True)
+        assert nested.dispatch_skipped is True
+        assert nested.results == []
+        return events.EventHandlerResult(hook=hook, lines=["ok"])
+
+    hooks.set_dispatcher(recursive_dispatch)
+    hooks.add("turn_start", "set compact.auto off")
+
+    emission = hooks.emit("turn_start")
+
+    assert calls == ["turn_start:set compact.auto off"]
+    assert emission.dispatch_skipped is False
+    assert emission.results[0].lines == ["ok"]
+
+
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     script = tmp_path / "agent.irc"
     script.write_text(

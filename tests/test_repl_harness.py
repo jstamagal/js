@@ -8,6 +8,7 @@ import ai
 from js import cli, events, providers, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
+from js.sampling import Sampling
 
 def make_cfg(tmp_path: Path) -> Config:
     return Config(
@@ -193,6 +194,87 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
     assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
+
+
+def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    trace_overrides: list[bool] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input set runtime.trace on", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        trace_overrides.append(kwargs["trace_override"])
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert trace_overrides == [True]
+
+
+def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    temperatures: list[float | None] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input set compact.auto off", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        temperatures.append(kwargs["sampling"].temperature)
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert temperatures == [0.9]
+
+
+def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    temperatures: list[float | None] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input set sampling.temperature 0.2", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        temperatures.append(kwargs["sampling"].temperature)
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert temperatures == [0.2]
 
 
 

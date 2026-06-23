@@ -7,7 +7,7 @@ import ai.types.messages
 import ai.types.usage
 import pytest
 
-from js import events, runtime, tools as runtime_tools
+from js import events, runtime, setcmd, settings, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext, build_default_registry
@@ -129,10 +129,13 @@ class RecordingHooks(events.EventHooks):
     def __init__(self) -> None:
         super().__init__()
         self.emitted: list[tuple[str, dict]] = []
+        self.emissions: list[events.EventEmission] = []
 
     def emit(self, event: str, **payload):
         self.emitted.append((event, payload))
-        return super().emit(event, **payload)
+        emission = super().emit(event, **payload)
+        self.emissions.append(emission)
+        return emission
 
 
 def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
@@ -167,6 +170,38 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     assert hooks.emitted[2][1]["text"] == "OK"
     assert hooks.emitted[3][1]["text"] == "OK"
     assert hooks.emitted[-1][1]["reason"] == "stop"
+
+
+def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+    live_settings = settings.seed_defaults()
+    hooks.set_dispatcher(
+        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
+    )
+    hooks.add("turn_start", "set compact.auto off")
+
+    def stream_stub(**kwargs):
+        kwargs["on_text"]("OK")
+        return model_text_result("OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Say OK."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    turn_start = next(emission for emission in hooks.emissions if emission.event == "turn_start")
+    assert turn_start.results[0].changed is True
+    assert turn_start.results[0].error is None
 
 
 def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
