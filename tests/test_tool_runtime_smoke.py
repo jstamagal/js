@@ -599,6 +599,23 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
     assert aliased_registry.resolve("WRITE").name == "write"
 
 
+def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config():
+    live_settings = settings.seed_defaults()
+    result = setcmd.run_repl_command(
+        live_settings,
+        '/set tools.alias_profiles ['
+        '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
+        '{"match":["openai"],"aliases":{"read":"Read"}}'
+        ']',
+    )
+    registry = build_default_registry().select(["read"])
+
+    assert result.error is None
+    assert runtime._resolve_alias_profile(live_settings, "openai-test", None, registry) == {
+        "read": "Read",
+    }
+
+
 def test_resolve_alias_profile_matches_model_or_provider_substring():
     settings = {"tools": {"alias_profiles": [
         {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
