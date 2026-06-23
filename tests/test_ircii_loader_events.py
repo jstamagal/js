@@ -268,6 +268,28 @@ def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     ]
 
 
+def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path, capsys):
+    script = tmp_path / "agent-error.irc"
+    script.write_text("on turn_start echo boot\nbogus nope\n", encoding="utf-8")
+    cfg = make_cfg(tmp_path)
+    hooks = events.EventHooks()
+    state = {
+        "messages": [],
+        "system": "sys",
+        "settings": settings.seed_defaults(),
+        "events": hooks,
+    }
+
+    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "on turn_start = echo boot"
+    assert "unknown command: bogus" in lines[1]
+    assert hooks.handlers_for("turn_start") == [
+        events.EventHook(event="turn_start", handler="echo boot", suppress=False)
+    ]
+
+
 def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
     script = tmp_path / "sampling.irc"
     script.write_text("set sampling.temperature 0.2\n", encoding="utf-8")

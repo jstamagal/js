@@ -607,8 +607,6 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
             events=state.setdefault("events", events.EventHooks()),
         )
         result = setcmd.run_repl_command(state["settings"], line, context=context)
-        if result.error:
-            print(f"{C.ORANGE}{result.error}{C.RESET}")
         if result.changed:
             if setcmd.is_repl_command(line, "/set"):
                 state["sampling_cli"] = _sampling_override_after_set(
@@ -619,6 +617,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         for out in result.lines:
             print(out)
+        if result.error:
+            print(f"{C.ORANGE}{result.error}{C.RESET}")
         return True
     if line.startswith("/model "):
         model_value = line[len("/model "):].strip()
