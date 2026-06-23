@@ -71,6 +71,22 @@ def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     assert out["model"]["id"] == "file-model"
 
 
+def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
+    cfg = tmp_path / "jsrc"
+    cfg.write_text(
+        "set tools.alias_profiles.foo bar\n"
+        "set model.id file-model\n",
+        encoding="utf-8",
+    )
+    live_settings = settings.seed_defaults()
+
+    warnings = settings.load_jsrc_files([cfg], live_settings)
+
+    assert warnings == [f"{cfg}:1: unknown knob: tools.alias_profiles.foo"]
+    assert live_settings["model"]["id"] == "file-model"
+    assert "alias_profiles" not in live_settings.get("tools", {})
+
+
 def test_collect_settings_applies_env_after_file(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set model.id file-model\n", encoding="utf-8")
