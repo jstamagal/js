@@ -63,6 +63,26 @@ def test_tools_alias_profiles_rejects_non_list_json():
     assert config_settings == config_before
 
 
+def test_tools_alias_profiles_rejects_entries_without_aliases():
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    raw = '[{"match":["openai"]}]'
+
+    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    config_settings = settings.seed_defaults()
+    config_before = copy.deepcopy(config_settings)
+    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == "tools.alias_profiles: expected profiles with match and aliases"
+    assert live_settings == before
+    assert config_result.handled is True
+    assert config_result.changed is False
+    assert config_result.error == "tools.alias_profiles: expected profiles with match and aliases"
+    assert config_settings == config_before
+
+
 def test_provider_extra_rejects_non_object_json():
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)

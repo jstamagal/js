@@ -282,10 +282,25 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, "expected a JSON value"
         if kind == "map" and not isinstance(value, dict):
             return None, "expected a JSON object"
-        if spec.key == "tools.alias_profiles" and not isinstance(value, list):
-            return None, "expected a JSON list"
+        if spec.key == "tools.alias_profiles":
+            error = _validate_alias_profiles(value)
+            if error is not None:
+                return None, error
         return value, None
     return text, None  # str
+
+
+def _validate_alias_profiles(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return "expected a JSON list"
+    for profile in value:
+        if not isinstance(profile, dict):
+            return "expected profiles with match and aliases"
+        match = profile.get("match")
+        aliases = profile.get("aliases")
+        if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
+            return "expected profiles with match and aliases"
+    return None
 
 
 # ---------------------------------------------------------------------------

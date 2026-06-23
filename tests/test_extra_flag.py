@@ -108,6 +108,16 @@ def test_extra_tools_alias_profiles_rejects_non_list_json():
         settings.parse_extra_arg(raw)
 
 
+def test_extra_tools_alias_profiles_rejects_entries_without_aliases():
+    raw = 'tools.alias_profiles=[{"match":["offline-test-model"]}]'
+
+    with pytest.raises(
+        ValueError,
+        match="--extra tools\\.alias_profiles: expected profiles with match and aliases",
+    ):
+        settings.parse_extra_arg(raw)
+
+
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
     with pytest.raises(ValueError):
         settings.parse_extra_arg("limits.task_max_depth")  # no '='
