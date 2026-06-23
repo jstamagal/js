@@ -165,12 +165,15 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     from PIL import Image
 
     model = os.environ.get("JS_VISION_TEST_MODEL", "gemma4:e4b")
-    base_url = os.environ.get("JS_BASE_URL", "http://localhost:11434/v1")
-    api_key = os.environ.get("JS_API_KEY", "ollama")
+    # Pin to local ollama. Use vision-test-specific vars so the ambient
+    # JS_BASE_URL/JS_API_KEY (your real cloud provider, loaded via dotenv) can't
+    # shadow this into a 401 against a model the cloud doesn't host.
+    base_url = os.environ.get("JS_VISION_TEST_BASE_URL", "http://localhost:11434/v1")
+    api_key = os.environ.get("JS_VISION_TEST_API_KEY", "ollama")
     try:
         with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as resp:
-            if "gemma4:e4b" not in resp.read().decode("utf-8", "replace"):
-                pytest.skip("ollama gemma4:e4b model not pulled")
+            if model not in resp.read().decode("utf-8", "replace"):
+                pytest.skip(f"ollama {model} model not pulled")
     except Exception:
         pytest.skip("ollama not reachable on localhost:11434")
 
@@ -204,7 +207,10 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
                 provider_api_key=api_key,
                 messages=convo,
                 tools=None,
-                max_output_tokens=12,
+                # Generous budget: gemma4 (and other reasoning vision models)
+                # spend tokens thinking before the visible answer; too small a
+                # cap truncates mid-thought (finish_reason=length) -> empty text.
+                max_output_tokens=512,
                 reasoning_effort=None,
                 on_text=lambda _t: None,
             )

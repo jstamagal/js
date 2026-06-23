@@ -236,7 +236,7 @@ They call the same underlying `task` implementation with the agent id fixed.
 
 For another Python project, the behavior to preserve is:
 
-- canonical names with no legacy aliases
+- canonical names only in the public registry
 - descriptions as contract text
 - prompt frontmatter tool selection
 - `Tool` plus `ToolContext` separation
