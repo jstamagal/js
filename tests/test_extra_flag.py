@@ -100,6 +100,19 @@ def test_extra_provider_extra_subkeys_use_generic_coercion(monkeypatch, tmp_path
     assert settings.get_dotted(cfg.settings, ("provider", "extra", "live_flag")) is True
 
 
+def test_extra_wiki_aliases_map_uses_registry_coercion(monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+    raw = 'wiki.aliases={"creative":"~/wiki-creative"}'
+    expected = {"creative": "~/wiki-creative"}
+
+    path, value = settings.parse_extra_arg(raw)
+    cfg = from_env(save_session=False, extras=[raw])
+
+    assert path == ("wiki", "aliases")
+    assert value == expected
+    assert settings.get_dotted(cfg.settings, ("wiki", "aliases")) == expected
+
+
 def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"r"}}]'
