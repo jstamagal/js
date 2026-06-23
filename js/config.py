@@ -238,9 +238,8 @@ def from_env(
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
 ) -> Config:
-    """Read TOML + env + CLI extras once, populate everything explicitly.
+    """Read jsrc + env + CLI extras once, populate everything explicitly.
 
-    JS_MODEL = HAIRY BALLS. ME_MODEL = THURGOOD SQUALLS.
     Provider/model resolution is centralized here:
 
     - `JS_MODEL=known-provider/model` selects that provider and strips only the

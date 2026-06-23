@@ -454,10 +454,34 @@ def _handle_provider_command(line: str, state: dict, cfg: Config) -> bool:
 
     if cmd == "/login":
         if len(parts) == 1:
-            print(f"{C.ORANGE}usage: /login <provider-id>{C.RESET}")
+            print(f"{C.ORANGE}usage: /login <name> [apikey] [baseurl] [provider]{C.RESET}")
             return True
-        _set_provider_state(state, parts[1])
-        print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(parts[1]) or parts[1]}{C.RESET}")
+        name = parts[1]
+        key = parts[2] if len(parts) > 2 else None
+        url = parts[3] if len(parts) > 3 else None
+        ptype = parts[4] if len(parts) > 4 else None
+        if key is None and url is None and ptype is None:
+            # bare `/login <name>`: load a saved login (or fall back to provider defaults)
+            _set_provider_state(state, name)
+            print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(name) or name}{C.RESET}")
+            return True
+        # explicit creds: build + persist a login under <name>, then activate it.
+        # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
+        prov = providers.get_provider(ptype or name)
+        if ptype is None and prov is None:
+            print(f"{C.ORANGE}/login: '{name}' is not a known provider — name the provider type: "
+                  f"/login {name} <apikey> <baseurl> <provider>{C.RESET}")
+            return True
+        sdk = prov.effective_sdk_provider_id if prov is not None else ptype
+        canonical = providers.normalize_provider_id(name) or name
+        logins.save_login(logins.Login(
+            provider_id=canonical,
+            sdk_provider_id=sdk,
+            provider_base_url=url,
+            provider_api_key=key,
+        ))
+        _apply_saved_login_to_state(state, canonical)
+        print(f"{C.GREEN}login saved + active: {canonical}{C.RESET}")
         return True
 
     if cmd == "/logout":
@@ -591,7 +615,19 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
         return True
-    if line.startswith("/compact"):
+    if line.startswith("/compact-auto"):
+        arg = line[len("/compact-auto"):].strip().lower()
+        if arg not in ("on", "off"):
+            print(f"{C.ORANGE}usage: /compact-auto on|off{C.RESET}")
+            return True
+        result = setcmd.run_repl_command(state["settings"], f"/set compact.auto {arg}")
+        if result.error:
+            print(f"{C.ORANGE}{result.error}{C.RESET}")
+        else:
+            for out in result.lines:
+                print(out)
+        return True
+    if line == "/compact" or line.startswith("/compact "):
         focus = line[len("/compact"):].strip()
         forced = focus == "up to here"
         if forced:
