@@ -13,8 +13,11 @@ Callers own all I/O: `run_repl_command` and `apply_config_line` return a
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import shlex
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
+from . import events as _events
 from . import settings as _s
 
 
@@ -24,6 +27,14 @@ class CommandResult:
     changed: bool = False          # settings were mutated
     lines: list[str] = field(default_factory=list)  # human-readable output
     error: str | None = None       # a problem worth surfacing
+
+
+@dataclass(frozen=True)
+class CommandContext:
+    cwd: Path = field(default_factory=Path.cwd)
+    events: _events.EventHooks | None = None
+    max_load_depth: int = 16
+    _load_stack: tuple[Path, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +125,90 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
 
 
 # ---------------------------------------------------------------------------
+# on / load
+# ---------------------------------------------------------------------------
+
+def _show_event_lines(context: CommandContext | None) -> CommandResult:
+    if context is None or context.events is None:
+        return CommandResult(handled=True, lines=["(no event handlers)"])
+    hooks = context.events.all()
+    if not hooks:
+        return CommandResult(handled=True, lines=["(no event handlers)"])
+    lines: list[str] = []
+    for event in _events.CANONICAL_EVENT_NAMES:
+        for hook in hooks.get(event, ()):
+            prefix = "^" if hook.suppress else ""
+            lines.append(f"on {prefix}{hook.event} = {hook.handler}")
+    return CommandResult(handled=True, lines=lines)
+
+
+def apply_on(context: CommandContext | None, event_token: str, handler: str) -> CommandResult:
+    if context is None or context.events is None:
+        return CommandResult(handled=True, error="on needs an event context")
+    try:
+        hook = context.events.add(event_token, handler)
+    except ValueError as e:
+        return CommandResult(handled=True, error=str(e))
+    prefix = "^" if hook.suppress else ""
+    return CommandResult(
+        handled=True,
+        changed=True,
+        lines=[f"on {prefix}{hook.event} = {hook.handler}"],
+    )
+
+
+def _split_load_arg(raw: str) -> tuple[str | None, str | None]:
+    try:
+        parts = shlex.split(raw)
+    except ValueError as e:
+        return None, str(e)
+    if len(parts) != 1:
+        return None, "load needs exactly one path"
+    return parts[0], None
+
+
+def _resolve_load_path(raw_path: str, context: CommandContext) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = context.cwd / path
+    return path.resolve(strict=False)
+
+
+def run_script_file(settings: dict, raw_path: str, context: CommandContext | None) -> CommandResult:
+    """Load one ircII-style script file.
+
+    Script files use slashless commands. For this foundation pass, the accepted
+    verbs are ``set``, ``show``, ``on``, and nested ``load``.
+    """
+    if context is None:
+        context = CommandContext()
+    path = _resolve_load_path(raw_path, context)
+    if len(context._load_stack) >= context.max_load_depth:
+        return CommandResult(handled=True, error="load nesting too deep")
+    if path in context._load_stack:
+        return CommandResult(handled=True, error=f"load cycle: {path}")
+    if not path.is_file():
+        return CommandResult(handled=True, error=f"script not found: {path}")
+
+    child = replace(context, cwd=path.parent, _load_stack=(*context._load_stack, path))
+    lines: list[str] = []
+    changed = False
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        result = apply_script_line(settings, raw, context=child)
+        if result.error:
+            return CommandResult(
+                handled=True,
+                changed=changed,
+                lines=lines,
+                error=f"{path}:{lineno}: {result.error}",
+            )
+        changed = changed or result.changed
+        lines.extend(result.lines)
+    lines.append(f"loaded {path}")
+    return CommandResult(handled=True, changed=changed, lines=lines)
+
+
+# ---------------------------------------------------------------------------
 # Line dispatch
 # ---------------------------------------------------------------------------
 
@@ -127,8 +222,14 @@ def _normalize(line: str) -> str | None:
     return body
 
 
-def run_repl_command(settings: dict, line: str) -> CommandResult:
-    """Dispatch a REPL command line (`/set ...`, `/show ...`). Returns
+def is_repl_command(line: str, *commands: str) -> bool:
+    body = line.strip().lower()
+    return any(body == cmd.lower() or body.startswith(cmd.lower() + " ") for cmd in commands)
+
+
+def run_repl_command(settings: dict, line: str, *, context: CommandContext | None = None) -> CommandResult:
+    """Dispatch a REPL command line (`/set ...`, `/show ...`, `/on ...`,
+    `/load ...`). Returns
     ``handled=False`` when the verb is not one this runner owns."""
     body = _normalize(line)
     if body is None:
@@ -146,7 +247,36 @@ def run_repl_command(settings: dict, line: str) -> CommandResult:
     if verb == "show":
         return show_lines(settings, parts[1] if len(parts) > 1 else None)
 
+    if verb == "on":
+        if len(parts) == 1:
+            return _show_event_lines(context)
+        if len(parts) < 3:
+            return CommandResult(handled=True, error="on needs an event and handler")
+        return apply_on(context, parts[1], parts[2])
+
+    if verb == "load":
+        if len(parts) < 2:
+            return CommandResult(handled=True, error="load needs a path")
+        raw_path, error = _split_load_arg(body[len(parts[0]):].strip())
+        if error:
+            return CommandResult(handled=True, error=error)
+        return run_script_file(settings, raw_path or "", context)
+
     return CommandResult(handled=False)
+
+
+def apply_script_line(settings: dict, line: str, *, context: CommandContext | None = None) -> CommandResult:
+    """Apply one line from a loaded ircII-style script. Comments/blanks are
+    no-ops; commands are slashless, though a leading slash is tolerated at the
+    normalization layer."""
+    body = _normalize(line)
+    if body is None:
+        return CommandResult(handled=True)
+    parts = body.split(maxsplit=2)
+    verb = parts[0].lower()
+    if verb in {"set", "show", "on", "load"}:
+        return run_repl_command(settings, body, context=context)
+    return CommandResult(handled=True, error=f"unknown command: {verb}")
 
 
 def apply_config_line(settings: dict, line: str) -> CommandResult:
