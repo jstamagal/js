@@ -22,6 +22,8 @@ def test_slash_lists_slash_commands_only():
 def test_nonslash_commands_complete():
     assert command_candidates("ex") == ["exit"]
     assert "quit" in command_candidates("qu")
+    assert "/load" in command_candidates("lo")
+    assert "/on" in command_candidates("o")
 
 
 def test_shared_prefix_yields_all_for_rotation():
@@ -58,6 +60,11 @@ def test_show_arg_completes_keys():
 def test_login_arg_completes_names():
     cands, _ = _completer().candidates("/login dee")
     assert cands == ["deepseek"]
+
+
+def test_on_arg_completes_event_names():
+    cands, _ = _completer().candidates("/on tool_")
+    assert cands == ["tool_call", "tool_result"]
 
 
 def test_provider_arg_completes_names():
