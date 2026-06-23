@@ -378,6 +378,7 @@ def stream_model(
     reasoning_effort: str | None,
     on_text: Callable[[str], None],
     provider_headers: dict[str, str] | None = None,
+    provider_extra: dict[str, Any] | None = None,
     executor: ai.models.StreamExecutor | None = None,
     sampling: Sampling | None = None,
 ) -> ModelStreamResult:
@@ -393,7 +394,7 @@ def stream_model(
         provider_api_key=provider_api_key,
         provider_headers=provider_headers,
     )
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = dict(provider_extra or {})
     # Per-provider params: this is the canonical place to encode quirks.
     provider_def = providers.get_provider(provider_id)
     provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
