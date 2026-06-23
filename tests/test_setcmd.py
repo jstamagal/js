@@ -63,6 +63,26 @@ def test_tools_alias_profiles_rejects_non_list_json():
     assert config_settings == config_before
 
 
+def test_provider_extra_rejects_non_object_json():
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    raw = '["extra_body"]'
+
+    result = setcmd.run_repl_command(live_settings, f"/set provider.extra {raw}")
+    config_settings = settings.seed_defaults()
+    config_before = copy.deepcopy(config_settings)
+    config_result = setcmd.apply_config_line(config_settings, f"set provider.extra {raw}")
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == "provider.extra: expected a JSON object"
+    assert live_settings == before
+    assert config_result.handled is True
+    assert config_result.changed is False
+    assert config_result.error == "provider.extra: expected a JSON object"
+    assert config_settings == config_before
+
+
 def test_bool_off_differs_from_nullable_off():
     live_settings = settings.seed_defaults()
 
