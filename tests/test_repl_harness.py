@@ -5,7 +5,7 @@ from pathlib import Path
 
 import ai
 
-from js import cli, providers, setcmd, settings
+from js import cli, events, providers, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 
@@ -153,6 +153,45 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     captured = capsys.readouterr()
     assert actual == 0
     assert "RuntimeError: boom" in captured.out
+    assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
+
+
+def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    append_message(cfg.session_file, {"role": "user", "content": "existing"})
+    seen: list[tuple[str, dict]] = []
+
+    class RecordingHooks(events.EventHooks):
+        def emit(self, event: str, **payload):
+            seen.append((event, payload))
+            return super().emit(event, **payload)
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["interrupt me", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            line = next(self.lines)
+            if line == "exit":
+                return "exit"
+            return line
+
+    def run_turn_stub(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.events, "EventHooks", RecordingHooks)
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert ("input", {"text": "interrupt me", "attachments": []}) in seen
+    assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
 

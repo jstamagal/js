@@ -5,6 +5,7 @@ import json
 import ai
 import ai.types.messages
 import ai.types.usage
+import pytest
 
 from js import events, runtime, tools as runtime_tools
 from js.config import Config
@@ -204,6 +205,36 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
     assert "needle" in tool_result["result"]
     assert emitted[-1][0] == "turn_end"
     assert emitted[-1][1]["reason"] == "stop"
+
+
+def test_run_turn_emits_turn_end_after_fatal_error(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+
+    def stream_stub(**kwargs):
+        raise ValueError("bad request")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Break."}]
+
+    with pytest.raises(ValueError, match="bad request"):
+        runtime.run_turn(
+            cfg,
+            "system",
+            messages,
+            runtime.Telemetry(None),
+            trace_override=False,
+            suppress_output=True,
+            event_hooks=hooks,
+        )
+
+    assert [event for event, _payload in hooks.emitted] == [
+        "turn_start",
+        "prompt",
+        "error",
+        "turn_end",
+    ]
+    assert hooks.emitted[-1][1]["reason"] == "error"
 
 
 def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatch, tmp_path):

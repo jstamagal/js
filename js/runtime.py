@@ -857,17 +857,20 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                                     error=f"{type(e).__name__}: {e}", attempt=attempt)
                     if attempt == 2:
                         _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
+                        _end_turn("error")
                         raise
                     time.sleep(_backoff(attempt))
                 else:
                     telemetry.event("fatal_error", model=model,
                                     error=f"{type(e).__name__}: {e}")
                     _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
+                    _end_turn("error")
                     raise
             except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
                 telemetry.event("fatal_error", model=model,
                                 error=f"{type(e).__name__}: {e}")
                 _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
+                _end_turn("error")
                 raise
         else:
             print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
