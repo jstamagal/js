@@ -291,6 +291,18 @@ def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], defau
     return default
 
 
+def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> str | None:
+    missing = object()
+    raw = settings.get_dotted(live_settings, ("model", "reasoning_effort"), missing)
+    if raw is missing:
+        return default
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return _norm_effort(raw)
+    return default
+
+
 def _live_bool_setting(live_settings: dict, path: tuple[str, str], default: bool) -> bool:
     raw = settings.get_dotted(live_settings, path, default)
     return raw if isinstance(raw, bool) else default
@@ -304,6 +316,10 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
         updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_OPTIONAL_INT_FIELDS:
         updates[attr] = _live_optional_int_setting(live_settings, path, getattr(active, attr))
+    updates["reasoning_effort"] = _live_reasoning_effort_setting(
+        live_settings,
+        active.reasoning_effort,
+    )
     for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
         updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_BOOL_FIELDS:
