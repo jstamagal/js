@@ -49,11 +49,12 @@ def _resolve_alias_profile(
     """Pick the canonical->alias map for the first matching tool alias profile.
 
     Profiles live under ``[[tools.alias_profiles]]`` in config; each entry has
-    a ``match`` list of case-insensitive substrings tested against the model id
-    and provider id, plus an ``aliases`` table mapping canonical tool names to
-    the model-facing names. The first profile whose ``match`` hits wins. No
-    profiles configured (the default) → empty map → default tool names. When a
-    registry is provided, matching profiles with no usable aliases are skipped.
+    a ``match`` string or list of case-insensitive substrings tested against the
+    model id and provider id, plus an ``aliases`` table mapping canonical tool
+    names to the model-facing names. The first profile whose ``match`` hits
+    wins. No profiles configured (the default) → empty map → default tool
+    names. When a registry is provided, matching profiles with no usable
+    aliases are skipped.
     """
     tools_cfg = (settings or {}).get("tools")
     profiles = tools_cfg.get("alias_profiles") if isinstance(tools_cfg, dict) else None

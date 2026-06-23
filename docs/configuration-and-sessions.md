@@ -80,7 +80,7 @@ as `<set>`.
 | `compact.pre_hook` | `<none>` | Optional shell command whose stdout guides compaction. |
 | `subagents.prefer_inherit` | `off` | Subagents inherit the parent's model when true; else use the agent's own primary. |
 | `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
-| `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:[...], aliases:{...}}. |
+| `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:string\|[...], aliases:{...}}. |
 | `wiki.aliases` | `<none>` | Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`. |
 | `artifact.dir` | `<none>` | Artifact library directory. |
 | `artifact.url` | `<none>` | Artifact HTTP base URL. |
@@ -89,6 +89,7 @@ as `<set>`.
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
 case-insensitive substring-matched against the active model id and provider id.
+`match` may be a single string or a list of strings.
 `aliases` maps canonical active tool names to model-facing names, for example
 `{"read":"Read"}`. At runtime, a matching profile with no aliases usable for
 the active tool registry is skipped, so a later matching profile can apply.
