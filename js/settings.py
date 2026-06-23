@@ -353,6 +353,13 @@ def _parse_dotted_key(key: str) -> tuple[str, ...]:
     return parts
 
 
+def _prefix_spec(key: str) -> SettingSpec | None:
+    for spec in REGISTRY:
+        if key.startswith(spec.key + "."):
+            return spec
+    return None
+
+
 # ---------------------------------------------------------------------------
 # CLI --extra one-shots
 # ---------------------------------------------------------------------------
@@ -394,6 +401,9 @@ def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
         if error is not None:
             raise ValueError(f"--extra {key}: {error}")
         return spec.path, value
+    prefix_spec = _prefix_spec(key)
+    if prefix_spec is not None and prefix_spec.type != "map":
+        raise ValueError(f"--extra unknown knob: {key}")
     return _parse_dotted_key(key), coerce_extra_value(raw_value)
 
 

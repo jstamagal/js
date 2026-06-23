@@ -88,6 +88,18 @@ def test_extra_provider_extra_rejects_non_object_json():
         settings.parse_extra_arg(raw)
 
 
+def test_extra_provider_extra_subkeys_use_generic_coercion(monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+    raw = "provider.extra.live_flag=true"
+
+    path, value = settings.parse_extra_arg(raw)
+    cfg = from_env(save_session=False, extras=[raw])
+
+    assert path == ("provider", "extra", "live_flag")
+    assert value is True
+    assert settings.get_dotted(cfg.settings, ("provider", "extra", "live_flag")) is True
+
+
 def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"r"}}]'
@@ -168,6 +180,12 @@ def test_extra_tools_alias_profiles_rejects_invalid_canonical_names():
             "expected canonical tool names matching \\[A-Za-z0-9_-\\]\\+"
         ),
     ):
+        settings.parse_extra_arg(raw)
+
+
+@pytest.mark.parametrize("raw", ["tools.alias_profiles.foo=bar", "model.id.foo=bar"])
+def test_extra_rejects_registered_non_map_subkeys(raw):
+    with pytest.raises(ValueError, match="--extra unknown knob:"):
         settings.parse_extra_arg(raw)
 
 
