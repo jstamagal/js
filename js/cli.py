@@ -309,6 +309,23 @@ def _live_bool_setting(live_settings: dict, path: tuple[str, str], default: bool
     return raw if isinstance(raw, bool) else default
 
 
+def _debug_log_from_live_settings(cfg: Config, live_settings: dict) -> Path | None:
+    enabled = _live_bool_setting(live_settings, ("runtime", "debug"), cfg.debug_log is not None)
+    if not enabled:
+        return None
+    return cfg.debug_log or (_paths.state_root() / cfg.agent_id / "debug.log")
+
+
+def _sync_telemetry_from_live_settings(cfg: Config, state: dict, telemetry: runtime.Telemetry) -> None:
+    debug_log = _debug_log_from_live_settings(cfg, state["settings"])
+    if debug_log is not None:
+        try:
+            debug_log.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    telemetry.debug_log = debug_log
+
+
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
@@ -1645,6 +1662,7 @@ def main(argv: list[str] | None = None) -> int:
         if not line:
             continue
         if _handle_command(line, state, cfg):
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
             continue
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
@@ -1662,6 +1680,7 @@ def main(argv: list[str] | None = None) -> int:
         input_changed_keys = _event_result_changed_keys(input_event.results)
         if _changed_provider_key(input_changed_keys):
             _sync_provider_from_live_settings(state, input_changed_keys)
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
             turn_cfg = _cfg_for_live_state(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
@@ -1704,6 +1723,7 @@ def main(argv: list[str] | None = None) -> int:
                 _sync_model_from_live_settings(state)
             after_turn_provider = _provider_from_live_settings(state["settings"])
             _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:
@@ -1719,6 +1739,7 @@ def main(argv: list[str] | None = None) -> int:
             cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
             if _changed_provider_key(cancel_changed_keys):
                 _sync_provider_from_live_settings(state, cancel_changed_keys)
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
