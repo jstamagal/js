@@ -259,10 +259,10 @@ def run_script_file(settings: dict, raw_path: str, context: CommandContext | Non
         if result.error:
             return CommandResult(
                 handled=True,
-                changed=changed,
-                lines=lines,
+                changed=changed or result.changed,
+                lines=[*lines, *result.lines],
                 error=f"{path}:{lineno}: {result.error}",
-                changed_keys=changed_keys,
+                changed_keys=[*changed_keys, *result.changed_keys],
             )
         changed = changed or result.changed
         changed_keys.extend(result.changed_keys)
