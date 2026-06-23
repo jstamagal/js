@@ -71,7 +71,7 @@ def _resolve_alias_profile(
         aliases = profile.get("aliases")
         if not isinstance(aliases, dict) or not isinstance(match, list):
             continue
-        needles = [str(m).lower() for m in match if str(m).strip()]
+        needles = [str(m).strip().lower() for m in match if str(m).strip()]
         if needles and any(n in h for n in needles for h in haystacks):
             alias_map = {str(k): str(v) for k, v in aliases.items() if str(v).strip()}
             if registry is not None:
