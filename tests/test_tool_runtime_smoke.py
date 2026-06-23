@@ -50,6 +50,19 @@ def test_read_boolean_line_range_values_are_ignored(tmp_path):
     assert "beta" in actual
     assert "invalid line range" not in actual
 
+
+def test_read_start_past_eof_returns_non_error_note(tmp_path):
+    target = tmp_path / "lines.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    actual = fs.read("lines.txt", start_line=50, end_line=80, context=context)
+
+    assert not actual.startswith("ERROR")
+    assert "2 total lines" in actual
+    assert "start_line=50" in actual
+
+
 def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_path):
     target = tmp_path / "guarded.txt"
     target.write_text("old\n", encoding="utf-8")
