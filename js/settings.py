@@ -277,9 +277,12 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, "expected a number"
     if kind in ("json", "map"):
         try:
-            return json.loads(raw), None
+            value = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             return None, "expected a JSON value"
+        if spec.key == "tools.alias_profiles" and not isinstance(value, list):
+            return None, "expected a JSON list"
+        return value, None
     return text, None  # str
 
 

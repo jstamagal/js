@@ -37,6 +37,32 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     assert shown.lines == [f"{key} = {setcmd.render_value(spec, expected)}"]
 
 
+def test_tools_alias_profiles_rejects_non_list_json():
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    raw = '{"match":["openai"],"aliases":{"read":"r"}}'
+
+    result = setcmd.run_repl_command(
+        live_settings,
+        f"/set tools.alias_profiles {raw}",
+    )
+    config_settings = settings.seed_defaults()
+    config_before = copy.deepcopy(config_settings)
+    config_result = setcmd.apply_config_line(
+        config_settings,
+        f"set tools.alias_profiles {raw}",
+    )
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == "tools.alias_profiles: expected a JSON list"
+    assert live_settings == before
+    assert config_result.handled is True
+    assert config_result.changed is False
+    assert config_result.error == "tools.alias_profiles: expected a JSON list"
+    assert config_settings == config_before
+
+
 def test_bool_off_differs_from_nullable_off():
     live_settings = settings.seed_defaults()
 
