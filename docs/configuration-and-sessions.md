@@ -86,6 +86,14 @@ as `<set>`.
 | `artifact.url` | `<none>` | Artifact HTTP base URL. |
 | `artifact.bin` | `<none>` | Artifact CLI binary. |
 
+Tool alias profiles let a model see alternate tool names without changing the
+canonical tool handlers. Profiles are evaluated in order; each `match` value is
+case-insensitive substring-matched against the active model id and provider id.
+`aliases` maps canonical active tool names to model-facing names, for example
+`{"read":"Read"}`. At runtime, a matching profile with no aliases usable for
+the active tool registry is skipped, so a later matching profile can apply.
+Aliases that collide with an active canonical tool name are also ignored.
+
 Artifact config values are unset by default in `jsrc`. Artifact helpers resolve
 directory, URL, and binary with this precedence: `set artifact.*` in `jsrc`,
 then the matching `ARTIFACT_*` environment variable, then the built-in default
