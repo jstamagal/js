@@ -69,6 +69,11 @@ test-mark marker:
 test-live:
     uv run --extra test pytest -q -m ai_provider tests/test_real_integrations.py
 
+# live vision suite — needs ollama + a pulled vision model. default gemma4:e4b,
+# override with JS_VISION_TEST_MODEL=<tag>. e.g. just test-vision
+test-vision:
+    uv run --extra test pytest -q -m vision tests/test_real_integrations.py
+
 # focused suites — mirror the groups in docs/testing-and-development.md
 test-tools:
     uv run --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py

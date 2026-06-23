@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=9.0",
+    "Pillow>=10.0",
 ]
 
 [project.scripts]
