@@ -16,6 +16,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import attach, codex_auth, colors as C
 from . import logins
@@ -24,6 +25,7 @@ from . import model_metadata
 from . import persona as P
 from . import picker
 from . import providers
+from . import replcomplete
 from . import runtime
 from . import paths as _paths
 from . import setcmd
@@ -1315,7 +1317,17 @@ def main(argv: list[str] | None = None) -> int:
     cfg = _apply_agent_model(cfg, prompt_spec, args.model)
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
-    session = PromptSession(history=FileHistory(str(cfg.history_file)))
+    completer = replcomplete.JsCompleter(
+        setting_keys=[spec.key for spec in settings.REGISTRY],
+        names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
+        spell=replcomplete.hunspell_suggest,
+    )
+    session = PromptSession(
+        history=FileHistory(str(cfg.history_file)),
+        completer=completer,
+        complete_while_typing=False,  # Tab-triggered, never auto-pops
+        complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
+    )
 
     messages = M.load_messages(cfg.session_file)
     if messages:
