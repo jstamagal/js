@@ -19,6 +19,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import attach, codex_auth, colors as C
+from . import events
 from . import logins
 from . import memory as M
 from . import model_metadata
@@ -264,6 +265,11 @@ def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
     return replace(current, **{field: value})
 
 
+def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
+    raw = settings.get_dotted(live_settings, ("sampling",), {})
+    return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
+
+
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
     provider_id = providers.normalize_provider_id(provider_name) or provider_name
     login = logins.load_logins().get(provider_id)
@@ -363,6 +369,8 @@ HELP_TEXT = f"""\
   {C.YELLOW}/help{C.RESET}            show this message
   {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
   {C.YELLOW}/show [key]{C.RESET}      list every knob and its current value
+  {C.YELLOW}/load <file>{C.RESET}     load a slashless ircII-style script file
+  {C.YELLOW}/on [event handler]{C.RESET} list or register an event hook
   {C.YELLOW}/model <name>{C.RESET}    switch model for this session
   {C.YELLOW}/model{C.RESET}             open interactive provider/model picker
   {C.YELLOW}/pick-model{C.RESET}       open interactive provider/model picker
@@ -564,15 +572,22 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/refresh-model-catalog":
         _force_refresh_model_catalog()
         return True
-    if line.startswith(("/set", "/show")):
-        result = setcmd.run_repl_command(state["settings"], line)
+    if setcmd.is_repl_command(line, "/set", "/show", "/load", "/on"):
+        context = setcmd.CommandContext(
+            cwd=getattr(cfg, "project_dir", Path.cwd()),
+            events=state.setdefault("events", events.EventHooks()),
+        )
+        result = setcmd.run_repl_command(state["settings"], line, context=context)
         if result.error:
             print(f"{C.ORANGE}{result.error}{C.RESET}")
         elif result.changed:
-            state["sampling_cli"] = _sampling_override_after_set(
-                line,
-                state.get("sampling_cli", Sampling()),
-            )
+            if setcmd.is_repl_command(line, "/set"):
+                state["sampling_cli"] = _sampling_override_after_set(
+                    line,
+                    state.get("sampling_cli", Sampling()),
+                )
+            else:
+                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         for out in result.lines:
             print(out)
         return True
@@ -615,7 +630,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
         return True
-    if line.startswith("/compact-auto"):
+    if setcmd.is_repl_command(line, "/compact-auto"):
         arg = line[len("/compact-auto"):].strip().lower()
         if arg not in ("on", "off"):
             print(f"{C.ORANGE}usage: /compact-auto on|off{C.RESET}")
@@ -642,7 +657,16 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
 
     # Provider commands
-    if line.startswith(("/provider", "/baseurl", "/apikey", "/login", "/logout", "/models", "/pick-model")):
+    if setcmd.is_repl_command(
+        line,
+        "/provider",
+        "/baseurl",
+        "/apikey",
+        "/login",
+        "/logout",
+        "/models",
+        "/pick-model",
+    ):
         return _handle_provider_command(line, state, cfg)
     return False
 
@@ -1385,6 +1409,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider_api_key": cfg.provider_api_key,
         "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
         "settings": live_settings,
+        "events": events.EventHooks(),
         "tool_registry": active_registry,
         "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
@@ -1407,6 +1432,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
+        state["events"].emit("input", text=prompt_text, attachments=line_attachments)
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
@@ -1436,6 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 tool_registry=state["tool_registry"],
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+                event_hooks=state.get("events"),
             )
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
