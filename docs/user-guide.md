@@ -118,8 +118,12 @@ picker.
 `load other.irc` lines resolve relative to the script that contains them. The
 foundation verbs are `set`, `show`, `load`, and `on`. `on` stores typed event
 hooks such as `turn_start`, `tool_call`, and `tool_result` against the emitted
-runtime event stream. Handler execution is the next runtime layer, so today those
-hooks are registered and inspectable.
+runtime event stream. Handler text is executed through the same command runner:
+slashless `set`, `show`, `load`, and `on` are supported, and a leading `/` is
+tolerated. Handler errors are captured as event results and debug telemetry
+instead of aborting the turn. Nested event dispatch is skipped while a handler is
+already running. The `^` prefix is stored for future suppressive hooks; it does
+not yet suppress the default runtime action.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
