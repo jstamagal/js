@@ -1560,7 +1560,7 @@ def main(argv: list[str] | None = None) -> int:
         if _changed_provider_key(input_changed_keys):
             _sync_provider_from_live_settings(state, input_changed_keys)
         try:
-            turn_cfg = _cfg_for_active_model(cfg, state)
+            turn_cfg = replace(_cfg_for_active_model(cfg, state), settings=state["settings"])
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
         except attach.AttachmentError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}")
