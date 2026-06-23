@@ -616,6 +616,19 @@ def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config()
     }
 
 
+def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
+    live_settings = settings.seed_defaults()
+    result = setcmd.run_repl_command(
+        live_settings,
+        '/set tools.alias_profiles [{"match":[" openai "],"aliases":{"read":"Read"}}]',
+    )
+
+    assert result.error is None
+    assert runtime._resolve_alias_profile(live_settings, "openai-test", None) == {
+        "read": "Read",
+    }
+
+
 def test_resolve_alias_profile_matches_model_or_provider_substring():
     settings = {"tools": {"alias_profiles": [
         {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
