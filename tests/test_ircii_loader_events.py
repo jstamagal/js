@@ -125,6 +125,25 @@ def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
     assert settings.get_dotted(live_settings, ("compact", "auto")) is True
 
 
+def test_event_hook_invalid_dispatch_result_is_captured_without_raising():
+    hooks = events.EventHooks()
+
+    def invalid_dispatch(hook, emission):
+        return None
+
+    hooks.set_dispatcher(invalid_dispatch)
+    hook = hooks.add("turn_start", "set compact.auto off")
+
+    emission = hooks.emit("turn_start")
+
+    assert emission.results == [
+        events.EventHandlerResult(
+            hook=hook,
+            error="invalid event handler result: NoneType",
+        )
+    ]
+
+
 def test_event_hooks_skip_recursive_dispatch():
     hooks = events.EventHooks()
     calls: list[str] = []
