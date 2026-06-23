@@ -239,6 +239,8 @@ def _normalize(line: str) -> str | None:
         return None
     if body.startswith("/"):
         body = body[1:].lstrip()
+    if not body or body.startswith("#"):
+        return None
     return body
 
 
