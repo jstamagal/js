@@ -183,6 +183,58 @@ that agent's persona is prepended to the built-in prompt.
 `--commit` is different: it is a convenience wrapper around the prompt-directory
 `commit` agent.
 
+## Commit Helper
+
+`js.commit_helper` is a standalone CLI the `commit` agent shells out to for the
+deterministic parts of committing: surveying repo state and splitting one file
+across commits. These belong in code, not the model
+(`js/commit_helper.py:1`). Both subcommands accept `-C <dir>` / `--repo <dir>`
+(or `--repo=<dir>`) before the subcommand to target a repo explicitly instead of
+the process cwd (`js/commit_helper.py:292`). With no repo flag the helper resolves
+`Path.cwd()` (`js/commit_helper.py:50`).
+
+`python -m js.commit_helper survey` prints one compact snapshot the agent reads
+once instead of probing (`js/commit_helper.py:170`):
+
+- `branch:` line (`branch --show-current`, falling back to a detached-HEAD short
+  hash or `(no commits yet)`) (`js/commit_helper.py:127`)
+- `-- status --`: raw `git status --porcelain` `XY path` rows, or
+  `(clean tree, nothing to commit)` (`js/commit_helper.py:181`)
+- `-- staged diff --` and `-- unstaged diff --`: per-tracked-file text diffs with
+  every `@@` hunk numbered, each headed `### <path>  (N hunks)`
+  (`js/commit_helper.py:149`)
+- `-- untracked --`: `??` files, each tagged with the `stage <p> all` hint
+  (`js/commit_helper.py:198`)
+- `-- recent log --`: `git log --oneline -8`, or `(no history)`
+  (`js/commit_helper.py:205`)
+
+The survey is deterministic: it only reads git state (status/diff/log), runs no
+model, and does not mutate the repo (`js/commit_helper.py:170`). A file with no
+text hunks prints `(no text hunks — binary/rename/mode? stage the whole file)`
+(`js/commit_helper.py:160`).
+
+`python -m js.commit_helper stage <file> <hunks|all>` stages part of one file
+(`js/commit_helper.py:232`). `<hunks>` is a comma-separated list of the 1-based
+hunk numbers the survey printed (e.g. `1,3`), or `all`:
+
+- For a tracked text file, the named hunks are extracted from `git diff -- <file>`
+  and replayed with `git apply --cached --recount`; output is
+  `staged <file> hunk(s) 1,3 of N` (`js/commit_helper.py:276`).
+- `all` on any file stages the whole file via `git add -- <file>`
+  (`js/commit_helper.py:214`).
+- An untracked (`??`) file only accepts `all`; a hunk spec on it errors
+  (`js/commit_helper.py:245`).
+- Out-of-range hunk numbers, non-numeric specs, files with no pending changes,
+  and `git apply` failures each error with exit code `2` (or `1` for the apply
+  failure, which also prints the `stage <file> all` fallback)
+  (`js/commit_helper.py:271`).
+
+For a bare or unknown subcommand `main()` prints the module docstring; exit is
+`2` when no args were given and `0` when an unknown subcommand was passed
+(`js/commit_helper.py:312`). `stage` with the wrong argument count exits `2`
+(`js/commit_helper.py:317`). A non-git directory exits `2`; other git failures
+exit `1` (`js/commit_helper.py:175`).
+
 ## Error Boundaries
 
 The runtime generally returns tool failures to the model as strings rather than
