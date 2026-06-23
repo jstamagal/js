@@ -139,6 +139,19 @@ def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp
     assert settings.get_dotted(cfg.settings, ("tools", "alias_profiles")) == expected
 
 
+def test_extra_tools_alias_profiles_accepts_string_match(monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+    raw = 'tools.alias_profiles=[{"match":"offline-test-model","aliases":{"read":"r"}}]'
+    expected = [{"match": "offline-test-model", "aliases": {"read": "r"}}]
+
+    path, value = settings.parse_extra_arg(raw)
+    cfg = from_env(save_session=False, extras=[raw])
+
+    assert path == ("tools", "alias_profiles")
+    assert value == expected
+    assert settings.get_dotted(cfg.settings, ("tools", "alias_profiles")) == expected
+
+
 def test_extra_tools_alias_profiles_rejects_non_list_json():
     raw = 'tools.alias_profiles={"match":["offline-test-model"],"aliases":{"read":"r"}}'
 
