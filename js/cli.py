@@ -1489,6 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
         state["messages"].append(user_bundle.runtime_message)
         _append_turn(cfg, user_bundle.history_message)
         try:
+            before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             runtime.run_turn(
                 turn_cfg,
                 state["system"],
@@ -1509,6 +1510,9 @@ def main(argv: list[str] | None = None) -> int:
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
                 event_hooks=state.get("events"),
             )
+            after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+            if after_turn_sampling != before_turn_sampling:
+                state["sampling_cli"] = after_turn_sampling
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:

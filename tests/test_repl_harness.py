@@ -382,6 +382,40 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
     assert temperatures == [0.2]
 
 
+def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (tmp_path / "turn-end.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    calls = 0
+    temperatures: list[float | None] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on turn_end load turn-end.irc", "first", "second", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            kwargs["event_hooks"].emit("turn_end", reason="stop")
+            return None
+        temperatures.append(kwargs["sampling"].temperature)
+        return None
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert temperatures == [0.2]
+
 
 def test_provider_commands_mutate_runtime_state(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
