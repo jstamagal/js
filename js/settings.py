@@ -308,7 +308,9 @@ def _validate_alias_profiles(value: Any) -> str | None:
         if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
             return "expected non-empty match values"
         seen_aliases: set[str] = set()
-        for alias in aliases.values():
+        for canonical, alias in aliases.items():
+            if not isinstance(canonical, str) or _TOOL_ALIAS_NAME_RE.fullmatch(canonical) is None:
+                return "expected canonical tool names matching [A-Za-z0-9_-]+"
             if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
                 return "expected alias names matching [A-Za-z0-9_-]+"
             key = alias.lower()
