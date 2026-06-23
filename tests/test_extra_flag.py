@@ -118,6 +118,16 @@ def test_extra_tools_alias_profiles_rejects_entries_without_aliases():
         settings.parse_extra_arg(raw)
 
 
+def test_extra_tools_alias_profiles_rejects_empty_match_values():
+    raw = 'tools.alias_profiles=[{"match":[],"aliases":{"read":"Read"}}]'
+
+    with pytest.raises(
+        ValueError,
+        match="--extra tools\\.alias_profiles: expected non-empty match values",
+    ):
+        settings.parse_extra_arg(raw)
+
+
 def test_extra_tools_alias_profiles_rejects_duplicate_alias_names():
     raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"Tool","write":"tool"}}]'
 
