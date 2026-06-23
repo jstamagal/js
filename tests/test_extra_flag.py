@@ -4,8 +4,8 @@
 precedence stack (built-in defaults < jsrc files < env vars < --extra; see
 ``js/settings.py:15`` and ``js/settings.py:57``), so it wins over both env and
 the jsrc files. Most right-hand sides are coerced int -> float -> bool/null ->
-str by ``js.settings.coerce_extra_value``; registered reasoning-effort aliases
-use the shared setting coercion so they match env and ``/set``.
+str by ``js.settings.coerce_extra_value``; selected registered keys use shared
+setting coercion when generic coercion would produce a runtime-surprising type.
 
 These exercise the real load path: the focused ``settings.collect_settings`` /
 ``settings.parse_extra_arg`` unit and the integrated ``js.config.from_env``
@@ -66,6 +66,19 @@ def test_extra_reasoning_effort_disable_aliases_use_registry(alias, monkeypatch,
     assert path == ("model", "reasoning_effort")
     assert value == "none"
     assert cfg.reasoning_effort == "none"
+
+
+def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+    raw = 'provider.extra={"extra_body":{"probe":true},"mode":"fast"}'
+    expected = {"extra_body": {"probe": True}, "mode": "fast"}
+
+    path, value = settings.parse_extra_arg(raw)
+    cfg = from_env(save_session=False, extras=[raw])
+
+    assert path == ("provider", "extra")
+    assert value == expected
+    assert settings.get_dotted(cfg.settings, ("provider", "extra")) == expected
 
 
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
