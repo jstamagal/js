@@ -410,6 +410,40 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     assert models == ["hook-model"]
 
 
+def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (tmp_path / "provider.irc").write_text(
+        "set provider.id openai\n"
+        "set provider.base_url http://provider.test/v1\n"
+        "set provider.api_key sk-hook\n"
+        "bogus nope\n",
+        encoding="utf-8",
+    )
+    seen: list[tuple[str | None, str | None, str | None]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input load provider.irc", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.provider_id, cfg_arg.provider_base_url, cfg_arg.provider_api_key))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
+
+
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
