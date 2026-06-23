@@ -396,10 +396,7 @@ def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
     if raw_value == "":
         raise ValueError(f"--extra value is empty: {arg!r}")
     spec = SPEC_BY_KEY.get(key)
-    if spec is not None and (
-        spec.type in {"bool", "int", "float", "map", "json"}
-        or key == "model.reasoning_effort"
-    ):
+    if spec is not None:
         value, error = coerce_value(spec, raw_value)
         if error is not None:
             raise ValueError(f"--extra {key}: {error}")
