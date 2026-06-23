@@ -81,6 +81,13 @@ def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_p
     assert settings.get_dotted(cfg.settings, ("provider", "extra")) == expected
 
 
+def test_extra_provider_extra_rejects_non_object_json():
+    raw = 'provider.extra=["extra_body"]'
+
+    with pytest.raises(ValueError, match="--extra provider\\.extra: expected a JSON object"):
+        settings.parse_extra_arg(raw)
+
+
 def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"r"}}]'
