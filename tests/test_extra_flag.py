@@ -3,8 +3,9 @@
 ``--extra`` sets a dotted config key for one run. It sits at the TOP of the
 precedence stack (built-in defaults < jsrc files < env vars < --extra; see
 ``js/settings.py:15`` and ``js/settings.py:57``), so it wins over both env and
-the jsrc files. The right-hand side is coerced int -> float -> bool/null -> str
-by ``js.settings.coerce_extra_value`` (``js/settings.py:321``).
+the jsrc files. Most right-hand sides are coerced int -> float -> bool/null ->
+str by ``js.settings.coerce_extra_value``; registered reasoning-effort aliases
+use the shared setting coercion so they match env and ``/set``.
 
 These exercise the real load path: the focused ``settings.collect_settings`` /
 ``settings.parse_extra_arg`` unit and the integrated ``js.config.from_env``
@@ -53,6 +54,18 @@ def test_parse_extra_arg_coerces_float_then_bool_then_string():
     assert settings.parse_extra_arg("runtime.debug=on")[1] is True
     assert settings.parse_extra_arg("provider.id=null")[1] is None
     assert settings.parse_extra_arg("model.id=some-model")[1] == "some-model"
+
+
+@pytest.mark.parametrize("alias", ["off", "none", "0"])
+def test_extra_reasoning_effort_disable_aliases_use_registry(alias, monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+
+    path, value = settings.parse_extra_arg(f"model.reasoning_effort={alias}")
+    cfg = from_env(save_session=False, extras=[f"model.reasoning_effort={alias}"])
+
+    assert path == ("model", "reasoning_effort")
+    assert value == "none"
+    assert cfg.reasoning_effort == "none"
 
 
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():

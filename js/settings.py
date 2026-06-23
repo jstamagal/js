@@ -351,6 +351,12 @@ def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
         raise ValueError(f"--extra key is empty: {arg!r}")
     if raw_value == "":
         raise ValueError(f"--extra value is empty: {arg!r}")
+    if key == "model.reasoning_effort":
+        spec = SPEC_BY_KEY[key]
+        value, error = coerce_value(spec, raw_value)
+        if error is not None:
+            raise ValueError(f"--extra {key}: {error}")
+        return spec.path, value
     return _parse_dotted_key(key), coerce_extra_value(raw_value)
 
 
