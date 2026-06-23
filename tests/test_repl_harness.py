@@ -709,6 +709,33 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
     assert seen == [("xhigh", "xhigh")]
 
 
+def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    seen: list[tuple[str | None, str | None]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/set model.reasoning_effort off", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert seen == [("none", "none")]
+
+
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), trace=False)
     cfg.prompts_dir.mkdir(parents=True)

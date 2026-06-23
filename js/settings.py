@@ -255,6 +255,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). A nullable knob
     accepts off/none/unset/default/auto/"" as "clear to default-provider"."""
     text = raw.strip()
+    if spec.key == "model.reasoning_effort" and text.lower() in {"off", "none", "0"}:
+        return "none", None
     if spec.empty in (EMPTY_NONE, EMPTY_UNSET) and text.lower() in _NULL_TOKENS:
         return None, None
     kind = spec.type
