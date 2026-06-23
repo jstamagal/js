@@ -563,6 +563,33 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
     assert prefer_inherit == [True]
 
 
+def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), max_output_tokens=99)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    max_output_tokens: list[int | None] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/set model.max_output_tokens off", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        max_output_tokens.append(cfg_arg.max_output_tokens)
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert max_output_tokens == [None]
+
+
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
