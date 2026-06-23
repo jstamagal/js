@@ -246,6 +246,11 @@ _LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 )
 
 
+_LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("prefer_inherit", ("subagents", "prefer_inherit")),
+)
+
+
 def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
     raw = settings.get_dotted(live_settings, path, default)
     if isinstance(raw, bool):
@@ -266,6 +271,11 @@ def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], defau
     return default
 
 
+def _live_bool_setting(live_settings: dict, path: tuple[str, str], default: bool) -> bool:
+    raw = settings.get_dotted(live_settings, path, default)
+    return raw if isinstance(raw, bool) else default
+
+
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
@@ -274,6 +284,8 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
         updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
         updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
+    for attr, path in _LIVE_BOOL_FIELDS:
+        updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
     return replace(active, **updates)
 
 
