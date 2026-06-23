@@ -282,3 +282,21 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
 
     assert cli._handle_command(f"/load {script.name}", state, cfg) is True
     assert state["sampling_cli"].temperature == 0.2
+
+
+def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path, capsys):
+    script = tmp_path / "sampling-error.irc"
+    script.write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    cfg = make_cfg(tmp_path)
+    state = {
+        "messages": [],
+        "system": "sys",
+        "settings": settings.seed_defaults(),
+        "events": events.EventHooks(),
+        "sampling_cli": cfg.sampling_cli,
+    }
+
+    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+
+    assert "unknown command: bogus" in capsys.readouterr().out
+    assert state["sampling_cli"].temperature == 0.2
