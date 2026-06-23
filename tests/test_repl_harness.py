@@ -444,6 +444,38 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
 
 
+def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (tmp_path / "tools.irc").write_text(
+        'set tools.alias_profiles [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
+        "bogus nope\n",
+        encoding="utf-8",
+    )
+    seen: list[list[dict]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/on input load tools.irc", "hello", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append(cfg_arg.settings.get("tools", {}).get("alias_profiles", []))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert seen == [[{"match": ["offline-test-model"], "aliases": {"read": "r"}}]]
+
+
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
