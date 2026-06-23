@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import pytest
 
 from js import cli, runtime
@@ -1338,3 +1340,38 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
 
     assert calls == []
     assert capsys.readouterr().out == ""
+
+def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    scaffold = tmp_path / "scaffold"
+    scaffold.mkdir()
+
+    seen: dict[str, str] = {}
+
+    def completion_stub(**kwargs):
+        seen["cwd"] = os.getcwd()
+        seen["ctx_cwd"] = str(runtime.T.DEFAULT_CONTEXT.cwd)
+        return _fake_stream_result("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+
+    orig = os.getcwd()
+    try:
+        actual = cli.main(["-C", str(scaffold), "-p", "hi", "-n", "-q"])
+    finally:
+        os.chdir(orig)
+
+    assert actual == 0
+    # git -C semantics: the agent's process cwd AND the tool context it runs
+    # against are both bound to the -C dir, so relative paths resolve there.
+    assert Path(seen["cwd"]).resolve() == scaffold.resolve()
+    assert Path(seen["ctx_cwd"]).resolve() == scaffold.resolve()
+
+
+def test_dash_C_rejects_missing_dir(tmp_path, capsys):
+    missing = tmp_path / "nope"
+    actual = cli.main(["-C", str(missing), "-p", "hi"])
+    assert actual == 2
+    assert "not a directory" in capsys.readouterr().err
