@@ -271,6 +271,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **REPL event handler errors now appear in debug telemetry.** Direct `state["events"].emit()` calls in the REPL (for `input` and `cancel` events) were replaced with `_emit_repl_event()`, which logs handler failures to the debug log instead of silently swallowing them.
 - **Event hooks close out error and cancel paths.** Fatal model-call errors now emit `turn_end` with an `error` reason after the `error` event, and Ctrl-C during a REPL turn emits `cancel` before rollback, so `/on` hooks can observe cleanup paths instead of only successful turns.
 - **Past-EOF `read` ranges are no longer retriable errors.** Asking `read` for a start line beyond the end of a file now returns a non-error EOF note with the file's total line count instead of `ERROR: invalid line range`, avoiding pointless retry loops during agent inspections.
 - **`/compact-auto` no longer misroutes into `/compact`.** REPL command dispatch matches `/compact` exactly (`== "/compact"` or a `"/compact "` prefix) instead of `startswith("/compact")`, so `/compact-auto on` reaches its own handler instead of firing a compaction with a garbage `"-auto on"` focus.
