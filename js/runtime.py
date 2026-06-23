@@ -31,14 +31,29 @@ from .toolkit.registry import ToolRegistry
 _UNSET = object()
 
 
-def _resolve_alias_profile(settings: dict, model: str, provider_id: str | None) -> dict[str, str]:
+def _usable_tool_aliases(alias_map: dict[str, str], tool_names: set[str]) -> dict[str, str]:
+    original_name_owners = {name.lower(): name for name in tool_names}
+    return {
+        canon: alias
+        for canon, alias in alias_map.items()
+        if canon in tool_names and (original_name_owners.get(alias.lower()) in (None, canon))
+    }
+
+
+def _resolve_alias_profile(
+    settings: dict,
+    model: str,
+    provider_id: str | None,
+    registry: ToolRegistry | None = None,
+) -> dict[str, str]:
     """Pick the canonical->alias map for the first matching tool alias profile.
 
     Profiles live under ``[[tools.alias_profiles]]`` in config; each entry has
     a ``match`` list of case-insensitive substrings tested against the model id
     and provider id, plus an ``aliases`` table mapping canonical tool names to
     the model-facing names. The first profile whose ``match`` hits wins. No
-    profiles configured (the default) → empty map → default tool names.
+    profiles configured (the default) → empty map → default tool names. When a
+    registry is provided, matching profiles with no usable aliases are skipped.
     """
     tools_cfg = (settings or {}).get("tools")
     profiles = tools_cfg.get("alias_profiles") if isinstance(tools_cfg, dict) else None
@@ -58,7 +73,12 @@ def _resolve_alias_profile(settings: dict, model: str, provider_id: str | None) 
             continue
         needles = [str(m).lower() for m in match if str(m).strip()]
         if needles and any(n in h for n in needles for h in haystacks):
-            return {str(k): str(v) for k, v in aliases.items() if str(v).strip()}
+            alias_map = {str(k): str(v) for k, v in aliases.items() if str(v).strip()}
+            if registry is not None:
+                alias_map = _usable_tool_aliases(alias_map, set(registry.by_name))
+                if not alias_map:
+                    continue
+            return alias_map
     return {}
 
 
@@ -71,18 +91,13 @@ def _aliased_tool_specs(specs: list[dict], alias_map: dict[str, str]) -> list[di
     untouched (same object) when ``alias_map`` is empty."""
     if not alias_map:
         return specs
-    original_name_owners = {
-        fn_name.lower(): fn_name
+    original_names = {
+        fn_name
         for spec in specs
         if isinstance((fn := spec.get("function")), dict)
         and isinstance((fn_name := fn.get("name")), str)
     }
-    usable_aliases = {
-        canon: alias
-        for canon, alias in alias_map.items()
-        if canon in original_name_owners.values()
-        and (original_name_owners.get(alias.lower()) in (None, canon))
-    }
+    usable_aliases = _usable_tool_aliases(alias_map, original_names)
     if not usable_aliases:
         return specs
     desc_subs = {f"`{canon}`": f"`{alias}`" for canon, alias in usable_aliases.items()}
@@ -722,8 +737,9 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
         max_out = _resolve_max_output(model, provider_id)
     ai_convo = model_client.history_to_ai_messages(system, messages)
     error_tracker = ToolErrorTracker()
-    alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id)
-    active_registry = (tool_registry or T._REGISTRY).aliased(alias_map)
+    base_registry = tool_registry or T._REGISTRY
+    alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
+    active_registry = base_registry.aliased(alias_map)
     active_context = tool_context or T.DEFAULT_CONTEXT
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
