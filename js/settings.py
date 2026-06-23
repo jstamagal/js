@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -240,6 +241,7 @@ SECTION_ORDER: tuple[str, ...] = (
 _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
 _NULL_TOKENS = {"off", "none", "unset", "default", "auto", ""}
+_TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def parse_bool(raw: str) -> bool | None:
@@ -302,11 +304,12 @@ def _validate_alias_profiles(value: Any) -> str | None:
             return "expected profiles with match and aliases"
         seen_aliases: set[str] = set()
         for alias in aliases.values():
-            key = str(alias).strip().lower()
+            if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
+                return "expected alias names matching [A-Za-z0-9_-]+"
+            key = alias.lower()
             if key in seen_aliases:
                 return "expected unique alias names"
-            if key:
-                seen_aliases.add(key)
+            seen_aliases.add(key)
     return None
 
 

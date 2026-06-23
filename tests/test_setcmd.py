@@ -103,6 +103,26 @@ def test_tools_alias_profiles_rejects_duplicate_alias_names():
     assert config_settings == config_before
 
 
+def test_tools_alias_profiles_rejects_invalid_alias_names():
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    raw = '[{"match":["openai"],"aliases":{"read":"read file"}}]'
+
+    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    config_settings = settings.seed_defaults()
+    config_before = copy.deepcopy(config_settings)
+    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.error == "tools.alias_profiles: expected alias names matching [A-Za-z0-9_-]+"
+    assert live_settings == before
+    assert config_result.handled is True
+    assert config_result.changed is False
+    assert config_result.error == "tools.alias_profiles: expected alias names matching [A-Za-z0-9_-]+"
+    assert config_settings == config_before
+
+
 def test_provider_extra_rejects_non_object_json():
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)

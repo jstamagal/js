@@ -128,6 +128,16 @@ def test_extra_tools_alias_profiles_rejects_duplicate_alias_names():
         settings.parse_extra_arg(raw)
 
 
+def test_extra_tools_alias_profiles_rejects_invalid_alias_names():
+    raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"read file"}}]'
+
+    with pytest.raises(
+        ValueError,
+        match="--extra tools\\.alias_profiles: expected alias names matching \\[A-Za-z0-9_-\\]\\+",
+    ):
+        settings.parse_extra_arg(raw)
+
+
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
     with pytest.raises(ValueError):
         settings.parse_extra_arg("limits.task_max_depth")  # no '='
