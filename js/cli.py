@@ -281,12 +281,65 @@ def _sync_model_from_live_settings(state: dict) -> None:
         state["model"] = model
 
 
+def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str | None, str | None]:
+    def _value(path: tuple[str, str]) -> str | None:
+        raw = settings.get_dotted(live_settings, path, None)
+        return raw if isinstance(raw, str) and raw else None
+
+    return (
+        _value(("provider", "id")),
+        _value(("provider", "base_url")),
+        _value(("provider", "api_key")),
+    )
+
+
+def _sync_provider_from_live_settings(state: dict, changed_keys: list[str]) -> None:
+    provider_id, base_url, api_key = _provider_from_live_settings(state["settings"])
+    changed = set(changed_keys)
+    if "provider.id" in changed:
+        if provider_id is None:
+            state["provider_id"] = None
+            state["provider_base_url"] = None
+            state["provider_api_key"] = None
+            state["provider_headers"] = {}
+        else:
+            _set_provider_state(state, provider_id)
+    if "provider.base_url" in changed:
+        state["provider_base_url"] = base_url
+    if "provider.api_key" in changed:
+        state["provider_api_key"] = api_key
+
+
+def _sync_provider_delta_from_live_settings(
+    state: dict,
+    before: tuple[str | None, str | None, str | None],
+    after: tuple[str | None, str | None, str | None],
+) -> None:
+    changed_keys: list[str] = []
+    if before[0] != after[0]:
+        changed_keys.append("provider.id")
+    if before[1] != after[1]:
+        changed_keys.append("provider.base_url")
+    if before[2] != after[2]:
+        changed_keys.append("provider.api_key")
+    if changed_keys:
+        _sync_provider_from_live_settings(state, changed_keys)
+
+
 def _changed_model_key(keys: list[str]) -> bool:
     return "model.id" in keys
 
 
+def _changed_provider_key(keys: list[str]) -> bool:
+    return any(key in {"provider.id", "provider.base_url", "provider.api_key"} for key in keys)
+
+
 def _changed_sampling_key(keys: list[str]) -> bool:
     return any(key.startswith("sampling.") for key in keys)
+
+
+def _event_result_changed_keys(results: list[events.EventHandlerResult]) -> list[str]:
+    return [key for result in results for key in result.changed_keys]
 
 
 def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
@@ -636,6 +689,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
             if _changed_model_key(result.changed_keys):
                 _sync_model_from_live_settings(state)
+            if _changed_provider_key(result.changed_keys):
+                _sync_provider_from_live_settings(state, result.changed_keys)
         for out in result.lines:
             print(out)
         if result.error:
@@ -1501,6 +1556,9 @@ def main(argv: list[str] | None = None) -> int:
             state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
         if _event_results_changed_model(input_event.results):
             _sync_model_from_live_settings(state)
+        input_changed_keys = _event_result_changed_keys(input_event.results)
+        if _changed_provider_key(input_changed_keys):
+            _sync_provider_from_live_settings(state, input_changed_keys)
         try:
             turn_cfg = _cfg_for_active_model(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
@@ -1514,6 +1572,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             before_turn_model = _model_from_live_settings(state["settings"])
+            before_turn_provider = _provider_from_live_settings(state["settings"])
             runtime.run_turn(
                 turn_cfg,
                 state["system"],
@@ -1540,6 +1599,8 @@ def main(argv: list[str] | None = None) -> int:
             after_turn_model = _model_from_live_settings(state["settings"])
             if after_turn_model != before_turn_model:
                 _sync_model_from_live_settings(state)
+            after_turn_provider = _provider_from_live_settings(state["settings"])
+            _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
             state["messages"][before_len] = user_bundle.history_message
             # Persist anything new the turn appended.
             for m in state["messages"][before_len + 1:]:
@@ -1552,6 +1613,9 @@ def main(argv: list[str] | None = None) -> int:
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
             if _event_results_changed_model(cancel_event.results):
                 _sync_model_from_live_settings(state)
+            cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
+            if _changed_provider_key(cancel_changed_keys):
+                _sync_provider_from_live_settings(state, cancel_changed_keys)
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
