@@ -279,6 +279,8 @@ def fs_read(
 
     start = max(1, int_or_default(start_line, 1, minimum=1))
     end = min(total, int_or_default(end_line, min(total, context.max_read_lines), minimum=1))
+    if start > total:
+        return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash})"
     if end < start:
         return f"ERROR: invalid line range {start}-{end}"
     if end - start + 1 > context.max_read_lines:
