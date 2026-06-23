@@ -239,6 +239,13 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 )
 
 
+_LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("artifact_dir", ("artifact", "dir")),
+    ("artifact_url", ("artifact", "url")),
+    ("artifact_bin", ("artifact", "bin")),
+)
+
+
 def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
     raw = settings.get_dotted(live_settings, path, default)
     if isinstance(raw, bool):
@@ -249,12 +256,24 @@ def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) 
         return default
 
 
+def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
+    missing = object()
+    raw = settings.get_dotted(live_settings, path, missing)
+    if raw is missing:
+        return default
+    if raw is None or isinstance(raw, str):
+        return raw
+    return default
+
+
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
     updates = {"settings": live_settings}
     for attr, path in _LIVE_LIMIT_FIELDS:
         updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
+    for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
+        updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
     return replace(active, **updates)
 
 
