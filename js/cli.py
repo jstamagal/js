@@ -239,6 +239,11 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 )
 
 
+_LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("max_output_tokens", ("model", "max_output_tokens")),
+)
+
+
 _LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("artifact_dir", ("artifact", "dir")),
     ("artifact_url", ("artifact", "url")),
@@ -253,6 +258,21 @@ _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 
 def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
     raw = settings.get_dotted(live_settings, path, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _live_optional_int_setting(live_settings: dict, path: tuple[str, str], default: int | None) -> int | None:
+    missing = object()
+    raw = settings.get_dotted(live_settings, path, missing)
+    if raw is missing:
+        return default
+    if raw is None:
+        return None
     if isinstance(raw, bool):
         return default
     try:
@@ -282,6 +302,8 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     updates = {"settings": live_settings}
     for attr, path in _LIVE_LIMIT_FIELDS:
         updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
+    for attr, path in _LIVE_OPTIONAL_INT_FIELDS:
+        updates[attr] = _live_optional_int_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
         updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_BOOL_FIELDS:
