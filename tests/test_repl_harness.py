@@ -115,6 +115,15 @@ def test_set_commands_parse_power_user_knobs():
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
 
 
+def test_unknown_commands_that_share_prefixes_are_not_swallowed(tmp_path):
+    cfg = make_cfg(tmp_path)
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+
+    assert cli._handle_command("/setty model.id nope", state, cfg) is False
+    assert cli._handle_command("/showtime", state, cfg) is False
+    assert cli._handle_command("/compact-autoload", state, cfg) is False
+
+
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)

@@ -6,7 +6,7 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import runtime, tools as runtime_tools
+from js import events, runtime, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext, build_default_registry
@@ -122,6 +122,88 @@ _CLAUDE_ALIAS_SETTINGS = {
         ]
     }
 }
+
+
+class RecordingHooks(events.EventHooks):
+    def __init__(self) -> None:
+        super().__init__()
+        self.emitted: list[tuple[str, dict]] = []
+
+    def emit(self, event: str, **payload):
+        self.emitted.append((event, payload))
+        return super().emit(event, **payload)
+
+
+def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+
+    def stream_stub(**kwargs):
+        kwargs["on_text"]("OK")
+        return model_text_result("OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Say OK."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    assert [event for event, _payload in hooks.emitted] == [
+        "turn_start",
+        "prompt",
+        "stream",
+        "response",
+        "turn_end",
+    ]
+    assert hooks.emitted[1][1]["message_count"] == 2
+    assert hooks.emitted[2][1]["text"] == "OK"
+    assert hooks.emitted[3][1]["text"] == "OK"
+    assert hooks.emitted[-1][1]["reason"] == "stop"
+
+
+def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
+    target = tmp_path / "note.txt"
+    target.write_text("needle\n", encoding="utf-8")
+    hooks = RecordingHooks()
+    calls: list[dict] = []
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return model_tool_call_result("read", [json.dumps({"file_path": "note.txt"})])
+        return model_text_result("DONE")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Read note.txt."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    emitted = [(event, payload) for event, payload in hooks.emitted]
+    tool_call = next(payload for event, payload in emitted if event == "tool_call")
+    tool_result = next(payload for event, payload in emitted if event == "tool_result")
+    assert tool_call["name"] == "read"
+    assert tool_call["id"] == "call_test"
+    assert tool_result["name"] == "read"
+    assert "needle" in tool_result["result"]
+    assert emitted[-1][0] == "turn_end"
+    assert emitted[-1][1]["reason"] == "stop"
 
 
 def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatch, tmp_path):
