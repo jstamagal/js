@@ -27,6 +27,7 @@ class CommandResult:
     changed: bool = False          # settings were mutated
     lines: list[str] = field(default_factory=list)  # human-readable output
     error: str | None = None       # a problem worth surfacing
+    changed_keys: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -110,8 +111,12 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
         if error is not None:
             return CommandResult(handled=True, error=f"{key}: {error}")
         _s.set_dotted(settings, spec.path, value)
-        return CommandResult(handled=True, changed=True,
-                             lines=[f"{key} = {render_value(spec, value)}"])
+        return CommandResult(
+            handled=True,
+            changed=True,
+            lines=[f"{key} = {render_value(spec, value)}"],
+            changed_keys=[key],
+        )
 
     # sub-keys of a map knob (wiki.aliases.creative) or other keys within a known
     # section (provider.extra.*) — stored with loose scalar coercion.
@@ -119,7 +124,12 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     if _map_prefix_spec(key) is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
         value = _s.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
-        return CommandResult(handled=True, changed=True, lines=[f"{key} = {value}"])
+        return CommandResult(
+            handled=True,
+            changed=True,
+            lines=[f"{key} = {value}"],
+            changed_keys=[key],
+        )
 
     return CommandResult(handled=True, error=f"unknown knob: {key}")
 
@@ -192,6 +202,7 @@ def run_script_file(settings: dict, raw_path: str, context: CommandContext | Non
 
     child = replace(context, cwd=path.parent, _load_stack=(*context._load_stack, path))
     lines: list[str] = []
+    changed_keys: list[str] = []
     changed = False
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         result = apply_script_line(settings, raw, context=child)
@@ -201,11 +212,13 @@ def run_script_file(settings: dict, raw_path: str, context: CommandContext | Non
                 changed=changed,
                 lines=lines,
                 error=f"{path}:{lineno}: {result.error}",
+                changed_keys=changed_keys,
             )
         changed = changed or result.changed
+        changed_keys.extend(result.changed_keys)
         lines.extend(result.lines)
     lines.append(f"loaded {path}")
-    return CommandResult(handled=True, changed=changed, lines=lines)
+    return CommandResult(handled=True, changed=changed, lines=lines, changed_keys=changed_keys)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +276,47 @@ def run_repl_command(settings: dict, line: str, *, context: CommandContext | Non
         return run_script_file(settings, raw_path or "", context)
 
     return CommandResult(handled=False)
+
+
+def _handler_verb(line: str) -> str:
+    body = _normalize(line)
+    if body is None:
+        return "<blank>"
+    return body.split(maxsplit=1)[0].lower()
+
+
+@dataclass(frozen=True)
+class EventCommandDispatcher:
+    """Run event handler text through the slash/setcmd command surface."""
+
+    settings: dict
+    cwd: Path = field(default_factory=Path.cwd)
+    events: _events.EventHooks | None = None
+    max_load_depth: int = 16
+
+    def __call__(
+        self,
+        hook: _events.EventHook,
+        emission: _events.EventEmission,
+    ) -> _events.EventHandlerResult:
+        context = CommandContext(
+            cwd=self.cwd,
+            events=self.events,
+            max_load_depth=self.max_load_depth,
+        )
+        result = run_repl_command(self.settings, hook.handler, context=context)
+        if not result.handled:
+            return _events.EventHandlerResult(
+                hook=hook,
+                error=f"unsupported event handler command: {_handler_verb(hook.handler)}",
+            )
+        return _events.EventHandlerResult(
+            hook=hook,
+            lines=list(result.lines),
+            error=result.error,
+            changed=result.changed,
+            changed_keys=list(result.changed_keys),
+        )
 
 
 def apply_script_line(settings: dict, line: str, *, context: CommandContext | None = None) -> CommandResult:
