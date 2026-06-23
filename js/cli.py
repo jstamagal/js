@@ -1124,6 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
+    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="show streamed text/tool debug output in prompt mode")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the rich debug trace (system prompt, messages sent, tool schemas, per-call timings) to PATH and keep the clean answer on stdout")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
@@ -1154,6 +1155,15 @@ def main(argv: list[str] | None = None) -> int:
                              "on and do not need this flag.")
     parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
+    if args.cd:
+        cd_target = Path(args.cd).expanduser()
+        if not cd_target.is_dir():
+            print(f"{C.ORANGE}error: -C target is not a directory: {cd_target}{C.RESET}", file=sys.stderr)
+            return 2
+        os.chdir(cd_target)
+        # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
+        # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
+        runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
     if args.login is not None:
         from . import login_cli
         return login_cli.main([args.login] if args.login else [])
