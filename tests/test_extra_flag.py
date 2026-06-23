@@ -81,6 +81,19 @@ def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_p
     assert settings.get_dotted(cfg.settings, ("provider", "extra")) == expected
 
 
+def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp_path):
+    _env_dirs(monkeypatch, tmp_path)
+    raw = 'tools.alias_profiles=[{"match":["offline-test-model"],"aliases":{"read":"r"}}]'
+    expected = [{"match": ["offline-test-model"], "aliases": {"read": "r"}}]
+
+    path, value = settings.parse_extra_arg(raw)
+    cfg = from_env(save_session=False, extras=[raw])
+
+    assert path == ("tools", "alias_profiles")
+    assert value == expected
+    assert settings.get_dotted(cfg.settings, ("tools", "alias_profiles")) == expected
+
+
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
     with pytest.raises(ValueError):
         settings.parse_extra_arg("limits.task_max_depth")  # no '='
