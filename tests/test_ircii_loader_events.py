@@ -66,6 +66,21 @@ def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123
 
 
+def test_script_load_reports_read_errors_without_raising(tmp_path):
+    script = tmp_path / "bad.irc"
+    script.write_bytes(b"\xff")
+    live_settings = settings.seed_defaults()
+    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+
+    result = setcmd.run_repl_command(live_settings, "/load bad.irc", context=ctx)
+
+    assert result.handled is True
+    assert result.changed is False
+    assert result.lines == []
+    assert result.error is not None
+    assert result.error.startswith(f"failed to read script: {script}: ")
+
+
 def test_on_registers_handlers_against_typed_event_names():
     hooks = events.EventHooks()
     live_settings = settings.seed_defaults()
