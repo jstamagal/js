@@ -103,6 +103,12 @@ def _resolve_max_output(model: str, provider_id: str | None) -> int | None:
     return model_metadata.max_output_tokens(model, provider_id)
 
 
+def _provider_extra_params(cfg: Config) -> dict[str, Any] | None:
+    provider_cfg = (getattr(cfg, "settings", {}) or {}).get("provider")
+    extra = provider_cfg.get("extra") if isinstance(provider_cfg, dict) else None
+    return dict(extra) if isinstance(extra, dict) else None
+
+
 def _resolve_context_window(
     model: str,
     provider_id: str | None,
@@ -827,6 +833,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                     reasoning_effort=effort,
                     on_text=_emit_text,
                     provider_headers=getattr(cfg, "provider_headers", None),
+                    provider_extra=_provider_extra_params(cfg),
                     sampling=sampling,
                 )
                 _close_text()

@@ -644,6 +644,54 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     assert traces == [True]
 
 
+def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    params_seen: list[dict | None] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter([
+                '/set provider.extra {"extra_body":{"live_flag":true}}',
+                "hello",
+                "exit",
+            ])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    class FakeProvider:
+        async def aclose(self):
+            return None
+
+    class FakeModel:
+        provider = FakeProvider()
+
+    async def stream_async_stub(*, model, messages, tools, params, executor, on_text):
+        params_seen.append(params)
+        return cli.runtime.model_client.ModelStreamResult(
+            text="ok",
+            tool_calls=[],
+            reasoning="",
+            usage=None,
+            finish_reason="stop",
+            assistant_message=ai.assistant_message("ok"),
+        )
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "_resolve_max_output", lambda _model, _provider_id: None)
+    monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert params_seen == [{"extra_body": {"live_flag": True}}]
+
+
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
