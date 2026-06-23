@@ -1516,7 +1516,9 @@ def main(argv: list[str] | None = None) -> int:
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
+            cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
+            if _event_results_changed_sampling(cancel_event.results):
+                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, "turn_aborted")
