@@ -109,6 +109,24 @@ def test_on_registers_handlers_against_typed_event_names():
     assert result.lines == ["on ^tool_call = echo denied"]
 
 
+def test_on_accepts_listed_equals_form_without_storing_equals():
+    hooks = events.EventHooks()
+    live_settings = settings.seed_defaults()
+    ctx = setcmd.CommandContext(events=hooks)
+
+    result = setcmd.apply_script_line(
+        live_settings,
+        "on turn_start = set compact.auto off",
+        context=ctx,
+    )
+
+    assert result.error is None
+    assert hooks.handlers_for("turn_start") == [
+        events.EventHook(event="turn_start", handler="set compact.auto off", suppress=False)
+    ]
+    assert result.lines == ["on turn_start = set compact.auto off"]
+
+
 def test_on_rejects_unknown_event_without_registering():
     hooks = events.EventHooks()
     ctx = setcmd.CommandContext(events=hooks)

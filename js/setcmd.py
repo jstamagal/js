@@ -155,6 +155,9 @@ def _show_event_lines(context: CommandContext | None) -> CommandResult:
 def apply_on(context: CommandContext | None, event_token: str, handler: str) -> CommandResult:
     if context is None or context.events is None:
         return CommandResult(handled=True, error="on needs an event context")
+    handler = handler.strip()
+    if handler.startswith("="):
+        handler = handler[1:].lstrip()
     try:
         hook = context.events.add(event_token, handler)
     except ValueError as e:
