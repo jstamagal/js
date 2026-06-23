@@ -126,6 +126,11 @@ class EventHooks:
                         hook=hook,
                         error=f"{type(e).__name__}: {e}",
                     )
+                if not isinstance(result, EventHandlerResult):
+                    result = EventHandlerResult(
+                        hook=hook,
+                        error=f"invalid event handler result: {type(result).__name__}",
+                    )
                 emission.results.append(result)
         finally:
             self._dispatch_depth -= 1
