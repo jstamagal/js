@@ -126,6 +126,8 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     assert "override JS_MODEL" not in captured.out
     assert "Wins over" in captured.out
     assert "all config files" in captured.out
+    assert "minimal" in captured.out
+    assert "min=low" in captured.out
     assert "platform data" in captured.out
     assert "sessions/<agent>" in captured.out
     assert "state/<agent>" in captured.out

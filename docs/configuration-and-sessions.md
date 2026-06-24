@@ -50,7 +50,7 @@ as `<set>`.
 | --- | --- | --- |
 | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
 | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|xhigh. |
+| `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|minimal\|xhigh; min=low. |
 | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
 | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
@@ -117,7 +117,7 @@ coercion as `set`.
 | --- | --- | --- | --- |
 | `JS_MODEL` | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
 | `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|xhigh. |
+| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|minimal\|xhigh; min=low. |
 | `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
 | `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |

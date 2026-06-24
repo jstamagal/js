@@ -1429,7 +1429,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
     parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|low|medium|high|max|xhigh")
+    parser.add_argument("-r", "--reasoning", help="thinking effort: off|low|medium|high|max|minimal|xhigh; min=low")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
