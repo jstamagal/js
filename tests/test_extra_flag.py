@@ -4,8 +4,8 @@
 precedence stack (built-in defaults < jsrc files < env vars < --extra; see
 ``js/settings.py:15`` and ``js/settings.py:57``), so it wins over both env and
 the jsrc files. Most right-hand sides are coerced int -> float -> bool/null ->
-str by ``js.settings.coerce_extra_value``; selected registered keys use shared
-setting coercion when generic coercion would produce a runtime-surprising type.
+str by ``js.settings.coerce_extra_value``; exact registered keys use shared
+setting coercion so ``--extra`` matches ``set`` and env/default loading.
 
 These exercise the real load path: the focused ``settings.collect_settings`` /
 ``settings.parse_extra_arg`` unit and the integrated ``js.config.from_env``
@@ -279,6 +279,20 @@ def test_collect_settings_extra_string_beats_env_for_same_key(tmp_path):
     )
 
     assert out["model"]["id"] == "cli-model"
+
+
+def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
+    cfg = tmp_path / "jsrc"
+    cfg.write_text("set model.id file-model\nset provider.id file-provider\n", encoding="utf-8")
+
+    out = settings.collect_settings(
+        config_paths=[cfg],
+        env={"JS_MODEL": "env-model", "JS_PROVIDER": "env-provider"},
+        extras=["model.id=123", "provider.id=off"],
+    )
+
+    assert out["model"]["id"] == "123"
+    assert out["provider"]["id"] is None
 
 
 # ---------------------------------------------------------------------------
