@@ -108,7 +108,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str", None,
-                "Thinking effort: off|low|medium|high|max|xhigh.",
+                "Thinking effort: off|low|medium|high|max|minimal|xhigh; min=low.",
                 env="JS_REASONING", empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
