@@ -144,9 +144,9 @@ js --reasoning max -p "prompt"
 REPL:
 
 ```text
-/set reasoning off
-/set reasoning high
-/set reasoning xhigh   # deepseek-native models
+/set model.reasoning_effort off
+/set model.reasoning_effort high
+/set model.reasoning_effort xhigh   # deepseek-native models
 ```
 
 Normalization:
