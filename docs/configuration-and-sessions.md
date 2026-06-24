@@ -166,9 +166,11 @@ js --migrate-config
 ```
 
 `--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
-all `jsrc` files. It may be repeated. Values are coerced int -> float ->
-`true`/`false`/`null` -> string; the key splits on the first `=` only, so values
-may contain `=`.
+all `jsrc` files. It may be repeated. Exact registered keys use the same
+registry coercion as `set` and env vars, including JSON validation for structured
+settings and each knob's clear/default tokens. Loose keys and map subkeys use
+generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
+on the first `=` only, so values may contain `=`.
 
 In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
 `set key` shows one value, and `set key value` changes the live setting.
