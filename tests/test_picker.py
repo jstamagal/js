@@ -78,6 +78,16 @@ def test_model_rows_require_cached_models(tmp_path: Path):
         _reset_logins()
 
 
+def test_codex_model_rows_append_gpt_5_5_when_cache_is_stale(tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    logins.cache_models("openai-codex", ["codex-auto-review", "gpt-5.4", "gpt-5.4-mini"])
+    try:
+        rows = picker._model_rows("openai-codex")
+        assert [row.id for row in rows] == ["codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"]
+    finally:
+        _reset_logins()
+
+
 def test_picker_fetch_action_updates_model_cache(monkeypatch, tmp_path: Path):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))

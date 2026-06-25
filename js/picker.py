@@ -55,7 +55,10 @@ def _model_rows(provider_id: str) -> list[ModelRow]:
     cached = logins.load_model_cache().get(provider_id)
     if not cached:
         return []
-    return [ModelRow(id=model_id, provider=provider_id) for model_id in cached]
+    model_ids = list(cached)
+    if provider_id == "openai-codex" and "gpt-5.5" not in model_ids:
+        model_ids.append("gpt-5.5")
+    return [ModelRow(id=model_id, provider=provider_id) for model_id in model_ids]
 
 
 class ModelPicker(App[dict[str, Any] | None]):
