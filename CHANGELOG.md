@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`--list-models [PROVIDER]`.** Print a human-readable list of models for a provider (or the configured one) with the exact `--model <provider/id>` value to pass, so external pickers and shell users can discover valid model flags without digging through JSON.
 - **REPL Tab completion.** Tab completes by prefix (never fuzzy) with a rotating menu: commands at line-start (a slashless word gets an implicit `/`, so `comp`→`/compact`), `/set`/`/show` knob keys, `/login`/`/provider` names, file paths for `/…`/`@…` tokens, and hunspell spelling suggestions for prose words. Tab-triggered only (`complete_while_typing=False`).
 - **`/login <name> [apikey] [baseurl] [provider]`.** Build and persist a named login inline — a custom name with an explicit transport (e.g. a local vLLM endpoint as `openai`), or a known provider that infers its own type. Bare `/login <name>` still loads a saved login.
 - **`/compact-auto on|off`.** Real handler that toggles `compact.auto` live (it was advertised in help with no handler before).
@@ -295,6 +296,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `FilePart`.
 - **OpenAI Codex model discovery** keeps `gpt-5.5` visible even when the
   model-list endpoint lags behind the live Responses route.
+- **CLI `-m` flag now routes through the model resolver.** A provider-prefixed model id (e.g. `openai-codex/gpt-5.5`) on `-m` re-routes provider, base URL, and API key instead of passing the raw string as a model override that the backend can't resolve.
 - **Wiki destructive re-archive.** Orphan detection no longer flags inbox names
   already safe in `Clippings/`, which had been re-archiving and eating
   freshly-staged logs; genuine-orphan self-heal still works.

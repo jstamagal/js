@@ -975,6 +975,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         cfg = _apply_agent_model(cfg, prompt_spec, model)
 
+    cfg = _resolve_cli_model_override(cfg, model)
+
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model))
         if model is not None
@@ -995,7 +997,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     messages.append(user_bundle.runtime_message)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     turn_kwargs = {
-        "model_override": model,
+        "model_override": cfg.model,
+        "provider_id_override": cfg.provider_id,
+        "provider_base_url_override": cfg.provider_base_url,
+        "provider_api_key_override": cfg.provider_api_key,
         "tool_registry": active_registry,
         "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
     }
@@ -1032,7 +1037,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 _maybe_auto_compact(cfg, {
                     "system": system,
                     "messages": messages,
-                    "model": model if model is not None else cfg.model,
+                    "model": cfg.model,
                 })
                 if show_continue:
                     hint = _session_hint_arg(cfg)
@@ -1391,15 +1396,51 @@ def _logins_json() -> list[dict]:
     return rows
 
 
-def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
+def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
+    if model is None:
+        return cfg
+    route = routing.resolve_model_route(
+        model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", {}),
+        env=os.environ,
+        explicit_model=True,
+        prefix_overrides_provider=True,
+    )
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model),
+    )
+
+
+
+def _list_models_payload(provider_id: str | None, cfg: Config | None = None) -> dict:
     if provider_id:
         provider = providers.normalize_provider_id(provider_id) or provider_id
         model_ids = _models_for_provider(provider, None, None)
     elif cfg is not None:
+        provider = cfg.provider_id
         model_ids = _models_for_provider(cfg.provider_id, cfg.provider_base_url, cfg.provider_api_key)
     else:
         raise ValueError("provider required")
-    return {"models": model_ids}
+    return {
+        "provider_id": provider,
+        "models": model_ids,
+        "pass_via_model": [f"{provider}/{model_id}" for model_id in model_ids] if provider else list(model_ids),
+    }
+
+
+
+def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
+    payload = _list_models_payload(provider_id, cfg)
+    return {"models": payload["models"]}
 
 
 def _print_json(value: object) -> int:
@@ -1440,6 +1481,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
     parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
+    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
     parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
     parser.add_argument("--wiki", metavar="MODES", help="wiki mode: comma list of ingest,synthesize,query,lint (e.g. --wiki=ingest,synthesize). Built-in wiki prompting; ignores defaultagent unless --agent is also given (persona + wiki).")
     parser.add_argument("--artifact", metavar="MODES", help="artifact mode: comma list of curate,digest,query,lint (e.g. --artifact=digest). Built-in artifact prompting; ignores defaultagent unless --agent is also given.")
@@ -1489,6 +1531,31 @@ def main(argv: list[str] | None = None) -> int:
             return _print_json(_models_json(provider_arg, cfg))
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+            return 1
+    if args.list_models is not None:
+        try:
+            cfg = None
+            provider_arg = args.list_models or None
+            if provider_arg is None:
+                cfg = _cfg_from_env_compat(
+                    args.session,
+                    save_session=False,
+                    extras=args.extras,
+                    agent_id=args.agent,
+                    ignore_local_config=args.ignore_local,
+                    ignore_global_config=args.ignore_global,
+                )
+            payload = _list_models_payload(provider_arg, cfg)
+            provider_label = payload["provider_id"] or "<unset>"
+            print(f"provider: {provider_label}")
+            print("models:")
+            for model_id in payload["models"]:
+                via = f"{provider_label}/{model_id}" if payload["provider_id"] else model_id
+                print(f"  {model_id}")
+                print(f"    --model {via}")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
             return 1
     if args.refresh_model_catalog:
         if not _force_refresh_model_catalog():

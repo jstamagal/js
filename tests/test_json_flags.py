@@ -253,3 +253,17 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
     else:
         assert rc == 1
         assert set(payload) == {"error"}
+
+
+def test_list_models_human_output_shows_exact_model_flag(monkeypatch, tmp_logins_dir, capsys):
+    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="jwt"))
+    monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
+
+    rc = cli.main(["--list-models", "openai-codex"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "provider: openai-codex" in out
+    assert "gpt-5.4" in out
+    assert "--model openai-codex/gpt-5.4" in out
+    assert "--model openai-codex/gpt-5.5" in out
