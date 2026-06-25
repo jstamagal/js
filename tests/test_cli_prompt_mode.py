@@ -185,6 +185,34 @@ def test_interactive_cli_model_flag_overrides_banner_model(monkeypatch, tmp_path
     assert "deepseek/deepseek-v4-flash" not in output
 
 
+def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+
+    seen = {}
+
+    def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
+        seen["cfg_model"] = cfg.model
+        seen["cfg_provider_id"] = cfg.provider_id
+        seen["model_override"] = kwargs.get("model_override")
+        seen["provider_id_override"] = kwargs.get("provider_id_override")
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
+    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+
+    actual = cli.main(["-p", "foo", "-m", "openai-codex/gpt-5.5"])
+
+    assert actual == 0
+    assert seen["cfg_model"] == "gpt-5.5"
+    assert seen["cfg_provider_id"] == "openai-codex"
+    assert seen["model_override"] == "gpt-5.5"
+    assert seen["provider_id_override"] == "openai-codex"
+
+
 def test_cli_rejects_debug_and_debug_file_combination(capsys):
     actual = cli.main(["--debug", "--debug-file", "/tmp/js-debug.log", "-p", "ignored"])
 
