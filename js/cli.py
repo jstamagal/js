@@ -1663,14 +1663,18 @@ def main(argv: list[str] | None = None) -> int:
                     ignore_local_config=args.ignore_local,
                     ignore_global_config=args.ignore_global,
                 )
-            payload = _list_models_payload(provider_arg, cfg)
-            provider_label = payload["provider_id"] or "<unset>"
-            print(f"provider: {provider_label}")
-            print("models:")
-            for model_id in payload["models"]:
-                via = f"{provider_label}/{model_id}" if payload["provider_id"] else model_id
-                print(f"  {model_id}")
-                print(f"    --model {via}")
+            provider_ids = _list_models_provider_ids(provider_arg, cfg)
+            if not provider_ids:
+                print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
+                return 0
+            for pid in provider_ids:
+                try:
+                    model_ids = _models_cached_or_live(pid, cfg)
+                except Exception as e:  # noqa: BLE001
+                    print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
+                    continue
+                for model_id in model_ids:
+                    print(f"{pid}/{model_id}" if pid else model_id)
             return 0
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)

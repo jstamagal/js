@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -255,7 +256,7 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
         assert set(payload) == {"error"}
 
 
-def test_list_models_human_output_shows_exact_model_flag(monkeypatch, tmp_logins_dir, capsys):
+def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_logins_dir, capsys):
     logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="jwt"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
 
@@ -263,7 +264,29 @@ def test_list_models_human_output_shows_exact_model_flag(monkeypatch, tmp_logins
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert "provider: openai-codex" in out
-    assert "gpt-5.4" in out
-    assert "--model openai-codex/gpt-5.4" in out
-    assert "--model openai-codex/gpt-5.5" in out
+    # Concise: exactly one `provider/model` per line, nothing else.
+    assert out == "openai-codex/gpt-5.4\nopenai-codex/gpt-5.5\n"
+
+
+def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir, capsys):
+    # A just-added provider must appear even when it is not the active one — the
+    # listing spans saved logins, served from the model cache (offline-friendly).
+    logins.save_login(logins.Login(provider_id="opencode-go", provider_api_key="sk"))
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk"))
+    logins.cache_models("opencode-go", ["glm-5.1", "glm-5.2"])
+    logins.cache_models("deepseek", ["deepseek-v4-flash"])
+
+    def _no_live(*_a, **_k):
+        raise AssertionError("cache hit should avoid a live fetch")
+
+    monkeypatch.setattr(cli.logins, "test_login", _no_live)
+    # Keep it hermetic: the no-arg path builds a Config only to read provider_id.
+    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *a, **k: SimpleNamespace(provider_id=None))
+
+    rc = cli.main(["--list-models"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "opencode-go/glm-5.1" in out
+    assert "opencode-go/glm-5.2" in out
+    assert "deepseek/deepseek-v4-flash" in out
