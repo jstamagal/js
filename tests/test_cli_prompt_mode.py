@@ -213,6 +213,46 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     assert seen["provider_id_override"] == "openai-codex"
 
 
+def test_interactive_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.delenv("JS_MODEL", raising=False)
+    monkeypatch.delenv("JS_PROVIDER", raising=False)
+    monkeypatch.delenv("JS_BASE_URL", raising=False)
+    monkeypatch.delenv("JS_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    seen = {}
+
+    class PromptSessionStub:
+        def __init__(self, history, **kwargs):
+            self.lines = iter(["hi", "exit"])
+
+        def prompt(self, *_args, **_kwargs):
+            return next(self.lines)
+
+    def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
+        seen["cfg_model"] = cfg.model
+        seen["cfg_provider_id"] = cfg.provider_id
+        seen["model_override"] = kwargs.get("model_override")
+        seen["provider_id_override"] = kwargs.get("provider_id_override")
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+
+    actual = cli.main(["--model", "openai-codex/gpt-5.5"])
+
+    assert actual == 0
+    assert seen["cfg_model"] == "gpt-5.5"
+    assert seen["cfg_provider_id"] == "openai-codex"
+    assert seen["model_override"] is None
+    assert seen["provider_id_override"] is None
+
+
 def test_cli_rejects_debug_and_debug_file_combination(capsys):
     actual = cli.main(["--debug", "--debug-file", "/tmp/js-debug.log", "-p", "ignored"])
 

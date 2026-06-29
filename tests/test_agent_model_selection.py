@@ -304,3 +304,50 @@ def test_prefixed_model_overrides_pinned_parent_provider():
     )
     assert kept.provider_id == "ollama"
     assert kept.base_url == OLLAMA_BASE_URL
+
+
+def test_saved_login_prefix_overrides_pinned_provider_without_flag():
+    from js.routing import resolve_model_route
+
+    # The operator logged into opencode-go and asks for opencode-go/glm-5.1 while
+    # a stale `provider.id=deepseek` sits pinned in jsrc. The saved login makes
+    # the prefix authoritative even without prefix_overrides_provider and even
+    # with use_saved_login=False (the live REPL state path) — and it carries the
+    # login's base/key, not deepseek's.
+    logins.save_login(logins.Login(
+        provider_id="opencode-go",
+        provider_api_key="sk-oc",
+        provider_base_url="https://opencode.ai/zen/go/v1",
+    ))
+    route = resolve_model_route(
+        "opencode-go/glm-5.1",
+        configured_provider_id="deepseek",
+        configured_base_url=DEEPSEEK_BASE_URL,
+        configured_api_key="sk-deepseek",
+        explicit_model=True,
+        discover_env=False,
+        use_saved_login=False,
+    )
+    assert route.provider_id == "opencode-go"
+    assert route.model == "glm-5.1"
+    assert route.base_url == "https://opencode.ai/zen/go/v1"
+    assert route.api_key == "sk-oc"
+
+
+def test_unlogged_vendor_prefix_does_not_hijack_pinned_gateway():
+    from js.routing import resolve_model_route
+
+    # Gateway protection: a vendor prefix the operator never logged into yields
+    # to the pinned gateway (no saved `anthropic` login -> no override).
+    route = resolve_model_route(
+        "anthropic/claude-sonnet-4",
+        configured_provider_id="omp",
+        configured_base_url="https://gateway.test/v1",
+        configured_api_key="sk-omp",
+        explicit_model=True,
+        discover_env=False,
+        use_saved_login=False,
+    )
+    assert route.provider_id == "omp"
+    assert route.model == "anthropic/claude-sonnet-4"
+    assert route.base_url == "https://gateway.test/v1"
