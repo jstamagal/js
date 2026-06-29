@@ -138,6 +138,41 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     return CommandResult(handled=True, error=f"unknown knob: {key}")
 
 
+def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
+    """Remove ``path`` from ``settings`` if present. Returns True if it existed."""
+    cursor = settings
+    for part in path[:-1]:
+        nxt = cursor.get(part) if isinstance(cursor, dict) else None
+        if not isinstance(nxt, dict):
+            return False
+        cursor = nxt
+    if isinstance(cursor, dict) and path and path[-1] in cursor:
+        del cursor[path[-1]]
+        return True
+    return False
+
+
+def apply_unset(settings: dict, key: str) -> CommandResult:
+    """`set -<key>` — clear a knob back to its default/unset state."""
+    spec = _s.SPEC_BY_KEY.get(key)
+    path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
+    if not path:
+        return CommandResult(handled=True, error=f"unknown knob: {key}")
+    if spec is None:
+        prefix_spec = _prefix_spec(key)
+        if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
+            return CommandResult(handled=True, error=f"unknown knob: {key}")
+    existed = _delete_dotted(settings, path)
+    display = render_value(spec, None) if spec is not None else "<unset>"
+    note = "" if existed else "  (already unset)"
+    return CommandResult(
+        handled=True,
+        changed=existed,
+        lines=[f"{key} = {display}{note}"],
+        changed_keys=[key] if existed else [],
+    )
+
+
 # ---------------------------------------------------------------------------
 # on / load
 # ---------------------------------------------------------------------------
@@ -309,6 +344,10 @@ def run_repl_command(settings: dict, line: str, *, context: CommandContext | Non
     if verb == "set":
         if len(parts) == 1:
             return show_lines(settings)
+        key = parts[1]
+        if key.startswith("-") and len(key) > 1:
+            # `set -knob` clears a knob (e.g. /set -sampling.temperature).
+            return apply_unset(settings, key[1:])
         if len(parts) == 2:
             return show_lines(settings, parts[1])
         return apply_set(settings, parts[1], parts[2])

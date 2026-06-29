@@ -49,6 +49,18 @@ sync:
 shell:
     uv run bash
 
+# install `js` + `js-drain` onto PATH as launchers shebanged to a managed venv,
+# editable so they track the working tree (no reinstall after a code edit). uv
+# puts the launchers in its tool bin dir — usually ~/.local/bin.
+#   just install   then   js -p "hi"   from anywhere
+install:
+    uv tool install --force --editable .
+    @echo "installed js + js-drain. if they aren't on PATH yet: uv tool update-shell"
+
+# remove the installed js launchers.
+uninstall:
+    uv tool uninstall js
+
 # ── testing ─────────────────────────────────────────────────────────────────
 
 # offline suite — the verified command from docs/testing-and-development.md.

@@ -228,6 +228,32 @@ def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, projec
             return candidate
     return repo_root / agent_id
 
+def _preset_config_paths(
+    presets: list[str] | None,
+    project_dir: Path,
+    *,
+    ignore_local_config: bool,
+    ignore_global_config: bool,
+) -> list[Path]:
+    """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
+
+    Each preset name layers on top of the base jsrc files like another `set`
+    script; later presets win over earlier ones, and a project ``.js/jsrc.<name>``
+    wins over the global ``jsrc.<name>``. Missing files are simply skipped by the
+    loader, so an unused preset is a no-op (the CLI warns when a name matches
+    nothing)."""
+    paths: list[Path] = []
+    for raw in presets or []:
+        name = raw.strip()
+        if not name:
+            continue
+        if not ignore_global_config:
+            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
+        if not ignore_local_config:
+            paths.append(project_dir / ".js" / f"jsrc.{name}")
+    return paths
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -237,6 +263,7 @@ def from_env(
     cwd: Path | None = None,
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
+    presets: list[str] | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
 
@@ -263,6 +290,13 @@ def from_env(
             project_dir / ".js" / "jsrc",
             project_dir / ".js" / "jsrc.local",
         ])
+    # Presets layer on top of the base jsrc files (still below env / --extra).
+    config_paths.extend(_preset_config_paths(
+        presets,
+        project_dir,
+        ignore_local_config=ignore_local_config,
+        ignore_global_config=ignore_global_config,
+    ))
 
     jsrc_settings = _settings.collect_settings(
         config_paths=config_paths,
@@ -371,7 +405,7 @@ def from_env(
         max_file_bytes=max_file_bytes,
         task_max_depth=task_max_depth,
         wiki_vault_lock_timeout_s=wiki_vault_lock_timeout_s,
-        allow_inline_code=env.get("JS_ALLOW_INLINE_CODE") == "1",
+        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), False)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
         artifact_dir=artifact_dir,

@@ -361,3 +361,61 @@ def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
     if spec.type in {"json", "map"}:
         return '{"env": true}', {"env": True}
     return f"env-{spec.key}", f"env-{spec.key}"
+
+
+# --------------------------------------------------------------------------
+# `set -key` unset
+# --------------------------------------------------------------------------
+
+def test_set_dash_key_unsets_registered_knob():
+    cfg = {}
+    settings.set_dotted(cfg, ("sampling", "temperature"), 1.0)
+    result = setcmd.run_repl_command(cfg, "/set -sampling.temperature")
+    assert result.changed is True
+    assert result.changed_keys == ["sampling.temperature"]
+    assert settings.get_dotted(cfg, ("sampling", "temperature")) is None
+
+
+def test_set_dash_key_on_already_unset_is_noop():
+    result = setcmd.run_repl_command({}, "/set -sampling.temperature")
+    assert result.changed is False
+    assert result.changed_keys == []
+    assert "already unset" in result.lines[0]
+
+
+def test_set_dash_key_clears_map_subkey():
+    cfg = {}
+    settings.set_dotted(cfg, ("wiki", "aliases", "creative"), "/tmp/x")
+    result = setcmd.run_repl_command(cfg, "/set -wiki.aliases.creative")
+    assert result.changed is True
+    assert settings.get_dotted(cfg, ("wiki", "aliases", "creative")) is None
+
+
+def test_set_dash_unknown_knob_errors():
+    result = setcmd.run_repl_command({}, "/set -nope.nope")
+    assert result.error == "unknown knob: nope.nope"
+
+
+# --------------------------------------------------------------------------
+# canonical JS_<DOTTED> env parity (env <-> jsrc)
+# --------------------------------------------------------------------------
+
+def test_canonical_env_name_maps_dotted_key():
+    assert settings.canonical_env_name("sampling.top_p") == "JS_SAMPLING_TOP_P"
+    assert settings.canonical_env_name("limits.max_read_lines") == "JS_LIMITS_MAX_READ_LINES"
+
+
+def test_canonical_env_sets_knob_without_hand_picked_alias():
+    # limits.max_read_lines has no short alias; the canonical name must still work.
+    overlaid = settings.apply_env_overrides(
+        settings.seed_defaults(), {"JS_LIMITS_MAX_READ_LINES": "42"}
+    )
+    assert settings.get_dotted(overlaid, ("limits", "max_read_lines")) == 42
+
+
+def test_hand_picked_env_alias_wins_over_canonical():
+    overlaid = settings.apply_env_overrides(
+        settings.seed_defaults(),
+        {"JS_MODEL": "from-alias", "JS_MODEL_ID": "from-canonical"},
+    )
+    assert settings.get_dotted(overlaid, ("model", "id")) == "from-alias"

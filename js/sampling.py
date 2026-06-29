@@ -15,12 +15,15 @@ _SAMPLING_FIELDS = (
     "presence_penalty",
 )
 
+# Each sampling field reads its short hand-picked alias OR the canonical
+# JS_SAMPLING_<FIELD> form (parity with `set sampling.<field>` in jsrc). The
+# short alias wins when both are set.
 _ENV_KEYS = {
-    "temperature": "JS_TEMP",
-    "top_p": "JS_TOPP",
-    "top_k": "JS_TOPK",
-    "repetition_penalty": "JS_REPPEN",
-    "presence_penalty": "JS_PRPEN",
+    "temperature": ("JS_TEMP", "JS_SAMPLING_TEMPERATURE"),
+    "top_p": ("JS_TOPP", "JS_SAMPLING_TOP_P"),
+    "top_k": ("JS_TOPK", "JS_SAMPLING_TOP_K"),
+    "repetition_penalty": ("JS_REPPEN", "JS_SAMPLING_REPETITION_PENALTY"),
+    "presence_penalty": ("JS_PRPEN", "JS_SAMPLING_PRESENCE_PENALTY"),
 }
 
 _ANTHROPIC_TRANSPORTS = frozenset({"anthropic", "custom_anthropic"})
@@ -98,10 +101,12 @@ class Sampling:
     @classmethod
     def from_env(cls, env: Mapping[str, Any]) -> Sampling:
         values: dict[str, Any] = {}
-        for key, env_name in _ENV_KEYS.items():
-            raw = env.get(env_name)
-            if raw not in (None, ""):
-                values[key] = raw
+        for key, env_names in _ENV_KEYS.items():
+            for env_name in env_names:
+                raw = env.get(env_name)
+                if raw not in (None, ""):
+                    values[key] = raw
+                    break
         return cls.from_mapping(values)
 
     def is_empty(self) -> bool:

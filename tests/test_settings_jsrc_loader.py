@@ -181,6 +181,47 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     assert global_cfg.read_text(encoding="utf-8").startswith("set model.id global-model")
 
 
+def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
+    config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
+    js_dir = config_home / "js"
+    js_dir.mkdir(parents=True)
+    (js_dir / "jsrc").write_text("set model.id base-model\nset limits.fetch_timeout_s 5\n", encoding="utf-8")
+    (js_dir / "jsrc.fast").write_text("set model.id fast-model\n", encoding="utf-8")
+    (js_dir / "jsrc.slow").write_text("set model.id slow-model\nset limits.fetch_timeout_s 99\n", encoding="utf-8")
+
+    # No preset: base wins.
+    assert from_env(save_session=False).model == "base-model"
+
+    # Last preset wins on overlap; earlier preset's non-overlapping keys persist.
+    cfg = from_env(save_session=False, presets=["fast", "slow"])
+    assert cfg.model == "slow-model"
+    assert cfg.fetch_timeout_s == 99
+
+    cfg2 = from_env(save_session=False, presets=["slow", "fast"])
+    assert cfg2.model == "fast-model"
+    assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
+
+
+def test_allow_inline_code_settable_via_jsrc(monkeypatch, tmp_path):
+    # Inline-code eval is a config knob now, not env/flag only.
+    config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
+    global_cfg = config_home / "js" / "jsrc"
+    global_cfg.parent.mkdir(parents=True)
+    global_cfg.write_text("set runtime.allow_inline_code on\n", encoding="utf-8")
+
+    cfg = from_env(save_session=False)
+    assert cfg.allow_inline_code is True
+
+
+def test_allow_inline_code_canonical_env_enables(monkeypatch, tmp_path):
+    # The --dangerously-evaluate-inline-code flag sets JS_ALLOW_INLINE_CODE=1;
+    # that env must still flip the knob through the registry env layer.
+    _env_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("JS_ALLOW_INLINE_CODE", "1")
+    cfg = from_env(save_session=False)
+    assert cfg.allow_inline_code is True
+
+
 def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     project = tmp_path / "project"
