@@ -1102,7 +1102,10 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
 
     output = capsys.readouterr().out
     assert actual == 0
-    assert output == "KINGAPE_SESSION_OK\nContinue: js --session scoped-session\n"
+    # The resume hint must echo -a kingape: the session lives under
+    # sessions/kingape, so an agent-less `js --session ...` would resolve against
+    # sessions/defaultagent and 404 the .jsonl.
+    assert output == "KINGAPE_SESSION_OK\nContinue: js --agent kingape --session scoped-session\n"
     assert loaded_prompt_dirs[0].name == "kingape"
     assert load_messages(kingape_session) == [
         {"role": "user", "content": "kingape old"},

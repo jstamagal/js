@@ -1115,6 +1115,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 if show_continue:
                     hint = _session_hint_arg(cfg)
                     cont = resume_prefix or "js"
+                    # Plain -p has no resume_prefix; the session lives under
+                    # sessions/<agent>, so a non-default agent MUST be echoed or
+                    # the resume looks in the wrong dir and 404s the .jsonl.
+                    # (wiki/artifact/commit already fold the agent into resume_prefix.)
+                    if resume_prefix is None and agent:
+                        cont += f" --agent {shlex.quote(agent)}"
                     if model:
                         cont += f" --model {shlex.quote(model)}"
                     cont += f" --session {hint}"
