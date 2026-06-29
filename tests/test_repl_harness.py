@@ -1038,6 +1038,8 @@ def test_provider_command_shows_current_value_when_bare(tmp_path, capsys):
 
 def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
+    config_path = tmp_path / "config" / "jsrc"
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
     state = {
         "messages": [],
         "system": "SYSTEM",
@@ -1063,6 +1065,52 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     assert state["provider_id"] == "deepseek"
     assert state["provider_api_key"] == "sk-test"
     assert state["model"] == "deepseek-v4-flash"
+    assert "set model.id deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
+
+
+
+def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    config_path = tmp_path / "config" / "jsrc"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("set model.id deepseek/deepseek-v4-flash\n", encoding="utf-8")
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
+    state = {
+        "messages": [],
+        "system": "SYSTEM",
+        "settings": settings.seed_defaults(),
+        "model": cfg.model,
+        "provider_id": cfg.provider_id,
+        "provider_base_url": cfg.provider_base_url,
+        "provider_api_key": cfg.provider_api_key,
+    }
+
+    monkeypatch.setattr(
+        cli.picker,
+        "pick_model",
+        lambda **kwargs: {
+            "provider_id": "openai-codex",
+            "provider_base_url": "https://chatgpt.com/backend-api",
+            "provider_api_key": None,
+            "provider_headers": {},
+            "model": "gpt-5.5",
+        },
+    )
+
+    assert cli._handle_command("/model", state, cfg) is True
+
+    assert state["provider_id"] == "openai-codex"
+    assert state["provider_base_url"] == "https://chatgpt.com/backend-api"
+    assert state["model"] == "gpt-5.5"
+    assert settings.get_dotted(state["settings"], ("model", "id")) == "openai-codex/gpt-5.5"
+    assert config_path.read_text(encoding="utf-8").splitlines()[0] == "set model.id openai-codex/gpt-5.5"
+    assert "saved as default" in capsys.readouterr().out
+
+    from js.config import from_env
+
+    boot_cfg = from_env(save_session=False, cwd=tmp_path, ignore_local_config=True)
+    assert boot_cfg.provider_id == "openai-codex"
+    assert boot_cfg.model == "gpt-5.5"
 
 
 
@@ -1104,6 +1152,8 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
 
 def test_pick_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
+    config_path = tmp_path / "config" / "jsrc"
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
     state = {
         "messages": [],
         "system": "SYSTEM",
@@ -1131,6 +1181,7 @@ def test_pick_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path
     assert state["provider_api_key"] == "sk-proxy"
     assert state["provider_headers"] == {"x-proxy": "1"}
     assert state["model"] == "proxy/model"
+    assert "set model.id openai/proxy/model" in config_path.read_text(encoding="utf-8")
     assert "openai" in capsys.readouterr().out
 
 def test_provider_command_uses_saved_login(tmp_path):
