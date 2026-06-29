@@ -113,9 +113,16 @@ def test_opencode_go_anthropic_login_filters_anthropic_models():
     assert models == ["minimax-m3", "qwen3.7-plus"]
 
 
-def test_public_model_list_requires_secondary_test(monkeypatch):
-    answers = iter(["", "2"])
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+def test_secondary_test_enter_adds_without_testing(monkeypatch):
+    # Empty input = add without a test, in BOTH modes (require_test only warns).
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+    assert login_cli._secondary_test_choice(["first", "second"], require_test=True) is True
+    assert login_cli._secondary_test_choice(["first", "second"], require_test=False) is True
+
+
+def test_secondary_test_number_picks_that_model(monkeypatch):
+    # A model number means "verify that one"; it returns the model id to test.
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
     assert login_cli._secondary_test_choice(["first", "second"], require_test=True) == "second"
 
 

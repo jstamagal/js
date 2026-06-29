@@ -18,7 +18,7 @@ _API_SHAPES: list[tuple[str, str, str]] = [
     ("anthropic-custom", "anthropic", "Anthropic-compatible endpoint"),
     ("cliproxyapi", "openai", "CLIProxyAPI / OpenAI-compatible proxy with optional headers"),
 ]
-_SECONDARY_TEST_PROMPT = "name 3 short facts about eastern lowland gorillas"
+_SECONDARY_TEST_PROMPT = "1+1="
 _MODEL_LIST_LIMIT = 20
 
 
@@ -204,13 +204,12 @@ def _display_models(models: list[str]) -> None:
 def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | None | bool:
     if not models:
         return True
-    prompt = (
-        "enter model number for a real request test (q cancel): "
-        if require_test
-        else "[enter] accept or enter model number for a secondary test: "
-    )
+    # Enter always means "add it, I don't care to test"; a model number means
+    # "test that one first". require_test only adds a heads-up that the listing
+    # didn't prove the key can generate — it never forces a test.
     if require_test:
         print("*** Model listing alone does not prove these credentials can generate.")
+    prompt = "[enter] add without a test, or a model number to verify (q cancel): "
     while True:
         try:
             choice = input(prompt).strip()
@@ -218,9 +217,6 @@ def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | No
             print()
             return False
         if not choice:
-            if require_test:
-                print("*** choose a model number or exact model id to verify a real request")
-                continue
             return True
         if choice.lower() in {"q", "quit", "exit"}:
             return False
@@ -232,7 +228,7 @@ def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | No
             index = int(choice) - 1
             if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
                 return models[index]
-        print("*** enter, q, a model number, or an exact model id")
+        print("*** enter to add, q to cancel, or a model number / exact model id")
 
 def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool | None:
     print(f"*** [user] {_SECONDARY_TEST_PROMPT}")
