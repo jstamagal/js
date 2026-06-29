@@ -1742,6 +1742,7 @@ def main(argv: list[str] | None = None) -> int:
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     cfg = _apply_agent_model(cfg, prompt_spec, args.model)
+    cfg = _resolve_cli_model_override(cfg, args.model)
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
     completer = replcomplete.JsCompleter(

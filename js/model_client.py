@@ -57,9 +57,12 @@ def resolve_model(
         return ai.get_model(model_id)
 
     provider_def = providers.get_provider(provider_id)
-    if provider_def is not None and not provider_def.supports_model(model_id):
-        allowed = ", ".join(provider_def.allowed_models)
-        raise ValueError(f"{provider_def.id} does not serve model {model_id}; allowed models: {allowed}")
+    # No client-side allowlist gate: ``allowed_models`` is a curated hint used to
+    # filter noisy /models listings, NOT an authority on what the endpoint serves.
+    # It goes stale the moment a provider ships a new id (e.g. opencode-go's
+    # glm-5.2), so refusing here only blocks a model the server happily answers.
+    # Let the request through; the provider is the one source of truth and will
+    # 400 with its own message if the id is genuinely unknown.
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if codex_auth.is_codex_provider(canonical_id):
         provider = codex_provider.provider_from_login_or_token(

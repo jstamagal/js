@@ -114,14 +114,18 @@ def test_resolve_model_uses_explicit_provider_verbatim():
     assert result.provider.base_url == "http://127.0.0.1:11434/v1"
 
 
-def test_resolve_model_rejects_model_not_served_by_provider():
-    with pytest.raises(ValueError, match="opencode-go-anthropic does not serve model glm-5.1"):
-        model_client.resolve_model(
-            "glm-5.1",
-            provider_id="opencode-go-anthropic",
-            provider_base_url="https://opencode.ai/zen/go",
-            provider_api_key="sk-test",
-        )
+def test_resolve_model_allows_model_outside_static_allowlist():
+    # allowed_models is a curated hint for filtering /models noise, not a gate.
+    # A model absent from the static tuple (the endpoint may serve ids the list
+    # has not caught up to, e.g. a new glm-5.2) must still resolve — the provider
+    # is the authority and will reject genuinely-unknown ids itself.
+    result = model_client.resolve_model(
+        "glm-5.2",
+        provider_id="opencode-go",
+        provider_base_url="https://opencode.ai/zen/go/v1",
+        provider_api_key="sk-test",
+    )
+    assert result.id == "glm-5.2"
 
 
 def test_tool_specs_to_ai_tools_requires_function_type():
