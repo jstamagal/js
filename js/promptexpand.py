@@ -176,17 +176,27 @@ def _sub_bash(body: str, *, environ: dict, timeout_s: int) -> str:
 
 
 def _interpreted(label: str, interp_argv, ext: str):
-    """Build a runner: write body to a temp <ext> file, run `interp file`."""
+    """Build a runner: write body to a temp <ext> file, run `interp file`.
+
+    The snippet lives in a temp dir (so it never litters the project), but it
+    RUNS in the invocation cwd (``cwd=None`` inherits it) — a directive that
+    probes the environment must see the directory js was launched from, not the
+    throwaway compile dir. This matches the bare ``!{sh}``/``!{bash}`` runners.
+    """
     def runner(body: str, *, environ: dict, timeout_s: int) -> str:
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
-            return _run_capture([*interp_argv, str(src)], cwd=d, timeout_s=timeout_s, label=label)
+            return _run_capture([*interp_argv, str(src)], timeout_s=timeout_s, label=label)
     return runner
 
 
 def _compiled(label: str, compiler: str, ext: str):
-    """Build a runner: write body to temp <ext>, `compiler src -o exe`, run exe."""
+    """Build a runner: write body to temp <ext>, `compiler src -o exe`, run exe.
+
+    Compilation stays in the temp dir; the built exe RUNS in the invocation cwd
+    (``cwd=None``) so it observes the real working directory, like ``_interpreted``.
+    """
     def runner(body: str, *, environ: dict, timeout_s: int) -> str:
         cc = shutil.which(compiler) or compiler
         with tempfile.TemporaryDirectory() as d:
@@ -194,7 +204,7 @@ def _compiled(label: str, compiler: str, ext: str):
             exe = Path(d) / "snippet.out"
             src.write_text(body, encoding="utf-8")
             _run_capture([cc, str(src), "-o", str(exe)], cwd=d, timeout_s=timeout_s, label=f"{label} (compile)")
-            return _run_capture([str(exe)], cwd=d, timeout_s=timeout_s, label=label)
+            return _run_capture([str(exe)], timeout_s=timeout_s, label=label)
     return runner
 
 
