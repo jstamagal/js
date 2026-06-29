@@ -137,6 +137,23 @@ def test_fence_python_block():
     assert expand_prompt(text, allow_code=True) == "42"
 
 
+@pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
+def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
+    # An env-probing directive must see the dir js was launched from, not the
+    # throwaway temp dir the snippet is compiled in.
+    monkeypatch.chdir(tmp_path)
+    out = expand_prompt("cwd=!{python import os; print(os.getcwd())}", allow_code=True)
+    assert out == f"cwd={tmp_path.resolve()}"
+
+
+@pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
+def test_inline_python_snippet_does_not_litter_cwd(tmp_path, monkeypatch):
+    # Running in the invocation cwd must not leave the snippet file behind there.
+    monkeypatch.chdir(tmp_path)
+    expand_prompt("!{python print(1)}", allow_code=True)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.skipif(not (shutil.which("cc") or shutil.which("gcc")), reason="no C compiler")
 def test_fence_c_block_compiles_runs_injects_stdout():
     text = '```!c\n#include <stdio.h>\nint main(void){ printf("answer=%d", 6*7); return 0; }\n```'
