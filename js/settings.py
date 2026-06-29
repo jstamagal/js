@@ -156,6 +156,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
+    SettingSpec("runtime.allow_inline_code", "bool", False,
+                "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
+                "prompt files and inject their stdout (DANGEROUS: runs arbitrary code from "
+                "prompt files; same as the --dangerously-evaluate-inline-code flag).",
+                env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
     # --- compact ---
     SettingSpec("compact.auto", "bool", DEFAULT_COMPACT_AUTO,
                 "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
@@ -418,17 +423,39 @@ def apply_cli_extras(settings: dict, extras: list[str]) -> dict:
 # Env layer
 # ---------------------------------------------------------------------------
 
+def canonical_env_name(key: str) -> str:
+    """The deterministic env var for any dotted knob: ``a.b.c`` -> ``JS_A_B_C``.
+
+    Every knob is reachable from the environment under this name, so env and
+    jsrc stay at parity (``JS_SAMPLING_TOP_P`` <-> ``set sampling.top_p``). A
+    spec may ALSO carry a shorter hand-picked ``env`` alias (``JS_MODEL`` for
+    ``model.id``); that alias wins when both are set."""
+    return "JS_" + key.upper().replace(".", "_")
+
+
+def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
+    """Env vars that feed ``spec``: the hand-picked alias first (highest
+    precedence), then the canonical ``JS_<DOTTED>`` form."""
+    canon = canonical_env_name(spec.key)
+    if spec.env and spec.env != canon:
+        return (spec.env, canon)
+    return (canon,)
+
+
 def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
-    """Overlay JS_* env vars (declared in the registry) onto ``settings``."""
+    """Overlay JS_* env vars onto ``settings``. Each knob accepts its canonical
+    ``JS_<DOTTED>`` name plus any hand-picked alias; the alias wins."""
     source = env if env is not None else os.environ
     for spec in REGISTRY:
-        if not spec.env or spec.env not in source:
-            continue
-        value, error = coerce_value(spec, source[spec.env])
-        if error is not None:
-            # garbage in the env: skip rather than clobber a working value
-            continue
-        set_dotted(settings, spec.path, value)
+        for name in env_names_for(spec):
+            if name not in source:
+                continue
+            value, error = coerce_value(spec, source[name])
+            if error is not None:
+                # garbage in the env: skip rather than clobber a working value
+                continue
+            set_dotted(settings, spec.path, value)
+            break
     return settings
 
 
@@ -547,6 +574,9 @@ def _template_lines() -> list[str]:
             lines.append(set_line)
         lines.append("")
     lines.append("# --- env vars (override config files; --extra wins over env) ---")
+    lines.append("# Every knob also reads a canonical JS_<DOTTED_UPPER> env var:")
+    lines.append("#   set sampling.top_p  <->  JS_SAMPLING_TOP_P")
+    lines.append("# Some knobs carry a shorter hand-picked alias too (it wins when both are set):")
     for spec in REGISTRY:
         if spec.env:
             lines.append(f"# {spec.env} -> set {spec.key}")

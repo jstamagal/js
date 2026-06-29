@@ -76,6 +76,7 @@ def _from_env(
     agent_id: str | None = None,
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
+    presets: list[str] | None = None,
 ) -> Config:
     return from_env(
         save_session=save_session,
@@ -84,6 +85,7 @@ def _from_env(
         agent_id=agent_id,
         ignore_local_config=ignore_local_config,
         ignore_global_config=ignore_global_config,
+        presets=presets,
     )
 
 
@@ -95,6 +97,7 @@ def _cfg_from_env_compat(
     agent_id: str | None = None,
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
+    presets: list[str] | None = None,
 ) -> Config:
     try:
         return _from_env(
@@ -104,6 +107,7 @@ def _cfg_from_env_compat(
             agent_id=agent_id,
             ignore_local_config=ignore_local_config,
             ignore_global_config=ignore_global_config,
+            presets=presets,
         )
     except TypeError:
         # Tests and external callers may monkeypatch the old helper signature.
@@ -374,13 +378,22 @@ def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
     if body.startswith("/"):
         body = body[1:].lstrip()
     parts = body.split(maxsplit=2)
-    if len(parts) != 3 or parts[0].lower() != "set":
+    if len(parts) < 2 or parts[0].lower() != "set":
         return current
     key = parts[1]
+    unset = key.startswith("-") and len(key) > 1
+    if unset:
+        key = key[1:]
     if not key.startswith("sampling."):
         return current
     field = key.split(".", 1)[1]
     if field not in Sampling.__dataclass_fields__:
+        return current
+    if unset:
+        # `/set -sampling.x` drops the live override so the field reverts to its
+        # jsrc/provider default instead of lingering at its last value.
+        return replace(current, **{field: None})
+    if len(parts) != 3:
         return current
     spec = settings.SPEC_BY_KEY.get(key)
     if spec is None:
@@ -599,6 +612,7 @@ HELP_TEXT = f"""\
 {C.MAGENTA}commands:{C.RESET}
   {C.YELLOW}/help{C.RESET}            show this message
   {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
+  {C.YELLOW}/set -key{C.RESET}        clear a knob back to its default (e.g. /set -sampling.temperature)
   {C.YELLOW}/show [key]{C.RESET}      list every knob and its current value
   {C.YELLOW}/load <file>{C.RESET}     load a slashless ircII-style script file
   {C.YELLOW}/on [event handler]{C.RESET} list or register an event hook
@@ -943,7 +957,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 show_continue: bool = True, tool_registry=None,
                 extras: list[str] | None = None, tool_context=None,
                 ignore_local_config: bool = False, ignore_global_config: bool = False,
-                files: list[str] | None = None, stdin_attachment: bytes | None = None) -> int:
+                files: list[str] | None = None, stdin_attachment: bytes | None = None,
+                presets: list[str] | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
@@ -956,6 +971,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             agent_id=agent,
             ignore_local_config=ignore_local_config,
             ignore_global_config=ignore_global_config,
+            presets=presets,
         )
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -1437,10 +1453,46 @@ def _list_models_payload(provider_id: str | None, cfg: Config | None = None) -> 
     }
 
 
+def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
+    """Models for one provider, cache first (offline-friendly, fast), live on miss."""
+    cached = logins.load_model_cache().get(provider_id)
+    if cached:
+        return cached
+    if cfg is not None and provider_id == cfg.provider_id:
+        return _models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)
+    return _models_for_provider(provider_id, None, None)
+
+
+def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> list[str]:
+    """Which providers `--list-models` covers: the named one, else every provider
+    the operator has a stake in — saved logins plus the active provider."""
+    if provider_arg:
+        return [providers.normalize_provider_id(provider_arg) or provider_arg]
+    ids = set(logins.load_logins())
+    if cfg is not None and cfg.provider_id:
+        ids.add(cfg.provider_id)
+    return sorted(ids)
+
+
 
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
     payload = _list_models_payload(provider_id, cfg)
     return {"models": payload["models"]}
+
+
+def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_global: bool) -> None:
+    from .config import _preset_config_paths
+
+    project_dir = Path.cwd()
+    for name in presets:
+        candidates = _preset_config_paths(
+            [name], project_dir,
+            ignore_local_config=ignore_local,
+            ignore_global_config=ignore_global,
+        )
+        if not any(path.exists() for path in candidates):
+            looked = " or ".join(str(p) for p in candidates) or "(no config dirs enabled)"
+            print(f"{C.ORANGE}warning: --preset {name}: no jsrc.{name} found ({looked}){C.RESET}", file=sys.stderr)
 
 
 def _print_json(value: object) -> int:
@@ -1475,6 +1527,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
+    parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
+                        help="layer jsrc.<name> preset files on top of the base config, in order "
+                             "(last wins). Comma-list and/or repeatable: --preset fast,debug. Looks for "
+                             "jsrc.<name> beside the global jsrc and in project .js/. Still below env/--extra.")
     parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
     parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
     parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
@@ -1496,6 +1552,7 @@ def main(argv: list[str] | None = None) -> int:
                              "on and do not need this flag.")
     parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
+    presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
         cd_target = Path(args.cd).expanduser()
         if not cd_target.is_dir():
@@ -1505,6 +1562,10 @@ def main(argv: list[str] | None = None) -> int:
         # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+    if presets:
+        # Resolve against the now-final cwd (after any -C). A name that matches no
+        # file anywhere is almost certainly a typo — say so rather than no-op.
+        _warn_unmatched_presets(presets, ignore_local=args.ignore_local, ignore_global=args.ignore_global)
     if args.login is not None:
         from . import login_cli
         return login_cli.main([args.login] if args.login else [])
@@ -1656,7 +1717,8 @@ def main(argv: list[str] | None = None) -> int:
                            ignore_local_config=args.ignore_local,
                            ignore_global_config=args.ignore_global,
                            files=args.files,
-                           stdin_attachment=stdin_attachment)
+                           stdin_attachment=stdin_attachment,
+                           presets=presets)
 
     try:
         cfg = _cfg_from_env_compat(
@@ -1666,6 +1728,7 @@ def main(argv: list[str] | None = None) -> int:
             agent_id=cli_agent,
             ignore_local_config=args.ignore_local,
             ignore_global_config=args.ignore_global,
+            presets=presets,
         )
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)

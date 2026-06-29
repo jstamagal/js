@@ -42,6 +42,23 @@ def test_sampling_from_env_reads_js_knobs():
     )
 
 
+def test_sampling_from_env_reads_canonical_js_sampling_names():
+    # Parity with `set sampling.<field>`: JS_SAMPLING_<FIELD> works too.
+    sampling = Sampling.from_env(
+        {
+            "JS_SAMPLING_TEMPERATURE": "0.6",
+            "JS_SAMPLING_TOP_P": "0.95",
+            "JS_SAMPLING_TOP_K": "64",
+        }
+    )
+    assert sampling == Sampling(temperature=0.6, top_p=0.95, top_k=64)
+
+
+def test_sampling_short_alias_wins_over_canonical():
+    sampling = Sampling.from_env({"JS_TOPP": "0.1", "JS_SAMPLING_TOP_P": "0.9"})
+    assert sampling.top_p == 0.1
+
+
 def test_sampling_from_mapping_coerces_known_keys_and_ignores_unknown():
     sampling = Sampling.from_mapping(
         {"temperature": "0.3", "top_k": 32.0, "future": 1}
