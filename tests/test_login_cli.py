@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from js import cli, login_cli, logins, paths, providers
@@ -107,6 +108,94 @@ def test_fetch_models_passes_through_live_list_without_allowlist(monkeypatch):
         provider_api_key="k",
     )
     assert logins.test_login(login) == live  # nothing filtered out
+
+
+class _FakeStdscr:
+    """Headless curses surface: renders nowhere, feeds a queued key sequence."""
+
+    def __init__(self, keys):
+        self._keys = list(keys)
+
+    def keypad(self, _flag):
+        pass
+
+    def clear(self):
+        pass
+
+    def getmaxyx(self):
+        return (24, 80)
+
+    def addstr(self, *_args):
+        pass
+
+    def refresh(self):
+        pass
+
+    def getch(self):
+        return self._keys.pop(0)
+
+
+def _run_multiselect(monkeypatch, keys, rows, preselected):
+    import curses
+
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    return login_cli._curses_multiselect(
+        _FakeStdscr(keys), rows, "pick", preselected=set(preselected)
+    )
+
+
+def test_multiselect_spacebar_deselects(monkeypatch):
+    import curses
+
+    rows = [("glm-5.2", "openai"), ("glm-5", "openai"), ("kimi-k2.6", "openai")]
+    # all preselected; toggle off row0, move down, toggle off row1, confirm -> [2]
+    keys = [ord(" "), curses.KEY_DOWN, ord(" "), ord("\n")]
+    assert _run_multiselect(monkeypatch, keys, rows, {0, 1, 2}) == [2]
+
+
+def test_multiselect_none_then_pick(monkeypatch):
+    rows = [("a", ""), ("b", ""), ("c", "")]
+    keys = [ord("n"), ord(" "), ord("\n")]  # clear all, select row0, confirm
+    assert _run_multiselect(monkeypatch, keys, rows, {0, 1, 2}) == [0]
+
+
+def test_multiselect_cancel_returns_none(monkeypatch):
+    rows = [("a", "")]
+    assert _run_multiselect(monkeypatch, keys=[ord("q")], rows=rows, preselected={0}) is None
+
+
+def test_select_models_non_tty_keeps_all(monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    models = ["glm-5.2", "glm-5.1", "kimi-k2.7-code"]
+    assert login_cli._select_models_to_cache("opencode-go", models) == models
+
+
+def test_select_models_interactive_with_custom_add(monkeypatch):
+    import curses
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [curses.KEY_DOWN, ord(" "), ord("\n")]  # to row1, deselect glm-5, confirm
+
+    def fake_wrapper(fn, *args, **kwargs):
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+    monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "extra-model, glm-5.2")
+    models = ["glm-5.2", "glm-5", "kimi-k2.7-code"]
+    # row1 deselected; "extra-model" appended; "glm-5.2" already known -> not duped
+    assert login_cli._select_models_to_cache("opencode-go", models) == [
+        "glm-5.2", "kimi-k2.7-code", "extra-model",
+    ]
+
+
+def test_dialect_map_tags_anthropic_models():
+    # claude-* on opencode is anthropic-dialect; glm-* is openai. Cosmetic tag,
+    # but it must read provider_config.npm correctly off the live catalog.
+    dialects = login_cli._dialect_map("opencode-go")
+    assert dialects.get("claude-opus-4-8") == "anthropic"
+    assert dialects.get("glm-5.2") == "openai"
 
 
 def test_secondary_test_enter_adds_without_testing(monkeypatch):
