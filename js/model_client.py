@@ -83,13 +83,25 @@ def resolve_model(
     headers = dict(provider_headers or {})
     if provider_def is not None and provider_def.headers:
         headers = {**provider_def.headers, **headers}
+    # ai>=0.2.1 flipped the openai SDK's default wire to the Responses API; every
+    # chat-completions endpoint js targets through the openai SDK (opencode-go,
+    # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
+    # Pin chat-completions for those; only the explicit Responses transport keeps
+    # the new default.
+    protocol = None
+    transport = provider_def.transport if provider_def is not None else None
+    if sdk_provider_id == "openai" and transport != "custom_responses":
+        from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
+
+        protocol = OpenAIChatCompletionsProtocol()
     provider = ai.get_provider(
         sdk_provider_id,
         base_url=provider_base_url,
         api_key=provider_api_key,
         headers=headers or None,
+        protocol=protocol,
     )
-    return ai.Model(model_id, provider=provider)
+    return ai.Model(id=model_id, provider=provider)
 
 
 def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
