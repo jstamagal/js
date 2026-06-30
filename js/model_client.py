@@ -129,6 +129,31 @@ def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
     return tools
 
 
+def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
+    """Drop reasoning parts from assistant messages.
+
+    The OpenAI chat-completions protocol re-serializes any ``ReasoningPart`` in
+    the history as a non-standard ``message.reasoning`` field. Some gateways
+    (opencode-go) reject it outright ("Extra inputs are not permitted, field:
+    messages[..].reasoning"), so a stored session can't be replayed there or
+    switched onto mid-conversation. Replayed chain-of-thought has no value on
+    this wire anyway — the model re-reasons — so strip it. Providers that do
+    want reasoning replayed (DeepSeek's own provider requires ``reasoning_content``;
+    Anthropic keeps thinking blocks) use their own protocols and never hit this.
+    """
+    out: list[ai.messages.Message] = []
+    for msg in messages:
+        if msg.role != "assistant" or not any(
+            isinstance(part, ai.types.messages.ReasoningPart) for part in msg.parts
+        ):
+            out.append(msg)
+            continue
+        kept = [part for part in msg.parts if not isinstance(part, ai.types.messages.ReasoningPart)]
+        if kept:
+            out.append(ai.assistant_message(*kept))
+    return out
+
+
 def _is_message_part(value: Any) -> bool:
     return hasattr(value, "kind")
 
@@ -535,6 +560,19 @@ def stream_model(
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense
     # that we never rewrite prior assistant/tool messages to satisfy a transport.
     # History cleanup happens before send; the provider registry owns the policy.
+
+    # The OpenAI chat-completions wire re-serializes replayed reasoning as a
+    # non-standard ``message.reasoning`` field that some backends (glm) reject,
+    # which otherwise breaks resume and mid-conversation model switches. Strip it
+    # only for those models, so a stored session stays portable without rewriting
+    # history for backends (mimo, kimi) that accept the field.
+    transport = provider_def.transport if provider_def is not None else None
+    if (
+        sdk_provider_name == "openai"
+        and transport != "custom_responses"
+        and reasoning.rejects_reasoning_replay(model_name)
+    ):
+        messages = _strip_reasoning_parts(messages)
 
     try:
         return asyncio.run(
