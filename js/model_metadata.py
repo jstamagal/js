@@ -28,7 +28,7 @@ from modelsdotdev._internal import sync as modelsdotdev_sync
 
 from . import codex_auth, paths, providers, settings as _settings
 
-_CATALOG_MAX_AGE = timedelta(hours=72)
+_CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
 _LOCAL_PROBE_TIMEOUT_S = min(float(_settings.DEFAULT_FETCH_TIMEOUT_S), 3.0)
 _LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai"}
