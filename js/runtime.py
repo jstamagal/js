@@ -721,6 +721,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
              provider_base_url_override: str | None = None,
              provider_api_key_override: str | None = None,
              sampling: Sampling | None = None,
+             call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None) -> None:
     """One user turn → tool-use loop until model produces a stop. Mutates
     `messages` in place so the caller can persist new entries.
@@ -884,20 +885,35 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                                 finish_reason=finish, n_tool_calls=len(pending_calls),
                                 prompt_tokens=active_context.last_prompt_tokens,
                                 cached_tokens=active_context.last_cached_tokens)
+                _out_tok = 0
+                if usage:
+                    _out_tok = int(getattr(usage, "output_tokens", 0)
+                                   or getattr(usage, "completion_tokens", 0) or 0)
+                if call_stats is not None:
+                    # Stream-isolated numbers (model_client clocks `ai.stream` itself,
+                    # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
+                    _stream_s = result.elapsed_s or (time.time() - t0)
+                    call_stats.append({
+                        "ttft_s": result.first_token_s,
+                        "stream_s": result.elapsed_s,
+                        "output_tokens": _out_tok,
+                        "prompt_tokens": active_context.last_prompt_tokens,
+                        "cached_tokens": active_context.last_cached_tokens,
+                        "tok_per_s": (_out_tok / _stream_s) if _stream_s > 0 else 0.0,
+                        "finish_reason": finish,
+                        "n_tool_calls": len(pending_calls),
+                    })
                 if trace:
                     _elapsed = time.time() - t0
-                    _out_tok = 0
-                    if usage:
-                        _out_tok = int(getattr(usage, "output_tokens", 0)
-                                       or getattr(usage, "completion_tokens", 0) or 0)
                     _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
                     _cache = ""
                     if active_context.last_prompt_tokens > 0 and active_context.last_cached_tokens > 0:
                         _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
                         _cache = f"  cache {_pct:.0f}%"
+                    _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
                     print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
                           f"finish={finish}  tool_calls={len(pending_calls)}  "
-                          f"{_out_tok} tok  {_tps:.1f} tok/s{_cache}{C.RESET}", flush=True)
+                          f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
                 break
             except ai.ProviderAPIError as e:
                 if e.is_retryable:
