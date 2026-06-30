@@ -10,6 +10,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -28,7 +29,9 @@ from . import picker
 from . import providers
 from . import replcomplete
 from . import runtime
+from . import stats
 from . import paths as _paths
+from .promptexpand import expand_prompt
 from . import setcmd
 from . import settings
 from . import routing
@@ -1024,7 +1027,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 extras: list[str] | None = None, tool_context=None,
                 ignore_local_config: bool = False, ignore_global_config: bool = False,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
-                presets: list[str] | None = None) -> int:
+                presets: list[str] | None = None,
+                stats_json: str | None = None, stats_csv: str | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
@@ -1079,6 +1083,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
     messages.append(user_bundle.runtime_message)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+    call_stats: list[dict] = []
     turn_kwargs = {
         "model_override": cfg.model,
         "provider_id_override": cfg.provider_id,
@@ -1086,11 +1091,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "provider_api_key_override": cfg.provider_api_key,
         "tool_registry": active_registry,
         "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
+        "call_stats": call_stats,
     }
     if reasoning is not None:
         turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
+    _t_wall = time.time()
     try:
         if debug:
             runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
@@ -1105,6 +1112,15 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     except Exception as e:  # noqa: BLE001
         print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
         return 1
+
+    if stats_json or stats_csv:
+        row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
+               "ok": True, "error": None, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
+        payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
+        if stats_json:
+            stats.write_json(stats_json, payload)
+        if stats_csv:
+            stats.write_csv(stats_csv, [row])
 
     messages[before_len] = user_bundle.history_message
     for message in reversed(messages):
@@ -1149,6 +1165,118 @@ def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
         return _run_prompt(*args, tool_context=tool_context, **kwargs)
     except TypeError:
         return _run_prompt(*args, **kwargs)
+
+
+def _bench_row_line(row: dict) -> str:
+    if not row.get("ok"):
+        return f"  {C.ORANGE}{row['name']}: {row.get('error') or 'failed'}{C.RESET}"
+    ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
+    return (f"  {C.GREY}{row['name']}: {row.get('output_tokens', 0)} tok  "
+            f"{row.get('tok_per_s', 0.0):.1f} tok/s  ttft {ttft}  "
+            f"wall {row.get('wall_s') or 0.0:.2f}s{C.RESET}")
+
+
+def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
+               maxout: int | None, quiet: bool, extras: list[str] | None,
+               ignore_local_config: bool, ignore_global_config: bool,
+               presets: list[str] | None,
+               stats_json: str | None, stats_csv: str | None) -> int:
+    """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
+    context, no session), measuring TTFT / tok-s / turn time. The persona
+    (NN-prompt.md + 00-tools.yaml) is rebuilt into each benchmark's head;
+    benchmarks never see each other."""
+    try:
+        agent_id = validate_agent_id(bench_agent)
+    except ValueError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
+    try:
+        cfg = _cfg_from_env_compat(
+            None, save_session=False, extras=extras, agent_id=agent_id,
+            ignore_local_config=ignore_local_config,
+            ignore_global_config=ignore_global_config, presets=presets,
+        )
+    except ValueError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
+    try:
+        prompt_spec = P.load_configured_prompt_spec(cfg)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+        return 2
+
+    benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
+    if not benchmarks:
+        print(f"{C.ORANGE}error: agent {agent_id!r} has no NN-benchmark.md files{C.RESET}", file=sys.stderr)
+        return 2
+
+    system = prompt_spec.system
+    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    cfg = _apply_agent_model(cfg, prompt_spec, model)
+    cfg = _resolve_cli_model_override(cfg, model)
+    agent_default_max = prompt_spec.max_output_tokens
+    allow_code = bool(getattr(cfg, "allow_inline_code", False))
+
+    rows: list[dict] = []
+    interrupted = False
+    for bench in benchmarks:
+        # max_tokens: --max-out wins; else per-benchmark frontmatter (already
+        # -1 -> None=uncapped); else the agent default from 00-tools.yaml.
+        if maxout is not None:
+            eff_max = maxout
+        elif bench.max_tokens_set:
+            eff_max = bench.max_tokens
+        else:
+            eff_max = agent_default_max
+        prompt_text = expand_prompt(bench.prompt, allow_code=allow_code)
+        messages = [{"role": "user", "content": prompt_text}]
+        call_stats: list[dict] = []
+        turn_kwargs = {
+            "model_override": cfg.model,
+            "provider_id_override": cfg.provider_id,
+            "provider_base_url_override": cfg.provider_base_url,
+            "provider_api_key_override": cfg.provider_api_key,
+            "tool_registry": active_registry,
+            "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
+            "max_output_override": eff_max,
+            "call_stats": call_stats,
+        }
+        if reasoning is not None:
+            turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
+        if not quiet:
+            print(f"{C.CYAN}▸ bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
+        ok, err = True, None
+        t_wall = time.time()
+        try:
+            sink = io.StringIO() if quiet else None
+            with contextlib.redirect_stdout(sink) if sink is not None else contextlib.nullcontext():
+                runtime.run_turn(cfg, system, messages, runtime.Telemetry(debug_log=cfg.debug_log),
+                                 trace_override=False, **turn_kwargs)
+        except KeyboardInterrupt:
+            interrupted, ok, err = True, False, "interrupted"
+        except Exception as e:  # noqa: BLE001
+            ok, err = False, f"{type(e).__name__}: {e}"
+        row = {
+            "name": bench.name, "prompt": prompt_text, "max_tokens": eff_max,
+            "ok": ok, "error": err,
+            **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
+        }
+        rows.append(row)
+        print(_bench_row_line(row), file=sys.stderr)
+        if interrupted:
+            break
+
+    payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
+    if stats_json:
+        stats.write_json(stats_json, payload)
+        print(f"{C.GREY}stats → {stats_json}{C.RESET}", file=sys.stderr)
+    if stats_csv:
+        stats.write_csv(stats_csv, rows)
+        print(f"{C.GREY}stats → {stats_csv}{C.RESET}", file=sys.stderr)
+    if not stats_json and not stats_csv:
+        print(json.dumps(payload, indent=2, default=str))
+    return 130 if interrupted else 0
+
 
 def _wiki_kickoff(mode: str, vault: str, target_desc: str, resuming: bool,
                   immediate_file: str | None = None, immediate_unit: str | None = None) -> str:
@@ -1597,6 +1725,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
     parser.add_argument("-r", "--reasoning", help="thinking effort: off|low|medium|high|max|minimal|xhigh; min=low")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
+    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
+    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
+    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
@@ -1728,6 +1859,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
         return 2
 
+    if args.bench:
+        if selected_modes or args.agent:
+            print(f"{C.ORANGE}error: --bench is its own mode; name the agent as --bench AGENT, not with --agent or a built-in mode{C.RESET}", file=sys.stderr)
+            return 2
+        return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
+                          maxout=args.max_out, quiet=args.quiet, extras=args.extras,
+                          ignore_local_config=args.ignore_local,
+                          ignore_global_config=args.ignore_global, presets=presets,
+                          stats_json=args.stats_json, stats_csv=args.stats_csv)
+
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
 
@@ -1795,7 +1936,8 @@ def main(argv: list[str] | None = None) -> int:
                            ignore_global_config=args.ignore_global,
                            files=args.files,
                            stdin_attachment=stdin_attachment,
-                           presets=presets)
+                           presets=presets,
+                           stats_json=args.stats_json, stats_csv=args.stats_csv)
 
     try:
         cfg = _cfg_from_env_compat(
