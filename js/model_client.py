@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import ai
 
-from . import codex_auth, codex_provider, providers
+from . import codex_auth, codex_provider, providers, reasoning
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -496,18 +496,28 @@ def stream_model(
 
     reasoning_params: ai_params.ReasoningParams | None = None
     if reasoning_effort is not None and not is_minimax:
-        if reasoning_effort == "none":
-            # Only the gateway path explicitly disables; explicit providers that
-            # default reasoning on are left to their own default (prior behavior).
-            if not explicit_provider:
-                reasoning_params = ai_params.ReasoningParams(effort=None)
-        elif explicit_provider:
-            # Direct DeepSeek/Anthropic-style providers steer reasoning via their
-            # own budget (below), not an effort knob — only openai/codex take effort.
-            if is_codex or sdk_provider_name == "openai":
-                reasoning_params = ai_params.ReasoningParams(effort=reasoning_effort)
-        else:
-            reasoning_params = ai_params.ReasoningParams(effort=reasoning_effort)
+        # Direct DeepSeek/Anthropic-style providers steer reasoning via their own
+        # budget (below) / thinking flag, not the OpenAI effort knob. Codex and
+        # any openai-SDK endpoint take the effort knob — snapped to the stops the
+        # target actually serves (js/reasoning.py), so the one dial fits each.
+        steers_via_effort = is_codex or sdk_provider_name == "openai" or not explicit_provider
+        if steers_via_effort:
+            if is_codex:
+                allowed: frozenset[str] | None = reasoning.CODEX_EFFORTS
+            elif explicit_provider and sdk_provider_name == "openai":
+                allowed = reasoning.supported_efforts(model_name)
+            else:
+                allowed = None  # gateway / implicit: let it self-normalize
+            effort = reasoning.snap_effort(reasoning_effort, allowed)
+            if effort == "none":
+                # Disable explicitly only where "none" is a real stop (glm) or on
+                # the implicit/gateway path that historically disabled; for an
+                # unknown explicit model, omit the knob and take its default
+                # rather than send a non-standard reasoning_effort="none".
+                if not explicit_provider or (allowed is not None and "none" in allowed):
+                    reasoning_params = ai_params.ReasoningParams(effort=None)
+            elif effort is not None:
+                reasoning_params = ai_params.ReasoningParams(effort=effort)
 
     # DeepSeek gets the maximum reasoning budget by default, passed straight
     # through to its OpenAI-compatible endpoint as an extra body field.
