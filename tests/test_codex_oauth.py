@@ -104,7 +104,10 @@ def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {"reasoning_effort": "xhigh"}
+    # Codex takes a reasoning effort but no output cap (its API rejects max_tokens).
+    params = executor.request.params
+    assert params.output is None
+    assert params.reasoning.effort == "xhigh"
 
 
 class _FakeModelListResponse:

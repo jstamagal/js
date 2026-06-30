@@ -840,7 +840,9 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     actual = cli.main([])
 
     assert actual == 0
-    assert params_seen == [{"extra_body": {"live_flag": True}}]
+    assert len(params_seen) == 1
+    assert params_seen[0] is not None
+    assert params_seen[0].extra_body == {"live_flag": True}
 
 
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):

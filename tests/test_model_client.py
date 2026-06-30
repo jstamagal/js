@@ -271,7 +271,7 @@ def test_stream_model_collects_text_reasoning_tool_calls_and_usage():
     assert result.usage.output_tokens == 10
     assert emitted_text == ["DONE"]
     assert executor.request is not None
-    assert executor.request.params == {"max_tokens": 100}
+    assert _pview(executor.request.params) == {"max_tokens": 100}
 
 
 def test_stream_model_passes_reasoning_effort():
@@ -288,10 +288,7 @@ def test_stream_model_passes_reasoning_effort():
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {
-        "max_tokens": 64,
-        "reasoning_effort": "low",
-    }
+    assert _pview(executor.request.params) == {"max_tokens": 64, "reasoning_effort": "low"}
 
 
 def test_stream_model_passes_reasoning_none():
@@ -308,9 +305,7 @@ def test_stream_model_passes_reasoning_none():
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {
-        "max_tokens": 64,
-    }
+    assert _pview(executor.request.params) == {"max_tokens": 64}
 
 
 def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body():
@@ -327,10 +322,7 @@ def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body():
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {
-        "max_tokens": 64,
-        "extra_body": {"max_reasoning_tokens": 32_000},
-    }
+    assert _pview(executor.request.params) == {"max_tokens": 64, "extra_body": {"max_reasoning_tokens": 32_000}}
 
 
 def test_stream_model_strips_minimax_reasoning_by_model_prefix():
@@ -347,7 +339,7 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix():
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {"max_tokens": 64}
+    assert _pview(executor.request.params) == {"max_tokens": 64}
 
 
 
@@ -376,7 +368,7 @@ def test_stream_model_applies_sampling_from_env_for_openai():
         executor=executor,
         sampling=sampling,
     )
-    assert executor.request.params == {
+    assert _pview(executor.request.params) == {
         "max_tokens": 64,
         "temperature": 1.1,
         "top_p": 0.96,
@@ -399,7 +391,7 @@ def test_stream_model_without_sampling_sends_no_overrides():
         on_text=lambda _s: None,
         executor=executor,
     )
-    assert executor.request.params == {"max_tokens": 64}
+    assert _pview(executor.request.params) == {"max_tokens": 64}
 
 
 def test_stream_model_sampling_topk_merges_with_provider_extra_body():
@@ -418,9 +410,10 @@ def test_stream_model_sampling_topk_merges_with_provider_extra_body():
         executor=executor,
         sampling=Sampling(top_k=40),
     )
-    assert executor.request.params == {
+    assert _pview(executor.request.params) == {
         "max_tokens": 64,
-        "extra_body": {"max_reasoning_tokens": 32_000, "top_k": 40},
+        "top_k": 40,
+        "extra_body": {"max_reasoning_tokens": 32_000},
     }
 
 
