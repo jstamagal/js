@@ -89,7 +89,7 @@ def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
     executor = FakeExecutor()
 
     def fake_resolve(model_id, *, provider_id, provider_base_url, provider_api_key, provider_headers=None):
-        return ai.Model(model_id, provider=ai.get_provider("openai", api_key="x"))
+        return ai.Model(id=model_id, provider=ai.get_provider("openai", api_key="x"))
 
     monkeypatch.setattr(model_client, "resolve_model", fake_resolve)
     model_client.stream_model(
