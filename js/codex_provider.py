@@ -332,15 +332,15 @@ def _tools_to_codex(tools: Sequence[ai.types.tools.Tool] | None) -> list[dict[st
     for tool in tools:
         if tool.kind == "provider":
             continue
-        args = tool.args
-        if not isinstance(args, ai.types.tools.FunctionToolArgs):
-            raise TypeError(f"function tool {tool.name!r} has invalid args")
+        spec = tool.spec
+        if not isinstance(spec, ai.types.tools.ToolSpec):
+            raise TypeError(f"function tool {tool.name!r} has invalid spec")
         out.append(
             {
                 "type": "function",
                 "name": tool.name,
-                "description": args.description or "",
-                "parameters": args.params or {"type": "object"},
+                "description": spec.description or "",
+                "parameters": spec.params or {"type": "object"},
             }
         )
     return out or None

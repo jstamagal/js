@@ -176,11 +176,11 @@ async def _collect_provider_stream(provider: codex_provider.OpenAICodexProvider)
         ai.types.tools.Tool(
             kind="function",
             name="fs_read",
-            args=ai.types.tools.FunctionToolArgs(description="read", params={"type": "object"}),
+            spec=ai.types.tools.ToolSpec(description="read", params={"type": "object"}),
         )
     ]
     async for event in provider.stream(
-        ai.Model("gpt-5-codex", provider=provider),
+        ai.Model(id="gpt-5-codex", provider=provider),
         [ai.system_message("system"), ai.user_message("hello")],
         tools=tools,
         params={"max_tokens": 64, "reasoning_effort": "high"},
