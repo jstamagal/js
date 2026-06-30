@@ -19,11 +19,29 @@ class PromptSpec:
     sampling: dict[str, Any] = field(default_factory=dict)
     model: str = ""              # preferred/primary model for this agent and the subagents it spawns
     secondary_model: str = ""    # backup model — reserved for a future (non-config) selection flag
+    max_output_tokens: int | None = None  # agent-default per-call cap from 00-tools.yaml; None = provider/metadata default
+
+
+@dataclass(frozen=True)
+class Benchmark:
+    """One clean-slate benchmark turn from a NN-benchmark.md file."""
+    name: str                    # file stem, e.g. "02-benchmark"
+    prompt: str                  # the one-shot user turn (file body)
+    max_tokens: int | None       # coerced per-benchmark cap; None = uncapped/default
+    max_tokens_set: bool         # whether the frontmatter set max_tokens (distinguishes absent from -1)
 
 
 def _is_zero_file(path: Path) -> bool:
     stem = path.stem
     return stem == "00" or stem.startswith("00-") or stem.startswith("00_")
+
+
+def _is_benchmark_file(path: Path) -> bool:
+    """A NN-benchmark.md (or bare benchmark.md) file: a --bench turn, never part
+    of the system prompt. Excluded universally so `--agent` does not suck
+    benchmark bodies into the persona."""
+    stem = path.stem
+    return stem == "benchmark" or stem.endswith("-benchmark") or stem.endswith("_benchmark")
 
 
 _DEPRECATED_MD_MANIFEST_NOTES: set[Path] = set()
@@ -115,6 +133,16 @@ _SAMPLING_KEYS = (
 )
 
 
+def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
+    """Per-call output cap from a manifest/frontmatter. <= 0 (e.g. -1) means
+    uncapped — fall back to the provider/metadata default (None)."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(f"max_tokens in {path} must be an integer")
+    return raw if raw > 0 else None
+
+
 def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
@@ -169,7 +197,7 @@ def load_agent_prompt_spec(
     if not agents_parts:
         return spec
     system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, max_output_tokens=spec.max_output_tokens)
 
 def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
@@ -190,6 +218,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     sampling: dict[str, Any] = {}
     model: str = ""
     secondary_model: str = ""
+    max_output_tokens: int | None = None
     parts: list[str] = []
 
     if yaml_zero_file is not None:
@@ -198,10 +227,13 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         sampling = _coerce_sampling(yaml_zero_file, manifest.get("sampling"))
         model = str(manifest.get("model") or "").strip()
         secondary_model = str(manifest.get("secondary_model") or "").strip()
+        max_output_tokens = _coerce_max_tokens(yaml_zero_file, manifest.get("max_tokens"))
 
     for path in md_files:
         if yaml_zero_file is not None and _is_zero_file(path):
             continue
+        if _is_benchmark_file(path):
+            continue  # --bench turns, never persona text (see load_benchmarks)
         text = path.read_text(encoding="utf-8")
         body = text.rstrip()
         if yaml_zero_file is None and path == markdown_zero_file:
@@ -212,6 +244,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
                 sampling = _coerce_sampling(path, frontmatter.get("sampling"))
                 model = str(frontmatter.get("model") or "").strip()
                 secondary_model = str(frontmatter.get("secondary_model") or "").strip()
+                max_output_tokens = _coerce_max_tokens(path, frontmatter.get("max_tokens"))
         if body:
             parts.append(body)
 
@@ -221,6 +254,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         sampling=sampling,
         model=model,
         secondary_model=secondary_model,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -245,9 +279,41 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
                 sampling=spec.sampling,
                 model=spec.model,
                 secondary_model=spec.secondary_model,
+                max_output_tokens=spec.max_output_tokens,
             )
     spec = _expand_spec(spec, cfg)
     return spec
+
+
+def resolve_agent_prompt_dir(cfg) -> Path:
+    """The prompt directory `load_configured_prompt_spec` would load for this
+    agent (project > global > repo). --bench reads its NN-benchmark.md files from
+    the same resolved dir as the persona."""
+    roots = tuple(getattr(cfg, "prompt_roots", ()))
+    if len(roots) >= 3:
+        return _most_specific_prompt_dir(cfg.agent_id, roots[0], roots[1], roots[2])
+    return cfg.prompts_dir
+
+
+def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
+    """Ordered NN-benchmark.md turns from a prompt dir. Each is a clean-slate
+    one-shot user turn with an optional `max_tokens` frontmatter override."""
+    if not prompts_dir.is_dir():
+        return []
+    out: list[Benchmark] = []
+    for path in sorted(prompts_dir.glob("*.md")):
+        if not _is_benchmark_file(path):
+            continue
+        frontmatter, body = _split_frontmatter(path, path.read_text(encoding="utf-8"))
+        body = body.strip()
+        if not body:
+            continue
+        max_tokens: int | None = None
+        max_tokens_set = frontmatter is not None and "max_tokens" in frontmatter
+        if max_tokens_set:
+            max_tokens = _coerce_max_tokens(path, frontmatter.get("max_tokens"))
+        out.append(Benchmark(name=path.stem, prompt=body, max_tokens=max_tokens, max_tokens_set=max_tokens_set))
+    return out
 
 
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
@@ -256,7 +322,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     system = expand_prompt(spec.system, allow_code=allow_code)
     if system == spec.system:
         return spec
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, max_output_tokens=spec.max_output_tokens)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system
