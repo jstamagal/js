@@ -200,10 +200,10 @@ async def fetch_models(login: Login) -> list[str]:
         aclose = getattr(provider, "aclose", None)
         if callable(aclose):
             await aclose()
-    rows = [str(mid) for mid in model_ids]
-    if provider_def is not None:
-        return provider_def.filter_models(rows)
-    return rows
+    # No client-side allowlist: the live API list is the source of truth, so the
+    # login picker shows exactly what the endpoint serves (e.g. opencode-go's
+    # glm-5.2) instead of a curated tuple that goes stale the moment a model ships.
+    return [str(mid) for mid in model_ids]
 
 
 def test_login(login: Login) -> list[str]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
@@ -46,7 +46,6 @@ class ProviderDef:
     append_only: bool = False
     reasoning_effort: str | None = None
     models_list_validates_auth: bool = True
-    allowed_models: tuple[str, ...] = ()
     headers: Mapping[str, str] = field(default_factory=dict)
 
     @property
@@ -56,15 +55,6 @@ class ProviderDef:
     @property
     def login_base_url_field(self) -> bool:
         return not self.established or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
-
-    def filter_models(self, model_ids: Iterable[str]) -> list[str]:
-        if not self.allowed_models:
-            return [str(model_id) for model_id in model_ids]
-        allowed = set(self.allowed_models)
-        return [model_id for model_id in model_ids if str(model_id) in allowed]
-
-    def supports_model(self, model_id: str) -> bool:
-        return not self.allowed_models or model_id in set(self.allowed_models)
 
 
 def _p(
@@ -85,7 +75,6 @@ def _p(
     append_only: bool = False,
     reasoning_effort: str | None = None,
     models_list_validates_auth: bool = True,
-    allowed_models: tuple[str, ...] = (),
     headers: Mapping[str, str] | None = None,
 ) -> ProviderDef:
     return ProviderDef(
@@ -105,30 +94,9 @@ def _p(
         append_only=append_only,
         reasoning_effort=reasoning_effort,
         models_list_validates_auth=models_list_validates_auth,
-        allowed_models=allowed_models,
         headers=headers or {},
     )
 
-
-_OPENCODE_GO_OPENAI_MODELS: tuple[str, ...] = (
-    "glm-5.1",
-    "glm-5",
-    "kimi-k2.7-code",
-    "kimi-k2.6",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "mimo-v2.5",
-    "mimo-v2.5-pro",
-)
-
-_OPENCODE_GO_ANTHROPIC_MODELS: tuple[str, ...] = (
-    "minimax-m3",
-    "minimax-m2.7",
-    "minimax-m2.5",
-    "qwen3.7-max",
-    "qwen3.7-plus",
-    "qwen3.6-plus",
-)
 
 _OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1"
 _BUILTINS: tuple[ProviderDef, ...] = (
@@ -191,7 +159,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("OPENCODE_GO_BASE_URL",),
         model_env=("OPENCODE_GO_MODEL",),
         models_list_validates_auth=False,
-        allowed_models=_OPENCODE_GO_OPENAI_MODELS,
     ),
     _p(
         "opencode-go-anthropic",
@@ -204,7 +171,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("OPENCODE_GO_ANTHROPIC_BASE_URL",),
         model_env=("OPENCODE_GO_ANTHROPIC_MODEL",),
         models_list_validates_auth=False,
-        allowed_models=_OPENCODE_GO_ANTHROPIC_MODELS,
     ),
     _p(
         "mimo",
@@ -498,17 +464,3 @@ def provider_for_login(provider_id: str) -> ProviderDef:
     return provider
 
 
-def filter_login_models(provider_id: str, model_ids: Iterable[str]) -> list[str]:
-    provider = get_provider(provider_id)
-    if provider is None:
-        return [str(model_id) for model_id in model_ids]
-    return provider.filter_models(model_ids)
-
-
-def provider_supports_model(provider_id: str | None, model_id: str | None) -> bool:
-    if provider_id is None or model_id is None:
-        return True
-    provider = get_provider(provider_id)
-    if provider is None:
-        return True
-    return provider.supports_model(model_id)

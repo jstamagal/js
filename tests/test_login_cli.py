@@ -85,32 +85,28 @@ def test_opencode_go_anthropic_uses_anthropic_root_base_url():
     assert provider.models_list_validates_auth is False
 
 
-def test_opencode_go_login_filters_openai_models():
-    provider = providers.provider_for_login("opencode-go")
-    models = provider.filter_models(
-        [
-            "deepseek-v4-flash",
-            "glm-5.1",
-            "minimax-m3",
-            "qwen3.7-plus",
-            "mimo-v2.5-pro",
-        ]
-    )
-    assert models == ["deepseek-v4-flash", "glm-5.1", "mimo-v2.5-pro"]
+def test_fetch_models_passes_through_live_list_without_allowlist(monkeypatch):
+    # No client-side allowlist: whatever the endpoint serves is what the login
+    # picker shows — including freshly shipped ids the old tuple would have hidden.
+    import ai
 
+    live = ["glm-5.2", "glm-5.1", "kimi-k2.7-code", "mimo-v2.5", "freshly-shipped"]
 
-def test_opencode_go_anthropic_login_filters_anthropic_models():
-    provider = providers.provider_for_login("opencode-go-anthropic")
-    models = provider.filter_models(
-        [
-            "deepseek-v4-flash",
-            "glm-5.1",
-            "minimax-m3",
-            "qwen3.7-plus",
-            "mimo-v2.5-pro",
-        ]
+    class _FakeProvider:
+        async def list_models(self):
+            return live
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(ai, "get_provider", lambda *a, **k: _FakeProvider())
+    login = logins.Login(
+        provider_id="opencode-go",
+        sdk_provider_id="openai",
+        provider_base_url="https://opencode.ai/zen/go/v1",
+        provider_api_key="k",
     )
-    assert models == ["minimax-m3", "qwen3.7-plus"]
+    assert logins.test_login(login) == live  # nothing filtered out
 
 
 def test_secondary_test_enter_adds_without_testing(monkeypatch):
