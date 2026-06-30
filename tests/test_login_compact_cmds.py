@@ -115,7 +115,7 @@ def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, 
     assert cli._handle_command('/set provider.extra {"extra_body":{"compact_flag":true}}', state, cfg) is True
     assert cli._handle_command("/compact up to here", state, cfg) is True
 
-    assert params_seen[0]["extra_body"] == {"compact_flag": True}
+    assert params_seen[0].extra_body == {"compact_flag": True}
 
 
 def test_compact_auto_bad_arg_usage(tmp_path):

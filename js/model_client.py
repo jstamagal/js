@@ -21,6 +21,7 @@ import ai.types.messages
 import ai.types.tools
 import ai.types.usage
 import ai.models
+from ai.models.core import params as ai_params
 
 
 @dataclass(frozen=True)
@@ -369,6 +370,57 @@ async def _stream_async(
     )
 
 
+def _sampler_map(sampling: Sampling, transport: str | None) -> dict:
+    """Express the sampling knobs THIS transport accepts as ai>=0.2.1
+    SamplerParamsMap entries (keyed by param class). The transport filter
+    (``sampling.call_params``) is kept so js never sends a wire an unsupported
+    knob — only the encoding changed from a flat dict to structured params."""
+    values = dict(sampling.call_params(transport))
+    values.update(values.pop("extra_body", {}) or {})
+    out: dict = {}
+    if "temperature" in values:
+        out[ai_params.TemperatureSamplerParams] = ai_params.TemperatureSamplerParams(
+            temperature=values["temperature"]
+        )
+    if "top_p" in values:
+        out[ai_params.TopPSamplerParams] = ai_params.TopPSamplerParams(top_p=values["top_p"])
+    if "top_k" in values:
+        out[ai_params.TopKSamplerParams] = ai_params.TopKSamplerParams(top_k=values["top_k"])
+    rep: dict[str, float] = {}
+    if "repetition_penalty" in values:
+        rep["repetition_penalty"] = values["repetition_penalty"]
+    if "presence_penalty" in values:
+        rep["presence_penalty"] = values["presence_penalty"]
+    if rep:
+        out[ai_params.RepetitionPenaltyParams] = ai_params.RepetitionPenaltyParams(**rep)
+    return out
+
+
+def _build_inference_params(
+    sampling: Sampling,
+    transport: str | None,
+    *,
+    reasoning: ai_params.ReasoningParams | None,
+    output: ai_params.OutputParams | None,
+    extra_body: dict[str, Any],
+) -> ai_params.InferenceRequestParams | None:
+    """Assemble an ``InferenceRequestParams`` from the parts, or None when there
+    is nothing to send (so the provider keeps every default)."""
+    kwargs: dict[str, Any] = {}
+    sampler_map = _sampler_map(sampling, transport)
+    if sampler_map:
+        kwargs["sampling"] = sampler_map
+    if reasoning is not None:
+        kwargs["reasoning"] = reasoning
+    if output is not None:
+        kwargs["output"] = output
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    if not kwargs:
+        return None
+    return ai_params.InferenceRequestParams(**kwargs)
+
+
 def stream_model(
     *,
     model_id: str,
@@ -397,8 +449,20 @@ def stream_model(
         provider_api_key=provider_api_key,
         provider_headers=provider_headers,
     )
-    params: dict[str, Any] = dict(provider_extra or {})
-    # Per-provider params: this is the canonical place to encode quirks.
+    # Per-provider params: this is the canonical place to encode quirks. We build
+    # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
+    # field to the provider's wire shape, so js no longer hand-routes sampling
+    # knobs into top-level-vs-extra_body per transport — it declares intent and
+    # lets the provider drop what it can't take.
+    # provider.extra is free-form raw passthrough. In the structured model every
+    # raw kwarg rides extra_body, so fold a nested ``extra_body`` key up and carry
+    # any sibling keys alongside it.
+    extra_body: dict[str, Any] = {}
+    _provider_extra = dict(provider_extra or {})
+    _nested_extra_body = _provider_extra.pop("extra_body", None)
+    if isinstance(_nested_extra_body, dict):
+        extra_body.update(_nested_extra_body)
+    extra_body.update(_provider_extra)
     provider_def = providers.get_provider(provider_id)
     provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
     sdk_provider_name = (
@@ -411,40 +475,40 @@ def stream_model(
     is_codex = codex_auth.is_codex_provider(provider_name)
     is_deepseek = provider_name == "deepseek" or "deepseek" in model_name
     is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
-    if max_output_tokens is not None and not is_codex:
-        params["max_tokens"] = max_output_tokens
-    if reasoning_effort is not None and not is_minimax:
-        if is_codex:
-            params["reasoning_effort"] = reasoning_effort
-        elif reasoning_effort == "none":
-            if not explicit_provider:
-                params["reasoning"] = {"effort": None}
-        elif explicit_provider:
-            if sdk_provider_name == "openai":
-                params["reasoning_effort"] = reasoning_effort
-        else:
-            params["reasoning"] = {"effort": reasoning_effort}
-    # DeepSeek gets the maximum reasoning budget by default. Direct providers
-    # use OpenAI-compatible chat completions, so provider-specific extras must go
-    # through extra_body instead of top-level kwargs.
-    if is_deepseek and reasoning_effort != "none":
-        if explicit_provider:
-            extra_body = dict(params.get("extra_body") or {})
-            extra_body.setdefault("max_reasoning_tokens", 32_000)
-            params["extra_body"] = extra_body
-        else:
-            params.setdefault("max_reasoning_tokens", 32_000)
 
-    sampling_params = (sampling or Sampling()).call_params(
-        provider_def.transport if provider_def is not None else None
+    output_params = (
+        ai_params.OutputParams(max_tokens=max_output_tokens)
+        if max_output_tokens is not None and not is_codex
+        else None
     )
-    if sampling_params:
-        sampling_extra_body = sampling_params.pop("extra_body", None)
-        params.update(sampling_params)
-        if sampling_extra_body:
-            extra_body = dict(params.get("extra_body") or {})
-            extra_body.update(sampling_extra_body)
-            params["extra_body"] = extra_body
+
+    reasoning_params: ai_params.ReasoningParams | None = None
+    if reasoning_effort is not None and not is_minimax:
+        if reasoning_effort == "none":
+            # Only the gateway path explicitly disables; explicit providers that
+            # default reasoning on are left to their own default (prior behavior).
+            if not explicit_provider:
+                reasoning_params = ai_params.ReasoningParams(effort=None)
+        elif explicit_provider:
+            # Direct DeepSeek/Anthropic-style providers steer reasoning via their
+            # own budget (below), not an effort knob — only openai/codex take effort.
+            if is_codex or sdk_provider_name == "openai":
+                reasoning_params = ai_params.ReasoningParams(effort=reasoning_effort)
+        else:
+            reasoning_params = ai_params.ReasoningParams(effort=reasoning_effort)
+
+    # DeepSeek gets the maximum reasoning budget by default, passed straight
+    # through to its OpenAI-compatible endpoint as an extra body field.
+    if is_deepseek and reasoning_effort != "none":
+        extra_body.setdefault("max_reasoning_tokens", 32_000)
+
+    params = _build_inference_params(
+        sampling or Sampling(),
+        provider_def.transport if provider_def is not None else None,
+        reasoning=reasoning_params,
+        output=output_params,
+        extra_body=extra_body,
+    )
 
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense
     # that we never rewrite prior assistant/tool messages to satisfy a transport.
@@ -456,7 +520,7 @@ def stream_model(
                 model=model,
                 messages=messages,
                 tools=tools,
-                params=params if params else None,
+                params=params,
                 executor=executor,
                 on_text=on_text,
             )

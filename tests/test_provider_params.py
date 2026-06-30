@@ -10,6 +10,37 @@ from js.model_client import ModelStreamResult
 from js.sampling import Sampling
 
 
+def _pview(p) -> dict:
+    """Flatten an ai>=0.2.1 InferenceRequestParams to a plain dict for assertions."""
+    from ai.models.core import params as ap
+
+    out: dict = {}
+    if p is None:
+        return out
+    if p.output is not None and p.output.max_tokens is not None:
+        out["max_tokens"] = p.output.max_tokens
+    if isinstance(p.reasoning, ap.ReasoningParams):
+        out["reasoning_effort"] = p.reasoning.effort
+    samp = p.sampling
+    if not isinstance(samp, ap.ModelProviderDefault):
+        for cls, key in (
+            (ap.TemperatureSamplerParams, "temperature"),
+            (ap.TopPSamplerParams, "top_p"),
+            (ap.TopKSamplerParams, "top_k"),
+        ):
+            if cls in samp:
+                out[key] = getattr(samp[cls], key)
+        rep = samp.get(ap.RepetitionPenaltyParams)
+        if rep is not None:
+            if not isinstance(rep.repetition_penalty, ap.ModelProviderDefault) and rep.repetition_penalty is not None:
+                out["repetition_penalty"] = rep.repetition_penalty
+            if not isinstance(rep.presence_penalty, ap.ModelProviderDefault) and rep.presence_penalty is not None:
+                out["presence_penalty"] = rep.presence_penalty
+    if p.extra_body:
+        out["extra_body"] = dict(p.extra_body)
+    return out
+
+
 class _FakeProvider:
     async def aclose(self) -> None:
         pass
@@ -73,7 +104,7 @@ def test_deepseek_reasoning_budget_uses_extra_body_when_enabled(monkeypatch):
         reasoning_effort="high",
     )
 
-    assert captured["params"] == {
+    assert _pview(captured["params"]) == {
         "max_tokens": 64,
         "extra_body": {"max_reasoning_tokens": 32_000},
     }
@@ -87,7 +118,7 @@ def test_deepseek_reasoning_budget_is_omitted_when_reasoning_is_off(monkeypatch)
         reasoning_effort="none",
     )
 
-    assert captured["params"] == {"max_tokens": 64}
+    assert _pview(captured["params"]) == {"max_tokens": 64}
 
 
 def test_anthropic_wire_drops_openai_and_vllm_penalties(monkeypatch):
@@ -104,7 +135,7 @@ def test_anthropic_wire_drops_openai_and_vllm_penalties(monkeypatch):
         ),
     )
 
-    assert captured["params"] == {
+    assert _pview(captured["params"]) == {
         "max_tokens": 64,
         "temperature": 0.7,
         "top_p": 0.9,
@@ -127,7 +158,7 @@ def test_openai_wire_emits_reasoning_effort_and_supported_sampling(monkeypatch):
         ),
     )
 
-    assert captured["params"] == {
+    assert _pview(captured["params"]) == {
         "max_tokens": 64,
         "reasoning_effort": "medium",
         "temperature": 0.7,
@@ -151,13 +182,14 @@ def test_openai_compatible_wire_keeps_reasoning_and_vllm_sampling(monkeypatch):
         ),
     )
 
-    assert captured["params"] == {
+    assert _pview(captured["params"]) == {
         "max_tokens": 64,
         "reasoning_effort": "high",
         "temperature": 0.7,
         "top_p": 0.9,
+        "top_k": 50,
+        "repetition_penalty": 1.1,
         "presence_penalty": 1.2,
-        "extra_body": {"top_k": 50, "repetition_penalty": 1.1},
     }
 
 
@@ -213,7 +245,7 @@ def test_append_only_providers_replay_history_without_rewriting_messages(
         model_id=model_id,
         messages=messages,
     )
-    assert captured["params"] == expected_params
+    assert _pview(captured["params"]) == expected_params
 
     assert captured["messages"] is messages
     assert [id(message) for message in captured["messages"]] == original_ids
