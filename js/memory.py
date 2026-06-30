@@ -84,6 +84,13 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
     return healed
 
 
+def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
+    """Public entry to the orphan-tool-call backfill, for the live REPL to repair
+    an interrupted turn's tail in memory before the next turn (the on-load path in
+    `load_messages` already heals the persisted copy)."""
+    return _heal_orphaned_tool_calls(messages)
+
+
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
     """Drop ``reasoning_content`` from assistant messages that have NO ``tool_calls``
     when rebuilding the in-memory conversation. The on-disk JSONL keeps the field
