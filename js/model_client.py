@@ -328,7 +328,7 @@ async def _stream_async(
     model: ai.Model,
     messages: list[ai.messages.Message],
     tools: list[ai.types.tools.Tool] | None,
-    params: dict[str, Any] | None,
+    params: ai_params.InferenceRequestParams | None,
     executor: ai.models.StreamExecutor | None,
     on_text: Callable[[str], None],
 ) -> ModelStreamResult:
