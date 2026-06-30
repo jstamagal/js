@@ -69,7 +69,7 @@ def resolve_model(
             provider_base_url=provider_base_url,
             provider_api_key=provider_api_key,
         )
-        return ai.Model(model_id, provider=provider)
+        return ai.Model(id=model_id, provider=provider)
 
     if provider_def is not None:
         providers.assert_endpoint_configured(provider_def, provider_base_url)

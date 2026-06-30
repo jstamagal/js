@@ -83,12 +83,44 @@ def _usage_events(
     ]
 
 
+def _pview(p) -> dict:
+    """Flatten an ai>=0.2.1 InferenceRequestParams back to a plain dict so the
+    param-shaping tests stay readable. Only set fields appear."""
+    from ai.models.core import params as ap
+
+    out: dict = {}
+    if p is None:
+        return out
+    if p.output is not None and p.output.max_tokens is not None:
+        out["max_tokens"] = p.output.max_tokens
+    if isinstance(p.reasoning, ap.ReasoningParams):
+        out["reasoning_effort"] = p.reasoning.effort
+    samp = p.sampling
+    if not isinstance(samp, ap.ModelProviderDefault):
+        for cls, key in (
+            (ap.TemperatureSamplerParams, "temperature"),
+            (ap.TopPSamplerParams, "top_p"),
+            (ap.TopKSamplerParams, "top_k"),
+        ):
+            if cls in samp:
+                out[key] = getattr(samp[cls], key)
+        rep = samp.get(ap.RepetitionPenaltyParams)
+        if rep is not None:
+            if not isinstance(rep.repetition_penalty, ap.ModelProviderDefault) and rep.repetition_penalty is not None:
+                out["repetition_penalty"] = rep.repetition_penalty
+            if not isinstance(rep.presence_penalty, ap.ModelProviderDefault) and rep.presence_penalty is not None:
+                out["presence_penalty"] = rep.presence_penalty
+    if p.extra_body:
+        out["extra_body"] = dict(p.extra_body)
+    return out
+
+
 def test_resolve_model_uses_gateway_when_provider_unset(monkeypatch):
     captured = {}
 
     def fake_get_model(model_id: str) -> ai.Model:
         captured["model_id"] = model_id
-        return ai.Model("fake-id", provider=ai.get_provider("openai", api_key="x"))
+        return ai.Model(id="fake-id", provider=ai.get_provider("openai", api_key="x"))
 
     monkeypatch.setattr(ai, "get_model", fake_get_model)
 
