@@ -56,6 +56,124 @@ def _curses_menu(stdscr: curses.window, items: list[str], title: str) -> int | N
             return None
 
 
+_NPM_DIALECT = {
+    "@ai-sdk/anthropic": "anthropic",
+    "@ai-sdk/google": "google",
+}
+
+
+def _dialect_map(provider_id: str) -> dict[str, str]:
+    """Map model id -> wire dialect tag from models.dev ``provider_config.npm``.
+
+    A multi-endpoint gateway (opencode-go) lists its anthropic-endpoint models
+    on the openai endpoint too, so the tag tells which models actually belong to
+    *this* login's wire. Best-effort: an empty/failed lookup just yields no tags.
+    """
+    try:
+        from . import model_metadata
+        import modelsdotdev
+
+        model_metadata.ensure_fresh_catalog()
+    except Exception:  # noqa: BLE001 - annotation is cosmetic; never block login
+        return {}
+    canonical = providers.normalize_provider_id(provider_id) or provider_id
+    candidates = {canonical}
+    if canonical.startswith("opencode"):
+        candidates |= {"opencode", "opencode-go"}
+    out: dict[str, str] = {}
+    for model in modelsdotdev.iter_models():
+        if model.provider_id not in candidates:
+            continue
+        config = getattr(model, "provider_config", None)
+        npm = getattr(config, "npm", None) if config is not None else None
+        tag = _NPM_DIALECT.get(npm, "openai") if npm else "openai"
+        # Prefer an explicit non-openai dialect if any entry carries one.
+        if model.id not in out or (tag != "openai" and out[model.id] == "openai"):
+            out[model.id] = tag
+    return out
+
+
+def _curses_multiselect(
+    stdscr: curses.window,
+    rows: list[tuple[str, str]],
+    title: str,
+    *,
+    preselected: set[int],
+) -> list[int] | None:
+    """Spacebar checklist. Returns selected indices, or None on cancel.
+
+    ``rows`` are ``(label, annotation)``; annotation is shown dimmed in parens.
+    """
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    n = len(rows)
+    if n == 0:
+        return []
+    idx = 0
+    selected = set(preselected)
+    while True:
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+        stdscr.addstr(0, 0, title[: w - 1])
+        stdscr.addstr(1, 0, "-" * min(w - 1, max(1, len(title))))
+        start = max(0, idx - max(0, h - 7))
+        visible = rows[start : start + max(1, h - 5)]
+        for off, (label, annotation) in enumerate(visible):
+            i = start + off
+            box = "[x]" if i in selected else "[ ]"
+            cursor = ">" if i == idx else " "
+            tag = f"  ({annotation})" if annotation else ""
+            stdscr.addstr(off + 3, 0, f"{cursor} {box} {label}{tag}"[: w - 1])
+        stdscr.addstr(h - 2, 0, f"{len(selected)}/{n} selected"[: w - 1])
+        stdscr.addstr(
+            h - 1, 0,
+            "↑↓/jk move  space toggle  a all  n none  enter confirm  q cancel"[: w - 1],
+        )
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            idx = max(0, idx - 1)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            idx = min(n - 1, idx + 1)
+        elif key == ord(" "):
+            selected.discard(idx) if idx in selected else selected.add(idx)
+        elif key in (ord("a"), ord("A")):
+            selected = set(range(n))
+        elif key in (ord("n"), ord("N")):
+            selected = set()
+        elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
+            return sorted(selected)
+        elif key in (ord("q"), 27, 3):
+            return None
+
+
+def _select_models_to_cache(provider_id: str, models: list[str]) -> list[str] | None:
+    """Curate which fetched models to cache. None == user cancelled.
+
+    Interactive: a spacebar checklist (all preselected, so plain Enter keeps the
+    lot) plus a free-text line to add ids the endpoint omitted. Non-interactive
+    (piped/no TTY): keep every fetched model, the prior behavior.
+    """
+    if not models:
+        return models
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return models
+    dialects = _dialect_map(provider_id)
+    rows = [(model_id, dialects.get(model_id, "")) for model_id in models]
+    title = f"select models to keep for {provider_id}  (cached for /model + --list-models)"
+    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=set(range(len(models))))
+    if chosen is None:
+        return None
+    selected = [models[i] for i in chosen]
+    known = set(models)
+    extra = _input("add model ids the list missed (comma-separated, enter to skip)", default="")
+    for raw in (extra or "").split(","):
+        model_id = raw.strip()
+        if model_id and model_id not in known and model_id not in selected:
+            selected.append(model_id)
+    return selected
+
+
 def _login_provider_rows() -> list[tuple[str, str, str]]:
     saved = load_logins()
     rows: list[tuple[str, str, str]] = []
@@ -288,11 +406,14 @@ def _run_codex_login(provider_id: str) -> int:
         print(f"{C.ORANGE}login failed: {type(exc).__name__}: {exc}{C.RESET}", file=sys.stderr)
         return 1
 
+    to_cache = _select_models_to_cache(login.provider_id, models)
+    if to_cache is None:
+        return 0
     save_login(login)
-    cache_models(login.provider_id, models)
+    cache_models(login.provider_id, to_cache)
     who = f" ({login.codex_email})" if login.codex_email else ""
     print(f"{C.GREEN}*** Provider added: {login.provider_id}{who}{C.RESET}")
-    print(f"cached {len(models)} models")
+    print(f"cached {len(to_cache)} models")
     return 0
 
 
@@ -334,10 +455,13 @@ def _run_login(provider_id: str | None = None) -> int:
         return 1
 
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+    to_cache = _select_models_to_cache(canonical_id, models)
+    if to_cache is None:
+        return 0
     save_login(login)
-    cache_models(canonical_id, models)
+    cache_models(canonical_id, to_cache)
     print(f"{C.GREEN}*** Provider added.{C.RESET}")
-    print(f"cached {len(models)} models")
+    print(f"cached {len(to_cache)} models")
     return 0
 
 
