@@ -297,22 +297,19 @@ API key (`OPENCODE_GO_API_KEY`) but route over different transports:
 - `opencode-go-anthropic` uses the Anthropic-compatible adapter
   (`sdk=anthropic`) at `https://opencode.ai/zen/go`.
 
-Both endpoints advertise the same upstream catalog, so each provider applies an
-`allowed_models` filter (`ProviderDef.filter_models`) to keep only the models its
-transport actually serves. The filter is what the JSON bridge surfaces:
+Both endpoints advertise their live catalog through the API. js does not apply a
+client-side allow-list — the endpoint is the source of truth, so the JSON bridge
+and the login picker surface exactly what the upstream `list_models` returns
+(including freshly shipped ids like `glm-5.2` that a curated tuple would hide):
 
 ```bash
 python -m js --models-json opencode-go
-# {"models": ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5", "glm-5.1",
-#             "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5", "mimo-v2.5-pro"]}
-python -m js --models-json opencode-go-anthropic
-# {"models": ["minimax-m2.5", "minimax-m2.7", "minimax-m3",
-#             "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"]}
+# {"models": [...whatever https://opencode.ai/zen/go/v1 serves right now...]}
 ```
 
-The same allow-list backs `supports_model`, so selecting a model outside a
-provider's set is rejected before a request is sent (`model_client` raises
-`does not serve model ...; allowed models: ...`).
+There is no model gate: a model id is passed straight through to the provider,
+which is the one authority on whether it serves it (and 400s with its own message
+if it does not).
 
 ### JSON bridge commands
 
