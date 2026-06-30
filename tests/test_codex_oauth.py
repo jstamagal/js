@@ -110,6 +110,41 @@ def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
     assert params.reasoning.effort == "xhigh"
 
 
+def test_stream_model_drives_codex_provider_end_to_end(monkeypatch):
+    # The whole chain through stream_model: resolve_model builds the codex
+    # provider, ai.stream's default executor calls provider.stream, and the
+    # Responses SSE shape is decoded back to text — no executor stub.
+    client = _FakeCodexHttpClient()
+
+    def fake_provider_from_login_or_token(*, provider_base_url, provider_api_key):
+        return codex_provider.OpenAICodexProvider(
+            access_token=_fake_jwt(), account_id="acct_123",
+            base_url="https://chatgpt.com/backend-api", client=client,
+        )
+
+    monkeypatch.setattr(
+        codex_provider, "provider_from_login_or_token", fake_provider_from_login_or_token
+    )
+    chunks: list[str] = []
+    result = model_client.stream_model(
+        model_id="gpt-5.5",
+        provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api",
+        provider_api_key=_fake_jwt(),
+        messages=[ai.user_message("ping")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort="max",  # codex has no 'max' stop -> dial snaps to 'xhigh'
+        on_text=chunks.append,
+    )
+    assert result.text == "hello"
+    assert result.finish_reason == "stop"
+    assert "".join(chunks) == "hello"
+    body = client.stream_calls[0]["json"]
+    assert body["reasoning"] == {"effort": "xhigh", "summary": "detailed"}
+    assert "max_tokens" not in body  # codex rejects output caps
+
+
 class _FakeModelListResponse:
     status_code = 200
 
@@ -182,17 +217,21 @@ async def _collect_provider_stream(provider: codex_provider.OpenAICodexProvider)
             spec=ai.types.tools.ToolSpec(description="read", params={"type": "object"}),
         )
     ]
+    from ai.models.core import params as ai_params
+
     async for event in provider.stream(
         ai.Model(id="gpt-5-codex", provider=provider),
         [ai.system_message("system"), ai.user_message("hello")],
         tools=tools,
-        params={"max_tokens": 64, "reasoning_effort": "high"},
+        params=ai_params.InferenceRequestParams(
+            output=ai_params.OutputParams(max_tokens=64),
+            reasoning=ai_params.ReasoningParams(effort="high"),
+        ),
     ):
         events.append(event)
     return events
 
 
-@pytest.mark.skip(reason="OpenAICodexProvider: port to ai>=0.2.1 pydantic Provider API pending (unused OAuth provider)")
 def test_codex_provider_lists_models_and_streams_responses_shape():
     client = _FakeCodexHttpClient()
     provider = codex_provider.OpenAICodexProvider(
@@ -270,7 +309,6 @@ def _provider_with_client(client) -> codex_provider.OpenAICodexProvider:
     )
 
 
-@pytest.mark.skip(reason="OpenAICodexProvider: port to ai>=0.2.1 pydantic Provider API pending (unused OAuth provider)")
 def test_codex_model_list_includes_live_ids_without_allowlist():
     # The endpoint advertises ids beyond the historical two-model set; every
     # api-usable id must come through, including freshly shipped models.
@@ -291,7 +329,6 @@ def test_codex_model_list_includes_live_ids_without_allowlist():
     assert models == sorted(models)
 
 
-@pytest.mark.skip(reason="OpenAICodexProvider: port to ai>=0.2.1 pydantic Provider API pending (unused OAuth provider)")
 def test_codex_model_list_falls_through_to_second_path_and_reports_errors():
     # First path 400s, second path returns models -> still succeeds.
     bad = _StaticModelListResponse(400, {"error": {"message": "no codex models here"}})
@@ -345,7 +382,6 @@ class _ErrorStreamClient:
         return None
 
 
-@pytest.mark.skip(reason="OpenAICodexProvider: port to ai>=0.2.1 pydantic Provider API pending (unused OAuth provider)")
 def test_codex_stream_400_names_model_and_captures_body():
     body = {"error": {"message": "the requested model is unavailable", "code": "model_not_found", "type": "invalid_request_error"}}
     provider = _provider_with_client(_ErrorStreamClient(body))

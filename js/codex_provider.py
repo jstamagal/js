@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import ai
 import httpx
+import pydantic
+from ai.models.core import params as ai_params
 
 from . import codex_auth
 
@@ -347,18 +349,37 @@ def _tools_to_codex(tools: Sequence[ai.types.tools.Tool] | None) -> list[dict[st
 
 
 
+def _effort_from_params(params: ai_params.InferenceRequestParams | None) -> str | None:
+    if params is None:
+        return None
+    reasoning = params.reasoning
+    if not isinstance(reasoning, ai_params.ReasoningParams):
+        return None
+    effort = reasoning.effort
+    if effort is None or isinstance(effort, ai_params.ModelProviderDefault):
+        return None
+    return effort
+
+
+def _sampling_from_params(
+    params: ai_params.InferenceRequestParams | None,
+) -> tuple[float | None, float | None]:
+    if params is None:
+        return None, None
+    sampling = params.sampling
+    if isinstance(sampling, ai_params.ModelProviderDefault):
+        return None, None
+    temp = sampling.get(ai_params.TemperatureSamplerParams)
+    top_p = sampling.get(ai_params.TopPSamplerParams)
+    return (temp.temperature if temp is not None else None), (top_p.top_p if top_p is not None else None)
+
+
 async def _build_body_async(
     model: ai.Model,
     messages: list[ai.messages.Message],
     tools: Sequence[ai.types.tools.Tool] | None,
-    params: Any,
+    params: ai_params.InferenceRequestParams | None,
 ) -> dict[str, Any]:
-    if params is None:
-        stream_params: dict[str, Any] = {}
-    elif isinstance(params, Mapping):
-        stream_params = dict(params)
-    else:
-        raise TypeError("Codex stream params must be a dict")
     instructions, input_items = await _messages_to_codex(messages)
     body: dict[str, Any] = {
         "model": model.id,
@@ -373,25 +394,39 @@ async def _build_body_async(
     codex_tools = _tools_to_codex(tools)
     if codex_tools:
         body["tools"] = codex_tools
-    effort = stream_params.pop("reasoning_effort", None)
-    if effort is None:
-        reasoning = stream_params.pop("reasoning", None)
-        if isinstance(reasoning, Mapping):
-            effort = reasoning.get("effort")
+    effort = _effort_from_params(params)
     if effort is not None:
         body["reasoning"] = {"effort": effort, "summary": "detailed"}
-    # Codex rejects caller-supplied output caps; keep the rest of the harmless knobs.
-    stream_params.pop("max_tokens", None)
-    stream_params.pop("max_output_tokens", None)
-    stream_params.pop("max_completion_tokens", None)
-    for key in ("temperature", "top_p", "presence_penalty", "parallel_tool_calls", "tool_choice"):
-        if key in stream_params:
-            body[key] = stream_params[key]
+    # Codex rejects caller-supplied output caps; forward only the sampling knobs
+    # the codex transport admitted into params.sampling.
+    temperature, top_p = _sampling_from_params(params)
+    if temperature is not None:
+        body["temperature"] = temperature
+    if top_p is not None:
+        body["top_p"] = top_p
     return body
 
 
 class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
-    """Provider backed by ChatGPT/Codex OAuth and the Codex Responses endpoint."""
+    """Provider backed by ChatGPT/Codex OAuth and the Codex Responses endpoint.
+
+    ai>=0.2.1 made ``Provider`` a frozen pydantic model: identity and static
+    config are fields, the upstream client is a private attr installed via
+    ``_set_client``, and ``base_url``/``api_key`` are read-only properties.
+    Codex's mutable OAuth state — the rotating access token, refresh token, and
+    account id — lives in private attrs so a refresh can update it in place.
+    """
+
+    provider_class_id: str = "openai-codex"
+    name: str = _PROVIDER
+    default_base_url: str = codex_auth.DEFAULT_CODEX_BASE_URL
+
+    _access_token: str = pydantic.PrivateAttr(default="")
+    _refresh_token: str | None = pydantic.PrivateAttr(default=None)
+    _expires_at: float | None = pydantic.PrivateAttr(default=None)
+    _account_id: str = pydantic.PrivateAttr(default="")
+    _login: Login | None = pydantic.PrivateAttr(default=None)
+    _owns_client: bool = pydantic.PrivateAttr(default=True)
 
     def __init__(
         self,
@@ -406,19 +441,19 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     ) -> None:
         if not access_token:
             raise ai.ConfigurationError("OpenAI Codex requires an OAuth access token; run js --login openai-codex")
+        resolved_account_id = _account_id_from_token(access_token, account_id)
+        super().__init__(
+            name=_PROVIDER,
+            default_base_url=_trim_base_url(base_url),
+            api_key_value=access_token,
+        )
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._expires_at = expires_at
-        self._account_id = _account_id_from_token(access_token, account_id)
+        self._account_id = resolved_account_id
         self._login = login
         self._owns_client = client is None
-        super().__init__(
-            name=_PROVIDER,
-            adapter="openai-codex-responses",
-            base_url=_trim_base_url(base_url),
-            api_key=access_token,
-            client=client or httpx.AsyncClient(timeout=None),
-        )
+        self._set_client(client or httpx.AsyncClient(timeout=None))
 
     @classmethod
     def from_login(cls, login: Login) -> OpenAICodexProvider:
