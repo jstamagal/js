@@ -8,6 +8,7 @@ This is the canonical provider boundary for the migration.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,13 @@ class ModelStreamResult:
     usage: ai.types.usage.Usage | None
     finish_reason: str  # "tool_calls" when tool_calls is non-empty, otherwise "stop"
     assistant_message: ai.messages.Message
+    # Wall-clock measured around `ai.stream` itself (isolated from run_turn's
+    # bookkeeping). first_token_s is time-to-first-*text*-token: js collects
+    # reasoning at end (not via on_text), and a tool-only turn streams no text,
+    # so it is None when the model emitted no visible text. elapsed_s is the full
+    # stream duration. Both default to 0/None so older constructors stay valid.
+    first_token_s: float | None = None
+    elapsed_s: float = 0.0
 
 
 def resolve_model(
@@ -380,10 +388,15 @@ async def _stream_async(
     if executor is not None:
         kwargs["executor"] = executor
 
+    start = time.perf_counter()
+    first_token_s: float | None = None
     async with ai.stream(**kwargs) as stream:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):
+                if first_token_s is None:
+                    first_token_s = time.perf_counter() - start
                 on_text(event.chunk)
+    elapsed_s = time.perf_counter() - start
 
     text = stream.text
     reasoning = stream.message.reasoning
@@ -404,6 +417,8 @@ async def _stream_async(
         usage=usage,
         finish_reason=finish,
         assistant_message=stream.message,
+        first_token_s=first_token_s,
+        elapsed_s=elapsed_s,
     )
 
 
