@@ -2107,7 +2107,6 @@ def main(argv: list[str] | None = None) -> int:
                 _append_turn(cfg, m)
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
-            print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
             cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             if _event_results_changed_sampling(cancel_event.results):
                 state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
@@ -2119,9 +2118,25 @@ def main(argv: list[str] | None = None) -> int:
             if _changed_lock_subagent_model_key(cancel_changed_keys):
                 _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            state["messages"][:] = state["messages"][:before_len]
-            M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
-            M.append_mark(cfg.session_file, "turn_aborted")
+            if len(state["messages"]) > before_len + 1:
+                # Turn did real work (assistant/tool messages beyond the user
+                # prompt) before ^C landed. Keep it: persist the partial turn,
+                # then heal any orphaned tool_calls in memory so the next turn is
+                # valid. The mark is informational ONLY — a `rollback_to:` mark
+                # would silently re-truncate this turn on the next session load.
+                print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+                state["messages"][before_len] = user_bundle.history_message
+                for m in state["messages"][before_len + 1:]:
+                    _append_turn(cfg, m)
+                M.append_mark(cfg.session_file, "turn_interrupted")
+                state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+            else:
+                # Stopped before the model produced anything worth keeping — drop
+                # the bare user prompt (rollback removes it on reload too).
+                print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+                state["messages"][:] = state["messages"][:before_len]
+                M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+                M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}")
             state["messages"][:] = state["messages"][:before_len]
