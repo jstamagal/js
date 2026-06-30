@@ -49,7 +49,7 @@ class PromptExpansionError(ValueError):
     unreadable file, malformed token)."""
 
 
-_DEFAULT_TIMEOUT_S = 30
+_DEFAULT_TIMEOUT_S = 120
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # One combined scanner: fenced block | inline | env shorthand. Matched in this
