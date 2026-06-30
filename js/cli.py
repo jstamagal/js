@@ -1006,6 +1006,15 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
     )
 
 
+def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
+    """Apply the agent's `max_tokens:` (00-tools.yaml) as the per-call cap, but
+    only when nothing higher-priority set one — config/env/`--max-out` win."""
+    agent_max = getattr(prompt_spec, "max_output_tokens", None) if prompt_spec is not None else None
+    if agent_max is None or cfg.max_output_tokens is not None:
+        return cfg
+    return replace(cfg, max_output_tokens=agent_max)
+
+
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -1047,6 +1056,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         cfg = _apply_agent_model(cfg, prompt_spec, model)
+        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
 
     cfg = _resolve_cli_model_override(cfg, model)
 
@@ -1809,6 +1819,7 @@ def main(argv: list[str] | None = None) -> int:
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     cfg = _apply_agent_model(cfg, prompt_spec, args.model)
+    cfg = _apply_agent_max_tokens(cfg, prompt_spec)
     cfg = _resolve_cli_model_override(cfg, args.model)
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1834,6 +1845,11 @@ def main(argv: list[str] | None = None) -> int:
         settings.set_dotted(live_settings, ("model", "reasoning_effort"), _norm_effort(args.reasoning))
     if args.max_out is not None:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
+    elif (prompt_spec.max_output_tokens is not None
+          and settings.get_dotted(live_settings, ("model", "max_output_tokens"), None) is None):
+        # Agent default from 00-tools.yaml — seed the per-turn source of truth so
+        # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
+        settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
     event_hooks = events.EventHooks()
     event_hooks.set_dispatcher(
         setcmd.EventCommandDispatcher(
