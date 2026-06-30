@@ -106,12 +106,12 @@ def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
         name = fn.get("name")
         if not name:
             raise ValueError("tool spec missing function.name")
-        args = ai.types.tools.FunctionToolArgs(
+        spec_obj = ai.types.tools.ToolSpec(
             description=fn.get("description") or "",
             params=fn.get("parameters") or {"type": "object"},
         )
         tools.append(
-            ai.types.tools.Tool(kind="function", name=name, args=args)
+            ai.types.tools.Tool(kind="function", name=name, spec=spec_obj)
         )
     return tools
 

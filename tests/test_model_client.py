@@ -154,9 +154,9 @@ def test_tool_specs_to_ai_tools_converts_spec():
     tool = tools[0]
     assert isinstance(tool, ai.types.tools.Tool)
     assert tool.name == "fs_search"
-    assert isinstance(tool.args, ai.types.tools.FunctionToolArgs)
-    assert tool.args.description == "Search files"
-    assert tool.args.params["type"] == "object"
+    assert isinstance(tool.spec, ai.types.tools.ToolSpec)
+    assert tool.spec.description == "Search files"
+    assert tool.spec.params["type"] == "object"
 
 
 def test_history_to_ai_messages_preserves_roles():
