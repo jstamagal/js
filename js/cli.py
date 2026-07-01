@@ -681,6 +681,8 @@ HELP_TEXT = f"""\
   {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
   {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
+  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents (--nonblocking)
+  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn (--nonblocking)
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
@@ -946,6 +948,41 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
+        return True
+    if line == "/jobs":
+        sup = supervisor.get_current()
+        if sup is None:
+            print(f"{C.GREY}(jobs need --nonblocking){C.RESET}")
+            return True
+        jobs = sup.jobs()
+        if not jobs:
+            print(f"{C.GREY}(no running jobs){C.RESET}")
+            return True
+        for j in jobs:
+            label = f"  {j.label}" if j.label else ""
+            print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
+        return True
+    if line == "/cancel" or line.startswith("/cancel "):
+        sup = supervisor.get_current()
+        if sup is None:
+            print(f"{C.GREY}(cancel needs --nonblocking){C.RESET}")
+            return True
+        arg = line[len("/cancel"):].strip()
+        if arg:
+            if not arg.isdigit():
+                print(f"{C.ORANGE}usage: /cancel [id]  (bare = active turn){C.RESET}")
+                return True
+            targets = [j for j in sup.jobs() if j.id == int(arg)]
+        else:
+            targets = sup.jobs("turn")
+        if not targets:
+            print(f"{C.GREY}(no matching job to cancel){C.RESET}")
+            return True
+        # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
+        for j in targets:
+            sup.loop.call_soon_threadsafe(sup.cancel, j.id)
+        ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
+        print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
         return True
     if setcmd.is_repl_command(line, "/compact-auto"):
         arg = line[len("/compact-auto"):].strip().lower()
