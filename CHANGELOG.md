@@ -191,6 +191,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Runtime turns can run without blocking the shared event loop.** `run_turn_async` now awaits async model streaming, uses non-blocking retry sleeps, and dispatches synchronous tools through an executor; the existing `run_turn` remains a sync wrapper for current CLI and subagent callers while tests patch the async model seam.
 - **Model streaming exposes an async primitive.** `stream_model_async` now runs on the caller's event loop and closes the provider asynchronously, while `stream_model` remains as the blocking compatibility wrapper for existing sync callers.
 - **Async model streaming concurrency is covered by tests.** A new stream test proves two model turns can overlap on one shared event loop instead of serializing through per-call `asyncio.run` loops.
 - **Dependency `ai` unpinned from `==0.2.0` to latest compatible.** `pyproject.toml` drops the version pin; `uv.lock` upgraded to `ai==0.2.1` (plus all transitive deps — anthropic, openai, pydantic-core, pytest, ruff, jiter, certifi, anyio, tqdm, wcwidth). Dropped transitive deps from the lockfile that `ai` no longer pulls: `mcp`, `cryptography`, `cffi`, `pycparser`, `pyjwt`, `click`, `uvicorn`, `starlette`, `sse-starlette`, `httpx-sse`, `python-multipart`, `python-dotenv`, `pydantic-settings`, `jsonschema`, `jsonschema-specifications`, `referencing`, `attrs`, `rpds-py`, `pywin32`.
