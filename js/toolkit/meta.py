@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+import asyncio
 import json
 import os
 import secrets
@@ -200,7 +200,7 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
     )
 
 
-def _run_one_task(
+async def _run_one_task_async(
     idx: int,
     total: int,
     item: Any,
@@ -213,7 +213,7 @@ def _run_one_task(
 ) -> str:
     from .. import memory as M
     from .. import persona as P
-    from ..runtime import Telemetry, run_turn
+    from ..runtime import Telemetry, run_turn_async
     from ..sampling import Sampling
     from .. import routing
 
@@ -302,7 +302,7 @@ def _run_one_task(
     before_len = len(messages)
     messages.append({"role": "user", "content": prompt})
     try:
-        run_turn(
+        await run_turn_async(
             cfg,
             system,
             messages,
@@ -328,6 +328,47 @@ def _run_one_task(
     if len(final) > 4000:
         final = final[:4000] + "\n... [truncated]"
     return f"{idx}. {final}"
+
+
+def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:
+    """Run each subagent turn concurrently, results returned in task order. Two
+    ramps, chosen by whether a non-blocking REPL supervisor is live:
+
+    - Supervisor present: schedule each turn as a cancelable "subagent" job on
+      the REPL's shared loop via `run_coroutine_threadsafe` (we're on a
+      tool-dispatch executor thread here), then block on each result — the
+      parent turn can't proceed without them anyway. This is what makes the
+      subagents visible/cancelable instead of detached on a private loop.
+    - No supervisor (`js -p`, bench, tests): spin one throwaway loop and gather
+      the turns here.
+    """
+    from ..supervisor import get_current
+
+    results: list[str | None] = [None] * len(indexed_items)
+    sup = get_current()
+    if sup is not None:
+        futures = {
+            sup.spawn_from_thread(coro_factory(idx, item), kind="subagent", label=f"task#{idx}"): idx
+            for idx, item in indexed_items
+        }
+        for future, idx in futures.items():
+            try:
+                results[idx - 1] = future.result()
+            except Exception as exc:  # noqa: BLE001
+                results[idx - 1] = f"{idx}. ERROR {type(exc).__name__}: {exc}"
+        return results
+
+    async def _gather():
+        return await asyncio.gather(
+            *(coro_factory(idx, item) for idx, item in indexed_items),
+            return_exceptions=True,
+        )
+
+    for (idx, _item), res in zip(indexed_items, asyncio.run(_gather())):
+        results[idx - 1] = (
+            f"{idx}. ERROR {type(res).__name__}: {res}" if isinstance(res, Exception) else res
+        )
+    return results
 
 
 def task(
@@ -359,33 +400,16 @@ def task(
 
     parent_cfg = getattr(context, "config", None) or from_env(save_session=True)
     full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None))
-    worker_count = len(normalized_items)
-    results: list[str | None] = [None] * len(normalized_items)
-    futures = {}
-    executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="js-task")
-    try:
-        for idx, item in enumerate(normalized_items, 1):
-            future = executor.submit(
-                _run_one_task,
-                idx,
-                len(normalized_items),
-                item,
-                context,
-                parent_cfg,
-                full_registry,
-                agent_id,
-                session_id,
-                model,
-            )
-            futures[future] = idx
+    total = len(normalized_items)
 
-        for future, idx in futures.items():
-            try:
-                results[idx - 1] = future.result()
-            except Exception as exc:  # noqa: BLE001
-                results[idx - 1] = f"{idx}. ERROR {type(exc).__name__}: {exc}"
-    finally:
-        executor.shutdown(wait=True)
+    def _coro(idx: int, item: Any):
+        return _run_one_task_async(
+            idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
+        )
+
+    results = _fan_out(
+        [(idx, item) for idx, item in enumerate(normalized_items, 1)], _coro
+    )
 
     filled = [result if result is not None else f"{idx}. ERROR worker did not return" for idx, result in enumerate(results, 1)]
     header = f"TASK_RESULTS agent={agent_id}"
