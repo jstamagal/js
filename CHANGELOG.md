@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Non-blocking REPL integration tests.** Added headless coverage for the async REPL path so a real queued turn persists messages and blank input exits cleanly without launching prompt_toolkit terminal machinery.
 - **Experimental non-blocking REPL mode.** Added `js --nonblocking` so interactive input stays live while a turn streams on a shared async loop, with Ctrl-C cancelling the active turn instead of exiting the process.
 - **Supervisor fan-out tests.** Added coverage for subagent fan-out through the live supervisor ramp, including cancelable job registration and per-task error reporting.
 - **Supervisor job registry.** Added a single-loop supervisor for tracking, cancelling, and cross-thread scheduling turn and subagent tasks, with tests covering lifecycle cleanup and cancellation semantics for the non-blocking REPL work.
@@ -310,6 +311,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Non-blocking REPL no longer drops a submitted turn on EOF.** Graceful quit now waits for queued and in-flight turns to finish before teardown, so headless or piped prompt sessions persist completed work instead of cancelling it during shutdown.
 - **Reasoning effort is a dial snapped to each model's real stops.** js exposes one seven-stop knob (`none<minimal<low<medium<high<xhigh<max`), but no endpoint serves all of them — Xiaomi MiMo 400s on anything outside `low|medium|high`, kimi caps at `high`, glm and DeepSeek take `xhigh`/`max`. `js/reasoning.py` snaps the requested stop to the nearest one the target serves (ground-truthed by live probe, not vendor docs), so `-r xhigh` on MiMo sends `high` instead of erroring. Fixes the MiMo `reasoning_effort` 400 (it was never a MiniMax — MiMo is Xiaomi's model and was never gated).
 - **Sessions resume and switch models cleanly across the OpenAI wire.** ai's chat-completions protocol re-serializes a replayed assistant turn's chain-of-thought as a non-standard `message.reasoning` field that the glm backend rejects ("Extra inputs are not permitted, field: messages[..].reasoning"), so resuming a tool-using session onto glm — or switching to it mid-conversation — 400'd on every prior turn. `stream_model` now strips replayed reasoning for backends that reject it (glm), while backends that accept it (mimo, kimi) and providers that require it (DeepSeek's own `reasoning_content`) keep theirs untouched.
 - **`--model` provider prefix now routes correctly in interactive mode.** The REPL path calls `_resolve_cli_model_override` so a provider-prefixed model id on `-m` re-routes provider, base URL, and API key instead of passing the raw string as a model override the backend can't resolve.
