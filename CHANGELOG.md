@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Non-blocking output event contract.** Added the `OutputEvent` data shape, stdout sink fallback, agent identity helper, and design notes for the future non-blocking/windowed runtime so output can move toward structured events without changing current default behavior.
 - **`js --login` model curation.** After fetching a provider's live model list, a spacebar checklist lets you keep only the models you want cached for `/model` and `--list-models` (all preselected, so a bare Enter keeps everything; `a`/`n` select/clear all). Each row is tagged with its wire dialect from models.dev `provider_config.npm` (e.g. `anthropic` vs `openai`), so a multi-endpoint gateway's anthropic-only models are visible at a glance. A free-text line adds ids the endpoint omitted. Falls back to caching the full list when there's no TTY (piped logins).
 - **`--list-models [PROVIDER]`.** Print a concise `provider/model`-per-line list for every saved login (or one named provider), served from the model cache for offline speed, so external pickers and shell users can discover valid model flags without digging through JSON.
 - **REPL Tab completion.** Tab completes by prefix (never fuzzy) with a rotating menu: commands at line-start (a slashless word gets an implicit `/`, so `comp`→`/compact`), `/set`/`/show` knob keys, `/login`/`/provider` names, file paths for `/…`/`@…` tokens, and hunspell spelling suggestions for prose words. Tab-triggered only (`complete_while_typing=False`).
