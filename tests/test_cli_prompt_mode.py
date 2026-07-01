@@ -359,7 +359,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
         return _fake_stream_result("I can write that scraper.")
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-p", "Can you write a recipe scraper?"])
 
@@ -413,7 +413,7 @@ def test_js_prompt_mode_reads_pipe_without_prompt_flag(monkeypatch, tmp_path, ca
             return "Reply with PIPE_OK"
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     actual = cli.main([])
@@ -460,7 +460,7 @@ def test_js_prompt_flag_reads_pipe(monkeypatch, tmp_path, capsys):
             return "Reply with PIPE_FLAG_OK"
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     actual = cli.main(["-p"])
@@ -513,7 +513,7 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch, tmp_path, cap
             return "diff --git a/file b/file\n+changed\n"
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     actual = cli.main(["-p", "review this patch"])
@@ -560,7 +560,7 @@ def test_js_prompt_existing_session_persists_to_selected_session(monkeypatch, tm
         return _fake_stream_result("NAMED_SESSION_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--session", session_file.stem, "-p", "Reply with NAMED_SESSION_OK"])
 
@@ -583,7 +583,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
     def completion_stub(**kwargs):
         return _fake_stream_result("MODEL_HINT_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--model", "hint-model", "-p", "Reply with MODEL_HINT_OK"])
 
@@ -611,7 +611,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
         seen.append(kwargs.get("model_id"))
         return _fake_stream_result("ENV_MODEL_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--session", "resume-env-model", "-p", "continue"])
 
@@ -629,7 +629,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
     def completion_stub(**kwargs):
         return _fake_stream_result("GENERATED_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-p", "Reply with GENERATED_OK"])
 
@@ -657,7 +657,7 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     def completion_stub(**kwargs):
         return _fake_stream_result("NO_SAVE_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--no-save", "-p", "Reply with NO_SAVE_OK"])
 
@@ -688,7 +688,7 @@ def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path,
         def read(self):
             return self.text
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     monkeypatch.setattr(cli.sys, "stdin", StdinStub("Reply with PIPE_NO_SAVE_OK"))
     actual_pipe = cli.main(["--no-save"])
@@ -715,7 +715,7 @@ def test_short_no_save_prompt_alias_suppresses_persistence(monkeypatch, tmp_path
     def completion_stub(**kwargs):
         return _fake_stream_result("SHORT_NO_SAVE_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-n", "-p", "Reply with SHORT_NO_SAVE_OK"])
 
@@ -837,7 +837,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
         return _fake_stream_result("KNOBS_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-r", "off", "--max-out", "321", "-p", "hi"])
 
@@ -1056,7 +1056,7 @@ def test_short_session_alias_loads_existing_session(monkeypatch, tmp_path, capsy
         return _fake_stream_result("SHORT_SESSION_OK")
 
     monkeypatch.setattr(cli.P, "load_prompt", lambda prompts_dir: "SYSTEM\n")
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-s", session_file.stem, "-p", "Reply with SHORT_SESSION_OK"])
 
@@ -1096,7 +1096,7 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
         return cli.P.PromptSpec(system="SYSTEM\n", tool_selectors=())
 
     monkeypatch.setattr(cli.P, "load_prompt_spec", load_prompt_spec_stub)
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["-a", "kingape", "-s", "scoped-session", "-p", "Reply with KINGAPE_SESSION_OK"])
 
@@ -1123,7 +1123,7 @@ def test_wiki_continue_hint_preserves_model_override(monkeypatch, tmp_path, caps
     def completion_stub(**kwargs):
         return _fake_stream_result("WIKI_MODEL_HINT_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     vault = tmp_path / "wiki-hints"
     vault.mkdir()
@@ -1152,7 +1152,7 @@ def test_wiki_combined_modes_run_as_sequential_turns_in_one_session(monkeypatch,
         systems.append(kwargs["messages"][0].parts[0].text)
         return _fake_stream_result(f"turn{len(systems)} done.")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--wiki=ingest,synthesize", "--vault", str(tmp_path)])
 
@@ -1179,7 +1179,7 @@ def test_artifact_combined_modes_run_as_sequential_turns_in_one_session(monkeypa
         systems.append(kwargs["messages"][0].parts[0].text)
         return _fake_stream_result(f"artifact turn {len(systems)} done.")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli.main(["--artifact=curate,digest"])
 
@@ -1428,7 +1428,7 @@ def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
         seen["ctx_cwd"] = str(runtime.T.DEFAULT_CONTEXT.cwd)
         return _fake_stream_result("ok")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     orig = os.getcwd()
     try:

@@ -179,7 +179,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
         calls.append(kwargs)
         return _fake_stream_result("NO_TOOLS_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "hi"}]
 
     runtime.run_turn(

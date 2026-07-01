@@ -70,7 +70,7 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
         return _fake_stream_result("TEXT_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = cli.main(["-f", str(note), "-p", "summarize"])
 
@@ -101,7 +101,7 @@ def test_prompt_dash_file_reads_stdin_bytes_as_attachment(monkeypatch, tmp_path,
         return _fake_stream_result("STDIN_FILE_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     actual = cli.main(["-f", "-", "-p", "summarize paste"])
@@ -139,7 +139,7 @@ def test_prompt_file_image_attachment_sends_file_part_and_persists_stub(monkeypa
         return _fake_stream_result("IMAGE_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = cli.main(["-f", str(image), "-p", "what is this?"])
 
@@ -173,7 +173,7 @@ def test_prompt_file_image_vision_off_falls_back_to_text(monkeypatch, tmp_path, 
         return _fake_stream_result("NO_VISION_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = cli.main(["-f", str(image), "-p", "what is this?"])
 
@@ -227,7 +227,7 @@ def test_prompt_file_binary_attachment_uses_descriptor(monkeypatch, tmp_path, ca
         return _fake_stream_result("BINARY_OK")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = cli.main(["-f", str(binary), "-p", "inspect"])
 
@@ -246,7 +246,7 @@ def test_missing_attachment_is_clear_error_without_model_call(monkeypatch, tmp_p
         raise AssertionError("model should not be called for a missing attachment")
 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = cli.main(["-f", str(tmp_path / "missing.txt"), "-p", "summarize"])
 

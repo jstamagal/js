@@ -157,7 +157,7 @@ def test_from_env_leaves_artifact_settings_none_without_config_lines(monkeypatch
 
 
 def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime.model_client, "stream_model", lambda **_kwargs: _fake_stream_result("ok"))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("ok"))
     cfg = _config(
         tmp_path,
         artifact_dir="/cfg/artifacts",

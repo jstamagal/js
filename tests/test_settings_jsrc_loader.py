@@ -285,7 +285,7 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
         captured_kwargs.update(kwargs)
         return _fake_stream_result("ok")
 
-    monkeypatch.setattr("js.runtime.model_client.stream_model", stream_stub)
+    monkeypatch.setattr("js.runtime.model_client.stream_model_async", stream_stub)
     cfg = _build_config(
         tmp_path,
         provider_id="openai",
@@ -318,7 +318,7 @@ def test_provider_config_absent_when_unset(monkeypatch, tmp_path):
         captured_kwargs.update(kwargs)
         return _fake_stream_result("ok")
 
-    monkeypatch.setattr("js.runtime.model_client.stream_model", stream_stub)
+    monkeypatch.setattr("js.runtime.model_client.stream_model_async", stream_stub)
     cfg = _build_config(tmp_path, provider_id=None, provider_base_url=None, provider_api_key=None)
     from js.toolkit import ToolContext
 
