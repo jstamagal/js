@@ -771,7 +771,7 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
             ),
         )
 
-    monkeypatch.setattr(model_client, "stream_model", stream_model_stub)
+    monkeypatch.setattr(model_client, "stream_model_async", stream_model_stub)
 
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()

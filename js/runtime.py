@@ -4,6 +4,9 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import functools
+import inspect
 import json
 import sys
 import subprocess
@@ -709,7 +712,7 @@ def compact_messages(cfg: Config, system: str, messages: list[dict], *, focus: s
     messages[:] = M.load_messages(cfg.session_file)
     return f"compacted: kept tail from message {keep_from}/{len(messages)} using {compact_model}"
 
-def run_turn(cfg: Config, system: str, messages: list[dict],
+async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
              trace_override: bool | None = None,
              reasoning_effort_override: str | None | object = _UNSET,
@@ -723,11 +726,14 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None) -> None:
-    """One user turn → tool-use loop until model produces a stop. Mutates
+    """One user turn → tool-use loop until the model stops. The real primitive:
+    it awaits the model stream and runs tool dispatch in a thread executor, so it
+    NEVER blocks the loop — many turns/subagents run concurrently. Mutates
     `messages` in place so the caller can persist new entries.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
-    reloading config; unset values fall back to the Config values.
+    reloading config; unset values fall back to the Config values. The sync
+    ``run_turn`` below wraps this for callers not yet on the async runtime.
     """
     model = model_override or cfg.model
     provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
@@ -855,7 +861,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                     message_count=len(ai_convo),
                     tool_count=len(specs),
                 )
-                result = model_client.stream_model(
+                _res = model_client.stream_model_async(
                     model_id=model,
                     provider_id=provider_id,
                     provider_base_url=provider_base_url,
@@ -869,6 +875,10 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                     provider_extra=_provider_extra_params(cfg),
                     sampling=sampling,
                 )
+                # Await the native async primitive; tolerate a sync override (a
+                # test stub patched onto stream_model_async that returns a result
+                # directly) so the seam accepts either shape.
+                result = await _res if inspect.isawaitable(_res) else _res
                 _close_text()
                 text = result.text
                 pending_calls = [
@@ -923,7 +933,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                         _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                         _end_turn("error")
                         raise
-                    time.sleep(_backoff(attempt))
+                    await asyncio.sleep(_backoff(attempt))
                 else:
                     telemetry.event("fatal_error", model=model,
                                     error=f"{type(e).__name__}: {e}")
@@ -980,14 +990,21 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                 name=_canonical_tool_call_name(pc.name, active_registry),
                 arguments=_canonical_tool_args(pc.arguments()),
             )
-        dispatch_records = _dispatch_tool_calls(
-            pending_calls,
-            telemetry,
-            cfg.max_tool_result_bytes,
-            trace,
-            error_tracker,
-            active_registry,
-            active_context,
+        # Tools are sync (subprocess, file I/O) and _dispatch_tool_calls fans
+        # parallel calls out to its own thread pool. Run the whole dispatch in a
+        # worker thread so the shared event loop stays free while tools execute.
+        dispatch_records = await asyncio.get_running_loop().run_in_executor(
+            None,
+            functools.partial(
+                _dispatch_tool_calls,
+                pending_calls,
+                telemetry,
+                cfg.max_tool_result_bytes,
+                trace,
+                error_tracker,
+                active_registry,
+                active_context,
+            ),
         )
         followup = False
         for pc, _args, result_value in dispatch_records:
@@ -1022,3 +1039,14 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
 
     print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
     _end_turn("max_iterations")
+
+
+def run_turn(*args, **kwargs) -> None:
+    """Sync wrapper over :func:`run_turn_async` — spins a throwaway loop for this
+    turn. The OLD blocking path; the non-blocking runtime awaits
+    ``run_turn_async`` directly on its shared loop. Kept so the current sync
+    callers (cli one-shot/REPL/bench, subagent threads) keep working through the
+    transition. `messages` is still mutated in place, so ^C mid-turn preserves
+    partial work exactly as before.
+    """
+    return asyncio.run(run_turn_async(*args, **kwargs))

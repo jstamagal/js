@@ -123,7 +123,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SHADOW_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["use the most specific prompt"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -153,7 +153,7 @@ def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_
     parent.task_depth = 1
     parent.task_max_depth = True
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", lambda **kwargs: _fake_stream_result("BOOL_DEPTH_DONE"))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("BOOL_DEPTH_DONE"))
 
     actual = task(["work"], agent_id="worker", context=parent)
 
@@ -179,7 +179,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("UNDO_TEST_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["try undo"], agent_id="worker", context=parent)
 
@@ -206,7 +206,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("WRITE_TEST_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["try overwrite"], agent_id="worker", context=parent)
 
@@ -235,7 +235,7 @@ def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("STATE_TEST_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["mutate child state"], agent_id="worker", context=parent)
 
@@ -254,7 +254,7 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("AGENTX_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["hello"], agent_id="workerx", session_id="child-session", context=ToolContext(cwd=tmp_path))
 
@@ -280,7 +280,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("NAMED_AGENT_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
@@ -303,7 +303,7 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
         seen_message_counts.append(len(kwargs["messages"]))
         return _fake_stream_result(f"TURN_{len(seen_tools)}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     first = task(["first"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
     second = task(["second"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
@@ -324,7 +324,7 @@ def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
         time.sleep(0.25)
         return _fake_stream_result(kwargs["messages"][-1].parts[0].text.upper())
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     started = time.perf_counter()
     actual = task(["a", "b", "c"], agent_id="worker", context=ToolContext(cwd=tmp_path))
@@ -350,7 +350,7 @@ def test_two_concurrent_workers_have_no_todo_state_bleed(monkeypatch, tmp_path):
             tool_results.append(last.parts[0].get_model_input())
         return _fake_stream_result("TODO_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["left", "right"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -371,7 +371,7 @@ def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_pat
             raise RuntimeError("boom")
         return _fake_stream_result(prompt.upper())
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["ok", "fail", "also"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -391,7 +391,7 @@ def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SURFACE_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = task(["check tools"], agent_id="worker", context=parent)
 
