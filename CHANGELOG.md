@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Non-blocking job controls.** Added `/jobs` and `/cancel [id]` REPL commands so `js --nonblocking` users can inspect running turns/subagents and cancel a specific job or the active turn without leaving the session.
+- **Non-blocking job command tests.** Added command-level coverage for listing jobs, cancelling active turns or explicit ids, and handling invalid or missing targets.
 - **Non-blocking REPL integration tests.** Added headless coverage for the async REPL path so a real queued turn persists messages and blank input exits cleanly without launching prompt_toolkit terminal machinery.
 - **Experimental non-blocking REPL mode.** Added `js --nonblocking` so interactive input stays live while a turn streams on a shared async loop, with Ctrl-C cancelling the active turn instead of exiting the process.
 - **Supervisor fan-out tests.** Added coverage for subagent fan-out through the live supervisor ramp, including cancelable job registration and per-task error reporting.
