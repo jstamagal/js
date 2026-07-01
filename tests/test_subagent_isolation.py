@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import threading
+import asyncio
 import time
 
 from js import runtime
@@ -320,8 +321,11 @@ def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "worker")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
 
-    def completion_stub(**kwargs):
-        time.sleep(0.25)
+    async def completion_stub(**kwargs):
+        # Async I/O, awaited on the shared loop: three gathered turns overlap
+        # (~0.25s total), not serialize (~0.75s). A blocking time.sleep here
+        # would model the model call wrong — real stream_model_async is async.
+        await asyncio.sleep(0.25)
         return _fake_stream_result(kwargs["messages"][-1].parts[0].text.upper())
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
