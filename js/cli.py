@@ -1865,11 +1865,17 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
                     print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
     finally:
         supervisor.set_current(None)
-        for job in sup.jobs():
-            job.task.cancel()
+        # Graceful quit (EOF / exit): let queued and in-flight turns finish
+        # before teardown so submitted work isn't silently dropped. To abandon a
+        # long turn, cancel it with ^C first, then quit.
+        if not consumer.done():
+            with contextlib.suppress(Exception):
+                await queue.join()
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await consumer
+        for job in sup.jobs():  # backstop: cancel any straggler
+            job.task.cancel()
     return 0
 
 
