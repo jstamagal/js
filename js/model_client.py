@@ -473,7 +473,7 @@ def _build_inference_params(
     return ai_params.InferenceRequestParams(**kwargs)
 
 
-def stream_model(
+async def stream_model_async(
     *,
     model_id: str,
     provider_id: str | None,
@@ -489,10 +489,12 @@ def stream_model(
     executor: ai.models.StreamExecutor | None = None,
     sampling: Sampling | None = None,
 ) -> ModelStreamResult:
-    """Synchronous entry point: stream one model turn and return the result.
+    """Async entry point: stream one model turn on the CALLER'S event loop.
 
-    This function builds the model, runs ``ai.stream`` in a fresh event loop,
-    and closes the provider-owned client in ``finally``.
+    This is the real primitive. It builds the model, streams ``ai.stream``, and
+    closes the provider-owned client in ``finally`` — all without owning a loop,
+    so many turns/subagents can run concurrently on one shared loop. The sync
+    ``stream_model`` below wraps this for callers not yet on the async runtime.
     """
     model = resolve_model(
         model_id,
@@ -590,18 +592,25 @@ def stream_model(
         messages = _strip_reasoning_parts(messages)
 
     try:
-        return asyncio.run(
-            _stream_async(
-                model=model,
-                messages=messages,
-                tools=tools,
-                params=params,
-                executor=executor,
-                on_text=on_text,
-            )
+        return await _stream_async(
+            model=model,
+            messages=messages,
+            tools=tools,
+            params=params,
+            executor=executor,
+            on_text=on_text,
         )
     finally:
         try:
-            asyncio.run(model.provider.aclose())
+            await model.provider.aclose()
         except Exception:
             pass
+
+
+def stream_model(**kwargs: Any) -> ModelStreamResult:
+    """Sync wrapper over :func:`stream_model_async` — spins a throwaway loop per
+    call. This is the OLD blocking path; the non-blocking runtime calls
+    ``stream_model_async`` directly on its shared loop. Kept so un-migrated
+    callers (and the current sync run_turn) keep working during the transition.
+    """
+    return asyncio.run(stream_model_async(**kwargs))
