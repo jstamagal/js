@@ -48,16 +48,24 @@ Nothing in the turn path writes to stdout. It emits an `OutputEvent`:
 
 ### 3. Non-blocking runtime
 
-- The REPL (a prompt_toolkit `Application`) owns the ONE event loop. Always
-  reading keys.
-- A turn = a background task. Worker thread first; async task later.
-- `model_client.stream_model` calls `asyncio.run()` per call → it MUST run off
-  the UI thread. Worker thread is step 1.
-- Subagents already run in a `ThreadPoolExecutor` — same mechanism, surfaced.
-- Output crosses back to the UI via a thread-safe queue, drained on the UI
-  loop, fed to irciipy, routed to the target window.
-- Cancel = a per-task flag the runtime checks between chunks / tool calls. ESC
-  sets it. (Partial work is already preserved.)
+Full async, not worker threads (fork B resolved — see below).
+
+- The REPL owns the ONE event loop. `prompt_async` keeps input live; turns and
+  subagents are `asyncio.Task`s on that loop, tracked by `js/supervisor.py`.
+- `model_client.stream_model_async` / `runtime.run_turn_async` are the real
+  primitives; the sync `stream_model`/`run_turn` are thin `asyncio.run`
+  wrappers kept for one-shot `-p`, bench, and tests.
+- Tools are sync (subprocess/file IO) → each turn's tool dispatch runs in
+  `run_in_executor`, so the loop stays free while tools execute.
+- Subagents schedule onto the SAME loop from the tool-dispatch thread via
+  `run_coroutine_threadsafe`, as cancelable `subagent` jobs — not a private
+  loop (that would leave them detached and un-cancelable).
+- Output paints above the live input line via `patch_stdout(raw=True)` today;
+  it moves to events → irciipy → target window later.
+- Cancel = `task.cancel()`. Ctrl-C cancels the active turn; the turn's
+  `CancelledError` handler persists partial work and heals orphaned tool_calls.
+  A running tool batch finishes detached (v1 contract) — a per-task flag
+  checked between sequential tools is the later upgrade.
 
 ## Windows (the view)
 
@@ -79,22 +87,26 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
 
 ## Build order (each behind `--nonblocking`, default OFF)
 
-0. **Event schema + OutputSink.** Route the turn's stdout through events.
-   Default sink = print (today's behavior, byte-for-byte). ← START HERE;
-   needed in EVERY future, in-process or daemon.
-1. Worker-thread turn: run_turn off the main thread; output via queue.
-2. prompt_toolkit `Application` shell: input always live; one window.
+0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`,
+   `StdoutSink`, `agent_identity`. Data contract only; not yet on the hot path.
+1. **Async runtime + supervisor** — DONE. `stream_model_async` /
+   `run_turn_async` primitives; `js/supervisor.py` job registry; `--nonblocking`
+   REPL (`_repl_main`/`_turn_consumer`/`_do_turn`) with `prompt_async` +
+   `patch_stdout`; subagent fan-out on the shared loop as cancelable jobs.
+   (Supersedes the old worker-thread plan.)
+2. **Wire output through events.** Route `run_turn_async`'s stdout writes
+   through `OutputEvent` → `Sink`; default sink stays byte-for-byte stdout.
+   ← NEXT.
 3. irciipy as dispatcher: events → ON hooks → rendered text.
-4. `/window` commands + key bindings.
+4. `/window` commands + key bindings (`/jobs`, `/cancel` are the seed).
 5. `model!provider@baseurl` identity on every event; window↔source binding.
-6. Cancel/ESC per task; fire-and-forget subagents into windows.
+6. Per-task cancel flag checked between tools (kill running tools, not just
+   detach); fire-and-forget subagents into windows.
 
-## Open forks (your call — do NOT block step 0)
+## Open forks
 
-- **A. Topology.** irciipy in-process (one binary) vs out-of-process
+- **A. Topology (open).** irciipy in-process (one binary) vs out-of-process
   daemon + view (your `ircii-go/bitchtea` shape). Assumed default: in-process
-  first, daemon later — step 0's event stream is the wire protocol either way.
-- **B. Concurrency.** Worker threads vs a full async rewrite of model_client.
-  Assumed default: threads first (smaller, reversible), async later.
-
-Both defaults are reversible. Step 0 commits to neither.
+  first, daemon later — the event stream is the wire protocol either way.
+- **B. Concurrency (RESOLVED → full async).** Worker threads were the fallback;
+  we went full async instead. Reversible if it disappoints.
