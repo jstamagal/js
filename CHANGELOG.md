@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Experimental non-blocking REPL mode.** Added `js --nonblocking` so interactive input stays live while a turn streams on a shared async loop, with Ctrl-C cancelling the active turn instead of exiting the process.
+- **Supervisor fan-out tests.** Added coverage for subagent fan-out through the live supervisor ramp, including cancelable job registration and per-task error reporting.
 - **Supervisor job registry.** Added a single-loop supervisor for tracking, cancelling, and cross-thread scheduling turn and subagent tasks, with tests covering lifecycle cleanup and cancellation semantics for the non-blocking REPL work.
 - **Non-blocking output event contract.** Added the `OutputEvent` data shape, stdout sink fallback, agent identity helper, and design notes for the future non-blocking/windowed runtime so output can move toward structured events without changing current default behavior.
 - **`js --login` model curation.** After fetching a provider's live model list, a spacebar checklist lets you keep only the models you want cached for `/model` and `--list-models` (all preselected, so a bare Enter keeps everything; `a`/`n` select/clear all). Each row is tagged with its wire dialect from models.dev `provider_config.npm` (e.g. `anthropic` vs `openai`), so a multi-endpoint gateway's anthropic-only models are visible at a glance. A free-text line adds ids the endpoint omitted. Falls back to caching the full list when there's no TTY (piped logins).
@@ -192,6 +194,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Subagent fan-out scheduling.** Subagent tasks now run as async turns gathered on the active REPL supervisor when present, keeping child jobs visible and cancelable while preserving ordered results outside the REPL.
 - **Runtime turns can run without blocking the shared event loop.** `run_turn_async` now awaits async model streaming, uses non-blocking retry sleeps, and dispatches synchronous tools through an executor; the existing `run_turn` remains a sync wrapper for current CLI and subagent callers while tests patch the async model seam.
 - **Model streaming exposes an async primitive.** `stream_model_async` now runs on the caller's event loop and closes the provider asynchronously, while `stream_model` remains as the blocking compatibility wrapper for existing sync callers.
 - **Async model streaming concurrency is covered by tests.** A new stream test proves two model turns can overlap on one shared event loop instead of serializing through per-call `asyncio.run` loops.
