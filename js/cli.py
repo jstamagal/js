@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import copy
+import functools
 import io
 import json
 import os
 import shlex
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import CompleteStyle
+
+from . import supervisor
 
 from . import attach, codex_auth, colors as C
 from . import events
@@ -1701,6 +1707,172 @@ def _print_json(value: object) -> int:
     return 0
 
 
+async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
+    """One main turn on the async loop. Runs the turn, syncs live-settings
+    deltas, persists new messages, then auto-compacts (in the executor because
+    compaction still calls asyncio.run under the hood). Owns cancellation
+    ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
+    caller — persists partial work and heals orphaned tool_calls, mirroring the
+    legacy blocking KeyboardInterrupt path, then re-raises so the job ends
+    cancelled.
+    """
+    try:
+        before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+        before_turn_model = _model_from_live_settings(state["settings"])
+        before_turn_provider = _provider_from_live_settings(state["settings"])
+        before_turn_lock = _live_bool_setting(
+            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+        )
+        await runtime.run_turn_async(
+            turn_cfg,
+            state["system"],
+            state["messages"],
+            telemetry,
+            trace_override=bool(
+                settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+            ),
+            reasoning_effort_override=turn_cfg.reasoning_effort,
+            max_output_override=turn_cfg.max_output_tokens,
+            tool_registry=state["tool_registry"],
+            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            event_hooks=state.get("events"),
+        )
+        after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+        if after_turn_sampling != before_turn_sampling:
+            state["sampling_cli"] = after_turn_sampling
+        after_turn_model = _model_from_live_settings(state["settings"])
+        if after_turn_model != before_turn_model:
+            _sync_model_from_live_settings(state)
+        after_turn_provider = _provider_from_live_settings(state["settings"])
+        _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+        after_turn_lock = _live_bool_setting(
+            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+        )
+        if after_turn_lock != before_turn_lock:
+            _sync_tool_registry_from_live_settings(cfg, state)
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        state["messages"][before_len] = user_bundle.history_message
+        for m in state["messages"][before_len + 1:]:
+            _append_turn(cfg, m)
+        await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
+    except asyncio.CancelledError:
+        cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
+        if _event_results_changed_sampling(cancel_event.results):
+            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+        if _event_results_changed_model(cancel_event.results):
+            _sync_model_from_live_settings(state)
+        cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
+        if _changed_provider_key(cancel_changed_keys):
+            _sync_provider_from_live_settings(state, cancel_changed_keys)
+        if _changed_lock_subagent_model_key(cancel_changed_keys):
+            _sync_tool_registry_from_live_settings(cfg, state)
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        if len(state["messages"]) > before_len + 1:
+            print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+            state["messages"][before_len] = user_bundle.history_message
+            for m in state["messages"][before_len + 1:]:
+                _append_turn(cfg, m)
+            M.append_mark(cfg.session_file, "turn_interrupted")
+            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+        else:
+            print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+            state["messages"][:] = state["messages"][:before_len]
+            M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+            M.append_mark(cfg.session_file, "turn_aborted")
+        raise
+    except Exception as e:  # noqa: BLE001
+        print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}")
+        state["messages"][:] = state["messages"][:before_len]
+        M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+        M.append_mark(cfg.session_file, f"error: {type(e).__name__}: {e}")
+
+
+async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -> None:
+    """Serialize main turns: one at a time, pulled FIFO from the input queue.
+    This is what keeps state['messages'] single-writer while the input line
+    stays live — the producer (`_repl_main`) never blocks on a turn."""
+    while True:
+        line = await queue.get()
+        try:
+            prompt_text, line_attachments = attach.split_repl_attachments(line)
+            input_event = _emit_repl_event(
+                state, telemetry, "input", text=prompt_text, attachments=line_attachments
+            )
+            if _event_results_changed_sampling(input_event.results):
+                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+            if _event_results_changed_model(input_event.results):
+                _sync_model_from_live_settings(state)
+            input_changed_keys = _event_result_changed_keys(input_event.results)
+            if _changed_provider_key(input_changed_keys):
+                _sync_provider_from_live_settings(state, input_changed_keys)
+            if _changed_lock_subagent_model_key(input_changed_keys):
+                _sync_tool_registry_from_live_settings(cfg, state)
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            try:
+                turn_cfg = _cfg_for_live_state(cfg, state)
+                user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+            except attach.AttachmentError as e:
+                print(f"{C.ORANGE}error: {e}{C.RESET}")
+                continue
+            before_len = len(state["messages"])
+            state["messages"].append(user_bundle.runtime_message)
+            _append_turn(cfg, user_bundle.history_message)
+            job = sup.spawn(
+                _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop),
+                kind="turn",
+                label=prompt_text[:40],
+            )
+            with contextlib.suppress(asyncio.CancelledError):
+                await job.task  # _do_turn persists partial work on cancel; keep looping
+        finally:
+            queue.task_done()
+
+
+async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
+    """Non-blocking REPL: input, the active turn, and subagents all share ONE
+    event loop. `prompt_async` keeps the input line live while a turn streams
+    (output paints above it via patch_stdout); ^C cancels the active turn
+    instead of killing the process; new prompts queue behind a running turn."""
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
+    sup = supervisor.Supervisor(loop)
+    supervisor.set_current(sup)
+    queue: asyncio.Queue = asyncio.Queue()
+    consumer = loop.create_task(
+        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop)
+    )
+    try:
+        with patch_stdout(raw=True):
+            while state["running"]:
+                try:
+                    line = (await session.prompt_async(ANSI(f"{C.YELLOW}LO> {C.RESET}"))).strip()
+                except EOFError:
+                    print()
+                    break
+                except KeyboardInterrupt:
+                    if sup.turn_active():
+                        n = sup.cancel_kind("turn")
+                        print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
+                    continue
+                if not line:
+                    continue
+                handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
+                if handled:
+                    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+                    continue
+                queue.put_nowait(line)
+                if sup.turn_active() or queue.qsize() > 1:
+                    print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
+    finally:
+        supervisor.set_current(None)
+        for job in sup.jobs():
+            job.task.cancel()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Handle login/logout before argparse so they don't require a valid agent/config.
     if argv and argv[0] in ("--login", "login"):
@@ -1728,6 +1900,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
+    parser.add_argument("--nonblocking", action="store_true", help="experimental: run the REPL on one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn. Legacy blocking REPL is the default.")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
@@ -2021,6 +2194,9 @@ def main(argv: list[str] | None = None) -> int:
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
 
     print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
+
+    if args.nonblocking:
+        return asyncio.run(_repl_main(cfg, state, telemetry, session, prompt_spec))
 
     while state["running"]:
         try:
