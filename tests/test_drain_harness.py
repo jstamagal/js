@@ -48,6 +48,25 @@ def test_plan_jobs_packs_small_files_splits_large_text_and_feeds_large_binary(tm
     assert blob.drainer_archives is False
 
 
+def test_plan_jobs_shatter_pieces_unique_across_same_name_in_different_subdirs(tmp_path):
+    """Two big same-named text files in different subdirs must not write over each
+    other's staged pieces (keyed on stem alone would collide and lose one file)."""
+    inbox = tmp_path / "vault" / "inbox"
+    staging = tmp_path / "staging"
+    (inbox / "A").mkdir(parents=True)
+    (inbox / "B").mkdir(parents=True)
+    staging.mkdir()
+    (inbox / "A" / "notes.txt").write_text("A1\nA2-long\nA3\n", encoding="utf-8")
+    (inbox / "B" / "notes.txt").write_text("B1\nB2-long\nB3\n", encoding="utf-8")
+
+    jobs = drain.plan_jobs(inbox, budget_chars=6, ralph=False, staging=staging)
+
+    feeds = [j.feed for j in jobs]
+    assert len(feeds) == len(set(feeds))          # no staging path collides
+    contents = "".join(f.read_text(encoding="utf-8") for f in feeds)
+    assert "A1" in contents and "B1" in contents  # both originals survive to staging
+
+
 def test_drain_help_describes_model_as_configured_env_override(capsys):
     with pytest.raises(SystemExit) as exc:
         drain.main(["--help"])
