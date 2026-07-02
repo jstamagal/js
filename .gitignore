@@ -7,7 +7,6 @@ my_*
 /REVIEW_*
 /*_REVIEW*
 node_modules/
-.claude/
 .omp/
 .codex/
 .pi/
