@@ -33,6 +33,11 @@ remove, it GONE — no rename, no hide.
    permission ever — commit free, quiet, often. 🦍 no narrate the git mechanic
    (hash, staging, "let me commit") — that noise the owner hate. a real
    defect/risk/decision 🦍 DO bark.
+   - **commit subject = PLAIN ENGLISH.** `Restore removed files through
+     symlinked paths` — a plain sentence, like a plain person wrote it. NOT
+     robot git-log-speak (`fix(scope):`, `feat(x):`, `docs:`). the commitbot
+     write plain and RIGHT; a robot-language subject mean a MODEL leaked
+     convention over the owner voice — that the leak, 🦍 no call it "correct."
 7. **AFTER `js --commit` finishes — INSPECT, then tune ONE knob.** 🦍 read the
    resulting `CHANGELOG.md` and the commits (`git log --oneline`, `git show`) and
    confirm everything correct: clean splits, honest bullets, exactly one of each
