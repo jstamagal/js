@@ -819,3 +819,21 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
     assert any(m.get("role") == "tool" and "VISUAL_FILE" in str(m.get("content", "")) for m in messages)
     # Vision auto-enabled for the gemma model via the name heuristic.
     assert context.vision_enabled is True
+
+
+def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
+    """remove keys its snapshot under the no-follow path; undo must find it even when
+    a parent component is a symlink (resolve_path would key under the resolved path)."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "f.txt").write_text("payload", encoding="utf-8")
+    (tmp_path / "lnk").symlink_to(real)
+    context = ToolContext(cwd=tmp_path)
+
+    remove_result = fs.remove("lnk/f.txt", permanent=True, context=context)
+    assert remove_result.startswith("removed")
+    assert not (real / "f.txt").exists()
+
+    undo_result = fs.undo("lnk/f.txt", context=context)
+    assert undo_result.startswith("restored")
+    assert (real / "f.txt").read_text(encoding="utf-8") == "payload"

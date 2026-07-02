@@ -346,7 +346,13 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
 
 def undo(path: str, context: ToolContext | None = None) -> str:
     assert context is not None
+    # write/patch key snapshots under resolve_path (follows symlinks); remove keys
+    # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
     target = context.resolve_path(path)
+    if not context.snapshots.get(target):
+        no_follow = _resolve_path_no_follow(context, path)
+        if context.snapshots.get(no_follow):
+            target = no_follow
     stack = context.snapshots.get(target) or []
     if not stack:
         return f"ERROR: no snapshot available for {target}"
