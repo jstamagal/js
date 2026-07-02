@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Regression coverage for byte-limited UTF-8 previews.** Added tests proving attachment sniffing and artifact previews survive when a byte cap splits a multibyte character.
+- **Regression coverage for non-blocking state commands.** Added tests for detecting `/reset`, `/wipe`, and `/compact` commands that would mutate live turn state.
+- **Regression coverage for drain staging collisions.** Added a test proving split text files with the same name in different inbox subdirectories keep distinct staged pieces.
+- **Regression coverage for post-heal memory marks.** Added tests showing rollback and compaction markers keep the intended messages after orphaned tool calls are healed.
+- **Regression coverage for OpenAI-compatible sampling extras.** Added tests proving `top_k` and `repetition_penalty` stay in raw `extra_body` while accepted sampling knobs remain structured.
+- **Regression coverage for symlinked undo snapshots.** Added a test proving `undo` can restore a removed file when the removal path crosses a symlinked parent.
+- **Regression coverage for wiki conversion edge cases.** Added tests for stale LibreOffice output and binary paths whose names contain the word `text`.
 - **Non-blocking job controls.** Added `/jobs` and `/cancel [id]` REPL commands so `js --nonblocking` users can inspect running turns/subagents and cancel a specific job or the active turn without leaving the session.
 - **Non-blocking job command tests.** Added command-level coverage for listing jobs, cancelling active turns or explicit ids, and handling invalid or missing targets.
 - **Non-blocking REPL integration tests.** Added headless coverage for the async REPL path so a real queued turn persists messages and blank input exits cleanly without launching prompt_toolkit terminal machinery.
@@ -317,6 +324,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Byte-limited UTF-8 reads no longer misclassify valid text as binary.** Attachment detection drops only an incomplete trailing multibyte sequence, and artifact previews decode split characters leniently so non-ASCII content still shows useful text.
+- **Non-blocking REPL state resets no longer race active turns.** `/reset`, `/wipe`, and `/compact` are refused while a turn is running so they cannot clear the live message list mid-append and corrupt output.
+- **Drain staging no longer overwrites split files that share a stem.** Large text pieces include a per-source sequence prefix, so same-named files in different subdirectories both survive staging.
+- **Rollback and compaction markers no longer cut the wrong messages after healing orphaned tool calls.** Session loading now heals before applying marker indexes because those indexes were computed against the healed live message list.
+- **OpenAI-compatible providers no longer receive unsupported structured `top_k` or `repetition_penalty` params.** Those knobs stay in raw `extra_body` and merge with provider extras while supported sampler fields remain structured.
+- **Undo no longer misses remove snapshots through symlinked parents.** It checks both resolved and no-follow snapshot keys so deleted files can be restored regardless of how the snapshot was keyed.
+- **Wiki conversion no longer returns stale office output or treats binary files as text because their path contains `text`.** LibreOffice results are accepted only after a successful fresh conversion, and `file` fallback classification inspects the description rather than the path.
 - **Non-blocking REPL no longer drops a submitted turn on EOF.** Graceful quit now waits for queued and in-flight turns to finish before teardown, so headless or piped prompt sessions persist completed work instead of cancelling it during shutdown.
 - **Reasoning effort is a dial snapped to each model's real stops.** js exposes one seven-stop knob (`none<minimal<low<medium<high<xhigh<max`), but no endpoint serves all of them — Xiaomi MiMo 400s on anything outside `low|medium|high`, kimi caps at `high`, glm and DeepSeek take `xhigh`/`max`. `js/reasoning.py` snaps the requested stop to the nearest one the target serves (ground-truthed by live probe, not vendor docs), so `-r xhigh` on MiMo sends `high` instead of erroring. Fixes the MiMo `reasoning_effort` 400 (it was never a MiniMax — MiMo is Xiaomi's model and was never gated).
 - **Sessions resume and switch models cleanly across the OpenAI wire.** ai's chat-completions protocol re-serializes a replayed assistant turn's chain-of-thought as a non-standard `message.reasoning` field that the glm backend rejects ("Extra inputs are not permitted, field: messages[..].reasoning"), so resuming a tool-using session onto glm — or switching to it mid-conversation — 400'd on every prior turn. `stream_model` now strips replayed reasoning for backends that reject it (glm), while backends that accept it (mimo, kimi) and providers that require it (DeepSeek's own `reasoning_content`) keep theirs untouched.
