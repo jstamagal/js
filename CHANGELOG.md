@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Claude Code repo guidance.** `CLAUDE.md` now documents the local workflow, command entry points, architecture map, and project landmines so Claude-based agents start with the same operating rules as the rest of the harness.
 - **Configurable inline prompt expansion timeout.** Inline code directives now default to 300 seconds and can be tuned with `limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT`, so slower prompt assembly commands can complete without hard-coded limits.
 
 - **`js --login` model curation.** After fetching a provider's live model list, a spacebar checklist lets you keep only the models you want cached for `/model` and `--list-models` (all preselected, so a bare Enter keeps everything; `a`/`n` select/clear all). Each row is tagged with its wire dialect from models.dev `provider_config.npm` (e.g. `anthropic` vs `openai`), so a multi-endpoint gateway's anthropic-only models are visible at a glance. A free-text line adds ids the endpoint omitted. Falls back to caching the full list when there's no TTY (piped logins).
@@ -192,6 +193,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Commit workflow recipe simplified.** `just commit` is now a no-argument wrapper around `js --commit`, preventing target paths, prompts, or prewritten messages from bypassing the commit agent's own inspection, staging, and message choices.
+- **Ignore rules narrowed to local scratch files.** Repo-root TODO/FIXME/review/handoff patterns remain ignored, while `CLAUDE.md`, `AGENTS.md`, and project `.js/` content are no longer globally hidden so real guidance and project config can be tracked deliberately.
 - **Dependency `ai` unpinned from `==0.2.0` to latest compatible.** `pyproject.toml` drops the version pin; `uv.lock` upgraded to `ai==0.2.1` (plus all transitive deps — anthropic, openai, pydantic-core, pytest, ruff, jiter, certifi, anyio, tqdm, wcwidth). Dropped transitive deps from the lockfile that `ai` no longer pulls: `mcp`, `cryptography`, `cffi`, `pycparser`, `pyjwt`, `click`, `uvicorn`, `starlette`, `sse-starlette`, `httpx-sse`, `python-multipart`, `python-dotenv`, `pydantic-settings`, `jsonschema`, `jsonschema-specifications`, `referencing`, `attrs`, `rpds-py`, `pywin32`.
 - **Tool schema ported from `FunctionToolArgs`/`args` to `ToolSpec`/`spec`.** ai>=0.2.1 renamed the tool argument class and field; `js/codex_provider.py`, `js/model_client.py`, `tests/test_codex_oauth.py`, `tests/test_model_client.py` updated accordingly.
 - **`ai.Model` constructor ported to keyword-only `id=` parameter.** All callsites (`js/model_client.py`, `tests/test_codex_oauth.py`, `tests/test_model_client.py`) use `ai.Model(id=..., provider=...)` instead of the old positional `ai.Model(..., provider=...)`.
