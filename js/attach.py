@@ -206,11 +206,27 @@ def _text_cap(cfg: Config) -> int:
     return max(1, min(TEXT_ATTACHMENT_MAX_BYTES, configured))
 
 
+def _strip_incomplete_utf8_tail(data: bytes) -> bytes:
+    """Drop a partial multibyte UTF-8 sequence left dangling at the end of a
+    byte-limited read, so a codepoint split across the read boundary doesn't make
+    valid UTF-8 look like binary."""
+    for back in range(1, 4):
+        if back > len(data):
+            break
+        b = data[-back]
+        if b < 0x80:            # plain ascii tail byte, nothing in progress
+            break
+        if b >= 0xC0:           # lead byte: it starts an N-byte sequence
+            need = 4 if b >= 0xF0 else 3 if b >= 0xE0 else 2
+            return data[: -back] if back < need else data
+    return data
+
+
 def _looks_text(data: bytes) -> bool:
     if b"\x00" in data[:4096]:
         return False
     try:
-        data.decode("utf-8")
+        _strip_incomplete_utf8_tail(data).decode("utf-8")
     except UnicodeDecodeError:
         return False
     return True
