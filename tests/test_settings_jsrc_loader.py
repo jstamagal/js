@@ -115,7 +115,7 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
     local_cfg = tmp_path / "project" / ".js" / "jsrc.local"
     global_cfg.parent.mkdir(parents=True)
     project_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set model.id global-model\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
+    global_cfg.write_text("set model.id global-model\nset limits.fetch_timeout_s 20\nset limits.inline_code_timeout_s 222\n", encoding="utf-8")
     project_cfg.write_text("set model.id project-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
     local_cfg.write_text("set model.id local-model\n", encoding="utf-8")
 
@@ -123,6 +123,7 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
 
     assert out["model"]["id"] == "local-model"
     assert out["limits"]["fetch_timeout_s"] == 20
+    assert out["limits"]["inline_code_timeout_s"] == 222
     assert out["limits"]["max_tool_iterations"] == 7
 
 
