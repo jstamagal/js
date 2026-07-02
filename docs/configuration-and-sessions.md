@@ -125,6 +125,7 @@ coercion as `set`.
 | `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
+| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
 | `JS_JSONL_MAX_LINE_CHARS` | `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
 | `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `JS_TRACE` | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
