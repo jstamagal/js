@@ -133,6 +133,7 @@ class Config:
     sessions_dir: Path
     session_file: Path
     prompts_dir: Path
+    inline_code_timeout_s: int = _settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     provider_headers: dict[str, str] = field(default_factory=dict)
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
@@ -336,6 +337,7 @@ def from_env(
     max_bash_output_bytes = _numeric_setting(js_root_settings, ("limits", "max_bash_output_bytes"), _settings.DEFAULT_MAX_BASH_OUTPUT_BYTES)
     max_tool_result_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_BYTES)
     fetch_timeout_s = _numeric_setting(js_root_settings, ("limits", "fetch_timeout_s"), _settings.DEFAULT_FETCH_TIMEOUT_S)
+    inline_code_timeout_s = _numeric_setting(js_root_settings, ("limits", "inline_code_timeout_s"), _settings.DEFAULT_INLINE_CODE_TIMEOUT_S)
     max_read_lines = _numeric_setting(js_root_settings, ("limits", "max_read_lines"), _settings.DEFAULT_MAX_READ_LINES)
     max_line_chars = _numeric_setting(js_root_settings, ("limits", "max_line_chars"), _settings.DEFAULT_MAX_LINE_CHARS)
     jsonl_max_line_chars = _numeric_setting(js_root_settings, ("limits", "jsonl_max_line_chars"), _settings.DEFAULT_JSONL_MAX_LINE_CHARS)
@@ -388,6 +390,7 @@ def from_env(
         max_bash_output_bytes=max_bash_output_bytes,
         max_tool_result_bytes=max_tool_result_bytes,
         fetch_timeout_s=fetch_timeout_s,
+        inline_code_timeout_s=inline_code_timeout_s,
         debug_log=debug,
         trace=trace,
         sessions_dir=sessions_dir,
