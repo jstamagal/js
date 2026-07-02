@@ -422,13 +422,12 @@ async def _stream_async(
     )
 
 
-def _sampler_map(sampling: Sampling, transport: str | None) -> dict:
-    """Express the sampling knobs THIS transport accepts as ai>=0.2.1
-    SamplerParamsMap entries (keyed by param class). The transport filter
-    (``sampling.call_params``) is kept so js never sends a wire an unsupported
-    knob — only the encoding changed from a flat dict to structured params."""
-    values = dict(sampling.call_params(transport))
-    values.update(values.pop("extra_body", {}) or {})
+def _sampler_map(values: dict) -> dict:
+    """Encode the TOP-LEVEL sampling knobs this transport accepts as ai>=0.2.1
+    SamplerParamsMap entries (keyed by param class). Knobs ``call_params`` routed
+    into ``extra_body`` (top_k/repetition_penalty on the openai-compatible family)
+    stay OUT of here: the OpenAI protocol hard-raises on TopK/RepetitionPenalty
+    param classes, so those ride through as raw extra_body instead."""
     out: dict = {}
     if "temperature" in values:
         out[ai_params.TemperatureSamplerParams] = ai_params.TemperatureSamplerParams(
@@ -459,15 +458,18 @@ def _build_inference_params(
     """Assemble an ``InferenceRequestParams`` from the parts, or None when there
     is nothing to send (so the provider keeps every default)."""
     kwargs: dict[str, Any] = {}
-    sampler_map = _sampler_map(sampling, transport)
+    values = dict(sampling.call_params(transport))
+    sampler_extra = values.pop("extra_body", {}) or {}
+    sampler_map = _sampler_map(values)
     if sampler_map:
         kwargs["sampling"] = sampler_map
     if reasoning is not None:
         kwargs["reasoning"] = reasoning
     if output is not None:
         kwargs["output"] = output
-    if extra_body:
-        kwargs["extra_body"] = extra_body
+    merged_extra = {**sampler_extra, **(extra_body or {})}
+    if merged_extra:
+        kwargs["extra_body"] = merged_extra
     if not kwargs:
         return None
     return ai_params.InferenceRequestParams(**kwargs)
