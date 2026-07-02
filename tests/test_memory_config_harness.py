@@ -103,6 +103,7 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
         "JS_MAX_BASH_OUTPUT_BYTES",
         "JS_MAX_TOOL_RESULT_BYTES",
         "JS_FETCH_TIMEOUT",
+        "JS_INLINE_CODE_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
     config_dir = tmp_path / ".config" / "js"
@@ -113,6 +114,7 @@ set limits.max_tool_iterations true
 set limits.max_bash_output_bytes true
 set limits.max_tool_result_bytes true
 set limits.fetch_timeout_s true
+set limits.inline_code_timeout_s true
 set limits.max_read_lines true
 set limits.max_line_chars true
 set limits.max_file_bytes true
@@ -129,6 +131,7 @@ set limits.wiki_vault_lock_timeout_s true
     assert actual.max_bash_output_bytes == settings.DEFAULT_MAX_BASH_OUTPUT_BYTES
     assert actual.max_tool_result_bytes == settings.DEFAULT_MAX_TOOL_RESULT_BYTES
     assert actual.fetch_timeout_s == settings.DEFAULT_FETCH_TIMEOUT_S
+    assert actual.inline_code_timeout_s == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     assert actual.max_read_lines == settings.DEFAULT_MAX_READ_LINES
     assert actual.max_line_chars == settings.DEFAULT_MAX_LINE_CHARS
     assert actual.max_file_bytes == settings.DEFAULT_MAX_FILE_BYTES
@@ -149,6 +152,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     monkeypatch.setenv("JS_MAX_BASH_OUTPUT_BYTES", "4567")
     monkeypatch.setenv("JS_MAX_TOOL_RESULT_BYTES", "8910")
     monkeypatch.setenv("JS_FETCH_TIMEOUT", "42")
+    monkeypatch.setenv("JS_INLINE_CODE_TIMEOUT", "77")
     monkeypatch.setenv("JS_VISION", "0")
     monkeypatch.delenv("JS_SESSION", raising=False)
 
@@ -175,6 +179,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.max_bash_output_bytes == 4567
     assert actual.max_tool_result_bytes == 8910
     assert actual.fetch_timeout_s == 42
+    assert actual.inline_code_timeout_s == 77
     assert actual.vision_enabled is False
     # save_session=False means no session file, no latest.json.
     assert not (expected_agent_dir / "latest.json").exists()

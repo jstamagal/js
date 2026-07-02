@@ -243,6 +243,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
     ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
     ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
+    ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
     ("max_read_lines", ("limits", "max_read_lines")),
     ("max_line_chars", ("limits", "max_line_chars")),
     ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
@@ -1271,7 +1272,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             eff_max = bench.max_tokens
         else:
             eff_max = agent_default_max
-        prompt_text = expand_prompt(bench.prompt, allow_code=allow_code)
+        prompt_text = expand_prompt(bench.prompt, allow_code=allow_code, timeout_s=cfg.inline_code_timeout_s)
         messages = [{"role": "user", "content": prompt_text}]
         call_stats: list[dict] = []
         turn_kwargs = {

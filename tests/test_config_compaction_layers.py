@@ -36,6 +36,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
 def test_default_fetch_timeout_and_template_cover_compact_wiki_artifact(tmp_path):
     out = settings.collect_settings(config_paths=[], env={})
     assert out["limits"]["fetch_timeout_s"] == settings.DEFAULT_FETCH_TIMEOUT_S
+    assert out["limits"]["inline_code_timeout_s"] == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     target = tmp_path / "jsrc"
     settings.write_default_template(target)
     text = target.read_text(encoding="utf-8")
@@ -45,6 +46,7 @@ def test_default_fetch_timeout_and_template_cover_compact_wiki_artifact(tmp_path
         if line.startswith("#set ")
     }
     assert {
+        "limits.inline_code_timeout_s",
         "compact.context_window",
         "compact.tail_tokens",
         "wiki.aliases",
