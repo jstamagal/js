@@ -193,6 +193,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Claude local configuration can be tracked deliberately.** The root `.claude/` directory is no longer ignored, so project-specific Claude settings and guidance can be reviewed and committed when they are real repo work.
 - **Commit workflow recipe simplified.** `just commit` is now a no-argument wrapper around `js --commit`, preventing target paths, prompts, or prewritten messages from bypassing the commit agent's own inspection, staging, and message choices.
 - **Ignore rules narrowed to local scratch files.** Repo-root TODO/FIXME/review/handoff patterns remain ignored, while `CLAUDE.md`, `AGENTS.md`, and project `.js/` content are no longer globally hidden so real guidance and project config can be tracked deliberately.
 - **Dependency `ai` unpinned from `==0.2.0` to latest compatible.** `pyproject.toml` drops the version pin; `uv.lock` upgraded to `ai==0.2.1` (plus all transitive deps — anthropic, openai, pydantic-core, pytest, ruff, jiter, certifi, anyio, tqdm, wcwidth). Dropped transitive deps from the lockfile that `ai` no longer pulls: `mcp`, `cryptography`, `cffi`, `pycparser`, `pyjwt`, `click`, `uvicorn`, `starlette`, `sse-starlette`, `httpx-sse`, `python-multipart`, `python-dotenv`, `pydantic-settings`, `jsonschema`, `jsonschema-specifications`, `referencing`, `attrs`, `rpds-py`, `pywin32`.
