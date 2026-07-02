@@ -150,10 +150,16 @@ def load_messages(memory_file: Path) -> list[dict]:
                         keep = max(0, int(rec.marker.split(":", 1)[1]))
                     except ValueError:
                         continue
+                    # The index rides in POST-heal (live) space — the caller cut
+                    # `state["messages"][:keep]` against a healed list — so heal
+                    # first, else a synthetic tool result inserted on reload shifts
+                    # every later offset and the mark truncates the wrong message.
+                    messages[:] = _heal_orphaned_tool_calls(messages)
                     del messages[keep:]
                 elif rec.marker:
                     data = _parse_compaction_marker(rec.marker)
                     if data is not None:
+                        messages[:] = _heal_orphaned_tool_calls(messages)
                         keep_from = int(data.get("keep_from", len(messages)))
                         keep_from = max(0, min(keep_from, len(messages)))
                         messages[:] = [_compaction_summary_message(data["summary"]), *messages[keep_from:]]
