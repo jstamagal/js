@@ -187,9 +187,10 @@ def test_openai_compatible_wire_keeps_reasoning_and_vllm_sampling(monkeypatch):
         "reasoning_effort": "high",
         "temperature": 0.7,
         "top_p": 0.9,
-        "top_k": 50,
-        "repetition_penalty": 1.1,
         "presence_penalty": 1.2,
+        # top_k/repetition_penalty ride as RAW extra_body — the OpenAI protocol this
+        # wire is pinned to hard-rejects a TopK/RepetitionPenalty sampler class.
+        "extra_body": {"top_k": 50, "repetition_penalty": 1.1},
     }
 
 
