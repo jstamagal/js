@@ -63,10 +63,9 @@ def _read_text(path: Path, limit: int) -> str:
         data = path.read_bytes()[:limit]
     except OSError:
         return ""
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return ""
+    # A byte-limit slice can cut mid-codepoint; decode leniently so a large
+    # non-ASCII artifact still yields a preview instead of dropping the whole body.
+    return data.decode("utf-8", errors="replace")
 
 
 def _entry_text(entry: dict[str, Any], root: Path, limit: int) -> str:

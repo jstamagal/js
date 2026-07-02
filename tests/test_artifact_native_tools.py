@@ -338,3 +338,13 @@ def test_artifact_ingest_resolves_paths_and_rejects_empty_input(tmp_path, monkey
         ]
     ]
     assert empty == "ERROR: no paths supplied"
+
+
+def test_read_text_keeps_preview_when_byte_limit_splits_a_codepoint(tmp_path):
+    """A byte-limited slice can cut mid multibyte char; the preview must survive
+    (lenient decode) instead of the whole body dropping to empty."""
+    p = tmp_path / "artifact.txt"
+    p.write_text("A" * 10 + "€" * 10, encoding="utf-8")   # € = 3 bytes each
+    out = artifact_tools._read_text(p, 11)   # 10 'A' + first byte of the first €
+    assert out.startswith("A" * 10)
+    assert out != ""

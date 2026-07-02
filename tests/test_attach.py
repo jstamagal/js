@@ -6,7 +6,7 @@ from pathlib import Path
 
 import ai
 
-from js import cli, model_client, runtime
+from js import attach, cli, model_client, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -254,3 +254,12 @@ def test_missing_attachment_is_clear_error_without_model_call(monkeypatch, tmp_p
     assert actual == 2
     assert "attachment not found" in captured.err
     assert load_messages(cfg.session_file) == []
+
+
+def test_looks_text_accepts_utf8_split_at_read_boundary():
+    """A valid-UTF8 sample whose trailing multibyte char is cut by the byte cap must
+    still classify as text; only genuinely invalid bytes should read as binary."""
+    full = ("x" * 8 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
+    assert attach._looks_text(full[:-1]) is True   # last byte of € dropped
+    assert attach._looks_text(full[:-2]) is True   # two bytes of € dropped
+    assert attach._looks_text(b"ab\xffcd") is False  # invalid byte mid-content
