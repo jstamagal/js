@@ -33,6 +33,7 @@ DEFAULT_MAX_TOOL_ITERATIONS = 50
 DEFAULT_MAX_BASH_OUTPUT_BYTES = 256 * 1024
 DEFAULT_MAX_TOOL_RESULT_BYTES = 256 * 1024
 DEFAULT_FETCH_TIMEOUT_S = 15
+DEFAULT_INLINE_CODE_TIMEOUT_S = 300
 DEFAULT_TRACE = True
 DEFAULT_MAX_READ_LINES = 2_000
 DEFAULT_MAX_LINE_CHARS = 2_000
@@ -136,6 +137,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("limits.fetch_timeout_s", "int", DEFAULT_FETCH_TIMEOUT_S,
                 "fetch() per-request timeout in seconds.",
                 env="JS_FETCH_TIMEOUT"),
+    SettingSpec("limits.inline_code_timeout_s", "int", DEFAULT_INLINE_CODE_TIMEOUT_S,
+                "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",
+                env="JS_INLINE_CODE_TIMEOUT"),
     SettingSpec("limits.max_read_lines", "int", DEFAULT_MAX_READ_LINES,
                 "Maximum lines returned by read()."),
     SettingSpec("limits.max_line_chars", "int", DEFAULT_MAX_LINE_CHARS,
