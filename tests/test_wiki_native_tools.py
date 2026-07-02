@@ -315,3 +315,42 @@ def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_pat
     assert image_actual == "MEDIA image. embed: ![[photo.png]]\n--- OCR (tesseract) ---\nocr words"
     assert (vault / "assets" / "photo.png").read_bytes() == b"fake-png-bytes"
     assert run_calls == [["tesseract", str(image), "stdout"]]
+
+
+def test_wiki_convert_fallback_tests_file_description_not_the_path(tmp_path, monkeypatch):
+    """`file` prints '<path>: <desc>'. A binary living under a path containing
+    "text" (e.g. .../context/...) must classify off the description, not the path."""
+    sub = tmp_path / "context"
+    sub.mkdir()
+    blob = sub / "thing.bin"
+    blob.write_bytes(b"\x00\x01\x02BOOT")
+
+    def run_stub(cmd, context):
+        return 0, f"{cmd[-1]}: DOS/MBR boot sector", ""
+
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+
+    actual = wiki_convert(str(blob), context=_ctx(tmp_path))
+    assert actual.startswith("UNREADABLE/binary:")
+
+
+def test_wiki_convert_soffice_failure_does_not_return_stale_tmp_output(tmp_path, monkeypatch):
+    """soffice writes /tmp/<stem>.txt; on a failed conversion a stale same-stem file
+    from a prior run must not be returned as this file's content."""
+    from pathlib import Path as _P
+
+    doc = tmp_path / "zzstalestem98765.doc"
+    doc.write_bytes(b"\xd0\xcf\x11\xe0garbage-ole")   # bogus .doc
+    stale = _P("/tmp") / "zzstalestem98765.txt"
+    stale.write_text("STALECONTENT", encoding="utf-8")
+
+    def run_stub(cmd, context):
+        return 1, "", "source file could not be loaded"   # soffice fails, writes nothing
+
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+    try:
+        actual = wiki_convert(str(doc), context=_ctx(tmp_path))
+        assert "STALECONTENT" not in actual
+        assert actual.startswith("ERROR soffice:")
+    finally:
+        stale.unlink(missing_ok=True)
