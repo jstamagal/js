@@ -30,11 +30,11 @@ run *args:
 drain *args:
     uv run js-drain {{ args }}
 
-# commit-agent workflow over the cwd. message goes through js's -p.
-#   just commit -p "mostly housekeeping"
-# just commit /path/to/repo -p "mostly housekeeping"
-commit *args:
-    uv run js --commit {{ args }}
+# Commit workflow is deliberately plain: run `js --commit` from repo root.
+# Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
+# This recipe exists only as a no-arg convenience and rejects arguments.
+commit:
+    uv run js --commit
 
 # ── env / deps ───────────────────────────────────────────────────────────────
 
