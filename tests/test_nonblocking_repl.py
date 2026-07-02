@@ -61,3 +61,17 @@ def test_nonblocking_repl_empty_line_then_eof_is_clean(monkeypatch, tmp_path):
     rc = _drive_async_repl(monkeypatch, tmp_path, ["   "], run_turn_async_stub)
     assert rc == 0
     assert load_messages(_session_file(tmp_path)) == []
+
+
+def test_turn_state_commands_are_refused_while_a_turn_runs():
+    """Commands that clear/rotate/compact the live message list must be gated while a
+    turn is active — running them off-loop races the turn's single-writer append."""
+    assert cli._is_turn_state_command("/reset")
+    assert cli._is_turn_state_command("/wipe")
+    assert cli._is_turn_state_command("/compact")
+    assert cli._is_turn_state_command("/compact up to here")
+    # non-mutating / unrelated commands stay live
+    assert not cli._is_turn_state_command("/compact-auto on")
+    assert not cli._is_turn_state_command("/turns")
+    assert not cli._is_turn_state_command("/model gpt")
+    assert not cli._is_turn_state_command("hello there")

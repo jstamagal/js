@@ -1866,6 +1866,14 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
             queue.task_done()
 
 
+def _is_turn_state_command(line: str) -> bool:
+    """Commands that clear/rotate/compact the live message list. Running one while
+    a turn appends to state["messages"] races the single-writer discipline the turn
+    queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
+    rollback marks) — refuse until the active turn ends."""
+    return line in ("/reset", "/wipe", "/compact") or line.startswith("/compact ")
+
+
 async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. `prompt_async` keeps the input line live while a turn streams
@@ -1893,6 +1901,9 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
                         print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
                     continue
                 if not line:
+                    continue
+                if _is_turn_state_command(line) and sup.turn_active():
+                    print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
                     continue
                 handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
                 if handled:
