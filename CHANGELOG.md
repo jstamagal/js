@@ -206,6 +206,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Commit-agent subject guidance.** Claude Code repo instructions now require plain-English commit subjects so automated commits keep the owner's voice instead of leaking conventional-commit syntax.
 - **Non-blocking window design plan.** Updated the design notes to reflect the completed async runtime and shared-loop supervisor, replacing the old worker-thread build path with the next output-event wiring step.
 - **Subagent fan-out scheduling.** Subagent tasks now run as async turns gathered on the active REPL supervisor when present, keeping child jobs visible and cancelable while preserving ordered results outside the REPL.
 - **Runtime turns can run without blocking the shared event loop.** `run_turn_async` now awaits async model streaming, uses non-blocking retry sleeps, and dispatches synchronous tools through an executor; the existing `run_turn` remains a sync wrapper for current CLI and subagent callers while tests patch the async model seam.
