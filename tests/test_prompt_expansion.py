@@ -190,3 +190,33 @@ def test_persona_code_blocked_without_flag(tmp_path):
     (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     with pytest.raises(PromptExpansionError):
         P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
+
+
+def test_default_inline_code_timeout_is_300():
+    import js.promptexpand as P
+    assert P._DEFAULT_TIMEOUT_S == 300
+
+
+def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
+    import js.persona as P
+
+    seen = {}
+
+    def fake_expand(text, *, allow_code=False, env=None, timeout_s=None):
+        seen["text"] = text
+        seen["allow_code"] = allow_code
+        seen["timeout_s"] = timeout_s
+        return text + " expanded"
+
+    d = tmp_path / "agent"
+    d.mkdir()
+    (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
+    cfg = _cfg(d, allow_inline_code=True)
+    cfg.inline_code_timeout_s = 17
+    monkeypatch.setattr(P, "expand_prompt", fake_expand)
+
+    spec = P.load_configured_prompt_spec(cfg)
+
+    assert "expanded" in spec.system
+    assert seen["allow_code"] is True
+    assert seen["timeout_s"] == 17

@@ -12,6 +12,7 @@ from js import setcmd, settings
     [
         ("model.id", "local-model", "local-model"),
         ("limits.fetch_timeout_s", "20", 20),
+        ("limits.inline_code_timeout_s", "300", 300),
         ("compact.notify_threshold", "0.75", 0.75),
         ("runtime.trace", "off", False),
         (
