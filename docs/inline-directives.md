@@ -70,7 +70,8 @@ the inline form when both could match.
 
 Command execution captures stdout only; a trailing newline is stripped. A
 nonzero exit, a missing interpreter/compiler, or a timeout raises an error and
-aborts prompt assembly. The default per-directive timeout is 30 seconds.
+aborts prompt assembly. The default per-directive timeout is 300 seconds; set
+`limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT` to override it.
 
 ## Enabling code execution
 
