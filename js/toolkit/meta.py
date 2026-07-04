@@ -332,11 +332,17 @@ async def _run_one_task_async(
             final = str(msg["content"]).strip()
             break
     final = final or "(no final response)"
-    # Cap each child's final with the same knob the PARENT's dispatch layer
-    # applies to the aggregate, so one fat sibling can't silently eat the whole
-    # budget. Read the parent context: the child's runtime rewrites
-    # child_context.max_tool_result_bytes from the child cfg mid-turn.
-    cap = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
+    # Give each child a FAIR SHARE of the aggregate budget, not the whole thing.
+    # The parent's dispatch layer re-clips the joined TASK_RESULTS at
+    # max_tool_result_bytes; if every child could fill that full budget, one fat
+    # sibling would fill it alone and the aggregate re-clip would slice the rest
+    # away — the short siblings vanish. Capping each at budget//total bounds a fat
+    # sibling to its 1/N slice, so the short ones always survive the join. (A run
+    # where ALL N are fat still trims the tail at the aggregate cap — inherent to a
+    # fixed budget, not silent starvation.) Read the parent context: the child's
+    # runtime rewrites child_context.max_tool_result_bytes mid-turn.
+    budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
+    cap = budget // max(1, total) if budget else 0
     if cap and len(final) > cap:
         final = final[:cap] + f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]"
     return f"{idx}. {final}"
