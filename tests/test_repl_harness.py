@@ -691,7 +691,9 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     actual = cli.main([])
 
     assert actual == 0
-    assert reasoning_efforts == ["high"]
+    # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
+    # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
+    assert reasoning_efforts == ["max"]
 
 
 def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path):
