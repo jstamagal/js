@@ -386,6 +386,7 @@ def tools() -> tuple[Tool, ...]:
             {
                 "command": {"type": "string"},
                 "cwd": {"type": "string"},
+                "timeout": {"type": "integer", "default": 300},
                 "keep_ansi": {"type": "boolean", "default": False},
                 "env": {"type": "array", "items": {"type": "string"}},
                 "description": {"type": "string"},
