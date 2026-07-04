@@ -1202,6 +1202,69 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
     finally:
         logins.set_config_dir(None)
 
+
+def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
+    """Ruling C: `/model vendor/model` may switch direct ONLY when that vendor is
+    a saved login. With no login and a pinned gateway, the REPL agrees with the
+    router — the endpoint holds and the whole id rides it (no hijack)."""
+    from js import logins
+
+    cfg = replace(
+        make_cfg(tmp_path),
+        provider_id="omp",
+        provider_base_url="https://gateway.test/v1",
+        provider_api_key="sk-omp",
+    )
+    logins.set_config_dir(tmp_path / "login-store")  # empty store: no anthropic login
+    state = {
+        "messages": [],
+        "system": "SYSTEM",
+        "model": cfg.model,
+        "provider_id": cfg.provider_id,
+        "provider_base_url": cfg.provider_base_url,
+        "provider_api_key": cfg.provider_api_key,
+        "provider_headers": {"x-omp": "1"},
+    }
+    try:
+        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
+        # Endpoint unchanged; the full prefixed id is passed through verbatim.
+        assert state["provider_id"] == "omp"
+        assert state["provider_base_url"] == "https://gateway.test/v1"
+        assert state["provider_api_key"] == "sk-omp"
+        assert state["provider_headers"] == {"x-omp": "1"}
+        assert state["model"] == "anthropic/claude-sonnet-4"
+    finally:
+        logins.set_config_dir(None)
+
+
+def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint(tmp_path):
+    """Ruling C: even with no pinned provider, a vendor prefix is only an
+    endpoint switch when that vendor is a saved login; otherwise it is a plain
+    model id."""
+    from js import logins
+
+    cfg = make_cfg(tmp_path)
+    logins.set_config_dir(tmp_path / "login-store")
+    state = {
+        "messages": [],
+        "system": "SYSTEM",
+        "model": cfg.model,
+        "provider_id": None,
+        "provider_base_url": None,
+        "provider_api_key": None,
+        "provider_headers": {},
+    }
+    try:
+        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
+        assert state["provider_id"] is None
+        assert state["provider_base_url"] is None
+        assert state["provider_api_key"] is None
+        assert state["provider_headers"] == {}
+        assert state["model"] == "anthropic/claude-sonnet-4"
+    finally:
+        logins.set_config_dir(None)
+
+
 def test_pick_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"

@@ -87,3 +87,23 @@ def test_cancel_unknown_id_is_noop(monkeypatch, capsys):
     assert cli._handle_command("/cancel 99", {}, None) is True
     assert not sup.loop.scheduled
     assert "no matching job" in capsys.readouterr().out
+
+
+def test_drain_queue_drops_all_pending_and_balances_task_done():
+    """/flush and ^C drain drop every queued prompt and balance task_done() so a
+    later queue.join() still completes (no orphaned unfinished tasks)."""
+    import asyncio
+
+    async def drive():
+        queue: asyncio.Queue = asyncio.Queue()
+        for line in ("one", "two", "three"):
+            queue.put_nowait(line)
+        dropped = cli._drain_queue(queue)
+        # Every item gone, count returned, and join() unblocks immediately.
+        assert dropped == 3
+        assert queue.qsize() == 0
+        await asyncio.wait_for(queue.join(), timeout=1.0)
+        # Draining an empty queue is a clean no-op.
+        assert cli._drain_queue(queue) == 0
+
+    asyncio.run(drive())
