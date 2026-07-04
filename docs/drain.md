@@ -43,10 +43,11 @@ whole.
 
 Budget:
 
-- otherwise `auto_budget_tokens(model)` asks models.dev for the active model's
-  context window and budgets a conservative fraction of it; if the model is
-  unknown, it falls back to a small conservative budget on the same effective
-  model that `js` would use: layered config, then `JS_MODEL`, with `--model` overriding all of them.
+- `-b`/`--budget` overrides; otherwise `auto_budget_tokens(model)` asks models.dev
+  for the active model's context window and budgets a conservative fraction of it.
+  If the model is unknown, it falls back to a small fixed budget.
+- The model resolved is the same one `js` would use: layered config, then
+  `JS_MODEL`, with `--model` overriding all.
 
 The rough conversion is:
 ```text

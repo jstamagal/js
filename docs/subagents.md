@@ -4,9 +4,9 @@ Subagents in `js` are implemented by the `task` tool and generated
 prompt-directory tools. They are parallel worker turns, not long-running managed
 processes with handles.
 
-For how to *create* the agents this page runs — directory layout, id rules,
-reserved names, and `tools:` frontmatter — see
-[agents-and-prompts.md](agents-and-prompts.md).
+Agents are created using prompt directories under `prompts/` (for bundled agents)
+or `.js/agents/` (for project/global agents), with a `00-tools.yaml` manifest
+declaring `tools:` (tool selectors) and optional `max_tokens:` overrides.
 
 ## Generic `task`
 

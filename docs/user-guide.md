@@ -99,7 +99,7 @@ REPL commands:
 /on [event handler]           list or register event hooks
 /set model.reasoning_effort high
 /set compact.auto off
-/on ^tool_call echo denied
+/on turn_start set compact.auto off
 /turns
 /persona
 /session

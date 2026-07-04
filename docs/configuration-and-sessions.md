@@ -59,6 +59,7 @@ as `<set>`.
 | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
 | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
+| `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
 | `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
 | `limits.max_line_chars` | `2000` | Maximum characters shown per read/search line. |
 | `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
@@ -67,6 +68,7 @@ as `<set>`.
 | `limits.wiki_vault_lock_timeout_s` | `30` | Wiki vault lock timeout in seconds. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| `runtime.allow_inline_code` | `off` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; same as --dangerously-evaluate-inline-code. |
 | `compact.auto` | `on` | Automatic cache-aware context compaction. |
 | `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
 | `compact.notify_threshold` | `0.5` | Notify once when context reaches this fraction. |
@@ -81,6 +83,11 @@ as `<set>`.
 | `subagents.prefer_inherit` | `off` | Subagents inherit the parent's model when true; else use the agent's own primary. |
 | `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
 | `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:string\|[...], aliases:{...}}. |
+| `sampling.temperature` | `<unset>` | Provider-default sampling temperature; unset = do not send. |
+| `sampling.top_p` | `<unset>` | Provider-default nucleus sampling top_p; unset = do not send. |
+| `sampling.top_k` | `<unset>` | Provider-default top_k sampling; unset = do not send. |
+| `sampling.repetition_penalty` | `<unset>` | Provider-default repetition penalty; unset = do not send. |
+| `sampling.presence_penalty` | `<unset>` | Provider-default presence penalty; unset = do not send. |
 | `wiki.aliases` | `<none>` | Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`. |
 | `artifact.dir` | `<none>` | Artifact library directory. |
 | `artifact.url` | `<none>` | Artifact HTTP base URL. |
@@ -257,11 +264,10 @@ which wins over repo. `AGENTS.md` and `AGENTS.local.md` from global then project
 scope are prepended to every main-agent and subagent system prompt, blank-line
 separated.
 
-For the full how-to — creating global/project agents, id rules, reserved names,
-the `00-*` zero file, and `tools:` frontmatter — see
-[agents-and-prompts.md](agents-and-prompts.md). The assembled system prompt is
-also run through inline-directive expansion
+The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
+Agent manifests use a `00-tools.yaml` zero file listing tool selectors and an
+optional `max_tokens:` override.
 
 ## Session Resolution
 
