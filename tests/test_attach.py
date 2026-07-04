@@ -211,7 +211,10 @@ def test_repl_at_file_attaches_text_file(monkeypatch, tmp_path, capsys):
 
     assert actual == 0
     capsys.readouterr()
-    assert seen and seen[0].startswith("summarize\n\nAttached file:")
+    # Position-aware @token removal leaves the separator space that preceded the
+    # token untouched (byte-for-byte outside the removed span) — unlike the old
+    # ' '.join(tokens) rebuild, which collapsed it away.
+    assert seen and seen[0].startswith("summarize \n\nAttached file:")
     assert "repl attachment" in seen[0]
     assert load_messages(cfg.session_file)[0] == {"role": "user", "content": seen[0]}
 
@@ -254,6 +257,43 @@ def test_missing_attachment_is_clear_error_without_model_call(monkeypatch, tmp_p
     assert actual == 2
     assert "attachment not found" in captured.err
     assert load_messages(cfg.session_file) == []
+
+
+def test_split_repl_attachments_apostrophe_does_not_drop_attachment(tmp_path):
+    """An unbalanced quote (an apostrophe in ordinary prose) used to make shlex
+    raise ValueError, and the old handler bailed out returning (line, []) —
+    silently sending no file at all. The attachment must survive."""
+    note = tmp_path / "notes.txt"
+    prompt, attachments = attach.split_repl_attachments(f"summarize @{note} isn't it great")
+
+    assert attachments == [str(note)]
+    assert f"@{note}" not in prompt
+    assert "isn't it great" in prompt
+    assert "summarize" in prompt
+
+
+def test_split_repl_attachments_preserves_prose_byte_for_byte():
+    """Presence of an @attachment must not reflow the rest of the line — quotes
+    and internal whitespace outside the removed @token span survive untouched."""
+    line = 'fix @a.py keep "exact   spacing" now'
+    prompt, attachments = attach.split_repl_attachments(line)
+
+    assert attachments == ["a.py"]
+    assert "@a.py" not in prompt
+    assert '"exact   spacing"' in prompt   # quotes not stripped
+    assert "exact   spacing" in prompt     # internal run of spaces not collapsed
+    assert "now" in prompt and "keep" in prompt
+
+
+def test_split_repl_attachments_quoted_path_with_spaces_still_works():
+    """@"path with spaces.png" is documented (docs/user-guide.md) as the way to
+    attach a file whose name contains spaces; the rewrite must keep parsing it."""
+    prompt, attachments = attach.split_repl_attachments('look at @"my file.png" please')
+
+    assert attachments == ["my file.png"]
+    assert "please" in prompt
+    assert "look at" in prompt
+    assert "my file.png" not in prompt
 
 
 def test_looks_text_accepts_utf8_split_at_read_boundary():
