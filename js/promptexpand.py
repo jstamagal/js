@@ -86,6 +86,10 @@ def expand_prompt(
 
     Raises :class:`PromptExpansionError` on an unknown subsystem, a code
     subsystem invoked while ``allow_code`` is false, or any execution/read failure.
+
+    ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
+    code subsystems (sh/bash/python/node/c) always execute against the real
+    process environment.
     """
     if "{{" not in text and "!{" not in text and "```!" not in text:
         return text
@@ -130,6 +134,9 @@ def _run_subsystem(name: str, body: str, allow_code: bool, environ: dict, timeou
             f"inline '{name}' executes code, but inline-code execution is off; "
             f"pass --dangerously-evaluate-inline-code to enable"
         )
+    if is_code:
+        # Code subsystems run against the real process environment, always.
+        return runner(body, timeout_s=timeout_s)
     return runner(body, environ=environ, timeout_s=timeout_s)
 
 
@@ -167,11 +174,11 @@ def _run_capture(argv, *, cwd=None, timeout_s: int, label: str) -> str:
     return proc.stdout.rstrip("\n")
 
 
-def _sub_sh(body: str, *, environ: dict, timeout_s: int) -> str:
+def _sub_sh(body: str, *, timeout_s: int) -> str:
     return _run_capture(["sh", "-c", body], timeout_s=timeout_s, label="!{sh}")
 
 
-def _sub_bash(body: str, *, environ: dict, timeout_s: int) -> str:
+def _sub_bash(body: str, *, timeout_s: int) -> str:
     return _run_capture(["bash", "-c", body], timeout_s=timeout_s, label="!{bash}")
 
 
@@ -183,7 +190,7 @@ def _interpreted(label: str, interp_argv, ext: str):
     probes the environment must see the directory js was launched from, not the
     throwaway compile dir. This matches the bare ``!{sh}``/``!{bash}`` runners.
     """
-    def runner(body: str, *, environ: dict, timeout_s: int) -> str:
+    def runner(body: str, *, timeout_s: int) -> str:
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
@@ -197,7 +204,7 @@ def _compiled(label: str, compiler: str, ext: str):
     Compilation stays in the temp dir; the built exe RUNS in the invocation cwd
     (``cwd=None``) so it observes the real working directory, like ``_interpreted``.
     """
-    def runner(body: str, *, environ: dict, timeout_s: int) -> str:
+    def runner(body: str, *, timeout_s: int) -> str:
         cc = shutil.which(compiler) or compiler
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"snippet{ext}"
