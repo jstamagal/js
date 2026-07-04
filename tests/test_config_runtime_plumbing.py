@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import ai
@@ -156,14 +157,30 @@ def test_from_env_leaves_artifact_settings_none_without_config_lines(monkeypatch
     assert cfg.artifact_bin is None
 
 
+def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
+    config_dir = _isolated_config_home(monkeypatch, tmp_path)
+    config_dir.mkdir(parents=True)
+    (config_dir / "jsrc").write_text(
+        "set model.id offline-test-model\nset limits.subagent_max_workers 3\n",
+        encoding="utf-8",
+    )
+
+    cfg = from_env(save_session=False)
+
+    assert cfg.subagent_max_workers == 3
+
+
 def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("ok"))
-    cfg = _config(
-        tmp_path,
-        artifact_dir="/cfg/artifacts",
-        artifact_url="http://cfg.local/",
-        artifact_bin="artifact-cfg",
-        settings_view={"wiki": {"aliases": {"creative": "/p"}}},
+    cfg = replace(
+        _config(
+            tmp_path,
+            artifact_dir="/cfg/artifacts",
+            artifact_url="http://cfg.local/",
+            artifact_bin="artifact-cfg",
+            settings_view={"wiki": {"aliases": {"creative": "/p"}}},
+        ),
+        subagent_max_workers=3,
     )
     context = ToolContext(cwd=tmp_path)
 
@@ -181,6 +198,7 @@ def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monke
     assert context.artifact_dir == "/cfg/artifacts"
     assert context.artifact_url == "http://cfg.local/"
     assert context.artifact_bin == "artifact-cfg"
+    assert context.subagent_max_workers == 3
     assert context.vault_aliases == {"creative": "/p"}
 
 

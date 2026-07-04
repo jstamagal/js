@@ -40,6 +40,7 @@ DEFAULT_MAX_LINE_CHARS = 2_000
 DEFAULT_JSONL_MAX_LINE_CHARS = 65536
 DEFAULT_MAX_FILE_BYTES = 2_000_000
 DEFAULT_TASK_MAX_DEPTH = 2
+DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
@@ -152,6 +153,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum file bytes read by fs tools."),
     SettingSpec("limits.task_max_depth", "int", DEFAULT_TASK_MAX_DEPTH,
                 "Maximum recursive task/subagent depth."),
+    SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,
+                "Maximum concurrent subagent workers per task call; minimum 1."),
     SettingSpec("limits.wiki_vault_lock_timeout_s", "int", DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S,
                 "Wiki vault lock timeout in seconds."),
     # --- runtime ---
@@ -288,9 +291,12 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return parsed, None
     if kind == "int":
         try:
-            return int(text), None
+            value = int(text)
         except ValueError:
             return None, "expected an integer"
+        if spec.key == "limits.subagent_max_workers" and value < 1:
+            return None, "expected an integer >= 1"
+        return value, None
     if kind == "float":
         try:
             return float(text), None
