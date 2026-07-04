@@ -11,11 +11,17 @@ Use for:
 - Getting matching file paths before reading the most relevant files.
 
 When not to use:
+{{#if sem_search}}
 - Use `sem_search` for intent-based exploration when you do not know the
   exact words.
+{{/if}}
+{{#if read}}
 - Use `read` when you already know the file path and need file contents.
+{{/if}}
+{{#if task}}
 - Use `task` for open-ended investigations that require multiple search/read
   rounds or synthesis across several areas.
+{{/if}}
 
 Pattern behavior:
 - `pattern` is a ripgrep (Rust regex) regular expression.

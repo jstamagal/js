@@ -33,10 +33,18 @@ Visual and binary handling:
 - Jupyter notebooks (`.ipynb`) are read as plain JSON text.
 
 When not to use:
+{{#if fs_search}}
 - This tool reads files only. Use `fs_search` or `shell` when you need directory
   discovery.
 - Use `fs_search` for exact string, regex, or broad content discovery.
+{{/if}}
+{{#unless fs_search}}
+- This tool reads files only. Use `shell` (`fd` to find files, `rg` to search
+  their contents) when you need directory discovery or broad content search.
+{{/unless}}
+{{#if sem_search}}
 - Use `sem_search` for intent-based exploration across unfamiliar code.
+{{/if}}
 
 Batching:
 - When several specific files may be relevant, request them in the same
