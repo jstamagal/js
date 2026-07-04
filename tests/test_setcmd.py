@@ -224,21 +224,46 @@ def test_provider_extra_rejects_non_object_json():
     assert config_settings == config_before
 
 
-def test_bool_off_differs_from_nullable_off():
+def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
+    # RULING A: magic strings die. "off" still parses as a real bool for a
+    # bool knob, but for a nullable int/str knob it's just a bad value now —
+    # `set -key` (js/setcmd.py apply_unset) is the only way to clear one.
     live_settings = settings.seed_defaults()
 
     bool_result = setcmd.run_repl_command(live_settings, "/set runtime.trace off")
     int_result = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens 123")
-    none_result = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
+    rejected = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
 
     assert bool_result.error is None
     assert bool_result.lines == ["runtime.trace = off"]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
     assert int_result.error is None
     assert int_result.lines == ["model.max_output_tokens = 123"]
-    assert none_result.error is None
-    assert none_result.lines == ["model.max_output_tokens = <none>"]
+    assert rejected.error == "model.max_output_tokens: expected an integer"
+    assert rejected.changed is False
+    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123  # unchanged
+
+    cleared = setcmd.run_repl_command(live_settings, "/set -model.max_output_tokens")
+    assert cleared.error is None
+    assert cleared.lines == ["model.max_output_tokens = <none>"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
+
+
+@pytest.mark.parametrize("token", ["default", "auto", "none", "unset"])
+def test_magic_strings_store_verbatim_for_string_knobs(token):
+    # RULING A headline: a literal string knob like model.id stores these
+    # words as-is instead of silently clearing to the built-in default.
+    live_settings = settings.seed_defaults()
+
+    result = setcmd.run_repl_command(live_settings, f"/set model.id {token}")
+
+    assert result.error is None
+    assert result.lines == [f"model.id = {token}"]
+    assert settings.get_dotted(live_settings, ("model", "id")) == token
+
+    cleared = setcmd.run_repl_command(live_settings, "/set -model.id")
+    assert cleared.error is None
+    assert settings.get_dotted(live_settings, ("model", "id")) is None
 
 
 def test_empty_state_rendering_distinguishes_off_none_and_unset():
@@ -261,7 +286,11 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     assert sampling.lines == ["sampling.temperature = <unset>"]
     template = "\n".join(settings._template_lines())
     assert "# Per-turn sampling overrides. Default display is <unset>;" in template
-    assert "#set sampling.temperature unset" in template
+    # RULING A: "unset" is no longer a magic clear-token, so the template no
+    # longer suggests typing it as a settable value — the commented example
+    # line is just the bare key, blank.
+    assert "#set sampling.temperature" in template
+    assert "#set sampling.temperature unset" not in template
 
 
 def test_secret_values_are_masked_when_shown():
@@ -353,6 +382,10 @@ def test_registry_defaults_seed_and_env_overrides_roundtrip():
 
 
 def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
+    if spec.key == "model.reasoning_effort":
+        # restricted domain (RULING B): an arbitrary string is rejected, so
+        # the generic str-fallback below doesn't apply to this one knob.
+        return "high", "high"
     if spec.type == "bool":
         return "on", True
     if spec.type == "int":
