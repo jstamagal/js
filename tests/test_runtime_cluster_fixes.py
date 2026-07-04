@@ -1,5 +1,6 @@
-"""Regressions for the runtime cluster fixes (SWEEP rulings E/F, findings on
-cancel turn_end, retry stream-close, and the byte-honest --debug-file trace)."""
+"""Regressions for the runtime cluster fixes (turn_end on cancel, retry
+stream-close, the byte-honest --debug-file trace, and the dispatch-layer clip
+marker). The stats aggregation rulings live in test_stats_aggregation.py."""
 
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ from js import runtime
 from js import colors as C
 from js import model_client as MC
 from js.config import Config
-from js.stats import summarize_calls
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -64,30 +64,6 @@ class _Recorder:
     def emit(self, event, **payload):
         self.events.append((event, payload))
         return SimpleNamespace(results=[], hooks=[])
-
-
-# --------------------------------------------------------------------------
-# RULING E / F: stats aggregation
-# --------------------------------------------------------------------------
-
-def test_summarize_calls_sums_token_denominators():
-    # A tool-first turn: call 1 has no text token, call 2 does. prompt/cached/output
-    # must share one cumulative denominator (ruling E) and ttft falls to the first
-    # call that produced text (ruling F).
-    calls = [
-        {"prompt_tokens": 1000, "cached_tokens": 0, "output_tokens": 10, "stream_s": 1.0, "ttft_s": None, "finish_reason": "tool_calls"},
-        {"prompt_tokens": 6000, "cached_tokens": 5500, "output_tokens": 20, "stream_s": 2.0, "ttft_s": 0.5, "finish_reason": "stop"},
-    ]
-    row = summarize_calls(calls)
-    assert row["prompt_tokens"] == 7000
-    assert row["cached_tokens"] == 5500
-    assert row["output_tokens"] == 30
-    assert row["cached_tokens"] <= row["prompt_tokens"]  # ratio is now meaningful
-    assert row["ttft_s"] == 0.5
-
-
-def test_summarize_calls_ttft_none_when_no_text_at_all():
-    assert summarize_calls([{"ttft_s": None, "output_tokens": 0, "stream_s": 0.0}])["ttft_s"] is None
 
 
 # --------------------------------------------------------------------------
