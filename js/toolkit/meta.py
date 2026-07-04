@@ -325,8 +325,8 @@ async def _run_one_task_async(
             final = str(msg["content"]).strip()
             break
     final = final or "(no final response)"
-    if len(final) > 4000:
-        final = final[:4000] + "\n... [truncated]"
+    # No per-subagent cap: the dispatch layer already clips the aggregated
+    # result to limits.max_tool_result_bytes, same as every other tool.
     return f"{idx}. {final}"
 
 
