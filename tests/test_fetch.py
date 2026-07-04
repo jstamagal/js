@@ -211,3 +211,11 @@ def test_fetch_tool_schema_exposes_whole_hog_surface():
         "json_body",
         "save",
     }
+
+
+def test_shell_tool_schema_exposes_timeout_param():
+    """timeout has a handler default of 300s but must also be a declared schema
+    param, or a schema-enforcing provider can never raise it for long builds."""
+    tool = next(tool for tool in process_net.tools() if tool.name == "shell")
+
+    assert tool.params["timeout"] == {"type": "integer", "default": 300}

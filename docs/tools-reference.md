@@ -131,6 +131,7 @@ Parameters:
 
 - `command`
 - `cwd`
+- `timeout` (default `300` seconds)
 - `keep_ansi`
 - `env`
 - `description`
