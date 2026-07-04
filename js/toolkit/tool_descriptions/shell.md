@@ -13,13 +13,28 @@ Critical directory rule:
 - `cd path && command` is redundant and violates the tool contract.
 
 Do not use this for normal file operations:
+{{#if fs_search}}
 - File search: use `fs_search`, not `find`, `grep`, or `rg`.
 - Content search: use `fs_search` with regex, not `grep` or `rg`.
+- Directory shape: use `fs_search` or an explicit `shell` listing command when
+  directory traversal is the actual request.
+{{/if}}
+{{#unless fs_search}}
+- Content search: use `rg` (ripgrep), not `grep`. `rg` is installed; it skips
+  binary and non-regular files, honors `.gitignore`, and is far faster.
+- File finding: use `fd`, not `find`, to locate files by name or extension. `fd`
+  is installed and safer around special files. Reach for `find`/`grep` only when
+  `rg`/`fd` cannot express the query.
+{{/unless}}
+{{#if read}}
 - File reads: use `read`, not `cat`, `head`, or `tail`.
+{{/if}}
+{{#if patch}}
 - File edits: use `patch` or `multi_patch`, not `sed` or `awk`.
+{{/if}}
+{{#if write}}
 - File writes: use `write`, not `echo > file` or heredocs.
-- Directory shape: use `fs_search` or `shell` with an explicit listing command
-  when directory traversal is the actual request.
+{{/if}}
 - Communication: respond directly, not with `echo` or `printf`.
 
 Before commands that create files or directories:

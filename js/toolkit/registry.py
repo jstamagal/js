@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 from .core import Tool
+from .descriptions import render_tool_name_sections
 from . import artifact, fs, meta, process_net, wiki
 
 
@@ -29,7 +30,20 @@ class ToolRegistry:
         return {tool.name: tool for tool in self.tools}
 
     def openai_specs(self) -> list[dict]:
-        return [tool.openai_spec() for tool in self.tools]
+        # Resolve each description's co-present-tool-name blocks against the tools
+        # actually on this surface. This is the one model-facing chokepoint every
+        # path funnels through (select()'d surfaces and the raw full registry that
+        # commit/wiki hand straight to the model), so it is leak-proof: a
+        # {{#unless fs_search}} block never reaches the model unresolved.
+        present = set(self.by_name)
+        specs = []
+        for tool in self.tools:
+            spec = tool.openai_spec()
+            spec["function"]["description"] = render_tool_name_sections(
+                tool.description, present, tool=tool.name
+            )
+            specs.append(spec)
+        return specs
 
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
