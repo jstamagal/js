@@ -2,7 +2,7 @@
 
 js keeps its own writable mirror of the models.dev catalog under platform data.
 The bundled DB from the installed package is only the seed. On lookup we check
-whether the active catalog is older than 72 hours; if so, we refresh it into
+whether the active catalog is older than 8 hours; if so, we refresh it into
 js's own DB and record when that happened. A forced refresh is available from
 js CLI/REPL commands.
 """
@@ -410,15 +410,32 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     return current
 
 
+def _is_wrapper_request(catalog_id: str, request: str) -> bool:
+    """True when ``request`` is ``catalog_id`` plus a wrapper suffix, e.g. the
+    catalog id ``deepseek-v4-pro`` against the request ``deepseek-v4-pro:cloud``.
+
+    Requires an exact prefix match followed by a boundary that is not itself
+    part of a bare model slug (letters, digits, ``-`` all continue one), so a
+    genuinely distinct sibling model — ``gpt-5-mini-2026`` against the catalog
+    id ``gpt-5`` — is rejected: ``-`` continues the slug, it isn't a wrapper
+    marker like ``:``.
+    """
+    if not request.startswith(catalog_id):
+        return False
+    tail = request[len(catalog_id):]
+    return not tail or not (tail[0].isalnum() or tail[0] == "-")
+
+
 @lru_cache(maxsize=512)
 def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits | None:
     """Return dynamic limits for ``model_id`` using models.dev metadata.
 
     We first try exact provider+model matches using the active js provider mapped
     to its underlying models.dev provider id. If that misses, we scan the
-    catalog: exact model-id matches first, then a substring pattern match so
-    custom wrappers like ``deepseek-v4-pro:cloud`` can still inherit the limits
-    of the underlying ``deepseek-v4-pro`` row.
+    catalog: exact model-id matches first, then a wrapper-prefix match (see
+    ``_is_wrapper_request``) so custom wrappers like ``deepseek-v4-pro:cloud``
+    can still inherit the limits of the underlying ``deepseek-v4-pro`` row,
+    without a shorter catalog id bleeding into an unrelated longer sibling.
     """
 
     model_id, provider_id = _normalize_request(model_id, provider_id)
@@ -458,10 +475,7 @@ def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits 
         )
 
     request = model_id.lower()
-    pattern_matches = [
-        row for row in _all_models()
-        if row.model_id.lower() in request or request in row.model_id.lower()
-    ]
+    pattern_matches = [row for row in _all_models() if _is_wrapper_request(row.model_id.lower(), request)]
     if not pattern_matches:
         return None
 

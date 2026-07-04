@@ -71,6 +71,28 @@ def test_lookup_limits_pattern_matches_unknown_provider_wrappers(monkeypatch):
     assert limits.max_output_tokens == 384_000
 
 
+def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypatch):
+    """The bidirectional substring fallback let a shorter catalog id (gpt-5) bleed
+    into a longer, genuinely-distinct sibling request (gpt-5-mini-2026) since '-'
+    is not alnum. The fix requires the wrapper boundary to not be '-' either, so
+    only a true wrapper suffix like ':cloud' still inherits the base model."""
+    rows = (
+        model_metadata._ModelRow("openai", "gpt-5", 400_000, 128_000, None),
+        model_metadata._ModelRow("deepseek", "deepseek-v4-pro", 1_000_000, 384_000, None),
+    )
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _model_id: None)
+    model_metadata.lookup_limits.cache_clear()
+
+    assert model_metadata.lookup_limits("gpt-5-mini-2026", "openai") is None
+
+    limits = model_metadata.lookup_limits("deepseek-v4-pro:cloud", "omp")
+    assert limits is not None
+    assert limits.model_id == "deepseek-v4-pro"
+    assert limits.context_window == 1_000_000
+    assert limits.max_output_tokens == 384_000
+
+
 def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypatch, tmp_path: Path):
     old_time = datetime.now(tz=UTC) - timedelta(days=5)
     new_time = datetime.now(tz=UTC)
