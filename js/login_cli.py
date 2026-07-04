@@ -23,7 +23,11 @@ _MODEL_LIST_LIMIT = 20
 
 
 def _mask(value: str) -> str:
-    if len(value) <= 10:
+    # Revealing an 8-char prefix + 4-char suffix only hides something when the
+    # string is long enough that the two slices can't cover the whole value
+    # (8 + 4 = 12) — otherwise every character comes through around the fake
+    # asterisks, which looks redacted but isn't.
+    if len(value) <= 12:
         return "*" * len(value)
     return f"{value[:8]}*******{value[-4:]}"
 

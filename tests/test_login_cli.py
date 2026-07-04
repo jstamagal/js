@@ -235,6 +235,21 @@ def test_dialect_map_tags_anthropic_models():
     assert dialects.get("glm-5.2") == "openai"
 
 
+def test_mask_hides_short_and_boundary_length_keys():
+    # len<=12 can't show an 8-char prefix + 4-char suffix without revealing
+    # every character (8 + 4 = 12), so anything that short falls back to
+    # all-asterisks instead of a fake-looking partial reveal.
+    assert login_cli._mask("short") == "*****"
+    assert login_cli._mask("sk-12345678x") == "*" * 12  # 12 chars: full overlap
+    assert login_cli._mask("x" * 11) == "*" * 11
+
+
+def test_mask_reveals_edges_only_once_a_hidden_middle_exists():
+    masked = login_cli._mask("sk-1234567890abcd")  # 17 chars: 8 prefix + 5 hidden + 4 suffix
+    assert masked == "sk-12345*******abcd"
+    assert "67890" not in masked  # the hidden middle chars never leak
+
+
 def test_secondary_test_enter_adds_without_testing(monkeypatch):
     # Empty input = add without a test, in BOTH modes (require_test only warns).
     monkeypatch.setattr("builtins.input", lambda _prompt="": "")
