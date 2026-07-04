@@ -161,10 +161,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
-    SettingSpec("runtime.allow_inline_code", "bool", False,
+    SettingSpec("runtime.allow_inline_code", "bool", True,
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
-                "prompt files and inject their stdout (DANGEROUS: runs arbitrary code from "
-                "prompt files; same as the --dangerously-evaluate-inline-code flag).",
+                "prompt files and inject their stdout. On by default (runs arbitrary code "
+                "from prompt files); opt out with --im-a-pussy or set this off.",
                 env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
     # --- compact ---
     SettingSpec("compact.auto", "bool", DEFAULT_COMPACT_AUTO,

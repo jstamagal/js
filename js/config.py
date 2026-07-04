@@ -152,7 +152,7 @@ class Config:
     max_file_bytes: int = _settings.DEFAULT_MAX_FILE_BYTES
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
     wiki_vault_lock_timeout_s: int = _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S
-    allow_inline_code: bool = False  # !{sh|python|c ...} inline-code execution (--dangerously-evaluate-inline-code)
+    allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
     artifact_dir: str | None = None  # artifact library dir; None = ARTIFACT_DIR env or built-in default
@@ -412,7 +412,7 @@ def from_env(
         max_file_bytes=max_file_bytes,
         task_max_depth=task_max_depth,
         wiki_vault_lock_timeout_s=wiki_vault_lock_timeout_s,
-        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), False)),
+        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
         artifact_dir=artifact_dir,
