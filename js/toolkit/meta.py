@@ -325,8 +325,13 @@ def _run_one_task(
             final = str(msg["content"]).strip()
             break
     final = final or "(no final response)"
-    if len(final) > 4000:
-        final = final[:4000] + "\n... [truncated]"
+    # Cap each child's final with the same knob the PARENT's dispatch layer
+    # applies to the aggregate, so one fat sibling can't silently eat the whole
+    # budget. Read the parent context: the child's runtime rewrites
+    # child_context.max_tool_result_bytes from the child cfg mid-turn.
+    cap = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
+    if cap and len(final) > cap:
+        final = final[:cap] + f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]"
     return f"{idx}. {final}"
 
 
