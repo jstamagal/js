@@ -9,28 +9,21 @@ Root `README.md` is only a launch pad.
 2. [Configuration And Sessions](configuration-and-sessions.md): config files and
    precedence, the full key reference, environment variables, the platformdirs
    config/data layout, session files, reset/wipe/rollback, and compaction.
-   See also the annotated [config.example.toml](config.example.toml).
-3. [Agents And Prompt Directories](agents-and-prompts.md): how to create global
-   and project agents, id rules, reserved names, the `00-*` zero file, and
-   `tools:` tool-surface frontmatter.
-4. [Inline Directives](inline-directives.md): `{{VAR}}`, `!{sub args}`, and
+3. [Inline Directives](inline-directives.md): `{{VAR}}`, `!{sub args}`, and
    ` ```!lang ` fences in system prompts, the subsystems, and the
    `--dangerously-evaluate-inline-code` flag.
-5. [Technical Guide](technical-guide.md): module map and runtime architecture.
-6. [Tool System](tool-system.md): registry, schemas, descriptions, dispatch, and
+4. [Technical Guide](technical-guide.md): module map and runtime architecture.
+5. [Tool System](tool-system.md): registry, schemas, descriptions, dispatch, and
    Forge-style behavior.
-7. [Tools Reference](tools-reference.md): every built-in tool and what it does.
-8. [Subagents](subagents.md): `task`, direct agent tools, parallelism, isolation,
+6. [Tools Reference](tools-reference.md): every built-in tool and what it does.
+7. [Subagents](subagents.md): `task`, direct agent tools, parallelism, isolation,
    and what is not implemented.
-9. [Wiki Mode](wiki.md), [Artifact Mode](artifact.md), [Drain](drain.md):
+8. [Wiki Mode](wiki.md), [Artifact Mode](artifact.md), [Drain](drain.md):
    built-in high-level workflows.
-10. [Models And Providers](models-and-providers.md): ai-python, proxies, Claude
-    name handling, reasoning, output caps, and vision.
-11. [Testing And Development](testing-and-development.md): test suite layout and
+9. [Models And Providers](models-and-providers.md): ai-python, proxies, Claude
+   name handling, reasoning, output caps, and vision.
+10. [Testing And Development](testing-and-development.md): test suite layout and
     verification commands.
-12. [Porting The Forge Tool System To Python](porting-forge-tool-system-to-python.md):
-    checklist and architecture notes for copying the behavior into another
-    Python project.
 
 ## What This Project Is
 

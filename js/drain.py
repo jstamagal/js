@@ -161,9 +161,10 @@ def plan_jobs(inbox: Path, budget_chars: int, ralph: bool, staging: Path | None)
             pieces = _split_lines(text, budget_chars)
             n = len(pieces)
             for i, piece in enumerate(pieces, 1):
-                cp = staging / f"{f.stem}.{i}of{n}{f.suffix or '.txt'}"
+                cp = staging / f"{seq:04d}-{f.stem}.{i}of{n}{f.suffix or '.txt'}"
                 cp.write_text(piece, "utf-8")
                 jobs.append(Job(srcs=[f], feed=cp, drainer_archives=True, part=i, parts=n))
+            seq += 1     # per-source prefix: same stem in two subdirs must not collide
             continue
 
         if size > budget_chars:      # big binary (or undecodable): feed whole, js archives
@@ -252,6 +253,8 @@ def _run_one(job: Job, vault: Path, modes: str, model: str | None,
             if timeout and job.seconds > timeout:
                 proc.kill()
                 break
+        if proc.returncode is None:
+            proc.wait()
         job.seconds = time.time() - start
         job.rc = proc.returncode
         cap.seek(0)

@@ -20,8 +20,18 @@ Text output format:
 - `12` is the 1-based line number.
 - `ab` is a short hash of the displayed line, useful for stable references after
   truncation.
-- Do not include the `12ab|` prefix when passing exact text to `patch` or
-  `multi_patch`; only the content after `|` belongs to the file.
+{{#if patch}}
+- Do not include the `12ab|` prefix when passing exact text to `patch`; only the
+  content after `|` belongs to the file.
+{{/if}}
+{{#if multi_patch}}
+- Do not include the `12ab|` prefix when passing exact text to `multi_patch`; only
+  the content after `|` belongs to the file.
+{{/if}}
+{{#unless patch multi_patch}}
+- Do not include the `12ab|` prefix if you later edit the file another way; only
+  the content after `|` belongs to the file.
+{{/unless}}
 
 Visual and binary handling:
 - Images (`png`, `jpg`, `jpeg`, `webp`, `gif`) return visual content when
@@ -33,10 +43,21 @@ Visual and binary handling:
 - Jupyter notebooks (`.ipynb`) are read as plain JSON text.
 
 When not to use:
-- This tool reads files only. Use `fs_search` or `shell` when you need directory
-  discovery.
-- Use `fs_search` for exact string, regex, or broad content discovery.
+{{#if fs_search}}
+- This tool reads files only. Use `fs_search` for directory discovery, exact
+  string search, regex, or broad content discovery.
+{{/if}}
+{{#unless fs_search}}
+- This tool reads files only; it does not discover unknown paths or search across
+  a tree.
+{{/unless}}
+{{#if shell}}
+- When this surface has no file-search tool, use `shell` with `fd` to find files
+  and `rg` to search their contents.
+{{/if}}
+{{#if sem_search}}
 - Use `sem_search` for intent-based exploration across unfamiliar code.
+{{/if}}
 
 Batching:
 - When several specific files may be relevant, request them in the same

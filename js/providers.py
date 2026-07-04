@@ -47,6 +47,12 @@ class ProviderDef:
     reasoning_effort: str | None = None
     models_list_validates_auth: bool = True
     headers: Mapping[str, str] = field(default_factory=dict)
+    # A locally-run endpoint (llama.cpp, ollama, a local proxy) whose real
+    # address varies per box. Any ``default_base_url`` on one of these is only
+    # ever a seed for the login prompt, never a value to route on unasked —
+    # skipping the prompt here is the catch-22 that silently aims a fresh
+    # login at 127.0.0.1 on a box where nothing is listening there.
+    local: bool = False
 
     @property
     def effective_sdk_provider_id(self) -> str | None:
@@ -54,7 +60,11 @@ class ProviderDef:
 
     @property
     def login_base_url_field(self) -> bool:
-        return not self.established or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
+        return (
+            not self.established
+            or self.local
+            or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
+        )
 
 
 def _p(
@@ -76,6 +86,7 @@ def _p(
     reasoning_effort: str | None = None,
     models_list_validates_auth: bool = True,
     headers: Mapping[str, str] | None = None,
+    local: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
         id=id,
@@ -95,6 +106,7 @@ def _p(
         reasoning_effort=reasoning_effort,
         models_list_validates_auth=models_list_validates_auth,
         headers=headers or {},
+        local=local,
     )
 
 
@@ -125,6 +137,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("OLLAMA_MODEL", "OLLAMA_LOCAL_MODEL"),
         aliases=("ollama-local",),
         requires_api_key=False,
+        local=True,
     ),
     _p(
         "ollama-cloud",
@@ -148,6 +161,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("LLAMACPP_MODEL", "LLAMA_CPP_MODEL"),
         aliases=("llamacpp", "llama-cpp"),
         requires_api_key=False,
+        local=True,
     ),
     _p(
         "opencode-go",
@@ -283,6 +297,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("CLIPROXYAPI_BASE_URL", "CLIPROXY_BASE_URL"),
         model_env=("CLIPROXYAPI_MODEL", "CLIPROXY_MODEL"),
         established=False,
+        local=True,
     ),
 )
 

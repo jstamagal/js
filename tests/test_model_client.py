@@ -395,7 +395,9 @@ def test_stream_model_without_sampling_sends_no_overrides():
 
 
 def test_stream_model_sampling_topk_merges_with_provider_extra_body():
-    """A vLLM sampling knob (top_k) merges with, not clobbers, an existing extra_body."""
+    """On the openai-compatible family top_k rides as RAW extra_body (the OpenAI
+    protocol hard-rejects a TopKSamplerParams class) and merges with, not clobbers,
+    an existing extra_body."""
     executor = _FakeExecutor(_text_events("ok"))
     model_client.stream_model(
         model_id="deepseek-chat",
@@ -412,9 +414,31 @@ def test_stream_model_sampling_topk_merges_with_provider_extra_body():
     )
     assert _pview(executor.request.params) == {
         "max_tokens": 64,
-        "top_k": 40,
-        "extra_body": {"max_reasoning_tokens": 32_000},
+        "extra_body": {"top_k": 40, "max_reasoning_tokens": 32_000},
     }
+
+
+def test_openai_compatible_topk_reppen_never_become_structured_params():
+    """Regression: the openai-compatible family (ollama/llama.cpp/vLLM/deepseek)
+    must forward top_k/repetition_penalty as raw extra_body, NEVER as
+    TopK/RepetitionPenalty sampler classes — the OpenAIChatCompletionsProtocol
+    those providers are pinned to raises ValueError the moment it sees them."""
+    from ai.models.core import params as ap
+
+    params = model_client._build_inference_params(
+        Sampling(temperature=0.5, top_k=40, repetition_penalty=1.2, presence_penalty=0.3),
+        "openai_compatible",
+        reasoning=None,
+        output=None,
+        extra_body={},
+    )
+    samp = params.sampling
+    assert ap.TopKSamplerParams not in samp
+    rep = samp.get(ap.RepetitionPenaltyParams)
+    assert rep is None or isinstance(rep.repetition_penalty, ap.ModelProviderDefault) or rep.repetition_penalty is None
+    assert dict(params.extra_body) == {"top_k": 40, "repetition_penalty": 1.2}
+    # temperature/presence_penalty stay top-level structured (the wire accepts them)
+    assert ap.TemperatureSamplerParams in samp
 
 
 def test_image_tool_result_becomes_user_file_message_without_persisting_base64(tmp_path):

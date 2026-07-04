@@ -116,7 +116,7 @@ def _capture_single_task_route(
         seen.update(kwargs)
         return _fake_stream_result("CHILD_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     monkeypatch.setattr(runtime, "_resolve_max_output", lambda _model, _provider_id: None)
 
     context = ToolContext(cwd=tmp_path)

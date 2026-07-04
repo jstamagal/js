@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,29 +31,76 @@ class UserMessageBundle:
     history_message: dict
 
 
+def _scan_tokens(line: str) -> list[tuple[str, int, int]]:
+    """Split `line` into shell-word tokens, each returned as (unquoted_text, start,
+    end) spanning the token's raw location in `line`. Mirrors shlex.split's posix
+    quote handling closely enough that a quote may be embedded mid-token (e.g.
+    @"a b.png"), but — unlike shlex — never raises: an unterminated quote just
+    runs to end of string. Only called once shlex.split has already accepted the
+    line, so quotes are known to be balanced and this matches its result."""
+    tokens: list[tuple[str, int, int]] = []
+    i, n = 0, len(line)
+    while i < n:
+        while i < n and line[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        buf: list[str] = []
+        while i < n and not line[i].isspace():
+            ch = line[i]
+            if ch in "'\"":
+                i += 1
+                q_start = i
+                end_quote = line.find(ch, i)
+                if end_quote == -1:
+                    buf.append(line[q_start:n])
+                    i = n
+                else:
+                    buf.append(line[q_start:end_quote])
+                    i = end_quote + 1
+            else:
+                buf.append(ch)
+                i += 1
+        tokens.append(("".join(buf), start, i))
+    return tokens
+
+
 def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     """Extract @path tokens from a REPL line.
 
-    Paths with spaces may be shell-quoted as @"path with spaces.png".
-    If no attachment token is present, return the original line unchanged.
+    Paths with spaces may be shell-quoted as @"path with spaces.png". If no
+    attachment token is present, return the original line unchanged. When one
+    or more are found, only their token spans are cut from the original text,
+    position-aware — everything else (quotes, repeated spaces, punctuation)
+    survives byte-for-byte.
+
+    An unbalanced quote (an apostrophe in ordinary prose like "isn't") makes
+    shlex raise; that alone must never drop an attachment, so this falls back
+    to a plain whitespace split for token/span extraction in that case.
     """
 
     try:
-        tokens = shlex.split(line)
+        shlex.split(line)
     except ValueError:
-        return line, []
+        tokens = [(m.group(), m.start(), m.end()) for m in re.finditer(r"\S+", line)]
+    else:
+        tokens = _scan_tokens(line)
 
     attachments: list[str] = []
-    prompt_tokens: list[str] = []
-    for token in tokens:
-        if token.startswith("@") and len(token) > 1:
-            attachments.append(token[1:])
-        else:
-            prompt_tokens.append(token)
+    spans: list[tuple[int, int]] = []
+    for text, start, end in tokens:
+        if text.startswith("@") and len(text) > 1:
+            attachments.append(text[1:])
+            spans.append((start, end))
 
     if not attachments:
         return line, []
-    return " ".join(prompt_tokens), attachments
+
+    prompt = line
+    for start, end in sorted(spans, reverse=True):
+        prompt = prompt[:start] + prompt[end:]
+    return prompt, attachments
 
 
 def build_user_message(
@@ -206,11 +254,27 @@ def _text_cap(cfg: Config) -> int:
     return max(1, min(TEXT_ATTACHMENT_MAX_BYTES, configured))
 
 
+def _strip_incomplete_utf8_tail(data: bytes) -> bytes:
+    """Drop a partial multibyte UTF-8 sequence left dangling at the end of a
+    byte-limited read, so a codepoint split across the read boundary doesn't make
+    valid UTF-8 look like binary."""
+    for back in range(1, 4):
+        if back > len(data):
+            break
+        b = data[-back]
+        if b < 0x80:            # plain ascii tail byte, nothing in progress
+            break
+        if b >= 0xC0:           # lead byte: it starts an N-byte sequence
+            need = 4 if b >= 0xF0 else 3 if b >= 0xE0 else 2
+            return data[: -back] if back < need else data
+    return data
+
+
 def _looks_text(data: bytes) -> bool:
     if b"\x00" in data[:4096]:
         return False
     try:
-        data.decode("utf-8")
+        _strip_incomplete_utf8_tail(data).decode("utf-8")
     except UnicodeDecodeError:
         return False
     return True

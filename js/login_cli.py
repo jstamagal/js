@@ -10,7 +10,7 @@ from getpass import getpass
 import ai
 
 from . import codex_auth, colors as C, model_client, providers
-from .logins import Login, cache_models, load_logins, remove_login, save_login, test_login
+from .logins import Login, LoginsCorruptError, cache_models, load_logins, remove_login, save_login, test_login
 
 _API_SHAPES: list[tuple[str, str, str]] = [
     ("openai-completions", "openai", "OpenAI-compatible chat completions"),
@@ -23,7 +23,11 @@ _MODEL_LIST_LIMIT = 20
 
 
 def _mask(value: str) -> str:
-    if len(value) <= 10:
+    # Revealing an 8-char prefix + 4-char suffix only hides something when the
+    # string is long enough that the two slices can't cover the whole value
+    # (8 + 4 = 12) — otherwise every character comes through around the fake
+    # asterisks, which looks redacted but isn't.
+    if len(value) <= 12:
         return "*" * len(value)
     return f"{value[:8]}*******{value[-4:]}"
 
@@ -150,9 +154,10 @@ def _curses_multiselect(
 def _select_models_to_cache(provider_id: str, models: list[str]) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
-    Interactive: a spacebar checklist (all preselected, so plain Enter keeps the
-    lot) plus a free-text line to add ids the endpoint omitted. Non-interactive
-    (piped/no TTY): keep every fetched model, the prior behavior.
+    Interactive: a spacebar checklist (nothing preselected — pick what you
+    actually want cached for /model + --list-models) plus a free-text line to
+    add ids the endpoint omitted. Non-interactive (piped/no TTY): keep every
+    fetched model, the prior behavior.
     """
     if not models:
         return models
@@ -161,7 +166,8 @@ def _select_models_to_cache(provider_id: str, models: list[str]) -> list[str] | 
     dialects = _dialect_map(provider_id)
     rows = [(model_id, dialects.get(model_id, "")) for model_id in models]
     title = f"select models to keep for {provider_id}  (cached for /model + --list-models)"
-    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=set(range(len(models))))
+    sys.stdout.flush()
+    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=set())
     if chosen is None:
         return None
     selected = [models[i] for i in chosen]
@@ -203,6 +209,7 @@ def _select_provider() -> str | None:
     rows = _login_provider_rows()
     items = [f"{pid:<28} {name} [{source}]" for pid, name, source in rows]
     items.append("<add custom provider>")
+    sys.stdout.flush()
     idx = curses.wrapper(_curses_menu, items, "select provider")
     if idx is None:
         return None
@@ -213,6 +220,7 @@ def _select_provider() -> str | None:
 
 def _select_api_shape() -> tuple[str, str] | None:
     items = [f"{pid}  {desc}" for pid, _sdk, desc in _API_SHAPES]
+    sys.stdout.flush()
     idx = curses.wrapper(_curses_menu, items, "select API shape")
     if idx is None:
         return None
@@ -348,7 +356,11 @@ def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | No
                 return models[index]
         print("*** enter to add, q to cancel, or a model number / exact model id")
 
-def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool | None:
+def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool:
+    # Seeing a real answer back IS the confirmation; a further "hit enter to
+    # add" after that just re-asked the same question the model number already
+    # answered, so it's gone — a bad answer or an exception is still visible
+    # right here, and Ctrl-C still works anywhere above this point.
     print(f"*** [user] {_SECONDARY_TEST_PROMPT}")
     chunks: list[str] = []
 
@@ -374,19 +386,15 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
 
     answer = result.text.strip() or "".join(chunks).strip()
     print(f"*** [assistant] {answer}")
-    try:
-        confirm = input("*** hit enter to add...[enter] ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
-    return True if confirm == "" else None
+    return True
 
 def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str]) -> bool | None:
     _display_models(models)
-    choice = _secondary_test_choice(
-        models,
-        require_test=not provider.models_list_validates_auth,
-    )
+    if provider.models_list_validates_auth:
+        # Listing already proved the credentials work — asking "add without a
+        # test, or verify first?" here is a prompt with only one sane answer.
+        return True
+    choice = _secondary_test_choice(models, require_test=True)
     if choice is True:
         return True
     if choice is False or choice is None:
@@ -409,8 +417,12 @@ def _run_codex_login(provider_id: str) -> int:
     to_cache = _select_models_to_cache(login.provider_id, models)
     if to_cache is None:
         return 0
-    save_login(login)
-    cache_models(login.provider_id, to_cache)
+    try:
+        save_login(login)
+        cache_models(login.provider_id, to_cache)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
+        return 1
     who = f" ({login.codex_email})" if login.codex_email else ""
     print(f"{C.GREEN}*** Provider added: {login.provider_id}{who}{C.RESET}")
     print(f"cached {len(to_cache)} models")
@@ -458,8 +470,12 @@ def _run_login(provider_id: str | None = None) -> int:
     to_cache = _select_models_to_cache(canonical_id, models)
     if to_cache is None:
         return 0
-    save_login(login)
-    cache_models(canonical_id, to_cache)
+    try:
+        save_login(login)
+        cache_models(canonical_id, to_cache)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
+        return 1
     print(f"{C.GREEN}*** Provider added.{C.RESET}")
     print(f"cached {len(to_cache)} models")
     return 0
@@ -467,7 +483,12 @@ def _run_login(provider_id: str | None = None) -> int:
 
 def _run_logout(provider_id: str) -> int:
     target = providers.normalize_provider_id(provider_id) or provider_id
-    if remove_login(target):
+    try:
+        removed = remove_login(target)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}logout failed: {exc}{C.RESET}", file=sys.stderr)
+        return 1
+    if removed:
         print(f"{C.GREY}logged out of {target}{C.RESET}")
         return 0
     print(f"{C.ORANGE}not logged in to {target}{C.RESET}", file=sys.stderr)

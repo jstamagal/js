@@ -40,14 +40,11 @@ Start here:
 - [docs/technical-guide.md](docs/technical-guide.md): architecture and runtime internals.
 - [docs/tool-system.md](docs/tool-system.md): registry, schemas, dispatch, descriptions, and Forge parity notes.
 - [docs/tools-reference.md](docs/tools-reference.md): all public tools.
-- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, isolation, and limits.
-- [docs/agents-and-prompts.md](docs/agents-and-prompts.md): create global/project agents, id rules, reserved names, `tools:` frontmatter.
+- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `tools:` frontmatter, isolation, and limits.
 - [docs/inline-directives.md](docs/inline-directives.md): `{{VAR}}` / `!{sub}` / `` ```!lang `` expansion and the inline-code flag.
 - [docs/configuration-and-sessions.md](docs/configuration-and-sessions.md): config precedence, full key reference, env vars, sessions, memory, and compaction.
-- [docs/config.example.toml](docs/config.example.toml): annotated example config covering every supported key.
 - [docs/wiki.md](docs/wiki.md), [docs/artifact.md](docs/artifact.md), [docs/drain.md](docs/drain.md): built-in modes.
 - [docs/models-and-providers.md](docs/models-and-providers.md): ai-python routing, proxies, Claude naming, reasoning, vision.
-- [docs/porting-forge-tool-system-to-python.md](docs/porting-forge-tool-system-to-python.md): how to port this style of tool system into another Python project.
 
 ## Project Map
 

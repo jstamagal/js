@@ -145,7 +145,7 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
         kwargs["on_text"]("OK")
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Say OK."}]
 
@@ -172,6 +172,57 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     assert hooks.emitted[-1][1]["reason"] == "stop"
 
 
+def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+    provider_metadata = {"incomplete": True, "incomplete_reason": "max_output_tokens"}
+
+    def stream_stub(**kwargs):
+        kwargs["on_text"]("PARTIAL")
+        assistant_message = ai.assistant_message("PARTIAL").model_copy(
+            update={"provider_metadata": provider_metadata}
+        )
+        return ModelStreamResult(
+            text="PARTIAL",
+            tool_calls=[],
+            reasoning="",
+            usage=ai.types.usage.Usage(input_tokens=10, output_tokens=7),
+            finish_reason="incomplete:max_output_tokens",
+            assistant_message=assistant_message,
+            provider_metadata=provider_metadata,
+            incomplete_reason="max_output_tokens",
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Say something long."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    response = next(payload for event, payload in hooks.emitted if event == "response")
+    assert response["finish_reason"] == "incomplete:max_output_tokens"
+    assert response["incomplete_reason"] == "max_output_tokens"
+    turn_end = hooks.emitted[-1]
+    assert turn_end[0] == "turn_end"
+    assert turn_end[1]["reason"] == "incomplete"
+    assert turn_end[1]["finish_reason"] == "incomplete:max_output_tokens"
+    assert turn_end[1]["incomplete_reason"] == "max_output_tokens"
+
+    assistant_record = messages[-1]
+    assert assistant_record["provider_metadata"] == provider_metadata
+    assert assistant_record["incomplete_reason"] == "max_output_tokens"
+
+    replay = runtime.model_client.history_to_ai_messages("system", messages)
+    assert getattr(replay[-1], "provider_metadata", None) == provider_metadata
+
+
 def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
     hooks = RecordingHooks()
     live_settings = settings.seed_defaults()
@@ -184,7 +235,7 @@ def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
         kwargs["on_text"]("OK")
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Say OK."}]
 
@@ -216,7 +267,7 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
             return model_tool_call_result("read", [json.dumps({"file_path": "note.txt"})])
         return model_text_result("DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Read note.txt."}]
 
@@ -248,7 +299,7 @@ def test_run_turn_emits_turn_end_after_fatal_error(monkeypatch, tmp_path):
     def stream_stub(**kwargs):
         raise ValueError("bad request")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Break."}]
 
@@ -279,7 +330,7 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
     messages = [{"role": "user", "content": "Use tools if needed."}]
     registry = build_default_registry().select(["read", "write", "task", "fs_search", "shell"])
@@ -309,7 +360,7 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(
         tmp_path,
         model="openai-test",
@@ -347,7 +398,7 @@ def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypa
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(
         tmp_path,
         model="openai-test",
@@ -385,7 +436,7 @@ def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tm
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     # Same model id that the old implicit magic would have capitalized; with no
     # configured profile the default lowercase names must be sent verbatim.
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4")
@@ -435,7 +486,7 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
         )
         return model_text_result("DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Find the secret token."}]
 
@@ -477,7 +528,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
         )
         return model_text_result("CAPPED")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 128, "fetch_timeout_s": 9})
     messages = [{"role": "user", "content": "run shell"}]
@@ -514,7 +565,7 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
             return model_tool_call_result("Read", [json.dumps({"file_path": "note.txt"})])
         return model_text_result("READ_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
     registry = build_default_registry().select(["read"])
     messages = [{"role": "user", "content": "read note"}]
@@ -543,7 +594,7 @@ def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(
         calls += 1
         return model_tool_call_result("missing_tool", ["{}"], call_id=f"missing_{calls}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "call missing tool repeatedly"}]
 
@@ -578,7 +629,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
             ("orphan_3", "missing_tool", "{}"),
         ])
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "fire three bad calls at once"}]
 
@@ -623,7 +674,7 @@ def test_run_turn_streams_tool_call_dispatches_real_sem_search_then_final_text(m
             )
         return model_text_result("FOUND")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = Config(
         agent_id="test-agent",
         agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
@@ -677,7 +728,7 @@ def test_assistant_turn_with_tool_calls_keeps_reasoning_in_next_convo(monkeypatc
             return model_tool_call_result("fs_search", [args[:35], args[35:]], reasoning="thinking-1")
         return model_text_result("DONE", reasoning="thinking-2")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
     target = tmp_path / "x.txt"
     target.write_text("x", encoding="utf-8")
@@ -751,7 +802,7 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
         calls.append(kwargs)
         return model_text_result("DONE", reasoning="thinking-2")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages: list[dict] = list(reloaded)  # fresh list to avoid cross-test pollution
 
     runtime.run_turn(

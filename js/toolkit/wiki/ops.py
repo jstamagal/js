@@ -62,7 +62,10 @@ def wiki_purpose(vault: str, context: ToolContext = None) -> str:
     if inbox.is_dir():
         units = [e.name for e in sorted(inbox.iterdir()) if e.name != "_skipped" and not e.name.startswith(".")]
         out.append(f"- inbox units waiting: {len(units)}")
-    orphans = _find_orphans(vp)
+    # Leave-in-place mode never archives, so every successful ingest would
+    # otherwise be flagged ORPHAN forever — skip the scan entirely there.
+    leave_in_place = getattr(context, "wiki_no_archive", False) or os.environ.get("JS_WIKI_NO_ARCHIVE")
+    orphans = [] if leave_in_place else _find_orphans(vp)
     if orphans:
         out.append("\n## ⚠ ORPHANS (source page exists but unit not archived — prior run dropped wiki_archive)")
         for unit, page in orphans:

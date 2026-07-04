@@ -6,6 +6,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,8 +31,6 @@ class Record:
 
     @classmethod
     def from_dict(cls, d: dict) -> Record | None:
-        if d.get("version") != SCHEMA_VERSION:
-            return None
         kind = d.get("kind")
         if kind not in {"message", "mark"}:
             return None
@@ -42,6 +41,19 @@ class Record:
             message=d.get("message"),
             marker=d.get("marker"),
         )
+
+
+def _migrate_record(d: dict) -> dict | None:
+    """Accept a raw record dict only if it is on the current SCHEMA_VERSION.
+
+    Placeholder migration hook: a future SCHEMA_VERSION bump should teach this
+    function to upgrade an older record's shape instead of discarding it. Until
+    then, a version mismatch returns None and the caller counts it — a record
+    dropped here is never silent.
+    """
+    if d.get("version") == SCHEMA_VERSION:
+        return d
+    return None
 
 
 def _open_locked(path: Path, mode: str):
@@ -131,15 +143,22 @@ def load_messages(memory_file: Path) -> list[dict]:
     if not memory_file.exists():
         return []
     messages: list[dict] = []
+    skipped_versions = 0
     with _open_locked(memory_file, "r") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                rec = Record.from_dict(json.loads(line))
+                raw = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            migrated = _migrate_record(raw)
+            if migrated is None:
+                if isinstance(raw, dict) and "version" in raw:
+                    skipped_versions += 1
+                continue
+            rec = Record.from_dict(migrated)
             if rec is None:
                 continue
             if rec.kind == "mark":
@@ -150,10 +169,16 @@ def load_messages(memory_file: Path) -> list[dict]:
                         keep = max(0, int(rec.marker.split(":", 1)[1]))
                     except ValueError:
                         continue
+                    # The index rides in POST-heal (live) space — the caller cut
+                    # `state["messages"][:keep]` against a healed list — so heal
+                    # first, else a synthetic tool result inserted on reload shifts
+                    # every later offset and the mark truncates the wrong message.
+                    messages[:] = _heal_orphaned_tool_calls(messages)
                     del messages[keep:]
                 elif rec.marker:
                     data = _parse_compaction_marker(rec.marker)
                     if data is not None:
+                        messages[:] = _heal_orphaned_tool_calls(messages)
                         keep_from = int(data.get("keep_from", len(messages)))
                         keep_from = max(0, min(keep_from, len(messages)))
                         messages[:] = [_compaction_summary_message(data["summary"]), *messages[keep_from:]]
@@ -162,6 +187,13 @@ def load_messages(memory_file: Path) -> list[dict]:
                 continue
             if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
                 messages.append(rec.message)
+    if skipped_versions:
+        print(
+            f"warning: {memory_file}: skipped {skipped_versions} record(s) from an "
+            f"incompatible schema version (no migration to {SCHEMA_VERSION} yet) — "
+            "history may be incomplete",
+            file=sys.stderr,
+        )
     return _strip_orphan_reasoning(_heal_orphaned_tool_calls(messages))
 
 

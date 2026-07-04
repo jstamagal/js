@@ -67,6 +67,7 @@ class ToolContext:
     max_bash_output_bytes: int = 256 * 1024
     fetch_timeout_s: int = 15
     task_max_depth: int = 2
+    subagent_max_workers: int = 8
     wiki_vault_lock_timeout_s: int = 30
     wiki_mode: str = ""
     wiki_no_archive: bool = False

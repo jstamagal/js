@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import secrets
+import selectors
+import socket
 import sys
 import time
 import urllib.parse
@@ -40,6 +42,12 @@ DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 DEVICE_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 DEVICE_AUTH_URL = "https://auth.openai.com/codex/device"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
+# The Codex model-list endpoint can lag behind the runtime route: gpt-5.5 has
+# been verified to work against /codex/responses before the listing endpoint
+# advertises it. Both codex_provider.list_models() and picker._model_rows()
+# splice this in so it's selectable even when the listing is stale — one
+# constant so the two call sites can't drift apart.
+CODEX_PHANTOM_MODEL_ID = "gpt-5.5"
 _TOKEN_TIMEOUT = 15.0
 _DEVICE_POLL_SAFETY_MARGIN = 3.0
 _DEVICE_MAX_POLLS = 120
@@ -294,32 +302,70 @@ class _CallbackServer(HTTPServer):
     received_error: str | None = None
 
 
+class _CallbackServerV6(_CallbackServer):
+    address_family = socket.AF_INET6
+
+
+def _bind_callback_servers(handler_cls: type[BaseHTTPRequestHandler]) -> list[_CallbackServer]:
+    """Bind the OAuth callback on every loopback family this host supports.
+
+    The registered redirect is ``http://localhost:1455/...``; on a dual-stack
+    host ``localhost`` can resolve to ``::1`` first, and a browser that
+    doesn't fall back to 127.0.0.1 would sit waiting on a port nothing is
+    listening on until the timeout. Binding both loopback addresses on the
+    same port removes that race. The redirect string itself must not change —
+    it has to match what CLIENT_ID is registered with at OpenAI.
+    """
+    servers: list[_CallbackServer] = []
+    for cls, address in ((_CallbackServer, "127.0.0.1"), (_CallbackServerV6, "::1")):
+        try:
+            servers.append(cls((address, CALLBACK_PORT), handler_cls))
+        except OSError:
+            continue  # that family isn't available on this host; the other may still bind
+    return servers
+
+
 def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> Login:
     """Run the fixed-port browser PKCE OAuth flow and return a saved Login."""
-
 
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
     url = build_authorize_url(state, challenge, originator=originator)
-    server = _CallbackServer(("127.0.0.1", CALLBACK_PORT), _CallbackHandler)
-    server.expected_state = state
-    server.timeout = 1.0
+    servers = _bind_callback_servers(_CallbackHandler)
+    if not servers:
+        raise RuntimeError(
+            f"OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
+        )
+    for server in servers:
+        server.expected_state = state
+        server.timeout = 1.0
     print("Opening browser for OpenAI Codex login...")
     print(f"If it does not open, visit:\n{url}")
     webbrowser.open(url)
     deadline = time.monotonic() + timeout_s
+    sel = selectors.DefaultSelector()
+    for server in servers:
+        sel.register(server, selectors.EVENT_READ, server)
+    winner: _CallbackServer | None = None
     try:
-        while time.monotonic() < deadline and not (server.received_code or server.received_error):
-            server.handle_request()
+        while time.monotonic() < deadline and winner is None:
+            for key, _events in sel.select(timeout=1.0):
+                srv = key.data
+                srv.handle_request()
+                if srv.received_code or srv.received_error:
+                    winner = srv
+                    break
     finally:
-        server.server_close()
-    if server.received_error:
-        raise RuntimeError(f"OpenAI Codex OAuth failed: {server.received_error}")
-    if not server.received_code:
+        sel.close()
+        for server in servers:
+            server.server_close()
+    if winner is None:
         raise RuntimeError("OpenAI Codex OAuth timed out waiting for browser callback")
-    if server.received_state != state:
+    if winner.received_error:
+        raise RuntimeError(f"OpenAI Codex OAuth failed: {winner.received_error}")
+    if winner.received_state != state:
         raise RuntimeError("OpenAI Codex OAuth state mismatch")
-    return login_from_token(exchange_code_for_token(server.received_code, verifier, CALLBACK_REDIRECT_URI))
+    return login_from_token(exchange_code_for_token(winner.received_code, verifier, CALLBACK_REDIRECT_URI))
 
 
 def login_device(*, open_browser: bool = True) -> Login:
@@ -402,39 +448,67 @@ def login_needs_refresh(login: Login, *, now: float | None = None) -> bool:
     return (now if now is not None else time.time()) >= float(expires) - _REFRESH_SKEW_SECONDS
 
 
+def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
+    """Rotate only the token-derived fields onto the EXISTING login.
+
+    ``login_from_token`` builds a bare Login with just the codex/token fields
+    populated — replace()ing its result instead of the real login reset
+    provider_headers (and any other field the login carried) to empty on
+    every ~hourly refresh. Starting from ``login`` keeps everything else.
+    """
+    return replace(
+        login,
+        provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL,
+        provider_api_key=token.access,
+        codex_refresh_token=token.refresh,
+        codex_token_expires=token.expires_at,
+        codex_account_id=token.account_id,
+        codex_email=token.email,
+    )
+
+
 def refreshed_login(login: Login) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
-    return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
+    return apply_refreshed_token(login, token)
 
 
 async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = await refresh_token_async(login.codex_refresh_token, client=client, previous=_token_from_login(login))
-    return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
+    return apply_refreshed_token(login, token)
+
+
+def save_refreshed_login(refreshed: Login) -> None:
+    # A background token refresh must not crash an in-flight turn just
+    # because logins.toml is unwritable/corrupt: the caller already has the
+    # refreshed token in memory and can keep going, it just won't survive a
+    # process restart until the file is fixed.
+    from . import logins
+
+    try:
+        logins.save_login(refreshed)
+    except logins.LoginsCorruptError as exc:
+        print(f"*** warning: could not save refreshed OpenAI Codex login: {exc}", file=sys.stderr)
 
 
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     if not login_needs_refresh(login):
         return login
-    from . import logins
-
     refreshed = refreshed_login(login)
     if persist:
-        logins.save_login(refreshed)
+        save_refreshed_login(refreshed)
     return refreshed
 
 
 async def ensure_fresh_login_async(login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None) -> Login:
     if not login_needs_refresh(login):
         return login
-    from . import logins
-
     refreshed = await refreshed_login_async(login, client=client)
     if persist:
-        logins.save_login(refreshed)
+        save_refreshed_login(refreshed)
     return refreshed
 
 

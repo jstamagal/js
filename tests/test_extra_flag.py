@@ -60,8 +60,10 @@ def test_parse_extra_arg_coerces_registered_values():
     ("raw", "expected"),
     [
         ("model.id=123", "123"),
-        ("provider.id=off", None),
-        ("compact.pre_hook=off", None),
+        # RULING A: magic strings die -- a str knob stores "off" verbatim now;
+        # `set -provider.id` / `set -compact.pre_hook` is the only clear path.
+        ("provider.id=off", "off"),
+        ("compact.pre_hook=off", "off"),
     ],
 )
 def test_extra_registered_string_keys_use_registry_coercion(raw, expected):
@@ -81,16 +83,28 @@ def test_extra_registered_scalar_keys_use_registry_validation(raw, message):
         settings.parse_extra_arg(raw)
 
 
-@pytest.mark.parametrize("alias", ["off", "none", "0"])
-def test_extra_reasoning_effort_disable_aliases_use_registry(alias, monkeypatch, tmp_path):
+def test_extra_reasoning_effort_off_disables_via_registry(monkeypatch, tmp_path):
+    # RULING B: `off` is the only token that disables reasoning now.
     _env_dirs(monkeypatch, tmp_path)
 
-    path, value = settings.parse_extra_arg(f"model.reasoning_effort={alias}")
-    cfg = from_env(save_session=False, extras=[f"model.reasoning_effort={alias}"])
+    path, value = settings.parse_extra_arg("model.reasoning_effort=off")
+    cfg = from_env(save_session=False, extras=["model.reasoning_effort=off"])
 
     assert path == ("model", "reasoning_effort")
     assert value == "none"
     assert cfg.reasoning_effort == "none"
+
+
+@pytest.mark.parametrize("alias", ["none", "0", "default", "auto", "unset"])
+def test_extra_reasoning_effort_rejects_former_null_tokens(alias):
+    # RULING B: only off|minimal|low|medium|high|xhigh|max are valid; the old
+    # none/0/default/auto/unset synonyms are now a clean rejection, not a
+    # silent re-enable of the provider default.
+    with pytest.raises(
+        ValueError,
+        match=r"--extra model\.reasoning_effort: expected off\|minimal\|low\|medium\|high\|xhigh\|max",
+    ):
+        settings.parse_extra_arg(f"model.reasoning_effort={alias}")
 
 
 def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_path):
@@ -292,12 +306,28 @@ def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
     )
 
     assert out["model"]["id"] == "123"
-    assert out["provider"]["id"] is None
+    # RULING A: "off" is no longer a magic clear-token -- it's stored verbatim.
+    assert out["provider"]["id"] == "off"
 
 
 # ---------------------------------------------------------------------------
 # from_env integration: the path js/cli.py actually drives (extras=args.extras)
 # ---------------------------------------------------------------------------
+
+def test_from_env_first_run_seeds_wiki_aliases_before_reading_them_back(monkeypatch, tmp_path):
+    # RULING J: the first-run template's stock wiki.aliases (creative/general)
+    # must be live on THIS run, not just from run 2 onward -- write_default_template
+    # has to run before collect_settings reads the file back.
+    config_home, _ = _env_dirs(monkeypatch, tmp_path)
+    project = tmp_path / "project"
+    assert not config_home.exists()  # nothing on disk yet -- a genuinely fresh box
+
+    cfg = from_env(cwd=project, save_session=False)
+
+    aliases = settings.get_dotted(cfg.settings, ("wiki", "aliases"), {})
+    assert "creative" in aliases
+    assert "general" in aliases
+
 
 def test_from_env_extra_wins_over_env_and_jsrc_for_one_run(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)

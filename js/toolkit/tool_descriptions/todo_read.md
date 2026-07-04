@@ -4,7 +4,7 @@ Use this before updating todos when you need to avoid duplicates or understand
 current progress.
 
 Use for:
-- Checking pending, in-progress, completed, and cancelled work.
+- Checking pending, in-progress, and completed work.
 - Resuming a multi-step task after interruption.
 - Answering operator questions about progress.
 - Confirming what remains before marking new items complete.
