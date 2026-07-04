@@ -415,5 +415,31 @@ def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp
 
     actual = task(["talk too much"], agent_id="worker", context=parent)
 
+    # Single child: fair share == full budget (64 // 1), marker still fires.
     assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
     assert "X" * 65 not in actual
+
+
+def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
+    # The adversary's repro: with a single per-child budget equal to the whole
+    # aggregate budget, one fat child fills it and the aggregate re-clip slices
+    # the short siblings away. Fair-share (budget//N) must keep them all visible.
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=400)
+
+    def completion_stub(**kwargs):
+        prompt = kwargs["messages"][-1].parts[0].text
+        if prompt == "fat":
+            return _fake_stream_result("X" * 5000)
+        return _fake_stream_result(prompt.upper())
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+
+    actual = task(["fat", "keep-me-two", "keep-me-three"], agent_id="worker", context=parent)
+
+    # Short siblings survive intact — the fat one is bounded to its 1/N slice.
+    assert "KEEP-ME-TWO" in actual
+    assert "KEEP-ME-THREE" in actual
+    assert "[truncated: limits.max_tool_result_bytes (133) reached]" in actual  # 400 // 3
+    assert "X" * 200 not in actual
