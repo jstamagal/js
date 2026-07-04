@@ -89,6 +89,51 @@ def test_save_refreshed_login_degrades_gracefully_on_corrupt_logins_file(monkeyp
     assert "logins.toml is broken" in capsys.readouterr().err
 
 
+def test_callback_redirect_uri_is_unchanged():
+    # The redirect string must match what CLIENT_ID is registered with at
+    # OpenAI — any bind-side fix has to leave this exactly alone.
+    assert codex_auth.CALLBACK_REDIRECT_URI == "http://localhost:1455/auth/callback"
+
+
+def test_bind_callback_servers_binds_available_loopback_families():
+    servers = codex_auth._bind_callback_servers(codex_auth._CallbackHandler)
+    try:
+        assert servers  # at least 127.0.0.1 must be available in CI/sandboxes
+        for server in servers:
+            assert server.server_address[1] == codex_auth.CALLBACK_PORT
+    finally:
+        for server in servers:
+            server.server_close()
+
+
+def test_bind_callback_servers_degrades_when_v6_unavailable(monkeypatch):
+    # Simulate a host with no IPv6 loopback: the v6 bind attempt raises, and
+    # binding still succeeds on 127.0.0.1 alone instead of failing outright.
+    def boom(self, *args, **kwargs):
+        raise OSError("Address family not supported by protocol")
+
+    monkeypatch.setattr(codex_auth._CallbackServerV6, "__init__", boom)
+    servers = codex_auth._bind_callback_servers(codex_auth._CallbackHandler)
+    try:
+        assert len(servers) == 1
+        assert not isinstance(servers[0], codex_auth._CallbackServerV6)
+    finally:
+        for server in servers:
+            server.server_close()
+
+
+def test_bind_callback_servers_returns_empty_when_both_families_fail(monkeypatch):
+    def boom_v4(self, *args, **kwargs):
+        raise OSError("port in use")
+
+    def boom_v6(self, *args, **kwargs):
+        raise OSError("Address family not supported by protocol")
+
+    monkeypatch.setattr(codex_auth._CallbackServer, "__init__", boom_v4)
+    monkeypatch.setattr(codex_auth._CallbackServerV6, "__init__", boom_v6)
+    assert codex_auth._bind_callback_servers(codex_auth._CallbackHandler) == []
+
+
 def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
     class FakeExecutor:
         request = None
