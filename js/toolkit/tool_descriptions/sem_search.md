@@ -12,9 +12,17 @@ Use for:
 - Finding where technologies, libraries, or workflows are used.
 
 When not to use:
+{{#if fs_search}}
 - Use `fs_search` for exact strings, TODOs, identifiers, literals, or regex.
 - Use `fs_search` when you need all occurrences of a variable or function name.
+{{/if}}
+{{#unless fs_search}}
+- This tool is not for exact strings, TODOs, identifiers, literals, regex, or all
+  occurrences of a variable or function name.
+{{/unless}}
+{{#if read}}
 - Use `read` when you already know the file path.
+{{/if}}
 
 Query guidance:
 - Pass 2-3 focused query objects for broad exploration.

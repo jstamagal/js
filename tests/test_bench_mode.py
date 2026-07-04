@@ -79,7 +79,7 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     _write_agent(tmp_path)
 
     captured: list = []
-    monkeypatch.setattr(cli.runtime.model_client, "stream_model", _stream_stub(captured))
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub(captured))
 
     out = tmp_path / "stats.json"
     rc = cli.main(["--bench", "jokertest", "-q", "--stats-json", str(out)])
@@ -116,7 +116,7 @@ def test_run_bench_csv_has_one_row_per_benchmark(tmp_path, monkeypatch):
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
-    monkeypatch.setattr(cli.runtime.model_client, "stream_model", _stream_stub([]))
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub([]))
 
     out = tmp_path / "stats.csv"
     rc = cli.main(["--bench", "jokertest", "-q", "--stats-csv", str(out)])

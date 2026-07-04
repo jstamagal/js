@@ -51,9 +51,10 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
         rc, out, err = run(["pandoc", str(p), "-t", "markdown"], context)
         return out[:cap] if rc == 0 else f"ERROR pandoc: {err}"
     if ext in SOFFICE_EXT:
-        rc, out, err = run(["soffice", "--headless", "--convert-to", "txt", "--outdir", "/tmp", str(p)], context)
         txt = Path("/tmp") / (p.stem + ".txt")
-        if txt.is_file():
+        txt.unlink(missing_ok=True)   # a stale same-stem output would masquerade as this conversion
+        rc, out, err = run(["soffice", "--headless", "--convert-to", "txt", "--outdir", "/tmp", str(p)], context)
+        if rc == 0 and txt.is_file():
             return read_text(txt, cap)
         return f"ERROR soffice: {err or out}"
 
@@ -72,6 +73,9 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
 
     # fallback
     rc, out, err = run(["file", str(p)], context)
-    if "text" in out.lower():
+    # `file` prints "<path>: <description>" — test only the description, else a
+    # binary living under a path containing "text" (e.g. .../context/...) reads as text.
+    desc = out.split(":", 1)[1] if ":" in out else out
+    if "text" in desc.lower():
         return read_text(p, cap)
     return f"UNREADABLE/binary: {out.strip()}  (quarantine to inbox/_skipped/ if nothing reads it)"

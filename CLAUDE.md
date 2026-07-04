@@ -33,6 +33,11 @@ remove, it GONE — no rename, no hide.
    permission ever — commit free, quiet, often. 🦍 no narrate the git mechanic
    (hash, staging, "let me commit") — that noise the owner hate. a real
    defect/risk/decision 🦍 DO bark.
+   - **commit subject = PLAIN ENGLISH.** `Restore removed files through
+     symlinked paths` — a plain sentence, like a plain person wrote it. NOT
+     robot git-log-speak (`fix(scope):`, `feat(x):`, `docs:`). the commitbot
+     write plain and RIGHT; a robot-language subject mean a MODEL leaked
+     convention over the owner voice — that the leak, 🦍 no call it "correct."
 7. **AFTER `js --commit` finishes — INSPECT, then tune ONE knob.** 🦍 read the
    resulting `CHANGELOG.md` and the commits (`git log --oneline`, `git show`) and
    confirm everything correct: clean splits, honest bullets, exactly one of each
@@ -111,12 +116,13 @@ need reading many files to see:
   `--dangerously-evaluate-inline-code`. SINGLE pass = injection guard, output
   never re-scanned. backtick-wrap or a leading `\` keep a directive LITERAL (for
   docs). 🦍 keep that property if 🦍 touch it.
-- **`js/config.py` + `js/settings.py` — config layering.** platform
-  `config.toml` < project `.js/config.toml` < `.js/config.local.toml`; env
-  override files; CLI flags / `--extra` override env. `[model].id` default; env
-  `JS_MODEL`/`JS_PROVIDER`/`JS_BASE_URL`/`JS_API_KEY` override. official SDK env
-  (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`)
-  read by `ai` directly when no explicit provider set.
+- **`js/config.py` + `js/settings.py` — config layering.** jsrc (global)
+  < `.js/jsrc` < `.js/jsrc.local` < env (`JS_MODEL`, `JS_PROVIDER`, `JS_BASE_URL`,
+  `JS_API_KEY`, etc.) < `--extra` CLI flag. Config files are scripts: each line is
+  a `set <key> <value>` command (no TOML; legacy `config.toml` migrated via
+  `js --migrate-config`). Set model id via `set model.id <value>`. Official SDK env
+  vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`)
+  are read by `ai` directly when no explicit provider set.
 - **sessions = append-only JSONL** at platform-data `sessions/<agent_id>/<session>.jsonl`,
   one isolated state per agent. **compaction APPENDS marks, never rewrite
   history** (`/compact [focus]`, `/compact up to here`, `js --compact <session>`).
@@ -150,5 +156,5 @@ let code do the rote.
 ## docs
 
 deep dives live in `docs/` — `technical-guide.md` (internals),
-`tool-system.md`, `subagents.md`, `agents-and-prompts.md`, `inline-directives.md`,
+`tool-system.md`, `subagents.md`, `inline-directives.md`,
 `configuration-and-sessions.md`. `CHANGELOG.md` track what moved.

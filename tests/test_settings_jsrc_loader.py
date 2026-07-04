@@ -147,7 +147,8 @@ def test_write_default_template_creates_jsrc_once(tmp_path):
     assert {spec.key for spec in settings.REGISTRY} <= template_keys
     assert {spec.env for spec in settings.REGISTRY if spec.env} <= env_keys
     assert "minimal" in text
-    assert "min=low" in text
+    assert "xhigh" in text
+    assert "off disables" in text
     rendered = settings.collect_settings(config_paths=[target], env={})
     assert rendered["model"]["id"] == settings.DEFAULT_MODEL
     assert settings.write_default_template(target) is False
@@ -203,24 +204,32 @@ def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
 
 
-def test_allow_inline_code_settable_via_jsrc(monkeypatch, tmp_path):
-    # Inline-code eval is a config knob now, not env/flag only.
+def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
+    # Inverted: inline code runs by default, no flag/knob needed.
+    _env_dirs(monkeypatch, tmp_path)
+    monkeypatch.delenv("JS_ALLOW_INLINE_CODE", raising=False)
+    cfg = from_env(save_session=False)
+    assert cfg.allow_inline_code is True
+
+
+def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
+    # Deliberate opt-out through the config knob.
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     global_cfg = config_home / "js" / "jsrc"
     global_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set runtime.allow_inline_code on\n", encoding="utf-8")
+    global_cfg.write_text("set runtime.allow_inline_code off\n", encoding="utf-8")
 
     cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is True
+    assert cfg.allow_inline_code is False
 
 
-def test_allow_inline_code_canonical_env_enables(monkeypatch, tmp_path):
-    # The --dangerously-evaluate-inline-code flag sets JS_ALLOW_INLINE_CODE=1;
-    # that env must still flip the knob through the registry env layer.
+def test_allow_inline_code_opt_out_via_env(monkeypatch, tmp_path):
+    # --im-a-pussy sets JS_ALLOW_INLINE_CODE=0; that env must flip the knob off
+    # through the registry env layer.
     _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.setenv("JS_ALLOW_INLINE_CODE", "1")
+    monkeypatch.setenv("JS_ALLOW_INLINE_CODE", "0")
     cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is True
+    assert cfg.allow_inline_code is False
 
 
 def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
@@ -286,7 +295,7 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
         captured_kwargs.update(kwargs)
         return _fake_stream_result("ok")
 
-    monkeypatch.setattr("js.runtime.model_client.stream_model", stream_stub)
+    monkeypatch.setattr("js.runtime.model_client.stream_model_async", stream_stub)
     cfg = _build_config(
         tmp_path,
         provider_id="openai",
@@ -319,7 +328,7 @@ def test_provider_config_absent_when_unset(monkeypatch, tmp_path):
         captured_kwargs.update(kwargs)
         return _fake_stream_result("ok")
 
-    monkeypatch.setattr("js.runtime.model_client.stream_model", stream_stub)
+    monkeypatch.setattr("js.runtime.model_client.stream_model_async", stream_stub)
     cfg = _build_config(tmp_path, provider_id=None, provider_base_url=None, provider_api_key=None)
     from js.toolkit import ToolContext
 

@@ -13,8 +13,8 @@ Parameters:
 - `body`: raw string request body.
 - `json_body`: JSON object request body. It is UTF-8 encoded and sets
   `Content-Type: application/json` unless that header is already supplied.
-- `save` or `download`: path to write the response body to disk using the
-  session cwd/path resolver instead of returning the body inline.
+- `save`: path to write the response body to disk using the session cwd/path
+  resolver instead of returning the body inline.
 
 Behavior:
 - GET + HTML-to-readable-text (`raw=false`) remains the default.

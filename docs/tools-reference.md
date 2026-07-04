@@ -131,6 +131,7 @@ Parameters:
 
 - `command`
 - `cwd`
+- `timeout` (default `300` seconds)
 - `keep_ansi`
 - `env`
 - `description`
@@ -151,8 +152,7 @@ Parameters:
 - `headers`: object of name→value or a list of `"Name: value"` strings
 - `body`
 - `json_body`
-- `save` or `download`: path to write the response body to instead of returning
-  it inline
+- `save`: path to write the response body to instead of returning it inline
 
 HTML is converted to text unless `raw=true`. Inline output is capped by
 `max_tool_result_bytes`; downloads are capped at 32 MiB and return

@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from js.toolkit import ToolContext
+from js.toolkit import wiki as wiki_module
+from js.toolkit.core import call_tool
 from js.toolkit.wiki import convert as wiki_convert_module
 from js.toolkit.wiki import ops as wiki_ops
 from js.toolkit.wiki.convert import wiki_convert
@@ -53,6 +55,83 @@ def test_wiki_purpose_reports_counts_inbox_and_orphaned_source_pages(tmp_path):
     assert "ORPHANS" in actual
     assert 'inbox/raw.txt' in actual
     assert 'call wiki_archive(vault, "raw.txt")' in actual
+
+
+def test_wiki_purpose_skips_orphan_scan_in_leave_in_place_mode(tmp_path, monkeypatch):
+    """The same source/inbox pairing that reports ORPHANS in normal (archiving)
+    mode must NOT be flagged when leave-in-place is active — otherwise every
+    successfully-ingested unit is a permanent false orphan (js-drain default)."""
+    vault = _vault(tmp_path)
+    for name in ("sources", "entities", "concepts", "synthesis", "inbox"):
+        (vault / name).mkdir()
+    (vault / "inbox" / "raw.txt").write_text("raw\n", encoding="utf-8")
+    (vault / "sources" / "raw-summary.md").write_text(
+        '---\nsource: "inbox/raw.txt"\n---\n# Raw\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("JS_WIKI_NO_ARCHIVE", "1")
+    via_env = wiki_purpose(str(vault), context=_ctx(tmp_path))
+    monkeypatch.delenv("JS_WIKI_NO_ARCHIVE", raising=False)
+
+    context = _ctx(tmp_path)
+    context.wiki_no_archive = True
+    via_context_flag = wiki_purpose(str(vault), context=context)
+
+    normal_mode = wiki_purpose(str(vault), context=_ctx(tmp_path))
+
+    assert "ORPHANS" not in via_env
+    assert "ORPHANS" not in via_context_flag
+    assert "ORPHANS" in normal_mode  # sanity: guard only fires in leave-in-place mode
+
+
+def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
+    """override_dedup must be usable through the wiki_write Tool's DECLARED
+    schema (params dict, what a schema-enforcing provider validates against
+    with additionalProperties:false) — not just as a raw Python kwarg."""
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    tool = next(t for t in wiki_module.tools() if t.name == "wiki_write")
+    assert "override_dedup" in tool.params
+
+    call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Existing shared page",
+            "slug": "dayton-dcs165-4",
+            "title": "Dayton DCS165-4",
+        },
+        context,
+    )
+    blocked = call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Duplicate-looking sibling",
+            "slug": "dayton-dcs165-4-specs",
+            "title": "Dayton DCS165-4 Specs",
+        },
+        context,
+    )
+    overridden = call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Actually distinct despite the overlap",
+            "slug": "dayton-dcs165-4-specs",
+            "title": "Dayton DCS165-4 Specs",
+            "override_dedup": True,
+        },
+        context,
+    )
+
+    assert blocked.startswith("NEAR-MATCH:")
+    assert "(type: entity)" in overridden
+    assert (vault / "entities" / "dayton-dcs165-4-specs.md").exists()
 
 
 def test_wiki_inbox_lists_only_processable_units(tmp_path):
@@ -315,3 +394,42 @@ def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_pat
     assert image_actual == "MEDIA image. embed: ![[photo.png]]\n--- OCR (tesseract) ---\nocr words"
     assert (vault / "assets" / "photo.png").read_bytes() == b"fake-png-bytes"
     assert run_calls == [["tesseract", str(image), "stdout"]]
+
+
+def test_wiki_convert_fallback_tests_file_description_not_the_path(tmp_path, monkeypatch):
+    """`file` prints '<path>: <desc>'. A binary living under a path containing
+    "text" (e.g. .../context/...) must classify off the description, not the path."""
+    sub = tmp_path / "context"
+    sub.mkdir()
+    blob = sub / "thing.bin"
+    blob.write_bytes(b"\x00\x01\x02BOOT")
+
+    def run_stub(cmd, context):
+        return 0, f"{cmd[-1]}: DOS/MBR boot sector", ""
+
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+
+    actual = wiki_convert(str(blob), context=_ctx(tmp_path))
+    assert actual.startswith("UNREADABLE/binary:")
+
+
+def test_wiki_convert_soffice_failure_does_not_return_stale_tmp_output(tmp_path, monkeypatch):
+    """soffice writes /tmp/<stem>.txt; on a failed conversion a stale same-stem file
+    from a prior run must not be returned as this file's content."""
+    from pathlib import Path as _P
+
+    doc = tmp_path / "zzstalestem98765.doc"
+    doc.write_bytes(b"\xd0\xcf\x11\xe0garbage-ole")   # bogus .doc
+    stale = _P("/tmp") / "zzstalestem98765.txt"
+    stale.write_text("STALECONTENT", encoding="utf-8")
+
+    def run_stub(cmd, context):
+        return 1, "", "source file could not be loaded"   # soffice fails, writes nothing
+
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+    try:
+        actual = wiki_convert(str(doc), context=_ctx(tmp_path))
+        assert "STALECONTENT" not in actual
+        assert actual.startswith("ERROR soffice:")
+    finally:
+        stale.unlink(missing_ok=True)

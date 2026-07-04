@@ -21,19 +21,21 @@ _DEFAULT_MODEL = _settings.DEFAULT_MODEL
 _DEFAULT_AGENT_ID = "defaultagent"
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-_EFFORT_ALIASES = {"max": "high", "min": "low", "none": "none", "off": "none", "0": "none", "": None}
+_EFFORT_ALIASES = {"min": "low", "none": "none", "off": "none", "0": "none", "": None}
 
 # DeepSeek reasoning: xhigh is forwarded verbatim for deepseek-native models.
+# `max` is a real ladder stop (reasoning.py) and is NOT aliased away here —
+# reasoning.snap_effort floors it for families that don't serve it.
 
 def _norm_effort(raw: str | None) -> str | None:
-    """Normalize a thinking-effort value. max->high, off/none->\"none\", unset->None.
-    Pass through low|medium|high|minimal|xhigh."""
+    """Normalize a thinking-effort value. off/none->\"none\", unset->None.
+    Pass through low|medium|high|minimal|xhigh|max."""
     if raw is None:
         return None
     v = raw.strip().lower()
     if v in _EFFORT_ALIASES:
         return _EFFORT_ALIASES[v]
-    return v  # low | medium | high | minimal | xhigh — forwarded as-is to the SDK
+    return v  # low | medium | high | minimal | xhigh | max — forwarded as-is to the SDK
 
 
 def validate_agent_id(agent_id: str) -> str:
@@ -149,8 +151,9 @@ class Config:
     jsonl_max_line_chars: int = _settings.DEFAULT_JSONL_MAX_LINE_CHARS
     max_file_bytes: int = _settings.DEFAULT_MAX_FILE_BYTES
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
+    subagent_max_workers: int = _settings.DEFAULT_SUBAGENT_MAX_WORKERS
     wiki_vault_lock_timeout_s: int = _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S
-    allow_inline_code: bool = False  # !{sh|python|c ...} inline-code execution (--dangerously-evaluate-inline-code)
+    allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
     artifact_dir: str | None = None  # artifact library dir; None = ARTIFACT_DIR env or built-in default
@@ -285,7 +288,12 @@ def from_env(
 
     config_paths: list[Path] = []
     if not ignore_global_config:
-        config_paths.append(_paths.global_config_file())
+        config_file_path = _paths.global_config_file()
+        # RULING J: write the first-run template BEFORE it's read below, so a
+        # fresh box's stock wiki.aliases (creative/general) are live on run 1
+        # instead of only from run 2 onward.
+        _settings.write_default_template(config_file_path)
+        config_paths.append(config_file_path)
     if not ignore_local_config:
         config_paths.extend([
             project_dir / ".js" / "jsrc",
@@ -343,6 +351,7 @@ def from_env(
     jsonl_max_line_chars = _numeric_setting(js_root_settings, ("limits", "jsonl_max_line_chars"), _settings.DEFAULT_JSONL_MAX_LINE_CHARS)
     max_file_bytes = _numeric_setting(js_root_settings, ("limits", "max_file_bytes"), _settings.DEFAULT_MAX_FILE_BYTES)
     task_max_depth = _numeric_setting(js_root_settings, ("limits", "task_max_depth"), _settings.DEFAULT_TASK_MAX_DEPTH)
+    subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
     wiki_vault_lock_timeout_s = _numeric_setting(js_root_settings, ("limits", "wiki_vault_lock_timeout_s"), _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S)
     runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
@@ -352,10 +361,7 @@ def from_env(
     artifact_url = _settings.get_dotted(js_root_settings, ("artifact", "url"))
     artifact_bin = _settings.get_dotted(js_root_settings, ("artifact", "bin"))
 
-    config_file_path = _paths.global_config_file()
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
-    if not ignore_global_config:
-        _settings.write_default_template(config_file_path)
 
     sessions_dir = _paths.sessions_root() / agent_id
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -407,8 +413,9 @@ def from_env(
         jsonl_max_line_chars=jsonl_max_line_chars,
         max_file_bytes=max_file_bytes,
         task_max_depth=task_max_depth,
+        subagent_max_workers=subagent_max_workers,
         wiki_vault_lock_timeout_s=wiki_vault_lock_timeout_s,
-        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), False)),
+        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
         artifact_dir=artifact_dir,

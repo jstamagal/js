@@ -7,6 +7,9 @@ import hashlib
 import os
 import re
 import shutil
+import stat
+import subprocess
+import time
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -116,13 +119,40 @@ def _line_hash(line: str) -> str:
     return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
 
 
+def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
+    """Read bytes from *path*, refusing anything that is not a regular file and
+    never blocking on a FIFO/socket/device.
+
+    O_NONBLOCK makes the open return immediately for a pipe with no writer (the
+    kernel would otherwise park the caller in fifo_open->wait_for_partner);
+    on a regular file the flag has no effect and the read proceeds normally.
+    Raises OSError for a non-regular file or any read error so callers degrade
+    exactly as they do for a plain OSError."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        chunks: list[bytes] = []
+        read_so_far = 0
+        while limit is None or read_so_far < limit:
+            want = 65536 if limit is None else min(65536, limit - read_so_far)
+            chunk = os.read(fd, want)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            read_so_far += len(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in _BINARY_EXTS:
         return True
     if path.suffix.lower() in _TEXT_EXTS:
         return False
     try:
-        chunk = path.read_bytes()[:4096]
+        chunk = _read_regular_bytes(path, 4096)
     except OSError:
         return False
     return b"\x00" in chunk
@@ -154,7 +184,7 @@ def _image_marker(path: Path, mime: str, size: int) -> str:
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = path.read_bytes()
+    data = _read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
         return out[: context.max_tool_result_bytes], data
@@ -170,7 +200,7 @@ def _truncate_line(line: str, max_chars: int) -> str:
 
 
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = path.read_bytes()
+    data = _read_regular_bytes(path)
     if len(data) > context.max_file_bytes:
         raise ValueError(
             f"File size ({len(data)} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -236,8 +266,7 @@ def fs_read(
 
     try:
         size = target.stat().st_size
-        with target.open("rb") as fh:
-            header = fh.read(16)
+        header = _read_regular_bytes(target, 16)
     except OSError as exc:
         return f"ERROR: {exc}"
 
@@ -246,7 +275,7 @@ def fs_read(
         if size > context.max_file_bytes:
             return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
         try:
-            data = target.read_bytes()
+            data = _read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         content_hash = _hash_bytes(data)
@@ -275,7 +304,7 @@ def fs_read(
     all_lines = text.splitlines()
     total = len(all_lines)
     if total == 0:
-        return f"{file_path} is empty (hash {content_hash})"
+        return f"{target} is empty (hash {content_hash})"
 
     start = max(1, int_or_default(start_line, 1, minimum=1))
     end = min(total, int_or_default(end_line, min(total, context.max_read_lines), minimum=1))
@@ -346,7 +375,13 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
 
 def undo(path: str, context: ToolContext | None = None) -> str:
     assert context is not None
+    # write/patch key snapshots under resolve_path (follows symlinks); remove keys
+    # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
     target = context.resolve_path(path)
+    if not context.snapshots.get(target):
+        no_follow = _resolve_path_no_follow(context, path)
+        if context.snapshots.get(no_follow):
+            target = no_follow
     stack = context.snapshots.get(target) or []
     if not stack:
         return f"ERROR: no snapshot available for {target}"
@@ -489,7 +524,78 @@ def _iter_files(root: Path) -> Iterable[Path]:
     for base, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}]
         for name in files:
-            yield Path(base) / name
+            candidate = Path(base) / name
+            # Regular files only: a FIFO/socket/device (or a symlink to one) in
+            # the walk would otherwise reach a reader and, for a pipe with no
+            # writer, hang the whole turn on open(). is_file() stats (never
+            # opens) and follows symlinks, so only true regular files pass.
+            if candidate.is_file():
+                yield candidate
+
+
+_RG_MISSING = "ERROR: rg (ripgrep) not found on PATH; run `just install` to provision it."
+_RG_TIMEOUT_S = 120
+
+
+def _rg_binary() -> str | None:
+    return shutil.which("rg")
+
+
+def _rg_env() -> dict[str, str]:
+    # Inherit the real environment (PATH, locale) but drop the box-local ripgrep
+    # config so the documented contract holds everywhere: .gitignore honoured
+    # inside a git tree, .ignore/.rgignore anywhere, hidden + binary + non-regular
+    # files skipped. A stray RIPGREP_CONFIG_PATH must not silently change results.
+    env = dict(os.environ)
+    env.pop("RIPGREP_CONFIG_PATH", None)
+    return env
+
+
+def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int | None, str, bool]:
+    """Run rg and collect at most *want* output lines, then stop it.
+
+    Returns (lines, returncode, stderr, timed_out). returncode is None when rg
+    was stopped early because enough lines were already gathered — the caller
+    treats that as a successful match. Streaming with an early stop keeps memory
+    bounded (a pattern matching millions of lines never buffers them all) and,
+    with the wall-clock deadline, guarantees the turn cannot hang."""
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=_rg_env(), text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        return [], 2, str(exc), False
+    lines: list[str] = []
+    stopped_early = False
+    timed_out = False
+    deadline = time.monotonic() + timeout
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if len(lines) >= want:
+                stopped_early = True
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+    finally:
+        if stopped_early or timed_out:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    stderr = proc.stderr.read() if proc.stderr is not None else ""
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+    if not stopped_early and proc.poll() is None:
+        proc.wait()
+    rc = None if stopped_early else proc.returncode
+    return lines, rc, stderr, timed_out
 
 
 def fs_search(
@@ -519,77 +625,59 @@ def fs_search(
     root = context.resolve_path(path or ".")
     if not root.exists():
         return f"ERROR: Path does not exist: {root}"
+    try:
+        root_stat = root.stat()
+    except OSError as exc:
+        return f"ERROR: {type(exc).__name__}: {exc}"
+    if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
+        return f"ERROR: not a regular file or directory: {root}"
     mode = output_mode or "files_with_matches"
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline))
     if cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
-    flags = re.MULTILINE
-    if case_insensitive:
-        flags |= re.IGNORECASE
-    if multiline:
-        flags |= re.DOTALL
-    try:
-        regex = re.compile(pattern, flags)
-    except re.error as exc:
-        return f"ERROR: Invalid regex pattern: {exc}"
+    rg = _rg_binary()
+    if rg is None:
+        return _RG_MISSING
 
-    results: list[str] = []
     skip = int_or_default(offset, 0, minimum=0)
     limit = int_or_default(head_limit, 10_000, minimum=1)
     before = int_or_default(context_lines if context_lines is not None else before_context, 0, minimum=0)
     after = int_or_default(context_lines if context_lines is not None else after_context, 0, minimum=0)
 
-    for file in _iter_files(root):
-        if glob and not file.match(glob):
-            continue
-        if file_type and file.suffix.lstrip(".") != file_type.lstrip("."):
-            continue
-        if _is_binary(file):
-            continue
-        try:
-            text = file.read_text(errors="replace")
-        except OSError:
-            continue
-        matches = list(regex.finditer(text)) if multiline else []
-        if multiline:
-            match_count = len(matches)
-            if match_count == 0:
-                continue
-            if mode == "files_with_matches":
-                results.append(str(file))
-            elif mode == "count":
-                results.append(f"{file}:{match_count}")
-            else:
-                for m in matches:
-                    line_no = text.count("\n", 0, m.start()) + 1
-                    snippet = m.group(0).splitlines()[0] if m.group(0) else ""
-                    prefix = f"{file}:{line_no}:" if show_line_numbers else f"{file}:"
-                    results.append(prefix + snippet)
-        else:
-            lines = text.splitlines()
-            matched_lines: list[tuple[int, str]] = [(i, line) for i, line in enumerate(lines, 1) if regex.search(line)]
-            if not matched_lines:
-                continue
-            if mode == "files_with_matches":
-                results.append(str(file))
-            elif mode == "count":
-                results.append(f"{file}:{len(matched_lines)}")
-            else:
-                seen: set[int] = set()
-                for line_no, line in matched_lines:
-                    lo = max(1, line_no - before)
-                    hi = min(len(lines), line_no + after)
-                    for n in range(lo, hi + 1):
-                        if n in seen:
-                            continue
-                        seen.add(n)
-                        prefix = f"{file}:{n}:" if show_line_numbers else f"{file}:"
-                        results.append(prefix + lines[n - 1])
-        if len(results) >= skip + limit:
-            break
+    argv = [rg, "--color=never", "--no-messages"]
+    if mode == "files_with_matches":
+        argv.append("--files-with-matches")
+    elif mode == "count":
+        argv.append("--count")
+    else:  # content
+        argv += ["--no-heading", "--with-filename"]
+        argv.append("--line-number" if show_line_numbers else "--no-line-number")
+        if before:
+            argv += ["--before-context", str(before)]
+        if after:
+            argv += ["--after-context", str(after)]
+    if case_insensitive:
+        argv.append("--ignore-case")
+    if multiline:
+        argv += ["--multiline", "--multiline-dotall"]
+    if glob:
+        argv += ["--glob", str(glob)]
+    if file_type:
+        argv += ["--glob", f"*.{str(file_type).lstrip('.')}"]
+    argv += ["--regexp", pattern, "--", str(root)]
 
-    sliced = results[skip:skip + limit]
+    lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
+    if timed_out:
+        return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
+    # rc None = rg stopped early with a full page of matches; 0 = matches; 1 = no
+    # matches (clean empty result); anything else = real rg error (bad regex/glob).
+    if rc is not None and rc not in (0, 1):
+        detail = (stderr or "").strip()
+        first = detail.splitlines()[0] if detail else f"rg exit {rc}"
+        return f"ERROR: {first}"
+
+    sliced = lines[skip:skip + limit]
     out = "\n".join(sliced) if sliced else "(no matches)"
     context.search_cache[cache_key] = out
     return out

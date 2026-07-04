@@ -1,9 +1,10 @@
 # Models And Providers
 
 `js` uses the Vercel AI Python SDK (`ai`) as the provider adapter. The built-in
-default model is `deepseek/deepseek-v4-flash`. There is no built-in proxy route:
-unprefixed model ids route through AI Gateway; `provider:model` ids go directly
-to the named provider.
+default model is `deepseek/deepseek-v4-flash`. Model routing follows three patterns:
+a slash prefix (`provider/model-id`) routes directly to the named provider, matching
+against known-provider ids (deepseek, openai, etc.); a colon prefix (`provider:model-id`)
+uses the SDK's direct-routing form; truly unprefixed ids route through AI Gateway.
 
 ## Provider Routing
 
@@ -31,10 +32,12 @@ set provider.api_key sk-local
 ```
 
 When `provider.id` is set, the provider is constructed explicitly with the given
-base URL and API key. When unset, `ai.get_model(model_id)` is called and
-`ai-python` routes unprefixed ids through AI Gateway, while `provider:model` ids
-(e.g. `openai:gpt-4o`) go to the named provider using its default endpoint and
-official SDK env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
+base URL and API key. When unset, js routes the model id as follows: a slash prefix
+(e.g. `deepseek/deepseek-v4-flash`) matching a known provider goes directly to that
+provider; a colon prefix (e.g. `openai:gpt-4o`) uses the SDK's direct-routing form;
+truly unprefixed ids route through AI Gateway via `ai.get_model(model_id)`. Direct
+providers use their default endpoint and official SDK env vars (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc.).
 
 Provider env overrides (always win over `jsrc` files):
 
@@ -151,11 +154,11 @@ REPL:
 
 Normalization:
 
-- `max` -> `high`
 - `min` -> `low`
 - `none`, `off`, `0` -> the literal string `"none"` (explicitly disables reasoning)
 - empty/unset -> `None` (provider default applies)
-- other values are forwarded as typed (`xhigh` for deepseek-native endpoints)
+- other values are forwarded as typed (`xhigh`, `max` for deepseek/glm-native endpoints,
+  then snapped to the nearest stop the endpoint actually serves)
 
 DeepSeek gets `max_reasoning_tokens=32000` when reasoning is enabled so it can
 use its full reasoning budget without capping total output earlier than necessary.
@@ -225,8 +228,9 @@ Order:
 1. `--max-out` or `/set model.max_output_tokens <tokens>`
 2. `JS_MAX_OUTPUT_TOKENS`
 3. `model.max_output_tokens` in `jsrc`
-4. models.dev metadata for the active model/provider
-5. if the catalog has no match, no explicit cap is sent
+4. agent manifest `max_tokens:` in `00-tools.yaml`
+5. models.dev metadata for the active model/provider
+6. if the catalog has no match, no explicit cap is sent
 
 For custom providers js first tries the active provider mapped to its underlying
 models.dev provider id; if that misses, it pattern-matches the model id against
@@ -236,7 +240,7 @@ up the underlying model limits.
 js keeps a local writable mirror of the models.dev catalog under platform data
 (`~/.local/share/js/modelsdotdev/` on a default Linux setup). On model-limit
 lookups it checks the catalog age and refreshes it automatically when it is more
-than 72 hours old. To force it immediately:
+than 8 hours old. To force it immediately:
 
 ```bash
 js --refresh-model-catalog

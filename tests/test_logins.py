@@ -19,6 +19,37 @@ def test_load_logins_empty(tmp_logins_dir):
     assert logins.load_logins() == {}
 
 
+def test_load_logins_degrades_to_empty_on_corrupt_file(tmp_logins_dir):
+    # Read paths run on every routing/picker call and must never crash — a
+    # malformed file just looks like "no logins" here.
+    (tmp_logins_dir / "logins.toml").write_bytes(b"not valid toml {{{")
+    assert logins.load_logins() == {}
+
+
+def test_save_login_refuses_to_overwrite_a_corrupt_file(tmp_logins_dir):
+    path = tmp_logins_dir / "logins.toml"
+    path.write_bytes(b"not valid toml {{{")
+    with pytest.raises(logins.LoginsCorruptError):
+        logins.save_login(logins.Login(provider_id="x", provider_api_key="k"))
+    # Refusing means refusing: the corrupt bytes are untouched, not truncated
+    # down to the one login this call knew about.
+    assert path.read_bytes() == b"not valid toml {{{"
+
+
+def test_remove_login_refuses_to_overwrite_a_corrupt_file(tmp_logins_dir):
+    path = tmp_logins_dir / "logins.toml"
+    path.write_bytes(b"not valid toml {{{")
+    with pytest.raises(logins.LoginsCorruptError):
+        logins.remove_login("x")
+    assert path.read_bytes() == b"not valid toml {{{"
+
+
+def test_save_login_writes_atomically_with_no_leftover_temp_file(tmp_logins_dir):
+    logins.save_login(logins.Login(provider_id="a", provider_api_key="k"))
+    names = {p.name for p in tmp_logins_dir.iterdir()}
+    assert names == {"logins.toml"}
+
+
 def test_save_and_load_login(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk-test"))
     loaded = logins.load_logins()

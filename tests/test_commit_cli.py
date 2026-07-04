@@ -44,6 +44,9 @@ def test_cli_commit_arg_dispatches_target_and_operator_context(tmp_path, monkeyp
                 "maxout": None,
                 "extra_context": "operator note",
                 "extras": [],
+                "ignore_local_config": False,
+                "ignore_global_config": False,
+                "presets": [],
             },
         }
     ]

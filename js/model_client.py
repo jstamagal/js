@@ -38,7 +38,7 @@ class ModelStreamResult:
     tool_calls: list[ModelToolCall]
     reasoning: str
     usage: ai.types.usage.Usage | None
-    finish_reason: str  # "tool_calls" when tool_calls is non-empty, otherwise "stop"
+    finish_reason: str  # "tool_calls" when tool_calls is non-empty, otherwise "stop"; incomplete streams use "incomplete:<reason>".
     assistant_message: ai.messages.Message
     # Wall-clock measured around `ai.stream` itself (isolated from run_turn's
     # bookkeeping). first_token_s is time-to-first-*text*-token: js collects
@@ -47,6 +47,33 @@ class ModelStreamResult:
     # stream duration. Both default to 0/None so older constructors stay valid.
     first_token_s: float | None = None
     elapsed_s: float = 0.0
+    provider_metadata: dict[str, Any] | None = None
+    incomplete_reason: str | None = None
+
+
+def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
+    """Return a stable incomplete reason from provider metadata, if present.
+
+    Codex streams surface ``response.incomplete`` as provider metadata on the
+    assistant message / stream end. Keep this helper permissive so provider
+    versions that expose either ``incomplete_reason`` or an OpenAI-shaped
+    ``incomplete_details.reason`` do not make a truncated turn look like a clean
+    stop again. Unknown-but-flagged incomplete streams get an explicit
+    ``unknown`` reason rather than disappearing.
+    """
+    if not isinstance(provider_metadata, dict):
+        return None
+    reason = provider_metadata.get("incomplete_reason")
+    details = provider_metadata.get("incomplete_details")
+    if reason is None and isinstance(details, dict):
+        reason = details.get("reason")
+    if provider_metadata.get("incomplete") or reason is not None:
+        return str(reason or "unknown")
+    return None
+
+
+def incomplete_finish_reason(reason: str) -> str:
+    return f"incomplete:{reason}"
 
 
 def resolve_model(
@@ -233,7 +260,11 @@ def history_to_ai_messages(
                         tool_args=fn.get("arguments", ""),
                     )
                 )
-            out.append(ai.assistant_message(*parts))
+            assistant = ai.assistant_message(*parts)
+            provider_metadata = msg.get("provider_metadata")
+            if isinstance(provider_metadata, dict):
+                assistant = assistant.model_copy(update={"provider_metadata": provider_metadata})
+            out.append(assistant)
             continue
         if role == "tool":
             content = msg.get("content")
@@ -390,8 +421,12 @@ async def _stream_async(
 
     start = time.perf_counter()
     first_token_s: float | None = None
+    stream_provider_metadata: dict[str, Any] | None = None
     async with ai.stream(**kwargs) as stream:
         async for event in stream:
+            event_metadata = getattr(event, "provider_metadata", None)
+            if isinstance(event_metadata, dict):
+                stream_provider_metadata = event_metadata
             if isinstance(event, ai.events.TextDelta):
                 if first_token_s is None:
                     first_token_s = time.perf_counter() - start
@@ -401,6 +436,12 @@ async def _stream_async(
     text = stream.text
     reasoning = stream.message.reasoning
     usage = _usage_from_stream(stream)
+    provider_metadata = (
+        getattr(stream.message, "provider_metadata", None)
+        or stream_provider_metadata
+        or getattr(stream, "provider_metadata", None)
+    )
+    incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,
@@ -409,7 +450,7 @@ async def _stream_async(
         )
         for part in stream.message.tool_calls
     ]
-    finish = "tool_calls" if tool_calls else "stop"
+    finish = incomplete_finish_reason(incomplete_reason) if incomplete_reason else ("tool_calls" if tool_calls else "stop")
     return ModelStreamResult(
         text=text,
         tool_calls=tool_calls,
@@ -419,16 +460,17 @@ async def _stream_async(
         assistant_message=stream.message,
         first_token_s=first_token_s,
         elapsed_s=elapsed_s,
+        provider_metadata=provider_metadata if isinstance(provider_metadata, dict) else None,
+        incomplete_reason=incomplete_reason,
     )
 
 
-def _sampler_map(sampling: Sampling, transport: str | None) -> dict:
-    """Express the sampling knobs THIS transport accepts as ai>=0.2.1
-    SamplerParamsMap entries (keyed by param class). The transport filter
-    (``sampling.call_params``) is kept so js never sends a wire an unsupported
-    knob — only the encoding changed from a flat dict to structured params."""
-    values = dict(sampling.call_params(transport))
-    values.update(values.pop("extra_body", {}) or {})
+def _sampler_map(values: dict) -> dict:
+    """Encode the TOP-LEVEL sampling knobs this transport accepts as ai>=0.2.1
+    SamplerParamsMap entries (keyed by param class). Knobs ``call_params`` routed
+    into ``extra_body`` (top_k/repetition_penalty on the openai-compatible family)
+    stay OUT of here: the OpenAI protocol hard-raises on TopK/RepetitionPenalty
+    param classes, so those ride through as raw extra_body instead."""
     out: dict = {}
     if "temperature" in values:
         out[ai_params.TemperatureSamplerParams] = ai_params.TemperatureSamplerParams(
@@ -459,21 +501,105 @@ def _build_inference_params(
     """Assemble an ``InferenceRequestParams`` from the parts, or None when there
     is nothing to send (so the provider keeps every default)."""
     kwargs: dict[str, Any] = {}
-    sampler_map = _sampler_map(sampling, transport)
+    values = dict(sampling.call_params(transport))
+    sampler_extra = values.pop("extra_body", {}) or {}
+    sampler_map = _sampler_map(values)
     if sampler_map:
         kwargs["sampling"] = sampler_map
     if reasoning is not None:
         kwargs["reasoning"] = reasoning
     if output is not None:
         kwargs["output"] = output
-    if extra_body:
-        kwargs["extra_body"] = extra_body
+    merged_extra = {**sampler_extra, **(extra_body or {})}
+    if merged_extra:
+        kwargs["extra_body"] = merged_extra
     if not kwargs:
         return None
     return ai_params.InferenceRequestParams(**kwargs)
 
 
-def stream_model(
+def _debug_json(value: Any) -> str:
+    import json as _json
+
+    return _json.dumps(value, indent=2, default=str, ensure_ascii=False)
+
+
+def _message_to_debug(msg: ai.messages.Message) -> Any:
+    """Best-effort full serialization of one outgoing message. Never raises."""
+    try:
+        return msg.model_dump(mode="json")
+    except Exception:
+        parts = []
+        for part in getattr(msg, "parts", None) or []:
+            parts.append(
+                {k: getattr(part, k) for k in ("text", "tool_name", "tool_args", "tool_call_id")
+                 if hasattr(part, k)}
+            )
+        return {"role": getattr(msg, "role", "?"), "parts": parts}
+
+
+def _tool_to_debug(tool: ai.types.tools.Tool) -> dict:
+    spec = getattr(tool, "spec", None)
+    return {
+        "name": getattr(tool, "name", "?"),
+        "description": getattr(spec, "description", ""),
+        "parameters": getattr(spec, "params", {}),
+    }
+
+
+def _emit_request_trace(
+    *,
+    model_id: str,
+    provider_id: str | None,
+    provider_base_url: str | None,
+    params: ai_params.InferenceRequestParams | None,
+    messages: list[ai.messages.Message],
+    tools: list[ai.types.tools.Tool] | None,
+    dump_schemas: bool,
+    dump_from: int,
+) -> None:
+    """Byte-honest dump of the request as it leaves js for the SDK: the resolved
+    provider/model/params, and — once per turn — the unclipped system prompt and
+    FULL tool spec JSON (descriptions and all), then the messages newly sent this
+    call. This is the instrument the tool-contract audit reads, so it must not
+    clip or summarize. Never raises: a debug trace may not break a turn.
+
+    Note: for custom providers (codex) this shows the request js hands the SDK,
+    including the resolved base_url — the provider's own in-SDK reshaping to its
+    wire format happens downstream and is not captured here.
+    """
+    try:
+        header = {
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "base_url": provider_base_url or "provider-default",
+            "message_count": len(messages),
+            "tool_count": len(tools) if tools else 0,
+        }
+        if params is not None:
+            try:
+                header["params"] = params.model_dump(mode="json")
+            except Exception:
+                header["params"] = str(params)
+        blocks = ["\n━━ REQUEST (model_client) ━━", _debug_json(header)]
+        if dump_schemas:
+            sys_txt = ""
+            if messages and getattr(messages[0], "role", None) == "system":
+                first_parts = getattr(messages[0], "parts", None) or []
+                sys_txt = getattr(first_parts[0], "text", "") if first_parts else ""
+            blocks.append("── SYSTEM PROMPT (unclipped) ──")
+            blocks.append(sys_txt)
+            blocks.append(f"── TOOL SCHEMAS ({len(tools) if tools else 0}) ──")
+            blocks.append(_debug_json([_tool_to_debug(t) for t in (tools or [])]))
+        new_msgs = messages[dump_from:] if dump_from else messages
+        blocks.append(f"── MESSAGES (+{len(new_msgs)}) ──")
+        blocks.append(_debug_json([_message_to_debug(m) for m in new_msgs]))
+        print("\n".join(blocks), flush=True)
+    except Exception:
+        pass
+
+
+async def stream_model_async(
     *,
     model_id: str,
     provider_id: str | None,
@@ -488,11 +614,16 @@ def stream_model(
     provider_extra: dict[str, Any] | None = None,
     executor: ai.models.StreamExecutor | None = None,
     sampling: Sampling | None = None,
+    trace_request: bool = False,
+    trace_request_schemas: bool = True,
+    trace_request_from: int = 0,
 ) -> ModelStreamResult:
-    """Synchronous entry point: stream one model turn and return the result.
+    """Async entry point: stream one model turn on the CALLER'S event loop.
 
-    This function builds the model, runs ``ai.stream`` in a fresh event loop,
-    and closes the provider-owned client in ``finally``.
+    This is the real primitive. It builds the model, streams ``ai.stream``, and
+    closes the provider-owned client in ``finally`` — all without owning a loop,
+    so many turns/subagents can run concurrently on one shared loop. The sync
+    ``stream_model`` below wraps this for callers not yet on the async runtime.
     """
     model = resolve_model(
         model_id,
@@ -559,8 +690,12 @@ def stream_model(
             elif effort is not None:
                 reasoning_params = ai_params.ReasoningParams(effort=effort)
 
-    # DeepSeek gets the maximum reasoning budget by default, passed straight
-    # through to its OpenAI-compatible endpoint as an extra body field.
+    # DeepSeek gets the maximum reasoning budget by default as an extra_body
+    # field. `is_deepseek` matches on provider name OR a "deepseek" substring in
+    # the model id, so this also rides the implicit gateway path (provider_id
+    # None, e.g. `deepseek/deepseek-v3`), not only DeepSeek's own OpenAI-compatible
+    # endpoint — the budget is a harmless passthrough that other gateways forward
+    # or ignore, and both routes are exercised in daily use.
     if is_deepseek and reasoning_effort != "none":
         extra_body.setdefault("max_reasoning_tokens", 32_000)
 
@@ -589,19 +724,38 @@ def stream_model(
     ):
         messages = _strip_reasoning_parts(messages)
 
+    if trace_request:
+        _emit_request_trace(
+            model_id=model_id,
+            provider_id=provider_id,
+            provider_base_url=provider_base_url,
+            params=params,
+            messages=messages,
+            tools=tools,
+            dump_schemas=trace_request_schemas,
+            dump_from=trace_request_from,
+        )
+
     try:
-        return asyncio.run(
-            _stream_async(
-                model=model,
-                messages=messages,
-                tools=tools,
-                params=params,
-                executor=executor,
-                on_text=on_text,
-            )
+        return await _stream_async(
+            model=model,
+            messages=messages,
+            tools=tools,
+            params=params,
+            executor=executor,
+            on_text=on_text,
         )
     finally:
         try:
-            asyncio.run(model.provider.aclose())
+            await model.provider.aclose()
         except Exception:
             pass
+
+
+def stream_model(**kwargs: Any) -> ModelStreamResult:
+    """Sync wrapper over :func:`stream_model_async` — spins a throwaway loop per
+    call. This is the OLD blocking path; the non-blocking runtime calls
+    ``stream_model_async`` directly on its shared loop. Kept so un-migrated
+    callers (and the current sync run_turn) keep working during the transition.
+    """
+    return asyncio.run(stream_model_async(**kwargs))

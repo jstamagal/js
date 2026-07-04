@@ -4,9 +4,13 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import functools
+import inspect
 import json
 import sys
 import subprocess
+import threading
 from pathlib import Path
 import random
 import time
@@ -356,23 +360,40 @@ def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message
 class ToolErrorTracker:
     limit: int = 3
     errors: dict[str, int] = field(default_factory=dict)
+    # Under the non-blocking supervisor a turn's leaf tools dispatch in an
+    # executor thread while its fan-out calls run as coroutines on the loop; both
+    # record into this tracker, so guard the counter against that cross-thread
+    # interleave.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record(self, tool_name: str, result: str) -> str:
-        if not result.startswith("ERROR"):
-            self.errors.pop(tool_name, None)
-            return result
-        count = self.errors.get(tool_name, 0) + 1
-        self.errors[tool_name] = count
-        attempts_left = max(self.limit - count, 0)
-        return f"{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self.limit}</retry>"
+        with self._lock:
+            if not result.startswith("ERROR"):
+                self.errors.pop(tool_name, None)
+                return result
+            count = self.errors.get(tool_name, 0) + 1
+            self.errors[tool_name] = count
+            attempts_left = max(self.limit - count, 0)
+            return f"{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self.limit}</retry>"
 
     def limit_reached(self) -> bool:
-        return any(count >= self.limit for count in self.errors.values())
+        with self._lock:
+            return any(count >= self.limit for count in self.errors.values())
 
 
 # --------------------------------------------------------------------------
 # Tool dispatch
 # --------------------------------------------------------------------------
+
+def _cap_result(result: str, cap_bytes: int) -> str:
+    """Clip a tool result to the byte cap, leaving a visible marker when the slice
+    actually shortens it — same wording the subagent layer uses (meta.py) so a
+    truncated leaf result never looks like the tool simply stopped early. A cap of
+    0 or less means unlimited (matches the settings convention)."""
+    if cap_bytes > 0 and len(result) > cap_bytes:
+        return result[:cap_bytes] + f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
+    return result
+
 
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
@@ -406,7 +427,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = f"ERROR: no tool named {name}; use {active_registry.names()}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
-        return args, result[:cap_bytes]
+        return args, _cap_result(result, cap_bytes)
 
     started = time.time()
     try:
@@ -419,7 +440,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
     if error_tracker is not None:
         result = error_tracker.record(tool.name, result)
-    return args, result[:cap_bytes]
+    return args, _cap_result(result, cap_bytes)
 
 
 def _is_task_call(pc: _PendingToolCall) -> bool:
@@ -488,56 +509,126 @@ def _dispatch_tool_calls(
     ]
 
 
+async def _dispatch_fan_out_async(
+    pc: _PendingToolCall,
+    telemetry: Telemetry,
+    cap_bytes: int,
+    trace: bool,
+    error_tracker: ToolErrorTracker,
+    registry: ToolRegistry,
+    tool_context: ToolContext,
+) -> tuple[_PendingToolCall, dict, str]:
+    """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
+    turns on the current loop (never a dispatch thread). Mirrors ``_dispatch``'s
+    parse/trace/telemetry/error-tracking so a fan-out call is indistinguishable
+    from a threaded one to the caller."""
+    from .toolkit import meta
+
+    try:
+        args = _repair_jsonish(pc.arguments())
+    except ValueError as e:
+        if trace:
+            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
+        telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
+        result = f"ERROR: could not parse arguments for {pc.name}: {e}"
+        return pc, {}, error_tracker.record(pc.name, result)
+
+    tool = registry.resolve(pc.name)
+    trace_name = tool.name if tool is not None else pc.name
+    if trace:
+        pretty = _pretty_args(trace_name, args)
+        line = f"  {C.MAGENTA}▸ {trace_name}{C.RESET} {pretty}{C.RESET}" if pretty else f"  {C.MAGENTA}▸ {trace_name}{C.RESET}"
+        print(line, flush=True)
+    if tool is None:
+        telemetry.event("tool_unknown", tool=pc.name, args=args)
+        result = f"ERROR: no tool named {pc.name}; use {registry.names()}"
+        return pc, args, error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+
+    started = time.time()
+    try:
+        result = await meta.dispatch_fan_out_async(tool, args, tool_context)
+        telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
+    except Exception as e:  # noqa: BLE001
+        telemetry.event("tool_exception", tool=tool.name,
+                        error=f"{type(e).__name__}: {e}",
+                        latency_ms=int((time.time() - started) * 1000))
+        result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
+    return pc, args, error_tracker.record(tool.name, _cap_result(result, cap_bytes))
+
+
+async def _dispatch_batch(
+    tool_calls: list[_PendingToolCall],
+    telemetry: Telemetry,
+    cap_bytes: int,
+    trace: bool,
+    error_tracker: ToolErrorTracker,
+    registry: ToolRegistry,
+    tool_context: ToolContext,
+    loop: asyncio.AbstractEventLoop,
+) -> list[tuple[_PendingToolCall, dict, str]]:
+    """Dispatch one assistant batch, keeping the shared dispatch pool free of
+    blocked-on-descendant waiters.
+
+    When a non-blocking supervisor is live AND the batch contains fan-out
+    (task / named-agent) calls, those run ON THE LOOP as cancelable subagent jobs
+    (`_dispatch_fan_out_async`) — so a parent turn awaiting its subtree never
+    parks a bounded js-dispatch thread that its own descendants need for their
+    leaf tool dispatch (the pool-inversion deadlock). Leaf calls in the same
+    batch still run in the executor, concurrently. Without a supervisor (``-p``,
+    bench, tests) the whole batch takes the executor path unchanged."""
+    from . import supervisor
+    from .toolkit import meta
+
+    fan_out_idx: list[int] = []
+    if supervisor.get_current() is not None:
+        for i, pc in enumerate(tool_calls):
+            tool = registry.resolve(pc.name)
+            if tool is not None and meta.is_fan_out_handler(tool.handler):
+                fan_out_idx.append(i)
+
+    if not fan_out_idx:
+        return await loop.run_in_executor(
+            None,
+            functools.partial(
+                _dispatch_tool_calls,
+                tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
+            ),
+        )
+
+    fan_out_set = set(fan_out_idx)
+    records: list[tuple[_PendingToolCall, dict, str] | None] = [None] * len(tool_calls)
+
+    leaf_calls = [pc for i, pc in enumerate(tool_calls) if i not in fan_out_set]
+    leaf_future = (
+        loop.run_in_executor(
+            None,
+            functools.partial(
+                _dispatch_tool_calls,
+                leaf_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
+            ),
+        )
+        if leaf_calls else None
+    )
+
+    fan_out_records = await asyncio.gather(*(
+        _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace, error_tracker, registry, tool_context)
+        for i in fan_out_idx
+    ))
+    for i, rec in zip(fan_out_idx, fan_out_records):
+        records[i] = rec
+
+    if leaf_future is not None:
+        leaf_records = iter(await leaf_future)
+        for i in range(len(records)):
+            if records[i] is None:
+                records[i] = next(leaf_records)
+
+    return records  # type: ignore[return-value]
+
+
 # --------------------------------------------------------------------------
 # Turn loop
 # --------------------------------------------------------------------------
-
-def _clip(s: Any, n: int) -> str:
-    s = s if isinstance(s, str) else str(s)
-    return s if len(s) <= n else s[:n] + f" {C.BR_RED}…[+{len(s) - n} chars]{C.RESET}"
-
-
-def _dump_msg(m: dict) -> None:
-    role = m.get("role", "?")
-    col = {"user": C.BR_GREEN, "assistant": C.BR_WHITE, "tool": C.BR_BLACK}.get(role, C.BR_MAGENTA)
-    print(f"  {col}[{role}]{C.RESET}", flush=True)
-    content = m.get("content")
-    if isinstance(content, str) and content.strip():
-        print(f"{C.BR_BLACK}{_clip(content, 2000)}{C.RESET}", flush=True)
-    for tc in (m.get("tool_calls") or []):
-        fn = tc.get("function", {})
-        print(f"  {C.BR_MAGENTA}→ {fn.get('name')}{C.RESET} "
-              f"{C.BR_BLACK}{_clip(fn.get('arguments', ''), 500)}{C.RESET}", flush=True)
-
-
-def _trace_request(convo: list[dict], specs: list, state: dict) -> None:
-    """Debug view of what is actually sent to the model: system prompt + tool
-    schemas once, then the new messages each call. Bright-ANSI colorized."""
-    if not state["sys"]:
-        sys_txt = convo[0]["content"] if convo and convo[0].get("role") == "system" else ""
-        print(f"\n  {C.BR_MAGENTA}━━ SYSTEM PROMPT ━━{C.RESET}", flush=True)
-        print(f"{C.BR_BLACK}{_clip(sys_txt, 8000)}{C.RESET}", flush=True)
-        state["sys"] = True
-    if not state["tools"] and specs:
-        print(f"\n  {C.BR_BLUE}━━ TOOL SCHEMAS ({len(specs)}) ━━{C.RESET}", flush=True)
-        for s in specs:
-            fn = s.get("function", s)
-            params = (fn.get("parameters") or {})
-            props = params.get("properties") or {}
-            req = set(params.get("required") or [])
-            sig = ", ".join((f"{C.BR_WHITE}{p}*{C.RESET}" if p in req else f"{C.BR_BLACK}{p}{C.RESET}")
-                            for p in props)
-            print(f"  {C.BR_CYAN}▸ {fn.get('name', '?')}{C.RESET}{C.BR_BLACK}({C.RESET}{sig}{C.BR_BLACK}){C.RESET}",
-                  flush=True)
-        state["tools"] = True
-    new = [m for m in convo[state["n"]:] if m.get("role") != "system"]
-    if new:
-        print(f"\n  {C.BR_YELLOW}━━ SENT (+{len(new)} msg) ━━{C.RESET}", flush=True)
-        for m in new:
-            _dump_msg(m)
-    state["n"] = len(convo)
-
-
 
 _COMPACTION_HEADINGS = (
     "Goal",
@@ -709,7 +800,7 @@ def compact_messages(cfg: Config, system: str, messages: list[dict], *, focus: s
     messages[:] = M.load_messages(cfg.session_file)
     return f"compacted: kept tail from message {keep_from}/{len(messages)} using {compact_model}"
 
-def run_turn(cfg: Config, system: str, messages: list[dict],
+async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
              trace_override: bool | None = None,
              reasoning_effort_override: str | None | object = _UNSET,
@@ -723,11 +814,14 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None) -> None:
-    """One user turn → tool-use loop until model produces a stop. Mutates
+    """One user turn → tool-use loop until the model stops. The real primitive:
+    it awaits the model stream and runs tool dispatch in a thread executor, so it
+    NEVER blocks the loop — many turns/subagents run concurrently. Mutates
     `messages` in place so the caller can persist new entries.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
-    reloading config; unset values fall back to the Config values.
+    reloading config; unset values fall back to the Config values. The sync
+    ``run_turn`` below wraps this for callers not yet on the async runtime.
     """
     model = model_override or cfg.model
     provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
@@ -753,6 +847,7 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
+    active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
     active_context.wiki_vault_lock_timeout_s = getattr(cfg, "wiki_vault_lock_timeout_s", getattr(active_context, "wiki_vault_lock_timeout_s", 30))
     active_context.artifact_dir = getattr(cfg, "artifact_dir", None)
     active_context.artifact_url = getattr(cfg, "artifact_url", None)
@@ -776,8 +871,8 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
                 )
         return emission.hooks
 
-    def _end_turn(reason: str) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id)
+    def _end_turn(reason: str, **extra: Any) -> None:
+        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
 
     _emit_event(
         "turn_start",
@@ -836,189 +931,263 @@ def run_turn(cfg: Config, system: str, messages: list[dict],
             sys.stdout.flush()
             text_started["value"] = False
 
-    for _ in range(cfg.max_tool_iterations):
-        # --- One model call with retry on retriable transport errors ---
-        text = ""
-        pending_calls: list[_PendingToolCall] = []
-        finish: str | None = None
-        reasoning = ""
-        result: model_client.ModelStreamResult | None = None
-        for attempt in range(3):
-            t0 = time.time()
-            try:
-                specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
-                ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
-                _emit_event(
-                    "prompt",
-                    model=model,
-                    provider_id=provider_id,
-                    message_count=len(ai_convo),
-                    tool_count=len(specs),
-                )
-                result = model_client.stream_model(
-                    model_id=model,
-                    provider_id=provider_id,
-                    provider_base_url=provider_base_url,
-                    provider_api_key=provider_api_key,
-                    messages=ai_convo,
-                    tools=ai_tools,
-                    max_output_tokens=max_out,
-                    reasoning_effort=effort,
-                    on_text=_emit_text,
-                    provider_headers=getattr(cfg, "provider_headers", None),
-                    provider_extra=_provider_extra_params(cfg),
-                    sampling=sampling,
-                )
-                _close_text()
-                text = result.text
-                pending_calls = [
-                    _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
-                    for call in result.tool_calls
-                ]
-                finish = result.finish_reason
-                reasoning = result.reasoning
-                usage = result.usage
-                active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-                active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
-                telemetry.event("turn_complete", model=model,
-                                latency_ms=int((time.time() - t0) * 1000),
-                                finish_reason=finish, n_tool_calls=len(pending_calls),
-                                prompt_tokens=active_context.last_prompt_tokens,
-                                cached_tokens=active_context.last_cached_tokens)
-                _out_tok = 0
-                if usage:
-                    _out_tok = int(getattr(usage, "output_tokens", 0)
-                                   or getattr(usage, "completion_tokens", 0) or 0)
-                if call_stats is not None:
-                    # Stream-isolated numbers (model_client clocks `ai.stream` itself,
-                    # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
-                    _stream_s = result.elapsed_s or (time.time() - t0)
-                    call_stats.append({
-                        "ttft_s": result.first_token_s,
-                        "stream_s": result.elapsed_s,
-                        "output_tokens": _out_tok,
-                        "prompt_tokens": active_context.last_prompt_tokens,
-                        "cached_tokens": active_context.last_cached_tokens,
-                        "tok_per_s": (_out_tok / _stream_s) if _stream_s > 0 else 0.0,
-                        "finish_reason": finish,
-                        "n_tool_calls": len(pending_calls),
-                    })
-                if trace:
-                    _elapsed = time.time() - t0
-                    _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
-                    _cache = ""
-                    if active_context.last_prompt_tokens > 0 and active_context.last_cached_tokens > 0:
-                        _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
-                        _cache = f"  cache {_pct:.0f}%"
-                    _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                    print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
-                          f"finish={finish}  tool_calls={len(pending_calls)}  "
-                          f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
-                break
-            except ai.ProviderAPIError as e:
-                if e.is_retryable:
-                    telemetry.event("retriable_error", model=model,
-                                    error=f"{type(e).__name__}: {e}", attempt=attempt)
-                    if attempt == 2:
-                        _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
+    # --debug-file / -d request trace: dump system prompt + full tool schemas
+    # once (first model call), then only the newly-sent messages each call.
+    _trace_req = {"sent": 0, "schemas": True}
+
+    try:
+        for _ in range(cfg.max_tool_iterations):
+            # --- One model call with retry on retriable transport errors ---
+            text = ""
+            pending_calls: list[_PendingToolCall] = []
+            finish: str | None = None
+            reasoning = ""
+            result: model_client.ModelStreamResult | None = None
+            for attempt in range(3):
+                t0 = time.time()
+                try:
+                    specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
+                    ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
+                    _emit_event(
+                        "prompt",
+                        model=model,
+                        provider_id=provider_id,
+                        message_count=len(ai_convo),
+                        tool_count=len(specs),
+                    )
+                    _res = model_client.stream_model_async(
+                        model_id=model,
+                        provider_id=provider_id,
+                        provider_base_url=provider_base_url,
+                        provider_api_key=provider_api_key,
+                        messages=ai_convo,
+                        tools=ai_tools,
+                        max_output_tokens=max_out,
+                        reasoning_effort=effort,
+                        on_text=_emit_text,
+                        provider_headers=getattr(cfg, "provider_headers", None),
+                        provider_extra=_provider_extra_params(cfg),
+                        sampling=sampling,
+                        trace_request=trace,
+                        trace_request_schemas=_trace_req["schemas"],
+                        trace_request_from=_trace_req["sent"],
+                    )
+                    if trace:
+                        _trace_req["sent"] = len(ai_convo)
+                        _trace_req["schemas"] = False
+                    # Await the native async primitive; tolerate a sync override (a
+                    # test stub patched onto stream_model_async that returns a result
+                    # directly) so the seam accepts either shape.
+                    result = await _res if inspect.isawaitable(_res) else _res
+                    _close_text()
+                    text = result.text
+                    pending_calls = [
+                        _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
+                        for call in result.tool_calls
+                    ]
+                    finish = result.finish_reason
+                    provider_metadata = (
+                        getattr(result, "provider_metadata", None)
+                        or getattr(result.assistant_message, "provider_metadata", None)
+                    )
+                    incomplete_reason = (
+                        getattr(result, "incomplete_reason", None)
+                        or model_client.incomplete_reason_from_metadata(provider_metadata)
+                    )
+                    if incomplete_reason:
+                        finish = model_client.incomplete_finish_reason(incomplete_reason)
+                    reasoning = result.reasoning
+                    usage = result.usage
+                    active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+                    active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
+                    telemetry.event("turn_complete", model=model,
+                                    latency_ms=int((time.time() - t0) * 1000),
+                                    finish_reason=finish, n_tool_calls=len(pending_calls),
+                                    incomplete_reason=incomplete_reason,
+                                    prompt_tokens=active_context.last_prompt_tokens,
+                                    cached_tokens=active_context.last_cached_tokens)
+                    _out_tok = 0
+                    if usage:
+                        _out_tok = int(getattr(usage, "output_tokens", 0)
+                                       or getattr(usage, "completion_tokens", 0) or 0)
+                    if call_stats is not None:
+                        # Stream-isolated numbers (model_client clocks `ai.stream` itself,
+                        # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
+                        _stream_s = result.elapsed_s or (time.time() - t0)
+                        call_stats.append({
+                            "ttft_s": result.first_token_s,
+                            "stream_s": result.elapsed_s,
+                            "output_tokens": _out_tok,
+                            "prompt_tokens": active_context.last_prompt_tokens,
+                            "cached_tokens": active_context.last_cached_tokens,
+                            "tok_per_s": (_out_tok / _stream_s) if _stream_s > 0 else 0.0,
+                            "finish_reason": finish,
+                            "n_tool_calls": len(pending_calls),
+                        })
+                    if trace:
+                        _elapsed = time.time() - t0
+                        _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
+                        _cache = ""
+                        if active_context.last_prompt_tokens > 0 and active_context.last_cached_tokens > 0:
+                            _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
+                            _cache = f"  cache {_pct:.0f}%"
+                        _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
+                        print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
+                              f"finish={finish}  tool_calls={len(pending_calls)}  "
+                              f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
+                    break
+                except ai.ProviderAPIError as e:
+                    # Terminate any partially streamed text (RESET + newline) before
+                    # we retry or abort, so the next attempt's output doesn't
+                    # concatenate onto the truncated first attempt with color still open.
+                    _close_text()
+                    if e.is_retryable:
+                        telemetry.event("retriable_error", model=model,
+                                        error=f"{type(e).__name__}: {e}", attempt=attempt)
+                        if attempt == 2:
+                            _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
+                            _end_turn("error")
+                            raise
+                        await asyncio.sleep(_backoff(attempt))
+                    else:
+                        telemetry.event("fatal_error", model=model,
+                                        error=f"{type(e).__name__}: {e}")
+                        _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
                         _end_turn("error")
                         raise
-                    time.sleep(_backoff(attempt))
-                else:
+                except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
+                    _close_text()
                     telemetry.event("fatal_error", model=model,
                                     error=f"{type(e).__name__}: {e}")
                     _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
                     _end_turn("error")
                     raise
-            except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
-                telemetry.event("fatal_error", model=model,
-                                error=f"{type(e).__name__}: {e}")
-                _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
-                _end_turn("error")
-                raise
-        else:
-            print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
-            _end_turn("retry_budget_exhausted")
-            return
+            else:
+                print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
+                _end_turn("retry_budget_exhausted")
+                return
 
-        # --- Record the assistant turn ---
-        assistant_record: dict = {"role": "assistant", "content": text}
-        history_assistant_record: dict = {"role": "assistant", "content": text}
-        if pending_calls:
+            # --- Record the assistant turn ---
+            assistant_record: dict = {"role": "assistant", "content": text}
+            history_assistant_record: dict = {"role": "assistant", "content": text}
+            if pending_calls:
+                if reasoning:
+                    assistant_record["reasoning_content"] = reasoning
+                assistant_record["tool_calls"] = [
+                    {"id": pc.id, "type": "function",
+                     "function": {"name": pc.name, "arguments": _canonical_tool_args(pc.arguments())}}
+                    for pc in pending_calls
+                ]
+                history_assistant_record["tool_calls"] = [
+                    {"id": pc.id, "type": "function",
+                     "function": {"name": _canonical_tool_call_name(pc.name, active_registry), "arguments": _canonical_tool_args(pc.arguments())}}
+                    for pc in pending_calls
+                ]
             if reasoning:
-                assistant_record["reasoning_content"] = reasoning
-            assistant_record["tool_calls"] = [
-                {"id": pc.id, "type": "function",
-                 "function": {"name": pc.name, "arguments": _canonical_tool_args(pc.arguments())}}
-                for pc in pending_calls
-            ]
-            history_assistant_record["tool_calls"] = [
-                {"id": pc.id, "type": "function",
-                 "function": {"name": _canonical_tool_call_name(pc.name, active_registry), "arguments": _canonical_tool_args(pc.arguments())}}
-                for pc in pending_calls
-            ]
-        if reasoning:
-            history_assistant_record["reasoning_content"] = reasoning
-        assert result is not None
-        ai_convo.append(_sanitize_assistant_message(result.assistant_message))
-        messages.append(history_assistant_record)
-        if text:
-            _emit_event("response", text=text, finish_reason=finish)
+                history_assistant_record["reasoning_content"] = reasoning
+            assert result is not None
+            if not isinstance(provider_metadata, dict):
+                provider_metadata = None
+            incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
+            if provider_metadata:
+                history_assistant_record["provider_metadata"] = provider_metadata
+            if incomplete_reason:
+                history_assistant_record["incomplete_reason"] = incomplete_reason
+            assistant_message = result.assistant_message
+            if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
+                assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
+            ai_convo.append(_sanitize_assistant_message(assistant_message))
+            messages.append(history_assistant_record)
+            if text:
+                payload = {"text": text, "finish_reason": finish}
+                if incomplete_reason:
+                    payload["incomplete_reason"] = incomplete_reason
+                _emit_event("response", **payload)
+            if incomplete_reason and not suppress_output:
+                print(f"{C.ORANGE}warning: response incomplete ({incomplete_reason}){C.RESET}", file=sys.stderr)
 
-        if not pending_calls:
-            _end_turn("stop")
-            return
+            if not pending_calls:
+                if incomplete_reason:
+                    _end_turn("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
+                else:
+                    _end_turn("stop")
+                return
 
-        # --- Dispatch tools, append result messages ---
-        # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
-        # turn; messages — persisted and replayed on every future turn — carries the
-        # dehydrated stub so base64 is billed once.
-        for pc in pending_calls:
-            _emit_event(
-                "tool_call",
-                id=pc.id,
-                name=_canonical_tool_call_name(pc.name, active_registry),
-                arguments=_canonical_tool_args(pc.arguments()),
+            # --- Dispatch tools, append result messages ---
+            # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
+            # turn; messages — persisted and replayed on every future turn — carries the
+            # dehydrated stub so base64 is billed once.
+            for pc in pending_calls:
+                _emit_event(
+                    "tool_call",
+                    id=pc.id,
+                    name=_canonical_tool_call_name(pc.name, active_registry),
+                    arguments=_canonical_tool_args(pc.arguments()),
+                )
+            # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
+            # thread so the shared loop stays free while they execute. Fan-out (task /
+            # named-agent) calls are awaited ON the loop instead, so a parent turn
+            # never parks a dispatch thread its descendants need (see _dispatch_batch).
+            dispatch_records = await _dispatch_batch(
+                pending_calls,
+                telemetry,
+                cfg.max_tool_result_bytes,
+                trace,
+                error_tracker,
+                active_registry,
+                active_context,
+                asyncio.get_running_loop(),
             )
-        dispatch_records = _dispatch_tool_calls(
-            pending_calls,
-            telemetry,
-            cfg.max_tool_result_bytes,
-            trace,
-            error_tracker,
-            active_registry,
-            active_context,
-        )
-        followup = False
-        for pc, _args, result_value in dispatch_records:
-            canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
-            _emit_event(
-                "tool_result",
-                id=pc.id,
-                name=canonical_pc.name,
-                result=result_value,
-            )
-            tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
-            ai_convo.extend(tool_msgs)
-            messages.extend(_history_tool_result_message(canonical_pc, result_value))
-            followup = followup or result_value.startswith("FOLLOWUP_REQUIRED")
-        if followup:
-            _end_turn("followup_required")
-            return
-        if error_tracker.limit_reached():
-            name, last_error = next(
-                ((_canonical_tool_call_name(pc.name, active_registry), result_value)
-                 for pc, _, result_value in reversed(dispatch_records)
-                 if result_value.startswith("ERROR")),
-                (dispatch_records[-1][0].name, dispatch_records[-1][2]),
-            )
-            failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
-            final_error = {"role": "assistant", "content": failure}
-            ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-            messages.append(final_error)
-            _emit_event("error", error=failure, retryable=False)
-            _end_turn("tool_error_limit")
-            return
+            followup = False
+            for pc, _args, result_value in dispatch_records:
+                canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
+                _emit_event(
+                    "tool_result",
+                    id=pc.id,
+                    name=canonical_pc.name,
+                    result=result_value,
+                )
+                tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
+                ai_convo.extend(tool_msgs)
+                messages.extend(_history_tool_result_message(canonical_pc, result_value))
+                followup = followup or result_value.startswith("FOLLOWUP_REQUIRED")
+            if followup:
+                _end_turn("followup_required")
+                return
+            if error_tracker.limit_reached():
+                name, last_error = next(
+                    ((_canonical_tool_call_name(pc.name, active_registry), result_value)
+                     for pc, _, result_value in reversed(dispatch_records)
+                     if result_value.startswith("ERROR")),
+                    (dispatch_records[-1][0].name, dispatch_records[-1][2]),
+                )
+                failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
+                final_error = {"role": "assistant", "content": failure}
+                ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
+                messages.append(final_error)
+                _emit_event("error", error=failure, retryable=False)
+                _end_turn("tool_error_limit")
+                return
 
-    print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
-    _end_turn("max_iterations")
+        print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
+        _end_turn("max_iterations")
+    except BaseException as _turn_exc:  # noqa: BLE001
+        # turn_start is emitted unconditionally and every normal/handled exit
+        # already emitted turn_end; only cancellation (CancelledError /
+        # KeyboardInterrupt — BaseException, not Exception) reaches here
+        # unbalanced, so pair turn_start with a turn_end before propagating.
+        if not isinstance(_turn_exc, Exception):
+            _close_text()
+            _end_turn("cancelled")
+        raise
+
+
+def run_turn(*args, **kwargs) -> None:
+    """Sync wrapper over :func:`run_turn_async` — spins a throwaway loop for this
+    turn. The OLD blocking path; the non-blocking runtime awaits
+    ``run_turn_async`` directly on its shared loop. Kept so the current sync
+    callers (cli one-shot/REPL/bench, subagent threads) keep working through the
+    transition. `messages` is still mutated in place, so ^C mid-turn preserves
+    partial work exactly as before.
+    """
+    return asyncio.run(run_turn_async(*args, **kwargs))

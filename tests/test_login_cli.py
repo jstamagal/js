@@ -79,6 +79,43 @@ def test_collect_api_login_uses_env_key_without_prompt(monkeypatch, tmp_path: Pa
         _reset_logins()
 
 
+def test_local_providers_always_show_base_url_prompt():
+    # Finding 58: llama.cpp/ollama/cliproxyapi ship a default 127.0.0.1-style
+    # endpoint that "established"/no-established-flag logic treated as fixed,
+    # so the login prompt was skipped and a fresh box silently aimed at a
+    # port nothing was listening on. The endpoint differs per box, so the
+    # prompt must never be skippable for these — the default only seeds it.
+    for provider_id in ("ollama", "llama.cpp", "cliproxyapi"):
+        assert providers.provider_for_login(provider_id).login_base_url_field is True
+
+    # A genuinely fixed remote endpoint is unaffected and still skips the prompt.
+    assert providers.provider_for_login("deepseek").login_base_url_field is False
+    assert providers.provider_for_login("ollama-cloud").login_base_url_field is False
+
+
+def test_collect_api_login_prompts_for_base_url_on_local_providers(tmp_path: Path, monkeypatch):
+    logins.set_config_dir(tmp_path)
+    # This box has real LLAMACPP_* env vars set (the owner's actual llama.cpp
+    # box) — clear them so the test sees the registry's own hardcoded default.
+    for name in ("LLAMACPP_BASE_URL", "LLAMA_CPP_BASE_URL", "LLAMACPP_API_KEY", "LLAMA_CPP_API_KEY", "LLAMACPP_MODEL", "LLAMA_CPP_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    prompted: dict[str, str | None] = {}
+
+    def fake_input(prompt, *, default=None, secret=False):
+        prompted[prompt] = default
+        return default
+
+    monkeypatch.setattr(login_cli, "_input", fake_input)
+    try:
+        login = login_cli._collect_api_login("llama.cpp", "openai", providers.provider_for_login("llama.cpp"))
+        assert login is not None
+        # The hardcoded default only seeds the prompt — it never skips it.
+        assert prompted == {"Base URL": "http://127.0.0.1:8080/v1"}
+        assert login.provider_base_url == "http://127.0.0.1:8080/v1"
+    finally:
+        _reset_logins()
+
+
 def test_opencode_go_anthropic_uses_anthropic_root_base_url():
     provider = providers.provider_for_login("opencode-go-anthropic")
     assert provider.default_base_url == "https://opencode.ai/zen/go"
@@ -170,13 +207,33 @@ def test_select_models_non_tty_keeps_all(monkeypatch):
     assert login_cli._select_models_to_cache("opencode-go", models) == models
 
 
+def test_select_models_interactive_starts_with_none_preselected(monkeypatch):
+    # Owner ruling (FIXME #56): adding a new provider starts with NOTHING
+    # selected, not "all" — plain enter with no toggles keeps zero models.
+    import curses
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [ord("\n")]  # confirm immediately, nothing toggled
+
+    def fake_wrapper(fn, *args, **kwargs):
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+    monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
+    models = ["glm-5.2", "glm-5"]
+    assert login_cli._select_models_to_cache("opencode-go", models) == []
+
+
 def test_select_models_interactive_with_custom_add(monkeypatch):
     import curses
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
-    keys = [curses.KEY_DOWN, ord(" "), ord("\n")]  # to row1, deselect glm-5, confirm
+    # Nothing preselected: pick row0 (glm-5.2), skip row1 (glm-5), pick row2.
+    keys = [ord(" "), curses.KEY_DOWN, curses.KEY_DOWN, ord(" "), ord("\n")]
 
     def fake_wrapper(fn, *args, **kwargs):
         return fn(_FakeStdscr(keys), *args, **kwargs)
@@ -184,7 +241,7 @@ def test_select_models_interactive_with_custom_add(monkeypatch):
     monkeypatch.setattr(curses, "wrapper", fake_wrapper)
     monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "extra-model, glm-5.2")
     models = ["glm-5.2", "glm-5", "kimi-k2.7-code"]
-    # row1 deselected; "extra-model" appended; "glm-5.2" already known -> not duped
+    # row0 + row2 selected; "extra-model" appended; "glm-5.2" already known -> not duped
     assert login_cli._select_models_to_cache("opencode-go", models) == [
         "glm-5.2", "kimi-k2.7-code", "extra-model",
     ]
@@ -198,6 +255,75 @@ def test_dialect_map_tags_anthropic_models():
     assert dialects.get("glm-5.2") == "openai"
 
 
+def test_mask_hides_short_and_boundary_length_keys():
+    # len<=12 can't show an 8-char prefix + 4-char suffix without revealing
+    # every character (8 + 4 = 12), so anything that short falls back to
+    # all-asterisks instead of a fake-looking partial reveal.
+    assert login_cli._mask("short") == "*****"
+    assert login_cli._mask("sk-12345678x") == "*" * 12  # 12 chars: full overlap
+    assert login_cli._mask("x" * 11) == "*" * 11
+
+
+def test_mask_reveals_edges_only_once_a_hidden_middle_exists():
+    masked = login_cli._mask("sk-1234567890abcd")  # 17 chars: 8 prefix + 5 hidden + 4 suffix
+    assert masked == "sk-12345*******abcd"
+    assert "67890" not in masked  # the hidden middle chars never leak
+
+
+def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):
+    # deepseek (models_list_validates_auth=True): no test-choice prompt at all —
+    # asking "add without a test?" when listing already proved the key works
+    # is a prompt with only one sane answer, so it's skipped outright.
+    monkeypatch.setattr(
+        login_cli, "_secondary_test_choice",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not prompt")),
+    )
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._post_fetch_confirmation(login, provider, ["deepseek-chat"]) is True
+
+
+def test_post_fetch_confirmation_still_offers_test_when_listing_does_not_validate(monkeypatch):
+    # opencode-go (models_list_validates_auth=False): the offer is still real.
+    calls = []
+
+    def fake_choice(models, *, require_test):
+        calls.append(require_test)
+        return True
+
+    monkeypatch.setattr(login_cli, "_secondary_test_choice", fake_choice)
+    login = logins.Login(provider_id="opencode-go", provider_api_key="k")
+    provider = providers.provider_for_login("opencode-go")
+    assert login_cli._post_fetch_confirmation(login, provider, ["glm-5.2"]) is True
+    assert calls == [True]
+
+
+def test_run_secondary_test_adds_on_success_without_a_further_confirm(monkeypatch):
+    # The answer coming back IS the confirmation now — no more "hit enter to
+    # add" after it; a stray input() call here would mean the prompt is back.
+    monkeypatch.setattr(
+        "builtins.input", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no further prompt expected"))
+    )
+
+    class _Result:
+        text = "2"
+
+    monkeypatch.setattr(login_cli.model_client, "stream_model", lambda **kwargs: _Result())
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._run_secondary_test(login, provider, "deepseek-chat") is True
+
+
+def test_run_secondary_test_returns_false_on_failure_without_prompting(monkeypatch):
+    def boom(**kwargs):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(login_cli.model_client, "stream_model", boom)
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._run_secondary_test(login, provider, "deepseek-chat") is False
+
+
 def test_secondary_test_enter_adds_without_testing(monkeypatch):
     # Empty input = add without a test, in BOTH modes (require_test only warns).
     monkeypatch.setattr("builtins.input", lambda _prompt="": "")
@@ -209,6 +335,15 @@ def test_secondary_test_number_picks_that_model(monkeypatch):
     # A model number means "verify that one"; it returns the model id to test.
     monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
     assert login_cli._secondary_test_choice(["first", "second"], require_test=True) == "second"
+
+
+def test_run_logout_reports_corrupt_logins_file_cleanly_instead_of_raising(monkeypatch, capsys):
+    def boom(_provider_id):
+        raise logins.LoginsCorruptError("logins.toml is broken")
+
+    monkeypatch.setattr(login_cli, "remove_login", boom)
+    assert login_cli._run_logout("deepseek") == 1
+    assert "logins.toml is broken" in capsys.readouterr().err
 
 
 def test_login_cli_logout_requires_provider(capsys):

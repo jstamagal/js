@@ -12,7 +12,6 @@ import json
 import platform
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import ai
@@ -485,13 +484,13 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             self._expires_at = token.expires_at
             self._account_id = token.account_id or _account_id_from_token(token.access)
             if self._login is not None:
-                from . import logins
-
-                refreshed = replace(
-                    codex_auth.login_from_token(token),
-                    provider_base_url=self._login.provider_base_url or self.base_url,
-                )
-                logins.save_login(refreshed)
+                # apply_refreshed_token() rotates only the token-derived fields
+                # onto the EXISTING login — replace()ing login_from_token(token)
+                # here used to rebuild a bare Login and silently reset
+                # provider_headers (and any other field) to empty on every
+                # ~hourly refresh.
+                refreshed = codex_auth.apply_refreshed_token(self._login, token)
+                codex_auth.save_refreshed_login(refreshed)
                 self._login = refreshed
         return self._access_token, self._account_id
 
@@ -528,10 +527,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                 if isinstance(mid, str) and mid:
                     models.append(mid)
             if models:
-                # The Codex model endpoint can lag behind the runtime route.  We
-                # have verified gpt-5.5 is accepted by /codex/responses, so keep
-                # it visible to pickers even when the list endpoint is stale.
-                models.append("gpt-5.5")
+                models.append(codex_auth.CODEX_PHANTOM_MODEL_ID)
                 return sorted(set(models))
             errors.append(f"{path}: no usable model ids in response")
         detail = f" ({'; '.join(errors)})" if errors else ""
@@ -673,7 +669,17 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         continue
                     if event_type in {"response.completed", "response.done", "response.incomplete"}:
                         response_obj = raw.get("response")
-                        terminal_usage = _usage_from_response(response_obj if isinstance(response_obj, Mapping) else None)
+                        response_map = response_obj if isinstance(response_obj, Mapping) else None
+                        terminal_usage = _usage_from_response(response_map)
+                        provider_metadata: dict[str, Any] | None = None
+                        if event_type == "response.incomplete":
+                            # A cut-short turn must not look like a normal stop: carry
+                            # the reason onto the assistant message (ai's Stream copies
+                            # StreamEnd.provider_metadata onto stream.message) instead of
+                            # dropping incomplete_details on the floor.
+                            details = response_map.get("incomplete_details") if response_map else None
+                            reason = details.get("reason") if isinstance(details, Mapping) else None
+                            provider_metadata = {"incomplete": True, "incomplete_reason": reason}
                         if reasoning_open:
                             reasoning_open = False
                             yield ai.events.ReasoningEnd(block_id="reasoning")
@@ -682,7 +688,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             yield ai.events.TextEnd(block_id="text")
                         for ev in close_tool():
                             yield ev
-                        yield ai.events.StreamEnd(usage=terminal_usage)
+                        yield ai.events.StreamEnd(usage=terminal_usage, provider_metadata=provider_metadata)
                         return
                     if event_type in {"response.failed", "error"}:
                         message, code, error_type = _error_message(raw, "OpenAI Codex stream failed")

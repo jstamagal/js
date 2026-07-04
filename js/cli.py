@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import copy
+import functools
+import inspect
 import io
 import json
 import os
 import shlex
+import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import CompleteStyle
+
+from . import supervisor
 
 from . import attach, codex_auth, colors as C
 from . import events
@@ -243,6 +251,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
     ("max_file_bytes", ("limits", "max_file_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
+    ("subagent_max_workers", ("limits", "subagent_max_workers")),
     ("wiki_vault_lock_timeout_s", ("limits", "wiki_vault_lock_timeout_s")),
 )
 
@@ -647,6 +656,48 @@ def _set_provider_state(state: dict, provider_id: str) -> None:
     state["provider_api_key"] = providers.provider_api_key(provider_def, None, os.environ)
 
 
+def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
+    """Apply `/model <id>` through the SAME saved-login gate startup routing
+    uses for authoritative prefix switches. A `vendor/model` prefix may switch
+    the direct endpoint only when `vendor` is a saved login; otherwise the
+    current endpoint stays and the full id rides it."""
+    configured_provider_id = _state_value(state, "provider_id", cfg.provider_id)
+    configured_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
+    configured_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
+    configured_headers = _state_value(state, "provider_headers", getattr(cfg, "provider_headers", {}))
+    parsed_provider_id, _parsed_model = providers.parse_model_prefix(model_value)
+    prefix_login = routing._saved_login(parsed_provider_id) if parsed_provider_id is not None else None
+    if parsed_provider_id is not None and prefix_login is None:
+        state["model"] = model_value
+        if configured_provider_id:
+            print(f"{C.GREEN}model set to {configured_provider_id}:{model_value}{C.RESET}")
+        else:
+            print(f"{C.GREEN}model set to {model_value}{C.RESET}")
+        return
+
+    route = routing.resolve_model_route(
+        model_value,
+        configured_provider_id=parsed_provider_id or configured_provider_id,
+        configured_base_url=None if parsed_provider_id else configured_base_url,
+        configured_api_key=None if parsed_provider_id else configured_api_key,
+        configured_headers={} if parsed_provider_id else configured_headers,
+        env=os.environ,
+        explicit_model=True,
+        prefix_overrides_provider=parsed_provider_id is not None,
+        discover_env=False,
+        use_saved_login=parsed_provider_id is not None,
+    )
+    state["model"] = route.model
+    state["provider_id"] = route.provider_id
+    state["provider_base_url"] = route.base_url
+    state["provider_api_key"] = route.api_key
+    state["provider_headers"] = dict(route.headers)
+    if route.provider_id:
+        print(f"{C.GREEN}model set to {route.provider_id}:{route.model}{C.RESET}")
+    else:
+        print(f"{C.GREEN}model set to {route.model}{C.RESET}")
+
+
 # --------------------------------------------------------------------------
 # Banner / help
 # --------------------------------------------------------------------------
@@ -676,6 +727,9 @@ HELP_TEXT = f"""\
   {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
   {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
+  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents (--nonblocking)
+  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn (--nonblocking)
+  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn (--nonblocking)
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
@@ -905,14 +959,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line.startswith("/model "):
         model_value = line[len("/model "):].strip()
-        parsed_provider_id, parsed_model = providers.parse_model_prefix(model_value)
-        if parsed_provider_id is not None and parsed_model is not None:
-            _set_provider_state(state, parsed_provider_id)
-            state["model"] = parsed_model
-            print(f"{C.GREEN}model set to {parsed_provider_id}:{parsed_model}{C.RESET}")
-            return True
-        state["model"] = model_value
-        print(f"{C.GREEN}model set to {state['model']}{C.RESET}")
+        _set_model_via_route(state, cfg, model_value)
         return True
     if line == "/model":
         _pick_model_into_state(state, cfg)
@@ -941,6 +988,41 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
+        return True
+    if line == "/jobs":
+        sup = supervisor.get_current()
+        if sup is None:
+            print(f"{C.GREY}(jobs need --nonblocking){C.RESET}")
+            return True
+        jobs = sup.jobs()
+        if not jobs:
+            print(f"{C.GREY}(no running jobs){C.RESET}")
+            return True
+        for j in jobs:
+            label = f"  {j.label}" if j.label else ""
+            print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
+        return True
+    if line == "/cancel" or line.startswith("/cancel "):
+        sup = supervisor.get_current()
+        if sup is None:
+            print(f"{C.GREY}(cancel needs --nonblocking){C.RESET}")
+            return True
+        arg = line[len("/cancel"):].strip()
+        if arg:
+            if not arg.isdigit():
+                print(f"{C.ORANGE}usage: /cancel [id]  (bare = active turn){C.RESET}")
+                return True
+            targets = [j for j in sup.jobs() if j.id == int(arg)]
+        else:
+            targets = sup.jobs("turn")
+        if not targets:
+            print(f"{C.GREY}(no matching job to cancel){C.RESET}")
+            return True
+        # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
+        for j in targets:
+            sup.loop.call_soon_threadsafe(sup.cancel, j.id)
+        ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
+        print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
         return True
     if setcmd.is_repl_command(line, "/compact-auto"):
         arg = line[len("/compact-auto"):].strip().lower()
@@ -1019,6 +1101,38 @@ def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
     return replace(cfg, max_output_tokens=agent_max)
 
 
+def _format_prompt_load_error(cfg, exc: Exception) -> str:
+    """Turn a persona-load failure into an operator-legible line. A missing prompt
+    directory means the named agent doesn't exist anywhere on the search path —
+    say so plainly and point at the global agents dir where one is created,
+    instead of leaking the raw 'prompts directory missing at <path>'."""
+    if isinstance(exc, FileNotFoundError):
+        try:
+            resolved = P.resolve_agent_prompt_dir(cfg)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is None or not Path(resolved).is_dir():
+            agents_dir = _paths.global_agents_dir()
+            agent_id = getattr(cfg, "agent_id", "?")
+            return (
+                f"no such agent: {agent_id}; looked in project .js/agents, "
+                f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
+                f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
+                f"and an optional 00-tools.yaml manifest."
+            )
+    return str(exc)
+
+
+def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
+    """Coerce a raw ``--reasoning`` value through the SAME registry validation as
+    ``set model.reasoning_effort`` and ``JS_REASONING`` (ruling B): ``off``
+    disables (stored as ``none``); every other value must be a ladder stop. Any
+    other token yields a clean local error instead of shipping garbage to the
+    provider. Returns (value, error)."""
+    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
+    return settings.coerce_value(spec, reasoning)
+
+
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -1034,6 +1148,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
         return 2
+    reasoning_override = None
+    if reasoning is not None:
+        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
     try:
         cfg = _cfg_from_env_compat(
             session,
@@ -1056,7 +1176,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         try:
             prompt_spec = P.load_configured_prompt_spec(cfg)
         except (FileNotFoundError, ValueError) as e:
-            print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+            print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -1095,7 +1215,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "call_stats": call_stats,
     }
     if reasoning is not None:
-        turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
+        turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
     _t_wall = time.time()
@@ -1159,13 +1279,32 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
 
 
 
-def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
-    if tool_context is None:
-        return _run_prompt(*args, **kwargs)
+def _accepts_kwarg(func, name: str) -> bool:
+    """Whether ``func`` can take keyword ``name`` — a named parameter or ``**kwargs``.
+    Falls back to True when the signature can't be read, so the real call decides."""
     try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == name and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+    return False
+
+
+def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
+    # Decide whether the (possibly monkeypatched) _run_prompt takes tool_context
+    # by INSPECTING its signature, not by catching TypeError around the whole
+    # turn — a stray TypeError raised deep inside a commit/wiki run must surface
+    # as an error, never trigger a silent second full execution of the turn.
+    if tool_context is not None and _accepts_kwarg(_run_prompt, "tool_context"):
         return _run_prompt(*args, tool_context=tool_context, **kwargs)
-    except TypeError:
-        return _run_prompt(*args, **kwargs)
+    return _run_prompt(*args, **kwargs)
 
 
 def _bench_row_line(row: dict) -> str:
@@ -1191,6 +1330,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
+    reasoning_override = None
+    if reasoning is not None:
+        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
     try:
         cfg = _cfg_from_env_compat(
             None, save_session=False, extras=extras, agent_id=agent_id,
@@ -1203,7 +1348,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
         return 2
 
     benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
@@ -1243,7 +1388,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             "call_stats": call_stats,
         }
         if reasoning is not None:
-            turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
+            turn_kwargs["reasoning_effort_override"] = reasoning_override
         if not quiet:
             print(f"{C.CYAN}▸ bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
         ok, err = True, None
@@ -1335,7 +1480,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
               model: str | None = None, debug: bool = False, debug_file: str | None = None,
               agent: str | None = None, session: str | None = None, save: bool = True,
               reasoning: str | None = None, maxout: int | None = None,
-              extras: list[str] | None = None) -> int:
+              extras: list[str] | None = None,
+              ignore_local_config: bool = False, ignore_global_config: bool = False,
+              presets: list[str] | None = None) -> int:
     """js --wiki=ingest,synthesize [--vault=creative] <target>.
 
     Built-in wiki prompting (ignores defaultagent). If --agent is given, that
@@ -1365,7 +1512,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     persona = ""
     if agent:
         try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
             persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
         except (ValueError, FileNotFoundError) as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -1375,7 +1524,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     active_session = session
     if save and active_session is None:
         try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
@@ -1395,7 +1546,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     immediate_unit = None
     if immediate_file:
         # Resolve the vault the SAME way the wiki toolkit does (config aliases + ~ + cwd-relative).
-        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent)
+        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent,
+                                          ignore_local_config=ignore_local_config,
+                                          ignore_global_config=ignore_global_config, presets=presets)
         _wiki = (getattr(_alias_cfg, "settings", {}) or {}).get("wiki")
         _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
         vp = resolve_vault(vault, ToolContext(cwd=Path(os.getcwd()), vault_aliases=_aliases))
@@ -1423,7 +1576,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
                                 debug_file=debug_file, session=active_session, save=save, system_override=system,
                                 resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
                                 tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                                extras=extras, tool_context=mode_context)
+                                extras=extras, tool_context=mode_context,
+                                ignore_local_config=ignore_local_config,
+                                ignore_global_config=ignore_global_config, presets=presets)
         if rc != 0:
             break
     return rc
@@ -1454,7 +1609,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
                   model: str | None = None, debug: bool = False, debug_file: str | None = None,
                   agent: str | None = None, session: str | None = None, save: bool = True,
                   reasoning: str | None = None, maxout: int | None = None,
-                  extras: list[str] | None = None) -> int:
+                  extras: list[str] | None = None,
+                  ignore_local_config: bool = False, ignore_global_config: bool = False,
+                  presets: list[str] | None = None) -> int:
     valid = {"curate", "digest", "query", "lint"}
     modes = [m.strip().lower() for m in artifact_arg.split(",") if m.strip()]
     bad = [m for m in modes if m not in valid]
@@ -1466,7 +1623,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
     persona = ""
     if agent:
         try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
             persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
         except (ValueError, FileNotFoundError) as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -1475,7 +1634,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
     active_session = session
     if save and active_session is None:
         try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
@@ -1495,7 +1656,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
                          debug_file=debug_file, session=active_session, save=save, system_override=system,
                          resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
                          tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                         extras=extras)
+                         extras=extras,
+                         ignore_local_config=ignore_local_config,
+                         ignore_global_config=ignore_global_config, presets=presets)
         if rc != 0:
             break
     return rc
@@ -1506,7 +1669,9 @@ def _run_commit(target: str | None,
                 session: str | None = None, save: bool = True,
                 reasoning: str | None = None, maxout: int | None = None,
                 extra_context: str | None = None,
-                extras: list[str] | None = None) -> int:
+                extras: list[str] | None = None,
+                ignore_local_config: bool = False, ignore_global_config: bool = False,
+                presets: list[str] | None = None) -> int:
     target_dir = Path(target).expanduser() if target else Path.cwd()
     if not target_dir.is_absolute():
         target_dir = Path.cwd() / target_dir
@@ -1571,6 +1736,9 @@ def _run_commit(target: str | None,
         maxout=maxout,
         extras=extras,
         tool_context=ToolContext(cwd=target_dir),
+        ignore_local_config=ignore_local_config,
+        ignore_global_config=ignore_global_config,
+        presets=presets,
     )
 
 
@@ -1702,6 +1870,371 @@ def _print_json(value: object) -> int:
     return 0
 
 
+# External binaries js leans on. Assume NO box has them (owner runs many); warn
+# once per missing one at startup so a degraded run has an obvious cause, but
+# NEVER crash or block — `just install` provisions them.
+_EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
+    ("rg", "ripgrep — fs_search degrades"),
+    ("fd", "fd-find — file finding degrades"),
+    ("bat", "bat — syntax-highlighted preview degrades"),
+    ("fzf", "fzf — interactive pickers degrade"),
+)
+_warned_binaries: set[str] = set()
+
+
+def _warn_missing_binaries() -> None:
+    for name, why in _EXPECTED_BINARIES:
+        if name in _warned_binaries:
+            continue
+        if shutil.which(name) is None:
+            _warned_binaries.add(name)
+            print(
+                f"{C.ORANGE}warning: {name} not found on PATH; {why} — run `just install` to provision it{C.RESET}",
+                file=sys.stderr,
+            )
+
+
+async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
+    """One main turn on the async loop. Runs the turn, syncs live-settings
+    deltas, persists new messages, then auto-compacts (in the executor because
+    compaction still calls asyncio.run under the hood). Owns cancellation
+    ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
+    caller — persists partial work and heals orphaned tool_calls, mirroring the
+    legacy blocking KeyboardInterrupt path, then re-raises so the job ends
+    cancelled.
+    """
+    try:
+        before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+        before_turn_model = _model_from_live_settings(state["settings"])
+        before_turn_provider = _provider_from_live_settings(state["settings"])
+        before_turn_lock = _live_bool_setting(
+            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+        )
+        await runtime.run_turn_async(
+            turn_cfg,
+            state["system"],
+            state["messages"],
+            telemetry,
+            trace_override=bool(
+                settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+            ),
+            reasoning_effort_override=turn_cfg.reasoning_effort,
+            max_output_override=turn_cfg.max_output_tokens,
+            tool_registry=state["tool_registry"],
+            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            event_hooks=state.get("events"),
+        )
+        after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+        if after_turn_sampling != before_turn_sampling:
+            state["sampling_cli"] = after_turn_sampling
+        after_turn_model = _model_from_live_settings(state["settings"])
+        if after_turn_model != before_turn_model:
+            _sync_model_from_live_settings(state)
+        after_turn_provider = _provider_from_live_settings(state["settings"])
+        _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+        after_turn_lock = _live_bool_setting(
+            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+        )
+        if after_turn_lock != before_turn_lock:
+            _sync_tool_registry_from_live_settings(cfg, state)
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        state["messages"][before_len] = user_bundle.history_message
+        for m in state["messages"][before_len + 1:]:
+            _append_turn(cfg, m)
+        await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
+    except asyncio.CancelledError:
+        cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
+        if _event_results_changed_sampling(cancel_event.results):
+            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+        if _event_results_changed_model(cancel_event.results):
+            _sync_model_from_live_settings(state)
+        cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
+        if _changed_provider_key(cancel_changed_keys):
+            _sync_provider_from_live_settings(state, cancel_changed_keys)
+        if _changed_lock_subagent_model_key(cancel_changed_keys):
+            _sync_tool_registry_from_live_settings(cfg, state)
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        if len(state["messages"]) > before_len + 1:
+            print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+            state["messages"][before_len] = user_bundle.history_message
+            for m in state["messages"][before_len + 1:]:
+                _append_turn(cfg, m)
+            M.append_mark(cfg.session_file, "turn_interrupted")
+            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+        else:
+            print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+            state["messages"][:] = state["messages"][:before_len]
+            M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+            M.append_mark(cfg.session_file, "turn_aborted")
+        raise
+    except Exception as e:  # noqa: BLE001
+        print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}")
+        state["messages"][:] = state["messages"][:before_len]
+        M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+        M.append_mark(cfg.session_file, f"error: {type(e).__name__}: {e}")
+
+
+async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -> None:
+    """Serialize main turns: one at a time, pulled FIFO from the input queue.
+    This is what keeps state['messages'] single-writer while the input line
+    stays live — the producer (`_repl_main`) never blocks on a turn."""
+    while True:
+        line = await queue.get()
+        try:
+            prompt_text, line_attachments = attach.split_repl_attachments(line)
+            input_event = _emit_repl_event(
+                state, telemetry, "input", text=prompt_text, attachments=line_attachments
+            )
+            if _event_results_changed_sampling(input_event.results):
+                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+            if _event_results_changed_model(input_event.results):
+                _sync_model_from_live_settings(state)
+            input_changed_keys = _event_result_changed_keys(input_event.results)
+            if _changed_provider_key(input_changed_keys):
+                _sync_provider_from_live_settings(state, input_changed_keys)
+            if _changed_lock_subagent_model_key(input_changed_keys):
+                _sync_tool_registry_from_live_settings(cfg, state)
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            try:
+                turn_cfg = _cfg_for_live_state(cfg, state)
+                user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+            except attach.AttachmentError as e:
+                print(f"{C.ORANGE}error: {e}{C.RESET}")
+                continue
+            before_len = len(state["messages"])
+            state["messages"].append(user_bundle.runtime_message)
+            _append_turn(cfg, user_bundle.history_message)
+            job = sup.spawn(
+                _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop),
+                kind="turn",
+                label=prompt_text[:40],
+            )
+            with contextlib.suppress(asyncio.CancelledError):
+                await job.task  # _do_turn persists partial work on cancel; keep looping
+        finally:
+            queue.task_done()
+
+
+def _is_turn_state_command(line: str) -> bool:
+    """Commands that clear/rotate/compact the live message list. Running one while
+    a turn appends to state["messages"] races the single-writer discipline the turn
+    queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
+    rollback marks) — refuse until the active turn ends."""
+    return line in ("/reset", "/wipe", "/compact") or line.startswith("/compact ")
+
+
+def _drain_queue(queue: asyncio.Queue) -> int:
+    """Drop every pending input line, balancing task_done() so the teardown
+    queue.join() still completes. Loop-thread only — asyncio.Queue is not
+    thread-safe, so this never runs from the _handle_command executor hop."""
+    dropped = 0
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        queue.task_done()
+        dropped += 1
+    return dropped
+
+
+async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
+    """Non-blocking REPL: input, the active turn, and subagents all share ONE
+    event loop. `prompt_async` keeps the input line live while a turn streams
+    (output paints above it via patch_stdout); ^C cancels the active turn
+    instead of killing the process; new prompts queue behind a running turn."""
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
+    sup = supervisor.Supervisor(loop)
+    supervisor.set_current(sup)
+    queue: asyncio.Queue = asyncio.Queue()
+    consumer = loop.create_task(
+        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop)
+    )
+    try:
+        with patch_stdout(raw=True):
+            while state["running"]:
+                try:
+                    line = (await session.prompt_async(ANSI(f"{C.YELLOW}LO> {C.RESET}"))).strip()
+                except EOFError:
+                    print()
+                    break
+                except KeyboardInterrupt:
+                    # ^C cancels the active turn AND drops anything queued behind
+                    # it — otherwise the queue keeps draining prompts the operator
+                    # meant to abort. The drain-on-quit path (EOF) stays intact.
+                    if sup.turn_active():
+                        n = sup.cancel_kind("turn")
+                        print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
+                    flushed = _drain_queue(queue)
+                    if flushed:
+                        print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+                    continue
+                if not line:
+                    continue
+                if line in ("/flush", "/cancel queued"):
+                    # Drop pending input without touching the active turn. Handled
+                    # here (not in _handle_command) because the queue is loop-owned
+                    # and _handle_command runs on an executor thread.
+                    flushed = _drain_queue(queue)
+                    print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+                    continue
+                if _is_turn_state_command(line) and sup.turn_active():
+                    print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
+                    continue
+                handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
+                if handled:
+                    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+                    continue
+                queue.put_nowait(line)
+                if sup.turn_active() or queue.qsize() > 1:
+                    print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
+    finally:
+        supervisor.set_current(None)
+        # Graceful quit (EOF / exit): let queued and in-flight turns finish
+        # before teardown so submitted work isn't silently dropped. To abandon a
+        # long turn, cancel it with ^C first, then quit.
+        if not consumer.done():
+            with contextlib.suppress(Exception):
+                await queue.join()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+        for job in sup.jobs():  # backstop: cancel any straggler
+            job.task.cancel()
+    return 0
+
+
+# --------------------------------------------------------------------------
+# --printonly: dry-run dump of what would be sent to the model. NEVER errors —
+# every step degrades to a warning and keeps going (that is the whole point).
+# --------------------------------------------------------------------------
+
+_PRINTONLY_KNOWN = "tpeib"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
+_PRINTONLY_TITLES = {
+    "t": "TOOLS",
+    "p": "PROMPT (raw)",
+    "e": "PROMPT (env-expanded)",
+    "i": "PROMPT (inlines-expanded)",
+    "b": "BENCHMARKS",
+}
+
+
+def _printonly_slots(spec: str) -> tuple[str, int | None, str | None]:
+    """Parse ``LETTERS[:COUNT][:PATH]``. Positional slots; an empty slot skips.
+    ``p::/tmp/x.md`` -> letters 'p', no count, path '/tmp/x.md'. Never raises."""
+    parts = (spec or "").split(":", 2)
+    letters = parts[0].strip()
+    count: int | None = None
+    if len(parts) >= 2 and parts[1].strip():
+        try:
+            n = int(parts[1].strip())
+            count = n if n >= 0 else None
+        except ValueError:
+            print(f"js: --printonly ignoring non-numeric count {parts[1]!r}", file=sys.stderr)
+    path = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
+    return letters, count, path
+
+
+def _printonly_letters(letters: str) -> list[str]:
+    """Resolve the letter cluster to an ordered, de-duplicated section list.
+    'a' means everything; unknown letters warn and skip; nothing valid -> all."""
+    if "a" in letters:
+        return list(_PRINTONLY_KNOWN)
+    chosen: list[str] = []
+    for ch in letters:
+        if ch in _PRINTONLY_KNOWN:
+            if ch not in chosen:
+                chosen.append(ch)
+        elif ch == "o":
+            print("js: --printonly letter 'o' is parked (unimplemented); skipping", file=sys.stderr)
+        else:
+            print(f"js: --printonly unknown letter {ch!r}; skipping", file=sys.stderr)
+    return chosen or list(_PRINTONLY_KNOWN)
+
+
+def _raw_configured_spec(cfg):
+    """The assembled prompt spec BEFORE inline-directive expansion — what
+    load_configured_prompt_spec builds, minus the expansion pass."""
+    roots = tuple(getattr(cfg, "prompt_roots", ()))
+    if len(roots) >= 3:
+        return P.load_agent_prompt_spec(
+            cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
+            project_agents_root=roots[2], agents_files=getattr(cfg, "agents_files", ()),
+        )
+    return P.load_prompt_spec(cfg.prompts_dir)
+
+
+def _printonly_run(args, cli_agent, presets) -> int:
+    letters, count, path = _printonly_slots(args.printonly)
+    sections = _printonly_letters(letters)
+
+    try:
+        cfg = _cfg_from_env_compat(
+            args.session, save_session=False, extras=args.extras, agent_id=cli_agent,
+            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            presets=presets,
+        )
+    except Exception as e:  # noqa: BLE001 — printonly never errors
+        print(f"js: --printonly could not build config: {type(e).__name__}: {e}", file=sys.stderr)
+        return 0
+
+    try:
+        raw_spec = _raw_configured_spec(cfg)
+    except Exception as e:  # noqa: BLE001
+        print(f"js: --printonly could not load prompt: {type(e).__name__}: {e}", file=sys.stderr)
+        raw_spec = None
+
+    allow_code = bool(getattr(cfg, "allow_inline_code", True))
+    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
+    system = raw_spec.system if raw_spec is not None else ""
+    selectors = raw_spec.tool_selectors if raw_spec is not None else ()
+
+    def _tools() -> str:
+        specs = _registry_for(cfg).select(selectors).openai_specs()
+        return json.dumps(specs, indent=2, ensure_ascii=False)
+
+    def _bench() -> str:
+        benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
+        if not benches:
+            return "(no NN-benchmark.md files)"
+        blocks = []
+        for bm in benches:
+            body = expand_prompt(bm.prompt, allow_code=allow_code, timeout_s=timeout_s, on_error="warn")
+            blocks.append(f"# bench {bm.name}\n{body}")
+        return "\n\n".join(blocks)
+
+    builders = {
+        "t": _tools,
+        "p": lambda: system,
+        "e": lambda: expand_prompt(system, allow_code=False, on_error="warn"),
+        "i": lambda: expand_prompt(system, allow_code=allow_code, timeout_s=timeout_s, on_error="warn"),
+        "b": _bench,
+    }
+
+    chunks: list[str] = []
+    for ch in sections:
+        try:
+            body = builders[ch]()
+        except Exception as e:  # noqa: BLE001 — a bad section degrades, never kills the run
+            print(f"js: --printonly section {ch!r} degraded: {type(e).__name__}: {e}", file=sys.stderr)
+            body = f"(section {_PRINTONLY_TITLES[ch]} unavailable: {type(e).__name__}: {e})"
+        chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
+
+    text = "\n\n".join(chunks)
+    if count is not None:
+        text = "\n".join(text.splitlines()[:count])
+
+    if path:
+        try:
+            Path(path).expanduser().write_text(text + "\n", encoding="utf-8")
+            return 0
+        except OSError as e:
+            print(f"js: --printonly could not write {path}: {e}; printing to stdout instead", file=sys.stderr)
+    print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Handle login/logout before argparse so they don't require a valid agent/config.
     if argv and argv[0] in ("--login", "login"):
@@ -1720,15 +2253,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="show streamed text/tool debug output in prompt mode")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the rich debug trace (system prompt, messages sent, tool schemas, per-call timings) to PATH and keep the clean answer on stdout")
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
     parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|low|medium|high|max|minimal|xhigh; min=low")
+    parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
     parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
+    parser.add_argument("--nonblocking", action="store_true", help="experimental: run the REPL on one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn. Legacy blocking REPL is the default.")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
@@ -1749,12 +2283,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
     parser.add_argument("--vault", help="wiki vault: creative|general|path (default: infer from target/cwd, else creative)")
-    parser.add_argument("--dangerously-evaluate-inline-code", "--dangerously-evaluate-shell-commands",
-                        dest="dangerously_evaluate_inline_code", action="store_true",
-                        help="execute !{sh|python|c|node ...} inline directives / ```!lang fences in the system "
-                             "prompt and inject their stdout. Compiles/runs arbitrary code from prompt files — "
-                             "only use on prompts you trust. {{VAR}} env expansion and !{env}/!{file} are always "
-                             "on and do not need this flag.")
+    parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
+                        help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
+                             "and ```!lang fences are left literal instead of running. Inline code runs by "
+                             "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
+                             "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
+    parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
+                        help="dry run: assemble what would be sent and print it instead of calling the model, "
+                             "then exit. LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded "
+                             "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
+                             ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
+                             "Never errors — unknown letters/unwritable paths degrade with a warning.")
     parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
@@ -1837,13 +2376,20 @@ def main(argv: list[str] | None = None) -> int:
             and not args.commit
             and args.compact is None
             and args.target is None
+            and args.bench is None
+            and not args.migrate_config
         ):
             return 0
     if args.debug and args.debug_file:
         print(f"{C.ORANGE}error: choose either --debug or --debug-file, not both{C.RESET}", file=sys.stderr)
         return 2
-    if args.dangerously_evaluate_inline_code:
-        os.environ["JS_ALLOW_INLINE_CODE"] = "1"
+    if args.im_a_pussy:
+        # Inline code runs by default now; the opt-out flag turns it off for this
+        # run via the same env knob the config layer reads.
+        os.environ["JS_ALLOW_INLINE_CODE"] = "0"
+    # Past the machine-consumed introspection early-exits: this is a real run, so
+    # surface any missing helper binary once (never crash, never block startup).
+    _warn_missing_binaries()
     cli_agent = None
     if args.agent:
         try:
@@ -1851,6 +2397,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
+
+    if args.printonly is not None:
+        return _printonly_run(args, cli_agent, presets)
 
     selected_modes = [name for name, enabled in (("wiki", args.wiki), ("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
@@ -1878,14 +2427,18 @@ def main(argv: list[str] | None = None) -> int:
                          debug=args.debug, debug_file=args.debug_file, agent=args.agent,
                          session=args.session, save=not args.no_save,
                          reasoning=args.reasoning, maxout=args.max_out,
-                         extras=args.extras)
+                         extras=args.extras,
+                         ignore_local_config=args.ignore_local,
+                         ignore_global_config=args.ignore_global, presets=presets)
 
     if args.artifact:
         return _run_artifact(args.artifact, args.target, model=args.model,
                              debug=args.debug, debug_file=args.debug_file, agent=args.agent,
                              session=args.session, save=not args.no_save,
                              reasoning=args.reasoning, maxout=args.max_out,
-                             extras=args.extras)
+                             extras=args.extras,
+                             ignore_local_config=args.ignore_local,
+                             ignore_global_config=args.ignore_global, presets=presets)
 
     if args.migrate_config:
         return _run_migrate_config()
@@ -1904,7 +2457,9 @@ def main(argv: list[str] | None = None) -> int:
         return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
-                           extra_context=extra_context, extras=args.extras)
+                           extra_context=extra_context, extras=args.extras,
+                           ignore_local_config=args.ignore_local,
+                           ignore_global_config=args.ignore_global, presets=presets)
 
     if args.files and args.prompt is None and sys.stdin.isatty():
         print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
@@ -1957,7 +2512,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
         return 2
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -1985,7 +2540,11 @@ def main(argv: list[str] | None = None) -> int:
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
-        settings.set_dotted(live_settings, ("model", "reasoning_effort"), _norm_effort(args.reasoning))
+        reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {args.reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
+        settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
     if args.max_out is not None:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     elif (prompt_spec.max_output_tokens is not None
@@ -2022,6 +2581,9 @@ def main(argv: list[str] | None = None) -> int:
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
 
     print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
+
+    if args.nonblocking:
+        return asyncio.run(_repl_main(cfg, state, telemetry, session, prompt_spec))
 
     while state["running"]:
         try:

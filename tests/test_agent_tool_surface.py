@@ -171,6 +171,67 @@ def test_legacy_frontmatter_zero_file_still_loads_tools_once(tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
+def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_path):
+    """A project agent dir that only overrides the prompt wording (no
+    00-tools.yaml of its own) must not silently boot with zero tools — it
+    should inherit the nearest lower layer's manifest instead."""
+    repo_root = tmp_path / "prompts"
+    global_root = tmp_path / "global-agents"
+    project_root = tmp_path / "project-agents"
+    repo_root.mkdir()
+    global_root.mkdir()
+    project_root.mkdir()
+
+    (repo_root / "myagent").mkdir()
+    (repo_root / "myagent" / "00-tools.yaml").write_text(
+        "tools:\n  - todo_*\nmodel: repo-model\n", encoding="utf-8"
+    )
+    (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
+
+    (project_root / "myagent").mkdir()
+    (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
+
+    spec = persona.load_agent_prompt_spec(
+        "myagent",
+        repo_prompts_root=repo_root,
+        global_agents_root=global_root,
+        project_agents_root=project_root,
+    )
+
+    assert spec.system == "PROJECT PROMPT\n"
+    assert spec.tool_selectors == ("todo_*",)
+    assert spec.model == "repo-model"
+
+
+def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(tmp_path):
+    """An explicit `tools: []` in the winning dir is a deliberate choice, not
+    accidental shadowing — the fallback must leave it alone."""
+    repo_root = tmp_path / "prompts"
+    global_root = tmp_path / "global-agents"
+    project_root = tmp_path / "project-agents"
+    repo_root.mkdir()
+    global_root.mkdir()
+    project_root.mkdir()
+
+    (repo_root / "myagent").mkdir()
+    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - todo_*\n", encoding="utf-8")
+    (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
+
+    (project_root / "myagent").mkdir()
+    (project_root / "myagent" / "00-tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
+
+    spec = persona.load_agent_prompt_spec(
+        "myagent",
+        repo_prompts_root=repo_root,
+        global_agents_root=global_root,
+        project_agents_root=project_root,
+    )
+
+    assert spec.system == "PROJECT PROMPT\n"
+    assert spec.tool_selectors == ()
+
+
 def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path):
     prompts = write_prompt_dir(tmp_path, None, ("01.md", "SYSTEM\n"))
     calls: list[dict] = []
@@ -179,7 +240,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
         calls.append(kwargs)
         return _fake_stream_result("NO_TOOLS_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "hi"}]
 
     runtime.run_turn(

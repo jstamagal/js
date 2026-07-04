@@ -14,11 +14,24 @@ When to use:
   main editing path.
 
 When not to use:
+{{#if read}}
 - Reading one known file: use `read`.
-- Searching exact text, identifiers, or class/function definitions: use
-  `fs_search`.
 - Searching within one known file or two to three known files: use `read`
   directly.
+{{/if}}
+{{#unless read}}
+- Reading one known file is not enough reason to delegate; use the tools on this
+  surface directly when possible.
+{{/unless}}
+{{#if fs_search}}
+- Searching exact text, identifiers, or class/function definitions: use
+  `fs_search`.
+{{/if}}
+{{#unless fs_search}}
+- Searching exact text, identifiers, or class/function definitions is not enough
+  reason to delegate by itself; use a local search path available on this
+  surface when possible.
+{{/unless}}
 - Simple tasks that you can complete with one or two direct tool calls.
 
 Inputs:
@@ -27,6 +40,8 @@ Inputs:
 - `agent_id` is required and selects the worker persona and selected tools.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
   context. When omitted, a fresh worker session is created.
+- `tasks` is what the worker reads. The worker's routing — model, agent_id,
+  session_id — rides the fields, never the prose.
 <!--if:model_override-->
 - `model` overrides the model the worker runs on. Leave it unset by default — the
   worker uses its configured model. ONLY set it when the operator explicitly asks

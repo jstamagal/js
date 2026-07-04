@@ -40,6 +40,7 @@ DEFAULT_MAX_LINE_CHARS = 2_000
 DEFAULT_JSONL_MAX_LINE_CHARS = 65536
 DEFAULT_MAX_FILE_BYTES = 2_000_000
 DEFAULT_TASK_MAX_DEPTH = 2
+DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
@@ -109,7 +110,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str", None,
-                "Thinking effort: off|low|medium|high|max|minimal|xhigh; min=low.",
+                "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
+                "any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
@@ -151,6 +153,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum file bytes read by fs tools."),
     SettingSpec("limits.task_max_depth", "int", DEFAULT_TASK_MAX_DEPTH,
                 "Maximum recursive task/subagent depth."),
+    SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,
+                "Maximum concurrent subagent workers per task call; minimum 1."),
     SettingSpec("limits.wiki_vault_lock_timeout_s", "int", DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S,
                 "Wiki vault lock timeout in seconds."),
     # --- runtime ---
@@ -160,10 +164,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
-    SettingSpec("runtime.allow_inline_code", "bool", False,
+    SettingSpec("runtime.allow_inline_code", "bool", True,
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
-                "prompt files and inject their stdout (DANGEROUS: runs arbitrary code from "
-                "prompt files; same as the --dangerously-evaluate-inline-code flag).",
+                "prompt files and inject their stdout. On by default (runs arbitrary code "
+                "from prompt files); opt out with --im-a-pussy or set this off.",
                 env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
     # --- compact ---
     SettingSpec("compact.auto", "bool", DEFAULT_COMPACT_AUTO,
@@ -249,8 +253,14 @@ SECTION_ORDER: tuple[str, ...] = (
 
 _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
-_NULL_TOKENS = {"off", "none", "unset", "default", "auto", ""}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+# The only values `model.reasoning_effort` accepts. "off" disables reasoning
+# (stored as the literal "none"); everything else is rejected outright — no
+# default/auto/unset synonyms. Clearing the knob back to provider-default is
+# `set -model.reasoning_effort`, never a magic value here.
+REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+_REASONING_EFFORT_ERROR = "expected off|minimal|low|medium|high|xhigh|max"
 
 
 def parse_bool(raw: str) -> bool | None:
@@ -263,13 +273,16 @@ def parse_bool(raw: str) -> bool | None:
 
 
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
-    """Coerce ``raw`` for ``spec``. Returns (value, error). A nullable knob
-    accepts off/none/unset/default/auto/"" as "clear to default-provider"."""
+    """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
+    VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
+    special-casing); the only way to clear a knob back to its default/unset
+    state is `set -key` (see `apply_unset` in `js.setcmd`)."""
     text = raw.strip()
-    if spec.key == "model.reasoning_effort" and text.lower() in {"off", "none", "0"}:
-        return "none", None
-    if spec.empty in (EMPTY_NONE, EMPTY_UNSET) and text.lower() in _NULL_TOKENS:
-        return None, None
+    if spec.key == "model.reasoning_effort":
+        v = text.lower()
+        if v not in REASONING_EFFORT_VALUES:
+            return None, _REASONING_EFFORT_ERROR
+        return ("none" if v == "off" else v), None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
@@ -278,9 +291,12 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return parsed, None
     if kind == "int":
         try:
-            return int(text), None
+            value = int(text)
         except ValueError:
             return None, "expected an integer"
+        if spec.key == "limits.subagent_max_workers" and value < 1:
+            return None, "expected an integer >= 1"
+        return value, None
     if kind == "float":
         try:
             return float(text), None
@@ -538,7 +554,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
 def _template_value(spec: SettingSpec) -> str:
     default = spec.default
     if default is None:
-        return EMPTY_UNSET if spec.empty == EMPTY_UNSET else ""
+        return ""
     if isinstance(default, bool):
         return "on" if default else "off"
     if isinstance(default, (dict, list)):

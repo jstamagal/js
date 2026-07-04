@@ -116,7 +116,9 @@ def test_set_commands_parse_power_user_knobs():
     assert maxout.lines == ["model.max_output_tokens = 64000"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
 
-    cleared = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
+    # RULING A: magic strings die -- "off" is no longer a clear-token for a
+    # nullable int knob; `set -key` is the only way to clear one.
+    cleared = setcmd.run_repl_command(live_settings, "/set -model.max_output_tokens")
     assert cleared.error is None
     assert cleared.lines == ["model.max_output_tokens = <none>"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
@@ -629,14 +631,24 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
 
 
 def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), max_output_tokens=99)
+    # RULING A: magic strings die -- there is no longer a magic value that
+    # forces a nullable int knob to None regardless of its baseline. `set -key`
+    # clears a *live session override* back to whatever the knob's baseline
+    # already was (here: cfg's own None default, since nothing else set it).
+    cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
     max_output_tokens: list[int | None] = []
 
     class SessionStub:
         def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set model.max_output_tokens off", "hello", "exit"])
+            self.lines = iter([
+                "/set model.max_output_tokens 5000",
+                "hello",
+                "/set -model.max_output_tokens",
+                "hello",
+                "exit",
+            ])
 
         def prompt(self, *args, **kwargs):
             return next(self.lines)
@@ -652,7 +664,7 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     actual = cli.main([])
 
     assert actual == 0
-    assert max_output_tokens == [None]
+    assert max_output_tokens == [5000, None]
 
 
 def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
@@ -679,7 +691,9 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     actual = cli.main([])
 
     assert actual == 0
-    assert reasoning_efforts == ["high"]
+    # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
+    # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
+    assert reasoning_efforts == ["max"]
 
 
 def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path):
@@ -736,7 +750,10 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     assert seen == [("none", "none")]
 
 
-def test_repl_set_reasoning_effort_default_restores_provider_default(monkeypatch, tmp_path):
+def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeypatch, tmp_path):
+    # RULING B: "default"/"auto" are INVALID values now, not magic re-enable
+    # tokens — the knob stays disabled from the earlier `off`, and clearing
+    # back to the provider default is only `set -model.reasoning_effort`.
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
@@ -747,6 +764,39 @@ def test_repl_set_reasoning_effort_default_restores_provider_default(monkeypatch
             self.lines = iter([
                 "/set model.reasoning_effort off",
                 "/set model.reasoning_effort default",
+                "hello",
+                "exit",
+            ])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    # the rejected `default` never mutated the setting -- still disabled from `off`
+    assert seen == [("none", "none")]
+
+
+def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    seen: list[tuple[str | None, str | None]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter([
+                "/set model.reasoning_effort off",
+                "/set -model.reasoning_effort",
                 "hello",
                 "exit",
             ])
@@ -1151,6 +1201,69 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
         assert state["model"] == "gemma4:e2b"
     finally:
         logins.set_config_dir(None)
+
+
+def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
+    """Ruling C: `/model vendor/model` may switch direct ONLY when that vendor is
+    a saved login. With no login and a pinned gateway, the REPL agrees with the
+    router — the endpoint holds and the whole id rides it (no hijack)."""
+    from js import logins
+
+    cfg = replace(
+        make_cfg(tmp_path),
+        provider_id="omp",
+        provider_base_url="https://gateway.test/v1",
+        provider_api_key="sk-omp",
+    )
+    logins.set_config_dir(tmp_path / "login-store")  # empty store: no anthropic login
+    state = {
+        "messages": [],
+        "system": "SYSTEM",
+        "model": cfg.model,
+        "provider_id": cfg.provider_id,
+        "provider_base_url": cfg.provider_base_url,
+        "provider_api_key": cfg.provider_api_key,
+        "provider_headers": {"x-omp": "1"},
+    }
+    try:
+        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
+        # Endpoint unchanged; the full prefixed id is passed through verbatim.
+        assert state["provider_id"] == "omp"
+        assert state["provider_base_url"] == "https://gateway.test/v1"
+        assert state["provider_api_key"] == "sk-omp"
+        assert state["provider_headers"] == {"x-omp": "1"}
+        assert state["model"] == "anthropic/claude-sonnet-4"
+    finally:
+        logins.set_config_dir(None)
+
+
+def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint(tmp_path):
+    """Ruling C: even with no pinned provider, a vendor prefix is only an
+    endpoint switch when that vendor is a saved login; otherwise it is a plain
+    model id."""
+    from js import logins
+
+    cfg = make_cfg(tmp_path)
+    logins.set_config_dir(tmp_path / "login-store")
+    state = {
+        "messages": [],
+        "system": "SYSTEM",
+        "model": cfg.model,
+        "provider_id": None,
+        "provider_base_url": None,
+        "provider_api_key": None,
+        "provider_headers": {},
+    }
+    try:
+        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
+        assert state["provider_id"] is None
+        assert state["provider_base_url"] is None
+        assert state["provider_api_key"] is None
+        assert state["provider_headers"] == {}
+        assert state["model"] == "anthropic/claude-sonnet-4"
+    finally:
+        logins.set_config_dir(None)
+
 
 def test_pick_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)

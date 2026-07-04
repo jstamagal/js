@@ -1,15 +1,34 @@
 from __future__ import annotations
 
+import inspect
 import json
+import re
 import subprocess
 from pathlib import Path
 
 from js.toolkit import ToolContext
 from js.toolkit import artifact as artifact_tools
+from js.toolkit.artifact import prompts as artifact_prompts
 
 
 def _ctx(tmp_path: Path, max_bytes: int = 4096) -> ToolContext:
     return ToolContext(cwd=tmp_path, max_tool_result_bytes=max_bytes, fetch_timeout_s=9)
+
+
+def test_base_prompt_documents_artifact_write_page_in_real_argument_order():
+    """The BASE system prompt tells the model artifact_write_page's argument
+    order — it must match the real signature or the model passes title/body
+    into the wrong positional slots."""
+    real_params = [
+        name for name in inspect.signature(artifact_tools.artifact_write_page).parameters
+        if name != "context"
+    ]
+
+    match = re.search(r"artifact_write_page\(([^)]*)\)", artifact_prompts.BASE)
+    assert match, "BASE prompt must document artifact_write_page's argument order"
+    documented_params = [p.strip() for p in match.group(1).split(",")]
+
+    assert documented_params == real_params
 
 
 def _artifact_root(tmp_path: Path) -> Path:
@@ -338,3 +357,13 @@ def test_artifact_ingest_resolves_paths_and_rejects_empty_input(tmp_path, monkey
         ]
     ]
     assert empty == "ERROR: no paths supplied"
+
+
+def test_read_text_keeps_preview_when_byte_limit_splits_a_codepoint(tmp_path):
+    """A byte-limited slice can cut mid multibyte char; the preview must survive
+    (lenient decode) instead of the whole body dropping to empty."""
+    p = tmp_path / "artifact.txt"
+    p.write_text("A" * 10 + "€" * 10, encoding="utf-8")   # € = 3 bytes each
+    out = artifact_tools._read_text(p, 11)   # 10 'A' + first byte of the first €
+    assert out.startswith("A" * 10)
+    assert out != ""

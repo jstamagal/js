@@ -13,14 +13,58 @@ Critical directory rule:
 - `cd path && command` is redundant and violates the tool contract.
 
 Do not use this for normal file operations:
+{{#if fs_search}}
 - File search: use `fs_search`, not `find`, `grep`, or `rg`.
 - Content search: use `fs_search` with regex, not `grep` or `rg`.
+- Directory shape: use `fs_search` or an explicit `shell` listing command when
+  directory traversal is the actual request.
+{{/if}}
+{{#unless fs_search}}
+- Content search: use `rg` (ripgrep), not `grep`. `rg` is installed; it skips
+  binary and non-regular files, honors `.gitignore`, and is far faster.
+- File finding: use `fd`, not `find`, to locate files by name or extension. `fd`
+  is installed and safer around special files. Reach for `find`/`grep` only when
+  `rg`/`fd` cannot express the query.
+{{/unless}}
+{{#if read}}
 - File reads: use `read`, not `cat`, `head`, or `tail`.
-- File edits: use `patch` or `multi_patch`, not `sed` or `awk`.
+{{/if}}
+{{#if patch}}
+- File edits: use `patch`, not `sed` or `awk`.
+{{/if}}
+{{#if multi_patch}}
+- Multi-replacement edits in one file: use `multi_patch`, not `sed` or `awk`.
+{{/if}}
+{{#if write}}
 - File writes: use `write`, not `echo > file` or heredocs.
-- Directory shape: use `fs_search` or `shell` with an explicit listing command
-  when directory traversal is the actual request.
+{{/if}}
 - Communication: respond directly, not with `echo` or `printf`.
+
+When shell is the only tool for file work, use real Unix tools carefully:
+{{#unless read}}
+- Inspect known files with `python - <<'PY'` / `pathlib.Path(...).read_text()` or
+  focused commands such as `wc -l` and `file`. Avoid dumping huge files; use
+  small Python snippets to print numbered slices when needed.
+{{/unless}}
+{{#unless write}}
+- Create complete files with a small Python script that writes UTF-8 text or bytes
+  atomically enough for the task (`Path(...).write_text(...)` / `write_bytes(...)`).
+  Verify the parent directory first.
+{{/unless}}
+{{#unless patch multi_patch}}
+- Edit existing files with Python scripts that read, validate the exact old text,
+  replace it, and fail if the match count is not what you intended. Do not rely on
+  blind `sed -i` rewrites for source changes.
+{{/unless}}
+{{#unless remove}}
+- Remove files with `trash` / `trash-put` when available; use `rm` only for
+  generated scratch you are certain about, and never for user data without explicit
+  instruction.
+{{/unless}}
+{{#unless fetch}}
+- Download with Python `urllib.request` or `curl -L --fail --output PATH URL` only
+  when network fetch is truly needed; write to an explicit path and verify size.
+{{/unless}}
 
 Before commands that create files or directories:
 - Verify the parent directory is the intended location.
@@ -30,6 +74,8 @@ Command construction:
 - Always quote paths containing spaces.
 - Add a concise `description` when the purpose is not obvious.
 - Use `env` only for environment variable names that should be passed through.
+- **Default child env is restricted to PATH, HOME, USER, LANG, LC_ALL, TERM, PWD, and SHELL.** Any other variable (API keys, tokens, custom vars) must be explicitly named in `env` to pass through.
+- `timeout` (default `300` seconds): raise it for long builds/tests that legitimately run past 5 minutes.
 - Use `keep_ansi=true` only when color/control output matters.
 
 Output behavior:

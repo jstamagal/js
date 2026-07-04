@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,17 @@ from . import paths, providers
 _CONFIG_DIR_OVERRIDE: Path | None = None
 _LOGINS_FILE = "logins.toml"
 _CACHE_FILE = "models-cache.json"
+
+
+class LoginsCorruptError(RuntimeError):
+    """logins.toml exists but failed to parse.
+
+    Raised only by the write path (save_login/remove_login): rewriting the
+    file from a load that silently swallowed a parse error would truncate
+    every other saved login down to whatever this one call knows about.
+    load_logins() itself stays lenient (returns {}) for plain reads, since
+    those run on every route/picker call and must never crash a turn.
+    """
 
 
 def set_config_dir(path: Path | None) -> None:
@@ -72,17 +84,56 @@ def _ensure_config_dir() -> None:
     _config_dir().mkdir(parents=True, exist_ok=True)
 
 def _write_logins_toml(data: dict[str, dict[str, Any]]) -> None:
+    """Write logins.toml atomically: temp file in the same dir, then rename.
+
+    The old O_TRUNC-in-place write left a window where a crash/Ctrl-C mid-dump
+    truncated the real file; os.replace() is atomic on the same filesystem so
+    readers only ever see the old file or the fully-written new one.
+    """
     _ensure_config_dir()
     path = _logins_path()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        tomli_w.dump(data, f)
-    os.chmod(path, 0o600)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            tomli_w.dump(data, f)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
+
+def _refuse_if_corrupt() -> None:
+    """Raise LoginsCorruptError if logins.toml exists but fails to parse.
+
+    Called by save_login/remove_login before they load-then-rewrite, so a
+    corrupt file is never silently replaced by whatever this one call knows.
+    """
+    path = _logins_path()
+    if not path.exists():
+        return
+    try:
+        with path.open("rb") as f:
+            tomllib.load(f)
+    except Exception as exc:
+        raise LoginsCorruptError(
+            f"{path} exists but failed to parse as TOML ({exc}); refusing to overwrite it. "
+            "Fix or remove the file by hand, then retry."
+        ) from exc
 
 
 def load_logins() -> dict[str, Login]:
-    """Return map provider_id -> Login."""
+    """Return map provider_id -> Login.
+
+    A malformed file degrades to {} here — this runs on every routing/picker
+    call and must never crash a turn. The write path (save_login/
+    remove_login) calls _refuse_if_corrupt() first instead, since silently
+    treating a corrupt file as empty there would truncate every stored login.
+    """
     if not _logins_path().exists():
         return {}
     try:
@@ -110,8 +161,13 @@ def load_logins() -> dict[str, Login]:
 
 
 def save_login(login: Login) -> None:
-    """Add or update a provider login and persist."""
+    """Add or update a provider login and persist.
+
+    Raises LoginsCorruptError instead of proceeding if the existing file
+    fails to parse (see _refuse_if_corrupt).
+    """
     _ensure_config_dir()
+    _refuse_if_corrupt()
     canonical_id = providers.normalize_provider_id(login.provider_id) or login.provider_id
     login = replace(login, provider_id=canonical_id)
     loaded = load_logins()
@@ -127,8 +183,13 @@ def _normalize_provider_id(provider_id: str) -> str:
 
 
 def remove_login(provider_id: str) -> bool:
-    """Remove a provider login. Returns True if it existed."""
+    """Remove a provider login. Returns True if it existed.
+
+    Raises LoginsCorruptError instead of proceeding if the existing file
+    fails to parse (see _refuse_if_corrupt).
+    """
     provider_id = _normalize_provider_id(provider_id)
+    _refuse_if_corrupt()
     loaded = load_logins()
     existed = provider_id in loaded
     if existed:

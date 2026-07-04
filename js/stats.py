@@ -38,21 +38,26 @@ def _round(value: float | None, places: int = 4) -> float | None:
 def summarize_calls(call_stats: list[dict], *, wall_s: float | None = None) -> dict[str, Any]:
     """Fold a turn's per-call records into one summary row.
 
-    ttft is the first call's time-to-first-text-token (what the user waits to see
-    output). stream_s/output_tokens sum across calls; tok_per_s is total output
-    over total model-stream time (generation throughput, tool gaps excluded).
+    ttft is the first call that produced a visible-text token (a tool-first turn
+    streams no text on call 1, so we fall to the first call that did). All token
+    counts are cumulative across the turn's calls — prompt_tokens, cached_tokens,
+    and output_tokens share one denominator so their ratios stay meaningful.
+    stream_s sums stream time; tok_per_s is total output over total stream time
+    (generation throughput, tool gaps excluded).
     """
     stream_s = sum((c.get("stream_s") or 0.0) for c in call_stats)
     output_tokens = sum(int(c.get("output_tokens") or 0) for c in call_stats)
-    ttft = call_stats[0].get("ttft_s") if call_stats else None
+    prompt_tokens = sum(int(c.get("prompt_tokens") or 0) for c in call_stats)
+    cached_tokens = sum(int(c.get("cached_tokens") or 0) for c in call_stats)
+    ttft = next((c.get("ttft_s") for c in call_stats if c.get("ttft_s") is not None), None)
     return {
         "calls": len(call_stats),
         "ttft_s": _round(ttft),
         "wall_s": _round(wall_s),
         "stream_s": _round(stream_s),
         "output_tokens": output_tokens,
-        "prompt_tokens": int(call_stats[0].get("prompt_tokens") or 0) if call_stats else 0,
-        "cached_tokens": int(call_stats[-1].get("cached_tokens") or 0) if call_stats else 0,
+        "prompt_tokens": prompt_tokens,
+        "cached_tokens": cached_tokens,
         "tok_per_s": _round(output_tokens / stream_s) if stream_s > 0 else 0.0,
         "finish_reason": call_stats[-1].get("finish_reason") if call_stats else None,
     }
