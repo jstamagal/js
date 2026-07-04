@@ -163,6 +163,15 @@ def test_fs_search_over_directory_with_fifo_does_not_hang(tmp_path):
     assert str(tmp_path / "real.txt") in actual
 
 
+def test_fs_search_explicit_fifo_path_refuses_without_hanging(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    os.mkfifo(tmp_path / "pipe")
+
+    actual = _call_with_timeout(fs_search, "needle", path="pipe", context=context, timeout=10.0)
+
+    assert actual.startswith("ERROR: not a regular file or directory:")
+
+
 def test_fs_search_missing_rg_binary_degrades_cleanly(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
