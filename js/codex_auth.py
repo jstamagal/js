@@ -416,25 +416,34 @@ async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | Non
     return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
 
 
+def save_refreshed_login(refreshed: Login) -> None:
+    # A background token refresh must not crash an in-flight turn just
+    # because logins.toml is unwritable/corrupt: the caller already has the
+    # refreshed token in memory and can keep going, it just won't survive a
+    # process restart until the file is fixed.
+    from . import logins
+
+    try:
+        logins.save_login(refreshed)
+    except logins.LoginsCorruptError as exc:
+        print(f"*** warning: could not save refreshed OpenAI Codex login: {exc}", file=sys.stderr)
+
+
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     if not login_needs_refresh(login):
         return login
-    from . import logins
-
     refreshed = refreshed_login(login)
     if persist:
-        logins.save_login(refreshed)
+        save_refreshed_login(refreshed)
     return refreshed
 
 
 async def ensure_fresh_login_async(login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None) -> Login:
     if not login_needs_refresh(login):
         return login
-    from . import logins
-
     refreshed = await refreshed_login_async(login, client=client)
     if persist:
-        logins.save_login(refreshed)
+        save_refreshed_login(refreshed)
     return refreshed
 
 

@@ -10,7 +10,7 @@ from getpass import getpass
 import ai
 
 from . import codex_auth, colors as C, model_client, providers
-from .logins import Login, cache_models, load_logins, remove_login, save_login, test_login
+from .logins import Login, LoginsCorruptError, cache_models, load_logins, remove_login, save_login, test_login
 
 _API_SHAPES: list[tuple[str, str, str]] = [
     ("openai-completions", "openai", "OpenAI-compatible chat completions"),
@@ -417,8 +417,12 @@ def _run_codex_login(provider_id: str) -> int:
     to_cache = _select_models_to_cache(login.provider_id, models)
     if to_cache is None:
         return 0
-    save_login(login)
-    cache_models(login.provider_id, to_cache)
+    try:
+        save_login(login)
+        cache_models(login.provider_id, to_cache)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
+        return 1
     who = f" ({login.codex_email})" if login.codex_email else ""
     print(f"{C.GREEN}*** Provider added: {login.provider_id}{who}{C.RESET}")
     print(f"cached {len(to_cache)} models")
@@ -466,8 +470,12 @@ def _run_login(provider_id: str | None = None) -> int:
     to_cache = _select_models_to_cache(canonical_id, models)
     if to_cache is None:
         return 0
-    save_login(login)
-    cache_models(canonical_id, to_cache)
+    try:
+        save_login(login)
+        cache_models(canonical_id, to_cache)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
+        return 1
     print(f"{C.GREEN}*** Provider added.{C.RESET}")
     print(f"cached {len(to_cache)} models")
     return 0
@@ -475,7 +483,12 @@ def _run_login(provider_id: str | None = None) -> int:
 
 def _run_logout(provider_id: str) -> int:
     target = providers.normalize_provider_id(provider_id) or provider_id
-    if remove_login(target):
+    try:
+        removed = remove_login(target)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}logout failed: {exc}{C.RESET}", file=sys.stderr)
+        return 1
+    if removed:
         print(f"{C.GREY}logged out of {target}{C.RESET}")
         return 0
     print(f"{C.ORANGE}not logged in to {target}{C.RESET}", file=sys.stderr)

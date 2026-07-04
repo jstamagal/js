@@ -74,6 +74,21 @@ def test_login_cli_lists_and_dispatches_codex_oauth(monkeypatch):
     assert calls == ["openai-codex-device"]
 
 
+def test_save_refreshed_login_degrades_gracefully_on_corrupt_logins_file(monkeypatch, capsys):
+    # A background token refresh (codex_provider._ensure_access, or
+    # ensure_fresh_login/_async here) must never crash an in-flight turn just
+    # because logins.toml is corrupt — it should warn once and move on.
+    def boom(_login):
+        raise logins.LoginsCorruptError("logins.toml is broken")
+
+    monkeypatch.setattr(logins, "save_login", boom)
+    refreshed = codex_auth.login_from_token(
+        codex_auth.CodexToken(access=_fake_jwt(), refresh="r", expires_at=time.time() + 3600)
+    )
+    codex_auth.save_refreshed_login(refreshed)  # must not raise
+    assert "logins.toml is broken" in capsys.readouterr().err
+
+
 def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
     class FakeExecutor:
         request = None
