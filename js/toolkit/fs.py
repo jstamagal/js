@@ -625,6 +625,12 @@ def fs_search(
     root = context.resolve_path(path or ".")
     if not root.exists():
         return f"ERROR: Path does not exist: {root}"
+    try:
+        root_stat = root.stat()
+    except OSError as exc:
+        return f"ERROR: {type(exc).__name__}: {exc}"
+    if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
+        return f"ERROR: not a regular file or directory: {root}"
     mode = output_mode or "files_with_matches"
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline))
     if cache_key in context.search_cache:
