@@ -49,10 +49,11 @@ hook is the enforcer — effectively a type system bolted onto the loop.
 - ON CANCEL       ESC / Ctrl-C
 - ON IDLE
 
+**UNIMPLEMENTED — VISION:**
 `^` before an event suppresses its default action (e.g. display),
 ircII-style. The handler still runs.
 
-## Handler return contract (6 modes)
+## Handler return contract (6 modes) — UNIMPLEMENTED — VISION
 1. pass     — observe only (log / metrics)
 2. modify   — change the payload, continue
 3. suppress — kill the default action (`^`); e.g. deny a tool / drop a line

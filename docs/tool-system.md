@@ -248,6 +248,3 @@ For another Python project, the behavior to preserve is:
 - Claude provider-facing name transform based on model string only
 - canonical persisted history
 - capped tool results and shell output
-
-See [Porting The Forge Tool System To Python](porting-forge-tool-system-to-python.md)
-for an implementation checklist.

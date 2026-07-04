@@ -30,6 +30,7 @@ Command construction:
 - Always quote paths containing spaces.
 - Add a concise `description` when the purpose is not obvious.
 - Use `env` only for environment variable names that should be passed through.
+- **Default child env is restricted to PATH, HOME, USER, LANG, LC_ALL, TERM, PWD, and SHELL.** Any other variable (API keys, tokens, custom vars) must be explicitly named in `env` to pass through.
 - Use `keep_ansi=true` only when color/control output matters.
 
 Output behavior:
