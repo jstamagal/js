@@ -1,8 +1,14 @@
 Search local text files with regular expressions, backed by ripgrep (`rg`).
 
-This is the default tool for exact search tasks. Use it instead of running
-`grep`, `rg`, `find`, `cat`, `head`, `tail`, `sed`, or `awk` through `shell`
-when the goal is file discovery or content search.
+This is the default tool for exact search tasks.
+{{#if shell}}
+Use it instead of running `grep`, `rg`, `find`, `cat`, `head`, `tail`, `sed`, or
+`awk` through `shell` when the goal is file discovery or content search.
+{{/if}}
+{{#unless shell}}
+Use it for file discovery or content search; this surface has no terminal tool
+fallback.
+{{/unless}}
 
 Use for:
 - Exact strings, identifiers, TODOs, filenames, literals, and regex patterns.

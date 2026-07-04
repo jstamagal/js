@@ -242,3 +242,55 @@ def test_openai_specs_never_leak_raw_markers_on_any_surface():
         for spec in registry.openai_specs():
             desc = spec["function"]["description"]
             assert "{{#" not in desc and "{{/" not in desc, (sel, spec["function"]["name"])
+
+
+def test_rendered_surfaces_never_mention_unavailable_core_tools():
+    full = build_default_registry()
+    surfaces = [
+        ["shell"],
+        ["shell", "read", "write", "patch", "multi_patch", "remove", "undo"],
+        ["shell", "read", "write", "patch", "fs_search"],
+        ["read"],
+        ["write"],
+        ["patch"],
+        ["remove"],
+        ["fs_search"],
+        ["sem_search"],
+        ["task"],
+        ["read", "write", "fs_search", "patch", "undo", "shell"],  # commit agent
+        [
+            "read", "write", "fs_search", "sem_search", "remove", "patch",
+            "multi_patch", "undo", "shell", "fetch", "todo_read", "todo_write",
+            "followup", "plan", "skill", "task",
+        ],
+        None,
+    ]
+    core = CORE_TOOL_NAMES | {"multi_patch"}
+
+    for sel in surfaces:
+        registry = full if sel is None else full.select(sel)
+        present = {tool.name for tool in registry.tools}
+        for spec in registry.openai_specs():
+            tool = spec["function"]["name"]
+            desc = spec["function"]["description"]
+            for name in core - present:
+                assert f"`{name}`" not in desc, (sel, tool, name)
+
+
+def test_shell_only_surface_gets_missing_tool_doctrine_without_phantom_tools():
+    full = build_default_registry()
+    shell_desc = next(
+        spec["function"]["description"]
+        for spec in full.select(["shell"]).openai_specs()
+        if spec["function"]["name"] == "shell"
+    )
+
+    assert "Content search: use `rg`" in shell_desc
+    assert "File finding: use `fd`" in shell_desc
+    assert "Inspect known files with" in shell_desc
+    assert "Create complete files with" in shell_desc
+    assert "Edit existing files with" in shell_desc
+    assert "Remove files with" in shell_desc
+    assert "Download with" in shell_desc
+    for absent in CORE_TOOL_NAMES - {"shell"}:
+        assert f"`{absent}`" not in shell_desc

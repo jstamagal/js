@@ -14,9 +14,24 @@ Rules:
 
 
 Before removing:
-- Prefer `read`, `fs_search`, or `shell` when you need to verify what will be
-  removed.
+{{#if read}}
+- Use `read` when you need to inspect a known file before deleting it.
+{{/if}}
+{{#if fs_search}}
+- Use `fs_search` when you need to find or verify deletion targets by name or
+  content.
+{{/if}}
+{{#if shell}}
+- Use `shell` with safe listing commands when this surface lacks a narrower tool
+  for verifying what will be removed.
+{{/if}}
 - Do not delete generated-looking, user-created, or unrelated files just to clean
   up a workspace.
+{{#if followup}}
 - If the operator did not ask for deletion and the need is not obvious, ask with
   `followup`.
+{{/if}}
+{{#unless followup}}
+- If the operator did not ask for deletion and the need is not obvious, stop and
+  ask in plain text before deleting.
+{{/unless}}
