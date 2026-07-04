@@ -5,6 +5,7 @@ marker). The stats aggregation rulings live in test_stats_aggregation.py."""
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -201,12 +202,14 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
+    telemetry_log = tmp_path / "telemetry-incomplete.jsonl"
     runtime.run_turn(
-        cfg, "SYS", messages, runtime.Telemetry(debug_log=None),
+        cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,
     )
 
+    telemetry_events = [json.loads(line) for line in telemetry_log.read_text(encoding="utf-8").splitlines()]
     assistant = messages[-1]
     assert assistant["role"] == "assistant"
     assert assistant["content"] == "partial"
@@ -216,8 +219,10 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     response = next(payload for event, payload in rec.events if event == "response")
     assert response["finish_reason"] == "incomplete:max_output_tokens"
     assert response["incomplete_reason"] == "max_output_tokens"
-    # turn_complete is telemetry, not an event hook; call_stats is the local
-    # runtime summary that must carry the non-clean finish reason.
+    complete = next(event for event in telemetry_events if event["kind"] == "turn_complete")
+    assert complete["finish_reason"] == "incomplete:max_output_tokens"
+    assert complete["incomplete_reason"] == "max_output_tokens"
+    # call_stats is the local runtime summary that must carry the non-clean finish reason.
     assert calls[-1]["finish_reason"] == "incomplete:max_output_tokens"
     end = next(payload for event, payload in rec.events if event == "turn_end")
     assert end["reason"] == "incomplete"
@@ -237,16 +242,21 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
+    telemetry_log = tmp_path / "telemetry-normal.jsonl"
     runtime.run_turn(
-        cfg, "SYS", messages, runtime.Telemetry(debug_log=None),
+        cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,
     )
 
+    telemetry_events = [json.loads(line) for line in telemetry_log.read_text(encoding="utf-8").splitlines()]
     assistant = messages[-1]
     assert assistant == {"role": "assistant", "content": "done"}
     response = next(payload for event, payload in rec.events if event == "response")
     assert response == {"text": "done", "finish_reason": "stop"}
+    complete = next(event for event in telemetry_events if event["kind"] == "turn_complete")
+    assert complete["finish_reason"] == "stop"
+    assert complete["incomplete_reason"] is None
     assert calls[-1]["finish_reason"] == "stop"
     end = next(payload for event, payload in rec.events if event == "turn_end")
     assert end == {"reason": "stop", "model": "offline-test-model", "provider_id": None}
