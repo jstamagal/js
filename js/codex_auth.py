@@ -40,6 +40,12 @@ DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 DEVICE_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 DEVICE_AUTH_URL = "https://auth.openai.com/codex/device"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
+# The Codex model-list endpoint can lag behind the runtime route: gpt-5.5 has
+# been verified to work against /codex/responses before the listing endpoint
+# advertises it. Both codex_provider.list_models() and picker._model_rows()
+# splice this in so it's selectable even when the listing is stale — one
+# constant so the two call sites can't drift apart.
+CODEX_PHANTOM_MODEL_ID = "gpt-5.5"
 _TOKEN_TIMEOUT = 15.0
 _DEVICE_POLL_SAFETY_MARGIN = 3.0
 _DEVICE_MAX_POLLS = 120

@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from . import logins, providers
+from . import codex_auth, logins, providers
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,8 @@ def _model_rows(provider_id: str) -> list[ModelRow]:
     if not cached:
         return []
     model_ids = list(cached)
-    if provider_id == "openai-codex" and "gpt-5.5" not in model_ids:
-        model_ids.append("gpt-5.5")
+    if provider_id == codex_auth.CODEX_PROVIDER_ID and codex_auth.CODEX_PHANTOM_MODEL_ID not in model_ids:
+        model_ids.append(codex_auth.CODEX_PHANTOM_MODEL_ID)
     return [ModelRow(id=model_id, provider=provider_id) for model_id in model_ids]
 
 

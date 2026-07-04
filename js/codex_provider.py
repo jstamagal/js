@@ -528,10 +528,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                 if isinstance(mid, str) and mid:
                     models.append(mid)
             if models:
-                # The Codex model endpoint can lag behind the runtime route.  We
-                # have verified gpt-5.5 is accepted by /codex/responses, so keep
-                # it visible to pickers even when the list endpoint is stale.
-                models.append("gpt-5.5")
+                models.append(codex_auth.CODEX_PHANTOM_MODEL_ID)
                 return sorted(set(models))
             errors.append(f"{path}: no usable model ids in response")
         detail = f" ({'; '.join(errors)})" if errors else ""
