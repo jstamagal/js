@@ -27,6 +27,8 @@ Inputs:
 - `agent_id` is required and selects the worker persona and selected tools.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
   context. When omitted, a fresh worker session is created.
+- `tasks` is what the worker reads. The worker's routing — model, agent_id,
+  session_id — rides the fields, never the prose.
 <!--if:model_override-->
 - `model` overrides the model the worker runs on. Leave it unset by default — the
   worker uses its configured model. ONLY set it when the operator explicitly asks
