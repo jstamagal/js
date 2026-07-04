@@ -314,6 +314,21 @@ def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
 # from_env integration: the path js/cli.py actually drives (extras=args.extras)
 # ---------------------------------------------------------------------------
 
+def test_from_env_first_run_seeds_wiki_aliases_before_reading_them_back(monkeypatch, tmp_path):
+    # RULING J: the first-run template's stock wiki.aliases (creative/general)
+    # must be live on THIS run, not just from run 2 onward -- write_default_template
+    # has to run before collect_settings reads the file back.
+    config_home, _ = _env_dirs(monkeypatch, tmp_path)
+    project = tmp_path / "project"
+    assert not config_home.exists()  # nothing on disk yet -- a genuinely fresh box
+
+    cfg = from_env(cwd=project, save_session=False)
+
+    aliases = settings.get_dotted(cfg.settings, ("wiki", "aliases"), {})
+    assert "creative" in aliases
+    assert "general" in aliases
+
+
 def test_from_env_extra_wins_over_env_and_jsrc_for_one_run(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     project = tmp_path / "project"
