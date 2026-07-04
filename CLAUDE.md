@@ -156,5 +156,5 @@ let code do the rote.
 ## docs
 
 deep dives live in `docs/` — `technical-guide.md` (internals),
-`tool-system.md`, `subagents.md`, `agents-and-prompts.md`, `inline-directives.md`,
+`tool-system.md`, `subagents.md`, `inline-directives.md`,
 `configuration-and-sessions.md`. `CHANGELOG.md` track what moved.
