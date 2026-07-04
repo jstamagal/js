@@ -127,7 +127,10 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     assert "Wins over" in captured.out
     assert "all config files" in captured.out
     assert "minimal" in captured.out
-    assert "min=low" in captured.out
+    # Ruling B killed the min=low alias; the help now states off disables and
+    # any other value is rejected.
+    assert "min=low" not in captured.out
+    assert "off disables thinking" in captured.out
     assert "platform data" in captured.out
     assert "sessions/<agent>" in captured.out
     assert "state/<agent>" in captured.out
@@ -847,6 +850,63 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
     assert seen == {"reasoning_effort_present": True, "max_output_tokens": 321}
 
 
+def test_warn_missing_binaries_once_per_binary(monkeypatch, capsys):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None if name in {"rg", "fd"} else f"/bin/{name}")
+    cli._warned_binaries.clear()
+
+    cli._warn_missing_binaries()
+    cli._warn_missing_binaries()
+
+    err = capsys.readouterr().err
+    assert err.count("warning: rg not found on PATH") == 1
+    assert err.count("warning: fd not found on PATH") == 1
+    assert "bat not found" not in err
+    assert "fzf not found" not in err
+    assert "just install" in err
+    cli._warned_binaries.clear()
+
+
+def test_prompt_mode_missing_agent_says_no_such_agent(monkeypatch, tmp_path, capsys):
+    """Finding 55: a nonexistent agent id yields a 'no such agent' line that
+    points at the global agents dir, not the raw 'prompts directory missing'."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    actual = cli.main(["-a", "ghostagent", "-p", "hi"])
+
+    err = capsys.readouterr().err
+    assert actual == 2
+    assert "no such agent: ghostagent" in err
+    assert "$XDG_CONFIG_HOME/js/agents" in err
+
+
+def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatch, tmp_path, capsys):
+    """Ruling B: `--reasoning default` (or any non-ladder token) is rejected with
+    a clean local error and rc 2, never shipped verbatim to the provider."""
+    def explode(**kwargs):
+        raise AssertionError("provider must not be reached for an invalid --reasoning")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", explode)
+
+    actual = cli.main(["-r", "default", "-p", "hi"])
+
+    err = capsys.readouterr().err
+    assert actual == 2
+    assert "--reasoning default" in err
+    assert "expected off|minimal|low|medium|high|xhigh|max" in err
+
+
+def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path, capsys):
+    """The bench loop validates --reasoning up front too (same ruling B path)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    actual = cli.main(["--bench", "someagent", "-r", "auto"])
+    err = capsys.readouterr().err
+    assert actual == 2
+    assert "--reasoning auto" in err
+
+
 def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeypatch, tmp_path):
     calls: list[dict] = []
 
@@ -865,6 +925,10 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
         show_continue=True,
         tool_registry=None,
         extras=None,
+        ignore_local_config=False,
+        ignore_global_config=False,
+        presets=None,
+        tool_context=None,
     ):
         calls.append(
             {
@@ -881,6 +945,9 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
                 "has_system": bool(system_override),
                 "has_registry": tool_registry is not None,
                 "resume_prefix": resume_prefix,
+                "ignore_local_config": ignore_local_config,
+                "ignore_global_config": ignore_global_config,
+                "presets": presets,
             }
         )
         return 0
@@ -909,8 +976,8 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
 
     vault = tmp_path / "wiki-forward"
     vault.mkdir()
-    wiki_rc = cli.main(["--wiki=ingest", "--vault", str(vault), "--debug-file", str(tmp_path / "wiki.log"), "-r", "off", "--max-out", "111", "-m", "model-a", "-n", str(tmp_path)])
-    artifact_rc = cli.main(["--artifact=query", "--debug-file", str(tmp_path / "artifact.log"), "-r", "low", "--max-out", "222", "-m", "model-b", "-n", "find thing"])
+    wiki_rc = cli.main(["--wiki=ingest", "--vault", str(vault), "--debug-file", str(tmp_path / "wiki.log"), "-r", "off", "--max-out", "111", "-m", "model-a", "--ignore-local", "--preset", "fast", "-n", str(tmp_path)])
+    artifact_rc = cli.main(["--artifact=query", "--debug-file", str(tmp_path / "artifact.log"), "-r", "low", "--max-out", "222", "-m", "model-b", "--ignore-global", "-n", "find thing"])
 
     assert wiki_rc == 0
     assert artifact_rc == 0
@@ -920,12 +987,19 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
     assert calls[0]["model"] == "model-a"
     assert calls[0]["has_system"] is True
     assert calls[0]["has_registry"] is True
+    # --preset / --ignore-local now reach the mode runner instead of no-op'ing.
+    assert calls[0]["ignore_local_config"] is True
+    assert calls[0]["ignore_global_config"] is False
+    assert calls[0]["presets"] == ["fast"]
     assert calls[1]["debug_file"] == str(tmp_path / "artifact.log")
     assert calls[1]["reasoning"] == "low"
     assert calls[1]["maxout"] == 222
     assert calls[1]["model"] == "model-b"
     assert calls[1]["has_system"] is True
     assert calls[1]["has_registry"] is True
+    assert calls[1]["ignore_global_config"] is True
+    assert calls[1]["ignore_local_config"] is False
+    assert calls[1]["presets"] == []
 
 
 def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, capsys):

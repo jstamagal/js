@@ -7,10 +7,12 @@ import asyncio
 import contextlib
 import copy
 import functools
+import inspect
 import io
 import json
 import os
 import shlex
+import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -653,6 +655,48 @@ def _set_provider_state(state: dict, provider_id: str) -> None:
     state["provider_api_key"] = providers.provider_api_key(provider_def, None, os.environ)
 
 
+def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
+    """Apply `/model <id>` through the SAME saved-login gate startup routing
+    uses for authoritative prefix switches. A `vendor/model` prefix may switch
+    the direct endpoint only when `vendor` is a saved login; otherwise the
+    current endpoint stays and the full id rides it."""
+    configured_provider_id = _state_value(state, "provider_id", cfg.provider_id)
+    configured_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
+    configured_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
+    configured_headers = _state_value(state, "provider_headers", getattr(cfg, "provider_headers", {}))
+    parsed_provider_id, _parsed_model = providers.parse_model_prefix(model_value)
+    prefix_login = routing._saved_login(parsed_provider_id) if parsed_provider_id is not None else None
+    if parsed_provider_id is not None and prefix_login is None:
+        state["model"] = model_value
+        if configured_provider_id:
+            print(f"{C.GREEN}model set to {configured_provider_id}:{model_value}{C.RESET}")
+        else:
+            print(f"{C.GREEN}model set to {model_value}{C.RESET}")
+        return
+
+    route = routing.resolve_model_route(
+        model_value,
+        configured_provider_id=parsed_provider_id or configured_provider_id,
+        configured_base_url=None if parsed_provider_id else configured_base_url,
+        configured_api_key=None if parsed_provider_id else configured_api_key,
+        configured_headers={} if parsed_provider_id else configured_headers,
+        env=os.environ,
+        explicit_model=True,
+        prefix_overrides_provider=parsed_provider_id is not None,
+        discover_env=False,
+        use_saved_login=parsed_provider_id is not None,
+    )
+    state["model"] = route.model
+    state["provider_id"] = route.provider_id
+    state["provider_base_url"] = route.base_url
+    state["provider_api_key"] = route.api_key
+    state["provider_headers"] = dict(route.headers)
+    if route.provider_id:
+        print(f"{C.GREEN}model set to {route.provider_id}:{route.model}{C.RESET}")
+    else:
+        print(f"{C.GREEN}model set to {route.model}{C.RESET}")
+
+
 # --------------------------------------------------------------------------
 # Banner / help
 # --------------------------------------------------------------------------
@@ -684,6 +728,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
   {C.YELLOW}/jobs{C.RESET}            list running turns/subagents (--nonblocking)
   {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn (--nonblocking)
+  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn (--nonblocking)
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
@@ -913,14 +958,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line.startswith("/model "):
         model_value = line[len("/model "):].strip()
-        parsed_provider_id, parsed_model = providers.parse_model_prefix(model_value)
-        if parsed_provider_id is not None and parsed_model is not None:
-            _set_provider_state(state, parsed_provider_id)
-            state["model"] = parsed_model
-            print(f"{C.GREEN}model set to {parsed_provider_id}:{parsed_model}{C.RESET}")
-            return True
-        state["model"] = model_value
-        print(f"{C.GREEN}model set to {state['model']}{C.RESET}")
+        _set_model_via_route(state, cfg, model_value)
         return True
     if line == "/model":
         _pick_model_into_state(state, cfg)
@@ -1062,6 +1100,38 @@ def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
     return replace(cfg, max_output_tokens=agent_max)
 
 
+def _format_prompt_load_error(cfg, exc: Exception) -> str:
+    """Turn a persona-load failure into an operator-legible line. A missing prompt
+    directory means the named agent doesn't exist anywhere on the search path —
+    say so plainly and point at the global agents dir where one is created,
+    instead of leaking the raw 'prompts directory missing at <path>'."""
+    if isinstance(exc, FileNotFoundError):
+        try:
+            resolved = P.resolve_agent_prompt_dir(cfg)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is None or not Path(resolved).is_dir():
+            agents_dir = _paths.global_agents_dir()
+            agent_id = getattr(cfg, "agent_id", "?")
+            return (
+                f"no such agent: {agent_id}; looked in project .js/agents, "
+                f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
+                f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
+                f"and an optional 00-tools.yaml manifest."
+            )
+    return str(exc)
+
+
+def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
+    """Coerce a raw ``--reasoning`` value through the SAME registry validation as
+    ``set model.reasoning_effort`` and ``JS_REASONING`` (ruling B): ``off``
+    disables (stored as ``none``); every other value must be a ladder stop. Any
+    other token yields a clean local error instead of shipping garbage to the
+    provider. Returns (value, error)."""
+    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
+    return settings.coerce_value(spec, reasoning)
+
+
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -1077,6 +1147,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
         return 2
+    reasoning_override = None
+    if reasoning is not None:
+        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
     try:
         cfg = _cfg_from_env_compat(
             session,
@@ -1099,7 +1175,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         try:
             prompt_spec = P.load_configured_prompt_spec(cfg)
         except (FileNotFoundError, ValueError) as e:
-            print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+            print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -1138,7 +1214,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "call_stats": call_stats,
     }
     if reasoning is not None:
-        turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
+        turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
     _t_wall = time.time()
@@ -1202,13 +1278,32 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
 
 
 
-def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
-    if tool_context is None:
-        return _run_prompt(*args, **kwargs)
+def _accepts_kwarg(func, name: str) -> bool:
+    """Whether ``func`` can take keyword ``name`` — a named parameter or ``**kwargs``.
+    Falls back to True when the signature can't be read, so the real call decides."""
     try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == name and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+    return False
+
+
+def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
+    # Decide whether the (possibly monkeypatched) _run_prompt takes tool_context
+    # by INSPECTING its signature, not by catching TypeError around the whole
+    # turn — a stray TypeError raised deep inside a commit/wiki run must surface
+    # as an error, never trigger a silent second full execution of the turn.
+    if tool_context is not None and _accepts_kwarg(_run_prompt, "tool_context"):
         return _run_prompt(*args, tool_context=tool_context, **kwargs)
-    except TypeError:
-        return _run_prompt(*args, **kwargs)
+    return _run_prompt(*args, **kwargs)
 
 
 def _bench_row_line(row: dict) -> str:
@@ -1234,6 +1329,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
+    reasoning_override = None
+    if reasoning is not None:
+        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
     try:
         cfg = _cfg_from_env_compat(
             None, save_session=False, extras=extras, agent_id=agent_id,
@@ -1246,7 +1347,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
         return 2
 
     benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
@@ -1286,7 +1387,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             "call_stats": call_stats,
         }
         if reasoning is not None:
-            turn_kwargs["reasoning_effort_override"] = _norm_effort(reasoning)
+            turn_kwargs["reasoning_effort_override"] = reasoning_override
         if not quiet:
             print(f"{C.CYAN}▸ bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
         ok, err = True, None
@@ -1378,7 +1479,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
               model: str | None = None, debug: bool = False, debug_file: str | None = None,
               agent: str | None = None, session: str | None = None, save: bool = True,
               reasoning: str | None = None, maxout: int | None = None,
-              extras: list[str] | None = None) -> int:
+              extras: list[str] | None = None,
+              ignore_local_config: bool = False, ignore_global_config: bool = False,
+              presets: list[str] | None = None) -> int:
     """js --wiki=ingest,synthesize [--vault=creative] <target>.
 
     Built-in wiki prompting (ignores defaultagent). If --agent is given, that
@@ -1408,7 +1511,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     persona = ""
     if agent:
         try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
             persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
         except (ValueError, FileNotFoundError) as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -1418,7 +1523,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     active_session = session
     if save and active_session is None:
         try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
@@ -1438,7 +1545,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
     immediate_unit = None
     if immediate_file:
         # Resolve the vault the SAME way the wiki toolkit does (config aliases + ~ + cwd-relative).
-        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent)
+        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent,
+                                          ignore_local_config=ignore_local_config,
+                                          ignore_global_config=ignore_global_config, presets=presets)
         _wiki = (getattr(_alias_cfg, "settings", {}) or {}).get("wiki")
         _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
         vp = resolve_vault(vault, ToolContext(cwd=Path(os.getcwd()), vault_aliases=_aliases))
@@ -1466,7 +1575,9 @@ def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
                                 debug_file=debug_file, session=active_session, save=save, system_override=system,
                                 resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
                                 tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                                extras=extras, tool_context=mode_context)
+                                extras=extras, tool_context=mode_context,
+                                ignore_local_config=ignore_local_config,
+                                ignore_global_config=ignore_global_config, presets=presets)
         if rc != 0:
             break
     return rc
@@ -1497,7 +1608,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
                   model: str | None = None, debug: bool = False, debug_file: str | None = None,
                   agent: str | None = None, session: str | None = None, save: bool = True,
                   reasoning: str | None = None, maxout: int | None = None,
-                  extras: list[str] | None = None) -> int:
+                  extras: list[str] | None = None,
+                  ignore_local_config: bool = False, ignore_global_config: bool = False,
+                  presets: list[str] | None = None) -> int:
     valid = {"curate", "digest", "query", "lint"}
     modes = [m.strip().lower() for m in artifact_arg.split(",") if m.strip()]
     bad = [m for m in modes if m not in valid]
@@ -1509,7 +1622,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
     persona = ""
     if agent:
         try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
             persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
         except (ValueError, FileNotFoundError) as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -1518,7 +1633,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
     active_session = session
     if save and active_session is None:
         try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent)
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
@@ -1538,7 +1655,9 @@ def _run_artifact(artifact_arg: str, target: str | None,
                          debug_file=debug_file, session=active_session, save=save, system_override=system,
                          resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
                          tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                         extras=extras)
+                         extras=extras,
+                         ignore_local_config=ignore_local_config,
+                         ignore_global_config=ignore_global_config, presets=presets)
         if rc != 0:
             break
     return rc
@@ -1549,7 +1668,9 @@ def _run_commit(target: str | None,
                 session: str | None = None, save: bool = True,
                 reasoning: str | None = None, maxout: int | None = None,
                 extra_context: str | None = None,
-                extras: list[str] | None = None) -> int:
+                extras: list[str] | None = None,
+                ignore_local_config: bool = False, ignore_global_config: bool = False,
+                presets: list[str] | None = None) -> int:
     target_dir = Path(target).expanduser() if target else Path.cwd()
     if not target_dir.is_absolute():
         target_dir = Path.cwd() / target_dir
@@ -1614,6 +1735,9 @@ def _run_commit(target: str | None,
         maxout=maxout,
         extras=extras,
         tool_context=ToolContext(cwd=target_dir),
+        ignore_local_config=ignore_local_config,
+        ignore_global_config=ignore_global_config,
+        presets=presets,
     )
 
 
@@ -1745,6 +1869,30 @@ def _print_json(value: object) -> int:
     return 0
 
 
+# External binaries js leans on. Assume NO box has them (owner runs many); warn
+# once per missing one at startup so a degraded run has an obvious cause, but
+# NEVER crash or block — `just install` provisions them.
+_EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
+    ("rg", "ripgrep — fs_search degrades"),
+    ("fd", "fd-find — file finding degrades"),
+    ("bat", "bat — syntax-highlighted preview degrades"),
+    ("fzf", "fzf — interactive pickers degrade"),
+)
+_warned_binaries: set[str] = set()
+
+
+def _warn_missing_binaries() -> None:
+    for name, why in _EXPECTED_BINARIES:
+        if name in _warned_binaries:
+            continue
+        if shutil.which(name) is None:
+            _warned_binaries.add(name)
+            print(
+                f"{C.ORANGE}warning: {name} not found on PATH; {why} — run `just install` to provision it{C.RESET}",
+                file=sys.stderr,
+            )
+
+
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then auto-compacts (in the executor because
@@ -1874,6 +2022,21 @@ def _is_turn_state_command(line: str) -> bool:
     return line in ("/reset", "/wipe", "/compact") or line.startswith("/compact ")
 
 
+def _drain_queue(queue: asyncio.Queue) -> int:
+    """Drop every pending input line, balancing task_done() so the teardown
+    queue.join() still completes. Loop-thread only — asyncio.Queue is not
+    thread-safe, so this never runs from the _handle_command executor hop."""
+    dropped = 0
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        queue.task_done()
+        dropped += 1
+    return dropped
+
+
 async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. `prompt_async` keeps the input line live while a turn streams
@@ -1896,11 +2059,24 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
                     print()
                     break
                 except KeyboardInterrupt:
+                    # ^C cancels the active turn AND drops anything queued behind
+                    # it — otherwise the queue keeps draining prompts the operator
+                    # meant to abort. The drain-on-quit path (EOF) stays intact.
                     if sup.turn_active():
                         n = sup.cancel_kind("turn")
                         print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
+                    flushed = _drain_queue(queue)
+                    if flushed:
+                        print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
                     continue
                 if not line:
+                    continue
+                if line in ("/flush", "/cancel queued"):
+                    # Drop pending input without touching the active turn. Handled
+                    # here (not in _handle_command) because the queue is loop-owned
+                    # and _handle_command runs on an executor thread.
+                    flushed = _drain_queue(queue)
+                    print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
                     continue
                 if _is_turn_state_command(line) and sup.turn_active():
                     print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
@@ -2080,7 +2256,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
     parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|low|medium|high|max|minimal|xhigh; min=low")
+    parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
     parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
@@ -2199,6 +2375,8 @@ def main(argv: list[str] | None = None) -> int:
             and not args.commit
             and args.compact is None
             and args.target is None
+            and args.bench is None
+            and not args.migrate_config
         ):
             return 0
     if args.debug and args.debug_file:
@@ -2208,6 +2386,9 @@ def main(argv: list[str] | None = None) -> int:
         # Inline code runs by default now; the opt-out flag turns it off for this
         # run via the same env knob the config layer reads.
         os.environ["JS_ALLOW_INLINE_CODE"] = "0"
+    # Past the machine-consumed introspection early-exits: this is a real run, so
+    # surface any missing helper binary once (never crash, never block startup).
+    _warn_missing_binaries()
     cli_agent = None
     if args.agent:
         try:
@@ -2245,14 +2426,18 @@ def main(argv: list[str] | None = None) -> int:
                          debug=args.debug, debug_file=args.debug_file, agent=args.agent,
                          session=args.session, save=not args.no_save,
                          reasoning=args.reasoning, maxout=args.max_out,
-                         extras=args.extras)
+                         extras=args.extras,
+                         ignore_local_config=args.ignore_local,
+                         ignore_global_config=args.ignore_global, presets=presets)
 
     if args.artifact:
         return _run_artifact(args.artifact, args.target, model=args.model,
                              debug=args.debug, debug_file=args.debug_file, agent=args.agent,
                              session=args.session, save=not args.no_save,
                              reasoning=args.reasoning, maxout=args.max_out,
-                             extras=args.extras)
+                             extras=args.extras,
+                             ignore_local_config=args.ignore_local,
+                             ignore_global_config=args.ignore_global, presets=presets)
 
     if args.migrate_config:
         return _run_migrate_config()
@@ -2271,7 +2456,9 @@ def main(argv: list[str] | None = None) -> int:
         return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
-                           extra_context=extra_context, extras=args.extras)
+                           extra_context=extra_context, extras=args.extras,
+                           ignore_local_config=args.ignore_local,
+                           ignore_global_config=args.ignore_global, presets=presets)
 
     if args.files and args.prompt is None and sys.stdin.isatty():
         print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
@@ -2324,7 +2511,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{e}{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
         return 2
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -2352,7 +2539,11 @@ def main(argv: list[str] | None = None) -> int:
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
-        settings.set_dotted(live_settings, ("model", "reasoning_effort"), _norm_effort(args.reasoning))
+        reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
+        if effort_error is not None:
+            print(f"{C.ORANGE}error: --reasoning {args.reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            return 2
+        settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
     if args.max_out is not None:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     elif (prompt_spec.max_output_tokens is not None
