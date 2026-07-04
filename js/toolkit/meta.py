@@ -325,8 +325,13 @@ async def _run_one_task_async(
             final = str(msg["content"]).strip()
             break
     final = final or "(no final response)"
-    # No per-subagent cap: the dispatch layer already clips the aggregated
-    # result to limits.max_tool_result_bytes, same as every other tool.
+    # Cap each child's final with the same knob the PARENT's dispatch layer
+    # applies to the aggregate, so one fat sibling can't silently eat the whole
+    # budget. Read the parent context: the child's runtime rewrites
+    # child_context.max_tool_result_bytes from the child cfg mid-turn.
+    cap = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
+    if cap and len(final) > cap:
+        final = final[:cap] + f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]"
     return f"{idx}. {final}"
 
 
@@ -371,29 +376,75 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
     return results
 
 
-def task(
+async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:
+    """On-loop sibling of `_fan_out` for the non-blocking REPL. The CALLER is
+    already a coroutine on the shared loop (the parent turn), so each child turn
+    is scheduled as a cancelable "subagent" job on THAT loop and awaited with
+    `asyncio.gather` — holding NO dispatch-pool thread while the children run.
+
+    This is the invariant that keeps a deeply nested fan-out from deadlocking the
+    bounded js-dispatch executor: a blocked parent no longer parks a worker
+    thread that its own descendants need for their leaf tool dispatch. Falls back
+    to a plain on-loop gather when no supervisor is live (kept for symmetry)."""
+    from ..supervisor import get_current
+
+    results: list[str | None] = [None] * len(indexed_items)
+    sup = get_current()
+    if sup is not None:
+        jobs = [
+            (idx, sup.spawn(coro_factory(idx, item), kind="subagent", label=f"task#{idx}"))
+            for idx, item in indexed_items
+        ]
+        gathered = await asyncio.gather(
+            *(job.task for _idx, job in jobs), return_exceptions=True
+        )
+        for (idx, _job), res in zip(jobs, gathered):
+            results[idx - 1] = (
+                f"{idx}. ERROR {type(res).__name__}: {res}"
+                if isinstance(res, BaseException)
+                else res
+            )
+        return results
+
+    gathered = await asyncio.gather(
+        *(coro_factory(idx, item) for idx, item in indexed_items),
+        return_exceptions=True,
+    )
+    for (idx, _item), res in zip(indexed_items, gathered):
+        results[idx - 1] = (
+            f"{idx}. ERROR {type(res).__name__}: {res}"
+            if isinstance(res, BaseException)
+            else res
+        )
+    return results
+
+
+def _prepare_fan_out(
     tasks: list[Any],
-    agent_id: str = "",
-    session_id: str | None = None,
-    model: str = "",
-    context: ToolContext | None = None,
-) -> str:
-    assert context is not None
-    agent_id = str(agent_id).strip()
-    model = str(model or "").strip()
+    agent_id: str,
+    session_id: str | None,
+    model: str,
+    context: ToolContext,
+) -> tuple[str, None] | tuple[None, tuple[list[tuple[int, Any]], Any]]:
+    """Validate a task/named-agent call and build (indexed_items, coro_factory).
+
+    Returns ``(error_message, None)`` on a validation/depth failure, else
+    ``(None, (indexed_items, coro_factory))``. Shared verbatim by the sync
+    ``task`` (``-p``/bench) and async ``task_async`` (non-blocking REPL) paths so
+    the two rails can never drift."""
     if not agent_id:
-        return "ERROR: task requires agent_id"
+        return "ERROR: task requires agent_id", None
     if not isinstance(tasks, list):
-        return "ERROR: task tasks must be a list of strings"
+        return "ERROR: task tasks must be a list of strings", None
     if any(not isinstance(item, str) for item in tasks):
-        return "ERROR: task tasks must be strings"
+        return "ERROR: task tasks must be strings", None
     normalized_items = [item.strip() for item in tasks if item.strip()]
     if not normalized_items:
-        return "ERROR: task requires at least one non-empty task"
+        return "ERROR: task requires at least one non-empty task", None
 
     max_depth = int_or_default(getattr(context, "task_max_depth", _DEFAULT_TASK_DEPTH), _DEFAULT_TASK_DEPTH, minimum=1)
     if getattr(context, "task_depth", 0) >= max_depth:
-        return f"ERROR: task recursion depth limit reached ({max_depth})"
+        return f"ERROR: task recursion depth limit reached ({max_depth})", None
 
     from ..config import from_env
     from .registry import build_default_registry
@@ -407,10 +458,11 @@ def task(
             idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
         )
 
-    results = _fan_out(
-        [(idx, item) for idx, item in enumerate(normalized_items, 1)], _coro
-    )
+    indexed_items = [(idx, item) for idx, item in enumerate(normalized_items, 1)]
+    return None, (indexed_items, _coro)
 
+
+def _assemble_task_results(results: list[str | None], agent_id: str, session_id: str | None) -> str:
     filled = [result if result is not None else f"{idx}. ERROR worker did not return" for idx, result in enumerate(results, 1)]
     header = f"TASK_RESULTS agent={agent_id}"
     if session_id:
@@ -418,9 +470,81 @@ def task(
     return "\n\n".join([header, *filled])
 
 
+def task(
+    tasks: list[Any],
+    agent_id: str = "",
+    session_id: str | None = None,
+    model: str = "",
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    agent_id = str(agent_id).strip()
+    model = str(model or "").strip()
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
+    if prepared is None:
+        return error  # type: ignore[return-value]
+    indexed_items, coro_factory = prepared
+    results = _fan_out(indexed_items, coro_factory)
+    return _assemble_task_results(results, agent_id, session_id)
+
+
+task._js_fan_out = True  # type: ignore[attr-defined]
+
+
+async def task_async(
+    tasks: list[Any],
+    agent_id: str = "",
+    session_id: str | None = None,
+    model: str = "",
+    context: ToolContext | None = None,
+) -> str:
+    """Async twin of :func:`task` for the non-blocking REPL: awaits child turns
+    on the caller's loop via :func:`_fan_out_async` instead of blocking a
+    dispatch thread. The runtime routes fan-out calls here when a supervisor is
+    live (see ``runtime._dispatch_batch``)."""
+    assert context is not None
+    agent_id = str(agent_id).strip()
+    model = str(model or "").strip()
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
+    if prepared is None:
+        return error  # type: ignore[return-value]
+    indexed_items, coro_factory = prepared
+    results = await _fan_out_async(indexed_items, coro_factory)
+    return _assemble_task_results(results, agent_id, session_id)
+
+
+def is_fan_out_handler(handler: Any) -> bool:
+    """True for a tool handler that spawns child turns and blocks on them (the
+    `task` tool and every named-agent tool). The runtime routes these on-loop
+    under a supervisor to avoid the dispatch-pool inversion."""
+    return bool(getattr(handler, "_js_fan_out", False))
+
+
+async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> str:
+    """Await one fan-out tool call on the current loop. Bridges the runtime's
+    on-loop dispatch to :func:`task_async`, resolving the worker ``agent_id`` from
+    a named-agent tag when present, else from the call args."""
+    handler = tool.handler
+    agent_id = getattr(handler, "_js_agent_id", None)
+    if agent_id is None:
+        agent_id = str(args.get("agent_id", "")).strip()
+    return await task_async(
+        tasks=args.get("tasks"),
+        agent_id=agent_id,
+        session_id=args.get("session_id"),
+        model=args.get("model", ""),
+        context=context,
+    )
+
+
 def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     def run_named_agent(tasks: list[Any], context: ToolContext | None = None) -> str:
         return task(tasks=tasks, agent_id=agent_id, context=context)
+
+    # Tag so the runtime recognizes this as fan-out and awaits it on-loop under a
+    # supervisor (like the `task` tool); `_js_agent_id` carries the fixed worker.
+    run_named_agent._js_fan_out = True  # type: ignore[attr-defined]
+    run_named_agent._js_agent_id = agent_id  # type: ignore[attr-defined]
 
     text = description or (
         f"Run the `{agent_id}` agent as a subagent. Provide one or more task strings; "
