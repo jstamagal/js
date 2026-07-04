@@ -81,7 +81,7 @@ def test_file_url_download_is_guarded_by_download_cap(tmp_path, monkeypatch):
     source.write_bytes(b"1234")
     monkeypatch.setattr(process_net, "_DOWNLOAD_MAX_BYTES", 3)
 
-    result = process_net.fetch(source.as_uri(), download="out.bin", context=ToolContext(cwd=tmp_path))
+    result = process_net.fetch(source.as_uri(), save="out.bin", context=ToolContext(cwd=tmp_path))
 
     assert result == "ERROR: response exceeds 3 byte download limit"
     assert not (tmp_path / "out.bin").exists()
@@ -210,5 +210,4 @@ def test_fetch_tool_schema_exposes_whole_hog_surface():
         "body",
         "json_body",
         "save",
-        "download",
     }
