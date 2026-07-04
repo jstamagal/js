@@ -249,7 +249,6 @@ SECTION_ORDER: tuple[str, ...] = (
 
 _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
-_NULL_TOKENS = {"off", "none", "unset", "default", "auto", ""}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -263,13 +262,13 @@ def parse_bool(raw: str) -> bool | None:
 
 
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
-    """Coerce ``raw`` for ``spec``. Returns (value, error). A nullable knob
-    accepts off/none/unset/default/auto/"" as "clear to default-provider"."""
+    """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
+    VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
+    special-casing); the only way to clear a knob back to its default/unset
+    state is `set -key` (see `apply_unset` in `js.setcmd`)."""
     text = raw.strip()
     if spec.key == "model.reasoning_effort" and text.lower() in {"off", "none", "0"}:
         return "none", None
-    if spec.empty in (EMPTY_NONE, EMPTY_UNSET) and text.lower() in _NULL_TOKENS:
-        return None, None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
@@ -538,7 +537,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
 def _template_value(spec: SettingSpec) -> str:
     default = spec.default
     if default is None:
-        return EMPTY_UNSET if spec.empty == EMPTY_UNSET else ""
+        return ""
     if isinstance(default, bool):
         return "on" if default else "off"
     if isinstance(default, (dict, list)):

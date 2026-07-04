@@ -60,8 +60,10 @@ def test_parse_extra_arg_coerces_registered_values():
     ("raw", "expected"),
     [
         ("model.id=123", "123"),
-        ("provider.id=off", None),
-        ("compact.pre_hook=off", None),
+        # RULING A: magic strings die -- a str knob stores "off" verbatim now;
+        # `set -provider.id` / `set -compact.pre_hook` is the only clear path.
+        ("provider.id=off", "off"),
+        ("compact.pre_hook=off", "off"),
     ],
 )
 def test_extra_registered_string_keys_use_registry_coercion(raw, expected):
@@ -292,7 +294,8 @@ def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
     )
 
     assert out["model"]["id"] == "123"
-    assert out["provider"]["id"] is None
+    # RULING A: "off" is no longer a magic clear-token -- it's stored verbatim.
+    assert out["provider"]["id"] == "off"
 
 
 # ---------------------------------------------------------------------------

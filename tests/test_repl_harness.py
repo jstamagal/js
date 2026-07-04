@@ -116,7 +116,9 @@ def test_set_commands_parse_power_user_knobs():
     assert maxout.lines == ["model.max_output_tokens = 64000"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
 
-    cleared = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
+    # RULING A: magic strings die -- "off" is no longer a clear-token for a
+    # nullable int knob; `set -key` is the only way to clear one.
+    cleared = setcmd.run_repl_command(live_settings, "/set -model.max_output_tokens")
     assert cleared.error is None
     assert cleared.lines == ["model.max_output_tokens = <none>"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
@@ -629,14 +631,24 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
 
 
 def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), max_output_tokens=99)
+    # RULING A: magic strings die -- there is no longer a magic value that
+    # forces a nullable int knob to None regardless of its baseline. `set -key`
+    # clears a *live session override* back to whatever the knob's baseline
+    # already was (here: cfg's own None default, since nothing else set it).
+    cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
     max_output_tokens: list[int | None] = []
 
     class SessionStub:
         def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set model.max_output_tokens off", "hello", "exit"])
+            self.lines = iter([
+                "/set model.max_output_tokens 5000",
+                "hello",
+                "/set -model.max_output_tokens",
+                "hello",
+                "exit",
+            ])
 
         def prompt(self, *args, **kwargs):
             return next(self.lines)
@@ -652,7 +664,7 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     actual = cli.main([])
 
     assert actual == 0
-    assert max_output_tokens == [None]
+    assert max_output_tokens == [5000, None]
 
 
 def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
@@ -734,38 +746,6 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
 
     assert actual == 0
     assert seen == [("none", "none")]
-
-
-def test_repl_set_reasoning_effort_default_restores_provider_default(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
-    seen: list[tuple[str | None, str | None]] = []
-
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
-                "/set model.reasoning_effort off",
-                "/set model.reasoning_effort default",
-                "hello",
-                "exit",
-            ])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
-
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    actual = cli.main([])
-
-    assert actual == 0
-    assert seen == [("xhigh", "xhigh")]
 
 
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
