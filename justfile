@@ -51,11 +51,60 @@ shell:
 
 # install `js` + `js-drain` onto PATH as launchers shebanged to a managed venv,
 # editable so they track the working tree (no reinstall after a code edit). uv
-# puts the launchers in its tool bin dir — usually ~/.local/bin.
+# puts the launchers in its tool bin dir — usually ~/.local/bin. Also provisions
+# the CLI binaries the tools lean on (ripgrep/fd/bat/fzf).
 #   just install   then   js -p "hi"   from anywhere
 install:
+    #!/usr/bin/env bash
+    set -euo pipefail
     uv tool install --force --editable .
-    @echo "installed js + js-drain. if they aren't on PATH yet: uv tool update-shell"
+    just ensure-tools
+    echo "installed js + js-drain. if they aren't on PATH yet: uv tool update-shell"
+
+# ensure the CLI binaries js leans on are present, installing any that are
+# missing via the detected package manager. fs_search shells out to `rg`; `fd`,
+# `bat`, and `fzf` back file-finding and interactive helpers. idempotent — a
+# no-op when all four are already on PATH; safe to run on its own.
+ensure-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    have() { command -v "$1" >/dev/null 2>&1; }
+    need=()
+    have rg  || need+=(rg)
+    have fd  || have fdfind || need+=(fd)
+    have bat || have batcat || need+=(bat)
+    have fzf || need+=(fzf)
+    if [ ${#need[@]} -eq 0 ]; then
+      echo "cli tools present: rg fd bat fzf"
+      exit 0
+    fi
+    echo "provisioning missing cli tools: ${need[*]}"
+    if   have pacman;  then MGR=pacman; INSTALL=(sudo pacman -S --needed --noconfirm)
+    elif have apt-get; then MGR=apt;    INSTALL=(sudo apt-get install -y)
+    elif have dnf;     then MGR=dnf;    INSTALL=(sudo dnf install -y)
+    elif have zypper;  then MGR=zypper; INSTALL=(sudo zypper install -y)
+    elif have apk;     then MGR=apk;    INSTALL=(sudo apk add)
+    elif have brew;    then MGR=brew;   INSTALL=(brew install)
+    else
+      echo "!! no supported package manager found (pacman/apt/dnf/zypper/apk/brew)."
+      echo "!! install these yourself, then re-run 'just install': ${need[*]}"
+      exit 0
+    fi
+    pkgs=()
+    for b in "${need[@]}"; do
+      case "$b:$MGR" in
+        rg:*)        pkgs+=(ripgrep) ;;
+        fd:apt|fd:dnf) pkgs+=(fd-find) ;;
+        fd:*)        pkgs+=(fd) ;;
+        bat:*)       pkgs+=(bat) ;;
+        fzf:*)       pkgs+=(fzf) ;;
+      esac
+    done
+    echo "+ ${INSTALL[*]} ${pkgs[*]}"
+    "${INSTALL[@]}" "${pkgs[@]}" || {
+      echo "!! auto-install failed; run manually: ${INSTALL[*]} ${pkgs[*]}"
+      exit 0
+    }
 
 # remove the installed js launchers.
 uninstall:
