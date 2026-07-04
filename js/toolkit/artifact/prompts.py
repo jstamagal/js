@@ -24,7 +24,7 @@ Tools:
 - artifact_search(query, limit) — search title/tags/desc/type/original filename and text-like source contents.
 - artifact_read(slug) — read one artifact's metadata and text-like source/detail preview.
 - artifact_curate(curation_json) — install topic assignments and sparse related-artifact refs through the artifact CLI.
-- artifact_write_page(slug, title, body, tags, desc) — create/update a templated markdown artifact.
+- artifact_write_page(title, body, slug, tags, desc) — create/update a templated markdown artifact.
 - artifact_ingest(paths, tags, desc) — bulk raw file intake through the artifact CLI.
 
 Core rule: use the artifact CLI/tools only. Never hand-edit /srv/artifacts, manifest.json, index.html, curation.json, or files/.
