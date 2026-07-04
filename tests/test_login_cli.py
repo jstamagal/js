@@ -337,6 +337,15 @@ def test_secondary_test_number_picks_that_model(monkeypatch):
     assert login_cli._secondary_test_choice(["first", "second"], require_test=True) == "second"
 
 
+def test_run_logout_reports_corrupt_logins_file_cleanly_instead_of_raising(monkeypatch, capsys):
+    def boom(_provider_id):
+        raise logins.LoginsCorruptError("logins.toml is broken")
+
+    monkeypatch.setattr(login_cli, "remove_login", boom)
+    assert login_cli._run_logout("deepseek") == 1
+    assert "logins.toml is broken" in capsys.readouterr().err
+
+
 def test_login_cli_logout_requires_provider(capsys):
     assert login_cli.main(["logout"]) == 2
     assert "--logout <provider-id>" in capsys.readouterr().err
