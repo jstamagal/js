@@ -38,7 +38,7 @@ class ModelStreamResult:
     tool_calls: list[ModelToolCall]
     reasoning: str
     usage: ai.types.usage.Usage | None
-    finish_reason: str  # "tool_calls" when tool_calls is non-empty, otherwise "stop"
+    finish_reason: str  # "tool_calls" when tool_calls is non-empty, otherwise "stop"; incomplete streams use "incomplete:<reason>".
     assistant_message: ai.messages.Message
     # Wall-clock measured around `ai.stream` itself (isolated from run_turn's
     # bookkeeping). first_token_s is time-to-first-*text*-token: js collects
@@ -47,6 +47,33 @@ class ModelStreamResult:
     # stream duration. Both default to 0/None so older constructors stay valid.
     first_token_s: float | None = None
     elapsed_s: float = 0.0
+    provider_metadata: dict[str, Any] | None = None
+    incomplete_reason: str | None = None
+
+
+def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
+    """Return a stable incomplete reason from provider metadata, if present.
+
+    Codex streams surface ``response.incomplete`` as provider metadata on the
+    assistant message / stream end. Keep this helper permissive so provider
+    versions that expose either ``incomplete_reason`` or an OpenAI-shaped
+    ``incomplete_details.reason`` do not make a truncated turn look like a clean
+    stop again. Unknown-but-flagged incomplete streams get an explicit
+    ``unknown`` reason rather than disappearing.
+    """
+    if not isinstance(provider_metadata, dict):
+        return None
+    reason = provider_metadata.get("incomplete_reason")
+    details = provider_metadata.get("incomplete_details")
+    if reason is None and isinstance(details, dict):
+        reason = details.get("reason")
+    if provider_metadata.get("incomplete") or reason is not None:
+        return str(reason or "unknown")
+    return None
+
+
+def incomplete_finish_reason(reason: str) -> str:
+    return f"incomplete:{reason}"
 
 
 def resolve_model(
@@ -233,7 +260,11 @@ def history_to_ai_messages(
                         tool_args=fn.get("arguments", ""),
                     )
                 )
-            out.append(ai.assistant_message(*parts))
+            assistant = ai.assistant_message(*parts)
+            provider_metadata = msg.get("provider_metadata")
+            if isinstance(provider_metadata, dict):
+                assistant = assistant.model_copy(update={"provider_metadata": provider_metadata})
+            out.append(assistant)
             continue
         if role == "tool":
             content = msg.get("content")
@@ -390,8 +421,12 @@ async def _stream_async(
 
     start = time.perf_counter()
     first_token_s: float | None = None
+    stream_provider_metadata: dict[str, Any] | None = None
     async with ai.stream(**kwargs) as stream:
         async for event in stream:
+            event_metadata = getattr(event, "provider_metadata", None)
+            if isinstance(event_metadata, dict):
+                stream_provider_metadata = event_metadata
             if isinstance(event, ai.events.TextDelta):
                 if first_token_s is None:
                     first_token_s = time.perf_counter() - start
@@ -401,6 +436,12 @@ async def _stream_async(
     text = stream.text
     reasoning = stream.message.reasoning
     usage = _usage_from_stream(stream)
+    provider_metadata = (
+        getattr(stream.message, "provider_metadata", None)
+        or stream_provider_metadata
+        or getattr(stream, "provider_metadata", None)
+    )
+    incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,
@@ -409,7 +450,7 @@ async def _stream_async(
         )
         for part in stream.message.tool_calls
     ]
-    finish = "tool_calls" if tool_calls else "stop"
+    finish = incomplete_finish_reason(incomplete_reason) if incomplete_reason else ("tool_calls" if tool_calls else "stop")
     return ModelStreamResult(
         text=text,
         tool_calls=tool_calls,
@@ -419,6 +460,8 @@ async def _stream_async(
         assistant_message=stream.message,
         first_token_s=first_token_s,
         elapsed_s=elapsed_s,
+        provider_metadata=provider_metadata if isinstance(provider_metadata, dict) else None,
+        incomplete_reason=incomplete_reason,
     )
 
 
