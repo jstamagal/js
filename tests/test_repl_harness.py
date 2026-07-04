@@ -748,6 +748,74 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     assert seen == [("none", "none")]
 
 
+def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeypatch, tmp_path):
+    # RULING B: "default"/"auto" are INVALID values now, not magic re-enable
+    # tokens — the knob stays disabled from the earlier `off`, and clearing
+    # back to the provider default is only `set -model.reasoning_effort`.
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    seen: list[tuple[str | None, str | None]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter([
+                "/set model.reasoning_effort off",
+                "/set model.reasoning_effort default",
+                "hello",
+                "exit",
+            ])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    # the rejected `default` never mutated the setting -- still disabled from `off`
+    assert seen == [("none", "none")]
+
+
+def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    seen: list[tuple[str | None, str | None]] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter([
+                "/set model.reasoning_effort off",
+                "/set -model.reasoning_effort",
+                "hello",
+                "exit",
+            ])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    actual = cli.main([])
+
+    assert actual == 0
+    assert seen == [("xhigh", "xhigh")]
+
+
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), trace=False)
     cfg.prompts_dir.mkdir(parents=True)

@@ -147,7 +147,8 @@ def test_write_default_template_creates_jsrc_once(tmp_path):
     assert {spec.key for spec in settings.REGISTRY} <= template_keys
     assert {spec.env for spec in settings.REGISTRY if spec.env} <= env_keys
     assert "minimal" in text
-    assert "min=low" in text
+    assert "xhigh" in text
+    assert "off disables" in text
     rendered = settings.collect_settings(config_paths=[target], env={})
     assert rendered["model"]["id"] == settings.DEFAULT_MODEL
     assert settings.write_default_template(target) is False
