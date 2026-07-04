@@ -146,8 +146,11 @@ def _tracked_paths(rows: list[tuple[str, str]]) -> list[str]:
     return paths
 
 
-def _print_diff_section(repo: Path, title: str, paths: list[str], *, cached: bool) -> None:
-    print(f"\n-- {title} (hunks numbered per file; reference as `stage <file> <n[,n]|all>`) --")
+def _print_diff_section(repo: Path, title: str, paths: list[str], *, cached: bool, stageable: bool) -> None:
+    if stageable:
+        print(f"\n-- {title} (hunks numbered per file; reference as `stage <file> <n[,n]|all>`) --")
+    else:
+        print(f"\n-- {title} (already staged; review before commit — hunk numbers here do NOT address `stage`) --")
     any_diff = False
     for path in paths:
         args = ("diff", "--cached", "--", path) if cached else ("diff", "--", path)
@@ -189,8 +192,8 @@ def cmd_survey(repo: str | Path | None = None) -> int:
     untracked = [p for xy, p in rows if xy == "??"]
 
     try:
-        _print_diff_section(repo_path, "staged diff", tracked, cached=True)
-        _print_diff_section(repo_path, "unstaged diff", tracked, cached=False)
+        _print_diff_section(repo_path, "staged diff", tracked, cached=True, stageable=False)
+        _print_diff_section(repo_path, "unstaged diff", tracked, cached=False, stageable=True)
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 1

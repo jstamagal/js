@@ -72,6 +72,12 @@ def test_survey_reports_staged_and_unstaged_hunks_for_same_file(repo, capsys):
     assert "line28_UNSTAGED" not in staged_section
     assert "line28_UNSTAGED" in unstaged_section
 
+    # The staged section's hunk numbers don't address `stage` (only unstaged
+    # hunks are stageable) — its header must not carry the `stage <file> <n>`
+    # instruction, or the model can silently stage the wrong region.
+    assert "reference as `stage" not in staged_section
+    assert "reference as `stage" in unstaged_section
+
 
 def test_stage_subset_of_hunks(repo):
     # three well-separated edits -> three hunks; stage only 1 and 3
