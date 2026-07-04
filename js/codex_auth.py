@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import secrets
+import selectors
+import socket
 import sys
 import time
 import urllib.parse
@@ -300,32 +302,70 @@ class _CallbackServer(HTTPServer):
     received_error: str | None = None
 
 
+class _CallbackServerV6(_CallbackServer):
+    address_family = socket.AF_INET6
+
+
+def _bind_callback_servers(handler_cls: type[BaseHTTPRequestHandler]) -> list[_CallbackServer]:
+    """Bind the OAuth callback on every loopback family this host supports.
+
+    The registered redirect is ``http://localhost:1455/...``; on a dual-stack
+    host ``localhost`` can resolve to ``::1`` first, and a browser that
+    doesn't fall back to 127.0.0.1 would sit waiting on a port nothing is
+    listening on until the timeout. Binding both loopback addresses on the
+    same port removes that race. The redirect string itself must not change —
+    it has to match what CLIENT_ID is registered with at OpenAI.
+    """
+    servers: list[_CallbackServer] = []
+    for cls, address in ((_CallbackServer, "127.0.0.1"), (_CallbackServerV6, "::1")):
+        try:
+            servers.append(cls((address, CALLBACK_PORT), handler_cls))
+        except OSError:
+            continue  # that family isn't available on this host; the other may still bind
+    return servers
+
+
 def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> Login:
     """Run the fixed-port browser PKCE OAuth flow and return a saved Login."""
-
 
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
     url = build_authorize_url(state, challenge, originator=originator)
-    server = _CallbackServer(("127.0.0.1", CALLBACK_PORT), _CallbackHandler)
-    server.expected_state = state
-    server.timeout = 1.0
+    servers = _bind_callback_servers(_CallbackHandler)
+    if not servers:
+        raise RuntimeError(
+            f"OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
+        )
+    for server in servers:
+        server.expected_state = state
+        server.timeout = 1.0
     print("Opening browser for OpenAI Codex login...")
     print(f"If it does not open, visit:\n{url}")
     webbrowser.open(url)
     deadline = time.monotonic() + timeout_s
+    sel = selectors.DefaultSelector()
+    for server in servers:
+        sel.register(server, selectors.EVENT_READ, server)
+    winner: _CallbackServer | None = None
     try:
-        while time.monotonic() < deadline and not (server.received_code or server.received_error):
-            server.handle_request()
+        while time.monotonic() < deadline and winner is None:
+            for key, _events in sel.select(timeout=1.0):
+                srv = key.data
+                srv.handle_request()
+                if srv.received_code or srv.received_error:
+                    winner = srv
+                    break
     finally:
-        server.server_close()
-    if server.received_error:
-        raise RuntimeError(f"OpenAI Codex OAuth failed: {server.received_error}")
-    if not server.received_code:
+        sel.close()
+        for server in servers:
+            server.server_close()
+    if winner is None:
         raise RuntimeError("OpenAI Codex OAuth timed out waiting for browser callback")
-    if server.received_state != state:
+    if winner.received_error:
+        raise RuntimeError(f"OpenAI Codex OAuth failed: {winner.received_error}")
+    if winner.received_state != state:
         raise RuntimeError("OpenAI Codex OAuth state mismatch")
-    return login_from_token(exchange_code_for_token(server.received_code, verifier, CALLBACK_REDIRECT_URI))
+    return login_from_token(exchange_code_for_token(winner.received_code, verifier, CALLBACK_REDIRECT_URI))
 
 
 def login_device(*, open_browser: bool = True) -> Login:
