@@ -8,6 +8,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import time
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -531,6 +533,71 @@ def _iter_files(root: Path) -> Iterable[Path]:
                 yield candidate
 
 
+_RG_MISSING = "ERROR: rg (ripgrep) not found on PATH; run `just install` to provision it."
+_RG_TIMEOUT_S = 120
+
+
+def _rg_binary() -> str | None:
+    return shutil.which("rg")
+
+
+def _rg_env() -> dict[str, str]:
+    # Inherit the real environment (PATH, locale) but drop the box-local ripgrep
+    # config so the documented contract holds everywhere: .gitignore honoured
+    # inside a git tree, .ignore/.rgignore anywhere, hidden + binary + non-regular
+    # files skipped. A stray RIPGREP_CONFIG_PATH must not silently change results.
+    env = dict(os.environ)
+    env.pop("RIPGREP_CONFIG_PATH", None)
+    return env
+
+
+def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int | None, str, bool]:
+    """Run rg and collect at most *want* output lines, then stop it.
+
+    Returns (lines, returncode, stderr, timed_out). returncode is None when rg
+    was stopped early because enough lines were already gathered — the caller
+    treats that as a successful match. Streaming with an early stop keeps memory
+    bounded (a pattern matching millions of lines never buffers them all) and,
+    with the wall-clock deadline, guarantees the turn cannot hang."""
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=_rg_env(), text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        return [], 2, str(exc), False
+    lines: list[str] = []
+    stopped_early = False
+    timed_out = False
+    deadline = time.monotonic() + timeout
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if len(lines) >= want:
+                stopped_early = True
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+    finally:
+        if stopped_early or timed_out:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    stderr = proc.stderr.read() if proc.stderr is not None else ""
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+    if not stopped_early and proc.poll() is None:
+        proc.wait()
+    rc = None if stopped_early else proc.returncode
+    return lines, rc, stderr, timed_out
+
+
 def fs_search(
     pattern: str,
     path: str | None = None,
@@ -563,72 +630,48 @@ def fs_search(
     if cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
-    flags = re.MULTILINE
-    if case_insensitive:
-        flags |= re.IGNORECASE
-    if multiline:
-        flags |= re.DOTALL
-    try:
-        regex = re.compile(pattern, flags)
-    except re.error as exc:
-        return f"ERROR: Invalid regex pattern: {exc}"
+    rg = _rg_binary()
+    if rg is None:
+        return _RG_MISSING
 
-    results: list[str] = []
     skip = int_or_default(offset, 0, minimum=0)
     limit = int_or_default(head_limit, 10_000, minimum=1)
     before = int_or_default(context_lines if context_lines is not None else before_context, 0, minimum=0)
     after = int_or_default(context_lines if context_lines is not None else after_context, 0, minimum=0)
 
-    for file in _iter_files(root):
-        if glob and not file.match(glob):
-            continue
-        if file_type and file.suffix.lstrip(".") != file_type.lstrip("."):
-            continue
-        if _is_binary(file):
-            continue
-        try:
-            text = file.read_text(errors="replace")
-        except OSError:
-            continue
-        matches = list(regex.finditer(text)) if multiline else []
-        if multiline:
-            match_count = len(matches)
-            if match_count == 0:
-                continue
-            if mode == "files_with_matches":
-                results.append(str(file))
-            elif mode == "count":
-                results.append(f"{file}:{match_count}")
-            else:
-                for m in matches:
-                    line_no = text.count("\n", 0, m.start()) + 1
-                    snippet = m.group(0).splitlines()[0] if m.group(0) else ""
-                    prefix = f"{file}:{line_no}:" if show_line_numbers else f"{file}:"
-                    results.append(prefix + snippet)
-        else:
-            lines = text.splitlines()
-            matched_lines: list[tuple[int, str]] = [(i, line) for i, line in enumerate(lines, 1) if regex.search(line)]
-            if not matched_lines:
-                continue
-            if mode == "files_with_matches":
-                results.append(str(file))
-            elif mode == "count":
-                results.append(f"{file}:{len(matched_lines)}")
-            else:
-                seen: set[int] = set()
-                for line_no, line in matched_lines:
-                    lo = max(1, line_no - before)
-                    hi = min(len(lines), line_no + after)
-                    for n in range(lo, hi + 1):
-                        if n in seen:
-                            continue
-                        seen.add(n)
-                        prefix = f"{file}:{n}:" if show_line_numbers else f"{file}:"
-                        results.append(prefix + lines[n - 1])
-        if len(results) >= skip + limit:
-            break
+    argv = [rg, "--color=never", "--no-messages"]
+    if mode == "files_with_matches":
+        argv.append("--files-with-matches")
+    elif mode == "count":
+        argv.append("--count")
+    else:  # content
+        argv += ["--no-heading", "--with-filename"]
+        argv.append("--line-number" if show_line_numbers else "--no-line-number")
+        if before:
+            argv += ["--before-context", str(before)]
+        if after:
+            argv += ["--after-context", str(after)]
+    if case_insensitive:
+        argv.append("--ignore-case")
+    if multiline:
+        argv += ["--multiline", "--multiline-dotall"]
+    if glob:
+        argv += ["--glob", str(glob)]
+    if file_type:
+        argv += ["--glob", f"*.{str(file_type).lstrip('.')}"]
+    argv += ["--regexp", pattern, "--", str(root)]
 
-    sliced = results[skip:skip + limit]
+    lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
+    if timed_out:
+        return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
+    # rc None = rg stopped early with a full page of matches; 0 = matches; 1 = no
+    # matches (clean empty result); anything else = real rg error (bad regex/glob).
+    if rc is not None and rc not in (0, 1):
+        detail = (stderr or "").strip()
+        first = detail.splitlines()[0] if detail else f"rg exit {rc}"
+        return f"ERROR: {first}"
+
+    sliced = lines[skip:skip + limit]
     out = "\n".join(sliced) if sliced else "(no matches)"
     context.search_cache[cache_key] = out
     return out
