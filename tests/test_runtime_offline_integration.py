@@ -172,6 +172,57 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     assert hooks.emitted[-1][1]["reason"] == "stop"
 
 
+def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+    provider_metadata = {"incomplete": True, "incomplete_reason": "max_output_tokens"}
+
+    def stream_stub(**kwargs):
+        kwargs["on_text"]("PARTIAL")
+        assistant_message = ai.assistant_message("PARTIAL").model_copy(
+            update={"provider_metadata": provider_metadata}
+        )
+        return ModelStreamResult(
+            text="PARTIAL",
+            tool_calls=[],
+            reasoning="",
+            usage=ai.types.usage.Usage(input_tokens=10, output_tokens=7),
+            finish_reason="incomplete:max_output_tokens",
+            assistant_message=assistant_message,
+            provider_metadata=provider_metadata,
+            incomplete_reason="max_output_tokens",
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Say something long."}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    response = next(payload for event, payload in hooks.emitted if event == "response")
+    assert response["finish_reason"] == "incomplete:max_output_tokens"
+    assert response["incomplete_reason"] == "max_output_tokens"
+    turn_end = hooks.emitted[-1]
+    assert turn_end[0] == "turn_end"
+    assert turn_end[1]["reason"] == "incomplete"
+    assert turn_end[1]["finish_reason"] == "incomplete:max_output_tokens"
+    assert turn_end[1]["incomplete_reason"] == "max_output_tokens"
+
+    assistant_record = messages[-1]
+    assert assistant_record["provider_metadata"] == provider_metadata
+    assert assistant_record["incomplete_reason"] == "max_output_tokens"
+
+    replay = runtime.model_client.history_to_ai_messages("system", messages)
+    assert getattr(replay[-1], "provider_metadata", None) == provider_metadata
+
+
 def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
     hooks = RecordingHooks()
     live_settings = settings.seed_defaults()

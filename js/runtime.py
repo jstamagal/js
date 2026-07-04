@@ -871,8 +871,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 )
         return emission.hooks
 
-    def _end_turn(reason: str) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id)
+    def _end_turn(reason: str, **extra: Any) -> None:
+        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
 
     _emit_event(
         "turn_start",
@@ -986,6 +986,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         for call in result.tool_calls
                     ]
                     finish = result.finish_reason
+                    provider_metadata = (
+                        getattr(result, "provider_metadata", None)
+                        or getattr(result.assistant_message, "provider_metadata", None)
+                    )
+                    incomplete_reason = (
+                        getattr(result, "incomplete_reason", None)
+                        or model_client.incomplete_reason_from_metadata(provider_metadata)
+                    )
+                    if incomplete_reason:
+                        finish = model_client.incomplete_finish_reason(incomplete_reason)
                     reasoning = result.reasoning
                     usage = result.usage
                     active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
@@ -993,6 +1003,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     telemetry.event("turn_complete", model=model,
                                     latency_ms=int((time.time() - t0) * 1000),
                                     finish_reason=finish, n_tool_calls=len(pending_calls),
+                                    incomplete_reason=incomplete_reason,
                                     prompt_tokens=active_context.last_prompt_tokens,
                                     cached_tokens=active_context.last_cached_tokens)
                     _out_tok = 0
@@ -1075,13 +1086,31 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if reasoning:
                 history_assistant_record["reasoning_content"] = reasoning
             assert result is not None
-            ai_convo.append(_sanitize_assistant_message(result.assistant_message))
+            if not isinstance(provider_metadata, dict):
+                provider_metadata = None
+            incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
+            if provider_metadata:
+                history_assistant_record["provider_metadata"] = provider_metadata
+            if incomplete_reason:
+                history_assistant_record["incomplete_reason"] = incomplete_reason
+            assistant_message = result.assistant_message
+            if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
+                assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
+            ai_convo.append(_sanitize_assistant_message(assistant_message))
             messages.append(history_assistant_record)
             if text:
-                _emit_event("response", text=text, finish_reason=finish)
+                payload = {"text": text, "finish_reason": finish}
+                if incomplete_reason:
+                    payload["incomplete_reason"] = incomplete_reason
+                _emit_event("response", **payload)
+            if incomplete_reason and not suppress_output:
+                print(f"{C.ORANGE}warning: response incomplete ({incomplete_reason}){C.RESET}", file=sys.stderr)
 
             if not pending_calls:
-                _end_turn("stop")
+                if incomplete_reason:
+                    _end_turn("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
+                else:
+                    _end_turn("stop")
                 return
 
             # --- Dispatch tools, append result messages ---
