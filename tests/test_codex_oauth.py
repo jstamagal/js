@@ -518,6 +518,139 @@ def test_codex_stream_incomplete_marks_provider_metadata_instead_of_looking_clea
     assert end.usage.output_tokens == 4
 
 
+def test_apply_refreshed_token_preserves_headers_and_rotates_only_token_fields():
+    # login_from_token() only fills the codex/token fields; replace()ing its
+    # result (the old behavior) reset provider_headers — and any other field
+    # — to empty on every ~hourly refresh. apply_refreshed_token() must start
+    # from the existing login instead.
+    login = logins.Login(
+        provider_id="openai-codex",
+        sdk_provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api",
+        provider_api_key="old-access",
+        provider_headers={"x-custom": "1"},
+        codex_refresh_token="old-refresh",
+        codex_token_expires=100.0,
+        codex_account_id="acct_old",
+        codex_email="old@example.test",
+    )
+    token = codex_auth.CodexToken(
+        access="new-access", refresh="new-refresh", expires_at=200.0,
+        account_id="acct_new", email="new@example.test",
+    )
+    refreshed = codex_auth.apply_refreshed_token(login, token)
+    assert refreshed.provider_headers == {"x-custom": "1"}
+    assert refreshed.provider_id == "openai-codex"
+    assert refreshed.sdk_provider_id == "openai-codex"
+    assert refreshed.provider_base_url == "https://chatgpt.com/backend-api"
+    assert refreshed.provider_api_key == "new-access"
+    assert refreshed.codex_refresh_token == "new-refresh"
+    assert refreshed.codex_token_expires == 200.0
+    assert refreshed.codex_account_id == "acct_new"
+    assert refreshed.codex_email == "new@example.test"
+
+
+def test_apply_refreshed_token_falls_back_to_default_base_url_when_missing():
+    login = logins.Login(provider_id="openai-codex", provider_api_key="old", codex_refresh_token="r", codex_token_expires=0.0)
+    token = codex_auth.CodexToken(access="new", refresh="new-r", expires_at=1.0, account_id="acct")
+    refreshed = codex_auth.apply_refreshed_token(login, token)
+    assert refreshed.provider_base_url == codex_auth.DEFAULT_CODEX_BASE_URL
+
+
+def test_refreshed_login_preserves_provider_headers(monkeypatch):
+    login = logins.Login(
+        provider_id="openai-codex",
+        sdk_provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api",
+        provider_api_key="old-access",
+        provider_headers={"x-custom": "1"},
+        codex_refresh_token="old-refresh",
+        codex_token_expires=0.0,
+        codex_account_id="acct_old",
+    )
+    new_token = codex_auth.CodexToken(access="new-access", refresh="new-refresh", expires_at=999.0, account_id="acct_new")
+    monkeypatch.setattr(codex_auth, "refresh_token", lambda *a, **k: new_token)
+    refreshed = codex_auth.refreshed_login(login)
+    assert refreshed.provider_headers == {"x-custom": "1"}
+    assert refreshed.provider_api_key == "new-access"
+    assert refreshed.codex_refresh_token == "new-refresh"
+
+
+def test_refreshed_login_async_preserves_provider_headers(monkeypatch):
+    login = logins.Login(
+        provider_id="openai-codex",
+        sdk_provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api",
+        provider_api_key="old-access",
+        provider_headers={"x-custom": "1"},
+        codex_refresh_token="old-refresh",
+        codex_token_expires=0.0,
+    )
+    new_token = codex_auth.CodexToken(access="new-access", refresh="new-refresh", expires_at=999.0, account_id="acct_new")
+
+    async def fake_refresh_async(*a, **k):
+        return new_token
+
+    monkeypatch.setattr(codex_auth, "refresh_token_async", fake_refresh_async)
+    refreshed = asyncio.run(codex_auth.refreshed_login_async(login))
+    assert refreshed.provider_headers == {"x-custom": "1"}
+    assert refreshed.provider_api_key == "new-access"
+
+
+class _FakeTokenRefreshClient:
+    """Serves the OAuth token-refresh POST that _ensure_access() triggers."""
+
+    def __init__(self, token_payload: dict[str, Any]):
+        self._token_payload = token_payload
+        self.post_calls: list[dict[str, Any]] = []
+
+    async def post(self, url, *, data=None, headers=None):
+        self.post_calls.append({"url": url, "data": data, "headers": headers})
+        return _StaticModelListResponse(200, self._token_payload)
+
+    async def aclose(self):
+        return None
+
+
+def test_ensure_access_refresh_preserves_login_headers_end_to_end(tmp_path: Path):
+    # The full codex_provider._ensure_access() path: an expired token forces a
+    # background refresh mid-turn, and the persisted login must still carry
+    # provider_headers afterward instead of being silently reset to {}.
+    logins.set_config_dir(tmp_path)
+    try:
+        new_access = _fake_jwt(account_id="acct_new", email="new@example.test")
+        client = _FakeTokenRefreshClient({"access_token": new_access, "refresh_token": "new-refresh", "expires_in": 3600})
+        login = logins.Login(
+            provider_id="openai-codex",
+            sdk_provider_id="openai-codex",
+            provider_base_url="https://chatgpt.com/backend-api",
+            provider_api_key=_fake_jwt(),
+            provider_headers={"x-custom": "1"},
+            codex_refresh_token="old-refresh",
+            codex_token_expires=0.0,  # already expired -> forces a refresh
+            codex_account_id="acct_123",
+        )
+        provider = codex_provider.OpenAICodexProvider(
+            access_token=login.provider_api_key,
+            refresh_token=login.codex_refresh_token,
+            expires_at=login.codex_token_expires,
+            account_id=login.codex_account_id,
+            base_url=login.provider_base_url,
+            login=login,
+            client=client,
+        )
+        asyncio.run(provider._ensure_access())
+        assert client.post_calls  # the refresh actually happened
+        saved = logins.load_logins()["openai-codex"]
+        assert saved.provider_headers == {"x-custom": "1"}
+        assert saved.provider_id == "openai-codex"
+        assert saved.sdk_provider_id == "openai-codex"
+        assert saved.provider_api_key == new_access
+        assert saved.codex_refresh_token == "new-refresh"
+    finally:
+        logins.set_config_dir(Path.home() / ".config" / "js")
+
+
 def test_codex_refresh_preserves_refresh_token_and_profile():
     previous = codex_auth.CodexToken(
         access="old-access",

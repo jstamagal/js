@@ -12,7 +12,6 @@ import json
 import platform
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import ai
@@ -485,13 +484,13 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             self._expires_at = token.expires_at
             self._account_id = token.account_id or _account_id_from_token(token.access)
             if self._login is not None:
-                from . import logins
-
-                refreshed = replace(
-                    codex_auth.login_from_token(token),
-                    provider_base_url=self._login.provider_base_url or self.base_url,
-                )
-                logins.save_login(refreshed)
+                # apply_refreshed_token() rotates only the token-derived fields
+                # onto the EXISTING login — replace()ing login_from_token(token)
+                # here used to rebuild a bare Login and silently reset
+                # provider_headers (and any other field) to empty on every
+                # ~hourly refresh.
+                refreshed = codex_auth.apply_refreshed_token(self._login, token)
+                codex_auth.save_refreshed_login(refreshed)
                 self._login = refreshed
         return self._access_token, self._account_id
 

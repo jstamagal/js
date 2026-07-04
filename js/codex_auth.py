@@ -448,18 +448,37 @@ def login_needs_refresh(login: Login, *, now: float | None = None) -> bool:
     return (now if now is not None else time.time()) >= float(expires) - _REFRESH_SKEW_SECONDS
 
 
+def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
+    """Rotate only the token-derived fields onto the EXISTING login.
+
+    ``login_from_token`` builds a bare Login with just the codex/token fields
+    populated — replace()ing its result instead of the real login reset
+    provider_headers (and any other field the login carried) to empty on
+    every ~hourly refresh. Starting from ``login`` keeps everything else.
+    """
+    return replace(
+        login,
+        provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL,
+        provider_api_key=token.access,
+        codex_refresh_token=token.refresh,
+        codex_token_expires=token.expires_at,
+        codex_account_id=token.account_id,
+        codex_email=token.email,
+    )
+
+
 def refreshed_login(login: Login) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
-    return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
+    return apply_refreshed_token(login, token)
 
 
 async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
     token = await refresh_token_async(login.codex_refresh_token, client=client, previous=_token_from_login(login))
-    return replace(login_from_token(token), provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL)
+    return apply_refreshed_token(login, token)
 
 
 def save_refreshed_login(refreshed: Login) -> None:
