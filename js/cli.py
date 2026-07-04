@@ -1976,12 +1976,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
     parser.add_argument("--vault", help="wiki vault: creative|general|path (default: infer from target/cwd, else creative)")
-    parser.add_argument("--dangerously-evaluate-inline-code", "--dangerously-evaluate-shell-commands",
-                        dest="dangerously_evaluate_inline_code", action="store_true",
-                        help="execute !{sh|python|c|node ...} inline directives / ```!lang fences in the system "
-                             "prompt and inject their stdout. Compiles/runs arbitrary code from prompt files — "
-                             "only use on prompts you trust. {{VAR}} env expansion and !{env}/!{file} are always "
-                             "on and do not need this flag.")
+    parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
+                        help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
+                             "and ```!lang fences are left literal instead of running. Inline code runs by "
+                             "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
+                             "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
     parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
@@ -2069,8 +2068,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.debug and args.debug_file:
         print(f"{C.ORANGE}error: choose either --debug or --debug-file, not both{C.RESET}", file=sys.stderr)
         return 2
-    if args.dangerously_evaluate_inline_code:
-        os.environ["JS_ALLOW_INLINE_CODE"] = "1"
+    if args.im_a_pussy:
+        # Inline code runs by default now; the opt-out flag turns it off for this
+        # run via the same env knob the config layer reads.
+        os.environ["JS_ALLOW_INLINE_CODE"] = "0"
     cli_agent = None
     if args.agent:
         try:
