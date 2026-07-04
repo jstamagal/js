@@ -179,6 +179,80 @@ def test_request_trace_skips_schemas_on_followup(capsys):
 
 
 # --------------------------------------------------------------------------
+# Codex incomplete streams must not look like clean stops
+# --------------------------------------------------------------------------
+
+def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path, monkeypatch):
+    rec = _Recorder()
+    calls: list[dict] = []
+    meta = {"incomplete": True, "incomplete_reason": "max_output_tokens"}
+    msg = ai.assistant_message("partial").model_copy(update={"provider_metadata": meta})
+
+    def stub(**kwargs):
+        return ModelStreamResult(
+            text="partial",
+            tool_calls=[],
+            reasoning="",
+            usage=ai.types.usage.Usage(input_tokens=3, output_tokens=7),
+            finish_reason="stop",  # old model_client/runtime treated this as a clean stop
+            assistant_message=msg,
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
+    cfg = _cfg(tmp_path)
+    messages = [{"role": "user", "content": "hi"}]
+    runtime.run_turn(
+        cfg, "SYS", messages, runtime.Telemetry(debug_log=None),
+        tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True, event_hooks=rec, call_stats=calls,
+    )
+
+    assistant = messages[-1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == "partial"
+    assert assistant["provider_metadata"] == meta
+    assert assistant["incomplete_reason"] == "max_output_tokens"
+
+    response = next(payload for event, payload in rec.events if event == "response")
+    assert response["finish_reason"] == "incomplete:max_output_tokens"
+    assert response["incomplete_reason"] == "max_output_tokens"
+    # turn_complete is telemetry, not an event hook; call_stats is the local
+    # runtime summary that must carry the non-clean finish reason.
+    assert calls[-1]["finish_reason"] == "incomplete:max_output_tokens"
+    end = next(payload for event, payload in rec.events if event == "turn_end")
+    assert end["reason"] == "incomplete"
+    assert end["finish_reason"] == "incomplete:max_output_tokens"
+
+    replay = MC.history_to_ai_messages("SYS", [assistant])[-1]
+    assert replay.provider_metadata == meta
+
+
+def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypatch):
+    rec = _Recorder()
+    calls: list[dict] = []
+
+    def stub(**kwargs):
+        return _result("done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
+    cfg = _cfg(tmp_path)
+    messages = [{"role": "user", "content": "hi"}]
+    runtime.run_turn(
+        cfg, "SYS", messages, runtime.Telemetry(debug_log=None),
+        tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True, event_hooks=rec, call_stats=calls,
+    )
+
+    assistant = messages[-1]
+    assert assistant == {"role": "assistant", "content": "done"}
+    response = next(payload for event, payload in rec.events if event == "response")
+    assert response == {"text": "done", "finish_reason": "stop"}
+    assert calls[-1]["finish_reason"] == "stop"
+    end = next(payload for event, payload in rec.events if event == "turn_end")
+    assert end == {"reason": "stop", "model": "offline-test-model", "provider_id": None}
+
+
+# --------------------------------------------------------------------------
 # dispatch-layer clip carries the same visible marker as the subagent layer
 # --------------------------------------------------------------------------
 
