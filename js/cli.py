@@ -1928,6 +1928,136 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# --printonly: dry-run dump of what would be sent to the model. NEVER errors —
+# every step degrades to a warning and keeps going (that is the whole point).
+# --------------------------------------------------------------------------
+
+_PRINTONLY_KNOWN = "tpeib"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
+_PRINTONLY_TITLES = {
+    "t": "TOOLS",
+    "p": "PROMPT (raw)",
+    "e": "PROMPT (env-expanded)",
+    "i": "PROMPT (inlines-expanded)",
+    "b": "BENCHMARKS",
+}
+
+
+def _printonly_slots(spec: str) -> tuple[str, int | None, str | None]:
+    """Parse ``LETTERS[:COUNT][:PATH]``. Positional slots; an empty slot skips.
+    ``p::/tmp/x.md`` -> letters 'p', no count, path '/tmp/x.md'. Never raises."""
+    parts = (spec or "").split(":", 2)
+    letters = parts[0].strip()
+    count: int | None = None
+    if len(parts) >= 2 and parts[1].strip():
+        try:
+            n = int(parts[1].strip())
+            count = n if n >= 0 else None
+        except ValueError:
+            print(f"js: --printonly ignoring non-numeric count {parts[1]!r}", file=sys.stderr)
+    path = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
+    return letters, count, path
+
+
+def _printonly_letters(letters: str) -> list[str]:
+    """Resolve the letter cluster to an ordered, de-duplicated section list.
+    'a' means everything; unknown letters warn and skip; nothing valid -> all."""
+    if "a" in letters:
+        return list(_PRINTONLY_KNOWN)
+    chosen: list[str] = []
+    for ch in letters:
+        if ch in _PRINTONLY_KNOWN:
+            if ch not in chosen:
+                chosen.append(ch)
+        elif ch == "o":
+            print("js: --printonly letter 'o' is parked (unimplemented); skipping", file=sys.stderr)
+        else:
+            print(f"js: --printonly unknown letter {ch!r}; skipping", file=sys.stderr)
+    return chosen or list(_PRINTONLY_KNOWN)
+
+
+def _raw_configured_spec(cfg):
+    """The assembled prompt spec BEFORE inline-directive expansion — what
+    load_configured_prompt_spec builds, minus the expansion pass."""
+    roots = tuple(getattr(cfg, "prompt_roots", ()))
+    if len(roots) >= 3:
+        return P.load_agent_prompt_spec(
+            cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
+            project_agents_root=roots[2], agents_files=getattr(cfg, "agents_files", ()),
+        )
+    return P.load_prompt_spec(cfg.prompts_dir)
+
+
+def _printonly_run(args, cli_agent, presets) -> int:
+    letters, count, path = _printonly_slots(args.printonly)
+    sections = _printonly_letters(letters)
+
+    try:
+        cfg = _cfg_from_env_compat(
+            args.session, save_session=False, extras=args.extras, agent_id=cli_agent,
+            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            presets=presets,
+        )
+    except Exception as e:  # noqa: BLE001 — printonly never errors
+        print(f"js: --printonly could not build config: {type(e).__name__}: {e}", file=sys.stderr)
+        return 0
+
+    try:
+        raw_spec = _raw_configured_spec(cfg)
+    except Exception as e:  # noqa: BLE001
+        print(f"js: --printonly could not load prompt: {type(e).__name__}: {e}", file=sys.stderr)
+        raw_spec = None
+
+    allow_code = bool(getattr(cfg, "allow_inline_code", True))
+    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
+    system = raw_spec.system if raw_spec is not None else ""
+    selectors = raw_spec.tool_selectors if raw_spec is not None else ()
+
+    def _tools() -> str:
+        specs = _registry_for(cfg).select(selectors).openai_specs()
+        return json.dumps(specs, indent=2, ensure_ascii=False)
+
+    def _bench() -> str:
+        benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
+        if not benches:
+            return "(no NN-benchmark.md files)"
+        blocks = []
+        for bm in benches:
+            body = expand_prompt(bm.prompt, allow_code=allow_code, timeout_s=timeout_s, on_error="warn")
+            blocks.append(f"# bench {bm.name}\n{body}")
+        return "\n\n".join(blocks)
+
+    builders = {
+        "t": _tools,
+        "p": lambda: system,
+        "e": lambda: expand_prompt(system, allow_code=False, on_error="warn"),
+        "i": lambda: expand_prompt(system, allow_code=allow_code, timeout_s=timeout_s, on_error="warn"),
+        "b": _bench,
+    }
+
+    chunks: list[str] = []
+    for ch in sections:
+        try:
+            body = builders[ch]()
+        except Exception as e:  # noqa: BLE001 — a bad section degrades, never kills the run
+            print(f"js: --printonly section {ch!r} degraded: {type(e).__name__}: {e}", file=sys.stderr)
+            body = f"(section {_PRINTONLY_TITLES[ch]} unavailable: {type(e).__name__}: {e})"
+        chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
+
+    text = "\n\n".join(chunks)
+    if count is not None:
+        text = "\n".join(text.splitlines()[:count])
+
+    if path:
+        try:
+            Path(path).expanduser().write_text(text + "\n", encoding="utf-8")
+            return 0
+        except OSError as e:
+            print(f"js: --printonly could not write {path}: {e}; printing to stdout instead", file=sys.stderr)
+    print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Handle login/logout before argparse so they don't require a valid agent/config.
     if argv and argv[0] in ("--login", "login"):
@@ -1981,6 +2111,12 @@ def main(argv: list[str] | None = None) -> int:
                              "and ```!lang fences are left literal instead of running. Inline code runs by "
                              "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
                              "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
+    parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
+                        help="dry run: assemble what would be sent and print it instead of calling the model, "
+                             "then exit. LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded "
+                             "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
+                             ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
+                             "Never errors — unknown letters/unwritable paths degrade with a warning.")
     parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
@@ -2079,6 +2215,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
+
+    if args.printonly is not None:
+        return _printonly_run(args, cli_agent, presets)
 
     selected_modes = [name for name, enabled in (("wiki", args.wiki), ("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
