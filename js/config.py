@@ -287,7 +287,12 @@ def from_env(
 
     config_paths: list[Path] = []
     if not ignore_global_config:
-        config_paths.append(_paths.global_config_file())
+        config_file_path = _paths.global_config_file()
+        # RULING J: write the first-run template BEFORE it's read below, so a
+        # fresh box's stock wiki.aliases (creative/general) are live on run 1
+        # instead of only from run 2 onward.
+        _settings.write_default_template(config_file_path)
+        config_paths.append(config_file_path)
     if not ignore_local_config:
         config_paths.extend([
             project_dir / ".js" / "jsrc",
@@ -354,10 +359,7 @@ def from_env(
     artifact_url = _settings.get_dotted(js_root_settings, ("artifact", "url"))
     artifact_bin = _settings.get_dotted(js_root_settings, ("artifact", "bin"))
 
-    config_file_path = _paths.global_config_file()
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
-    if not ignore_global_config:
-        _settings.write_default_template(config_file_path)
 
     sessions_dir = _paths.sessions_root() / agent_id
     sessions_dir.mkdir(parents=True, exist_ok=True)
