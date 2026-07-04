@@ -251,6 +251,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
     ("max_file_bytes", ("limits", "max_file_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
+    ("subagent_max_workers", ("limits", "subagent_max_workers")),
     ("wiki_vault_lock_timeout_s", ("limits", "wiki_vault_lock_timeout_s")),
 )
 

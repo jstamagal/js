@@ -50,7 +50,7 @@ as `<set>`.
 | --- | --- | --- |
 | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
 | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|minimal\|xhigh; min=low. |
+| `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. Clear with `set -model.reasoning_effort`. |
 | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
 | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
@@ -65,6 +65,7 @@ as `<set>`.
 | `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
 | `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
 | `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
+| `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
 | `limits.wiki_vault_lock_timeout_s` | `30` | Wiki vault lock timeout in seconds. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
@@ -124,7 +125,7 @@ coercion as `set`.
 | --- | --- | --- | --- |
 | `JS_MODEL` | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
 | `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|low\|medium\|high\|max\|minimal\|xhigh; min=low. |
+| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
 | `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
 | `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
@@ -148,8 +149,8 @@ remain only for direct tool compatibility and subprocess boundaries.
 
 The byte caps use the canonical `_BYTES` env names only
 (`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter
-aliases. Note there is **no** env var for `limits.task_max_depth` — set it in
-`jsrc` or via `--extra limits.task_max_depth=N`.
+aliases. Note there is **no** env var for `limits.task_max_depth` or
+`limits.subagent_max_workers` — set them in `jsrc` or via `--extra limits.*=N`.
 
 `JS_ALLOW_INLINE_CODE=1` permits code-running inline prompt directives; it is set
 automatically by `--dangerously-evaluate-inline-code`. See
@@ -176,7 +177,8 @@ js --migrate-config
 `--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
 all `jsrc` files. It may be repeated. Exact registered keys use the same
 registry coercion as `set` and env vars, including JSON validation for structured
-settings and each knob's clear/default tokens. Loose keys and map subkeys use
+settings; values store verbatim, with no magic clear/default token (clearing a
+knob back to its default is `set -key`). Loose keys and map subkeys use
 generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
 on the first `=` only, so values may contain `=`.
 

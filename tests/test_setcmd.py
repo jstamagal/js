@@ -249,6 +249,18 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
 
 
+def test_subagent_max_workers_rejects_values_below_one():
+    live_settings = settings.seed_defaults()
+
+    rejected = setcmd.run_repl_command(live_settings, "/set limits.subagent_max_workers 0")
+    accepted = setcmd.run_repl_command(live_settings, "/set limits.subagent_max_workers 1")
+
+    assert rejected.error == "limits.subagent_max_workers: expected an integer >= 1"
+    assert rejected.changed is False
+    assert accepted.error is None
+    assert accepted.lines == ["limits.subagent_max_workers = 1"]
+
+
 @pytest.mark.parametrize("token", ["default", "auto", "none", "unset"])
 def test_magic_strings_store_verbatim_for_string_knobs(token):
     # RULING A headline: a literal string knob like model.id stores these
