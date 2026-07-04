@@ -53,7 +53,7 @@ def test_file_missing_skips():
 
 def test_unknown_subsystem_errors():
     with pytest.raises(PromptExpansionError) as e:
-        expand_prompt("!{wat hi}", env={})
+        expand_prompt("!{wat hi}", env={}, on_error="raise")
     assert "unknown inline subsystem" in str(e.value)
 
 
@@ -104,17 +104,43 @@ def test_unescaped_directive_after_escaped_one_still_runs():
 
 def test_sh_gated_off_errors():
     with pytest.raises(PromptExpansionError) as e:
-        expand_prompt("!{sh echo hi}", allow_code=False)
-    assert "--dangerously-evaluate-inline-code" in str(e.value)
+        expand_prompt("!{sh echo hi}", allow_code=False, on_error="raise")
+    assert "--im-a-pussy" in str(e.value)
 
 
 def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
+# ---- default degrade: a failed directive is left literal, never raised ----
+
+def test_unknown_subsystem_degrades_to_literal(capsys):
+    out = expand_prompt("a !{wat hi} b", env={})
+    assert out == "a !{wat hi} b"
+    assert "left literal" in capsys.readouterr().err
+
+
+def test_code_while_off_degrades_to_literal(capsys):
+    out = expand_prompt("run !{sh echo hi} now", allow_code=False)
+    assert out == "run !{sh echo hi} now"
+    assert "left literal" in capsys.readouterr().err
+
+
+def test_one_bad_directive_does_not_kill_the_others():
+    # The good !{env} still expands even though the sibling directive failed.
+    out = expand_prompt("!{wat x} then !{env WHO}", env={"WHO": "ape"})
+    assert out == "!{wat x} then ape"
+
+
+def test_failed_code_run_degrades_to_literal(capsys):
+    out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
+    assert out == "!{sh sh -c 'exit 3'}"
+    assert "left literal" in capsys.readouterr().err
+
+
 def test_sh_nonzero_exit_errors():
     with pytest.raises(PromptExpansionError) as e:
-        expand_prompt("!{sh sh -c 'echo boom >&2; exit 4'}", allow_code=True)
+        expand_prompt("!{sh sh -c 'echo boom >&2; exit 4'}", allow_code=True, on_error="raise")
     assert "4" in str(e.value) and "boom" in str(e.value)
 
 
@@ -128,7 +154,7 @@ def test_fence_sh_block():
 def test_fence_gated_off_errors():
     text = "```!sh\necho hi\n```"
     with pytest.raises(PromptExpansionError):
-        expand_prompt(text, allow_code=False)
+        expand_prompt(text, allow_code=False, on_error="raise")
 
 
 @pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
@@ -183,13 +209,28 @@ def test_persona_expands_env(tmp_path, monkeypatch):
     assert "hello world" in spec.system
 
 
-def test_persona_code_blocked_without_flag(tmp_path):
+def test_persona_code_blocked_leaves_literal_and_starts(tmp_path, capsys):
+    # Opt-out (allow_inline_code False): the code directive must NOT abort the
+    # load — it stays literal and js keeps starting, with a stderr warning.
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
     (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
-    with pytest.raises(PromptExpansionError):
-        P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
+    spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
+    assert "!{sh echo hi}" in spec.system  # left literal, not expanded, not crashed
+    assert "left literal" in capsys.readouterr().err
+
+
+def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
+    # A bad directive (unknown subsystem) degrades gracefully at load: literal +
+    # one warning + startup continues — never a raw traceback at startup.
+    import js.persona as P
+    d = tmp_path / "agent"
+    d.mkdir()
+    (d / "00-seed.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
+    spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=True))
+    assert "!{wat huh}" in spec.system
+    assert "left literal" in capsys.readouterr().err
 
 
 def test_default_inline_code_timeout_is_300():
