@@ -401,3 +401,19 @@ def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp
 
     assert "SURFACE_OK" in actual
     assert seen["tools"] == ["todo_read"]
+
+
+def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
+
+    def completion_stub(**kwargs):
+        return _fake_stream_result("X" * 500)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+
+    actual = task(["talk too much"], agent_id="worker", context=parent)
+
+    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
+    assert "X" * 65 not in actual
