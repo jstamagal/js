@@ -57,6 +57,7 @@ def tools() -> tuple[Tool, ...]:
                 "confidence": {"type": "string", "enum": ["low", "medium", "high"], "description": "Confidence label for extracted knowledge."},
                 "source_count": {"type": "integer", "default": 1, "description": "Number of sources supporting the page."},
                 "overwrite": {"type": "boolean", "default": False, "description": "Allow replacing an existing page with a fully merged body."},
+                "override_dedup": {"type": "boolean", "default": False, "description": "Write despite a NEAR-MATCH when the page is genuinely distinct and only shares vocabulary."},
             },
             required=("vault", "kind", "body"),
         ),

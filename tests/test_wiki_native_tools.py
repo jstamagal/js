@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from js.toolkit import ToolContext
+from js.toolkit import wiki as wiki_module
+from js.toolkit.core import call_tool
 from js.toolkit.wiki import convert as wiki_convert_module
 from js.toolkit.wiki import ops as wiki_ops
 from js.toolkit.wiki.convert import wiki_convert
@@ -53,6 +55,83 @@ def test_wiki_purpose_reports_counts_inbox_and_orphaned_source_pages(tmp_path):
     assert "ORPHANS" in actual
     assert 'inbox/raw.txt' in actual
     assert 'call wiki_archive(vault, "raw.txt")' in actual
+
+
+def test_wiki_purpose_skips_orphan_scan_in_leave_in_place_mode(tmp_path, monkeypatch):
+    """The same source/inbox pairing that reports ORPHANS in normal (archiving)
+    mode must NOT be flagged when leave-in-place is active — otherwise every
+    successfully-ingested unit is a permanent false orphan (js-drain default)."""
+    vault = _vault(tmp_path)
+    for name in ("sources", "entities", "concepts", "synthesis", "inbox"):
+        (vault / name).mkdir()
+    (vault / "inbox" / "raw.txt").write_text("raw\n", encoding="utf-8")
+    (vault / "sources" / "raw-summary.md").write_text(
+        '---\nsource: "inbox/raw.txt"\n---\n# Raw\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("JS_WIKI_NO_ARCHIVE", "1")
+    via_env = wiki_purpose(str(vault), context=_ctx(tmp_path))
+    monkeypatch.delenv("JS_WIKI_NO_ARCHIVE", raising=False)
+
+    context = _ctx(tmp_path)
+    context.wiki_no_archive = True
+    via_context_flag = wiki_purpose(str(vault), context=context)
+
+    normal_mode = wiki_purpose(str(vault), context=_ctx(tmp_path))
+
+    assert "ORPHANS" not in via_env
+    assert "ORPHANS" not in via_context_flag
+    assert "ORPHANS" in normal_mode  # sanity: guard only fires in leave-in-place mode
+
+
+def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
+    """override_dedup must be usable through the wiki_write Tool's DECLARED
+    schema (params dict, what a schema-enforcing provider validates against
+    with additionalProperties:false) — not just as a raw Python kwarg."""
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    tool = next(t for t in wiki_module.tools() if t.name == "wiki_write")
+    assert "override_dedup" in tool.params
+
+    call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Existing shared page",
+            "slug": "dayton-dcs165-4",
+            "title": "Dayton DCS165-4",
+        },
+        context,
+    )
+    blocked = call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Duplicate-looking sibling",
+            "slug": "dayton-dcs165-4-specs",
+            "title": "Dayton DCS165-4 Specs",
+        },
+        context,
+    )
+    overridden = call_tool(
+        tool,
+        {
+            "vault": str(vault),
+            "kind": "entity",
+            "body": "Actually distinct despite the overlap",
+            "slug": "dayton-dcs165-4-specs",
+            "title": "Dayton DCS165-4 Specs",
+            "override_dedup": True,
+        },
+        context,
+    )
+
+    assert blocked.startswith("NEAR-MATCH:")
+    assert "(type: entity)" in overridden
+    assert (vault / "entities" / "dayton-dcs165-4-specs.md").exists()
 
 
 def test_wiki_inbox_lists_only_processable_units(tmp_path):
