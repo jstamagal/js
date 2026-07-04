@@ -227,9 +227,7 @@ def artifact_ingest(paths: str, tags: str = "", desc: str = "", context: ToolCon
     paths = text_or_default(paths)
     tags = text_or_default(tags)
     desc = text_or_default(desc)
-    resolved = [str(context.resolve_path(p)) for p in paths.splitlines() if p.strip()]
-    if not resolved:
-        resolved = [str(context.resolve_path(p)) for p in paths.split() if p.strip()]
+    resolved = [str(context.resolve_path(p)) for p in paths.split() if p.strip()]
     if not resolved:
         return "ERROR: no paths supplied"
     args = ["ingest", *resolved]
