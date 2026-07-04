@@ -207,13 +207,33 @@ def test_select_models_non_tty_keeps_all(monkeypatch):
     assert login_cli._select_models_to_cache("opencode-go", models) == models
 
 
+def test_select_models_interactive_starts_with_none_preselected(monkeypatch):
+    # Owner ruling (FIXME #56): adding a new provider starts with NOTHING
+    # selected, not "all" — plain enter with no toggles keeps zero models.
+    import curses
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [ord("\n")]  # confirm immediately, nothing toggled
+
+    def fake_wrapper(fn, *args, **kwargs):
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+    monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
+    models = ["glm-5.2", "glm-5"]
+    assert login_cli._select_models_to_cache("opencode-go", models) == []
+
+
 def test_select_models_interactive_with_custom_add(monkeypatch):
     import curses
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
-    keys = [curses.KEY_DOWN, ord(" "), ord("\n")]  # to row1, deselect glm-5, confirm
+    # Nothing preselected: pick row0 (glm-5.2), skip row1 (glm-5), pick row2.
+    keys = [ord(" "), curses.KEY_DOWN, curses.KEY_DOWN, ord(" "), ord("\n")]
 
     def fake_wrapper(fn, *args, **kwargs):
         return fn(_FakeStdscr(keys), *args, **kwargs)
@@ -221,7 +241,7 @@ def test_select_models_interactive_with_custom_add(monkeypatch):
     monkeypatch.setattr(curses, "wrapper", fake_wrapper)
     monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "extra-model, glm-5.2")
     models = ["glm-5.2", "glm-5", "kimi-k2.7-code"]
-    # row1 deselected; "extra-model" appended; "glm-5.2" already known -> not duped
+    # row0 + row2 selected; "extra-model" appended; "glm-5.2" already known -> not duped
     assert login_cli._select_models_to_cache("opencode-go", models) == [
         "glm-5.2", "kimi-k2.7-code", "extra-model",
     ]
@@ -248,6 +268,60 @@ def test_mask_reveals_edges_only_once_a_hidden_middle_exists():
     masked = login_cli._mask("sk-1234567890abcd")  # 17 chars: 8 prefix + 5 hidden + 4 suffix
     assert masked == "sk-12345*******abcd"
     assert "67890" not in masked  # the hidden middle chars never leak
+
+
+def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):
+    # deepseek (models_list_validates_auth=True): no test-choice prompt at all —
+    # asking "add without a test?" when listing already proved the key works
+    # is a prompt with only one sane answer, so it's skipped outright.
+    monkeypatch.setattr(
+        login_cli, "_secondary_test_choice",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not prompt")),
+    )
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._post_fetch_confirmation(login, provider, ["deepseek-chat"]) is True
+
+
+def test_post_fetch_confirmation_still_offers_test_when_listing_does_not_validate(monkeypatch):
+    # opencode-go (models_list_validates_auth=False): the offer is still real.
+    calls = []
+
+    def fake_choice(models, *, require_test):
+        calls.append(require_test)
+        return True
+
+    monkeypatch.setattr(login_cli, "_secondary_test_choice", fake_choice)
+    login = logins.Login(provider_id="opencode-go", provider_api_key="k")
+    provider = providers.provider_for_login("opencode-go")
+    assert login_cli._post_fetch_confirmation(login, provider, ["glm-5.2"]) is True
+    assert calls == [True]
+
+
+def test_run_secondary_test_adds_on_success_without_a_further_confirm(monkeypatch):
+    # The answer coming back IS the confirmation now — no more "hit enter to
+    # add" after it; a stray input() call here would mean the prompt is back.
+    monkeypatch.setattr(
+        "builtins.input", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no further prompt expected"))
+    )
+
+    class _Result:
+        text = "2"
+
+    monkeypatch.setattr(login_cli.model_client, "stream_model", lambda **kwargs: _Result())
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._run_secondary_test(login, provider, "deepseek-chat") is True
+
+
+def test_run_secondary_test_returns_false_on_failure_without_prompting(monkeypatch):
+    def boom(**kwargs):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(login_cli.model_client, "stream_model", boom)
+    login = logins.Login(provider_id="deepseek", provider_api_key="sk-test")
+    provider = providers.provider_for_login("deepseek")
+    assert login_cli._run_secondary_test(login, provider, "deepseek-chat") is False
 
 
 def test_secondary_test_enter_adds_without_testing(monkeypatch):
