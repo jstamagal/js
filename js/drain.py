@@ -253,6 +253,8 @@ def _run_one(job: Job, vault: Path, modes: str, model: str | None,
             if timeout and job.seconds > timeout:
                 proc.kill()
                 break
+        if proc.returncode is None:
+            proc.wait()
         job.seconds = time.time() - start
         job.rc = proc.returncode
         cap.seek(0)
