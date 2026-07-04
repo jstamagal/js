@@ -10,7 +10,7 @@ byte-for-byte so the flag can stay off with zero change.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 
@@ -29,13 +29,16 @@ def agent_identity(model: str, provider: str | None, base_url: str | None) -> st
 @dataclass(frozen=True)
 class OutputEvent:
     """One unit of output. `args` map to irciipy positionals ($0 $1 ...);
-    `fields` carry named values for richer hooks and structured logs; `text` is
-    the fallback rendering used only when no hook formats the event."""
+    `fields` carry named values for richer hooks and structured logs, as a tuple
+    of (key, value) pairs — not a dict — so the frozen dataclass is genuinely
+    hashable (a dict field would make hash() raise despite frozen=True
+    advertising it); build a lookup with `dict(event.fields)` when needed.
+    `text` is the fallback rendering used only when no hook formats the event."""
 
     name: str
     source: str = ""                       # model!provider@baseurl; "" = the harness itself
     args: tuple[str, ...] = ()
-    fields: dict[str, object] = field(default_factory=dict)
+    fields: tuple[tuple[str, object], ...] = ()
     text: str | None = None
 
 
