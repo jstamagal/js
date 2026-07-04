@@ -227,11 +227,8 @@ def _request_body(headers: dict[str, str], body: str | None, json_body: Any) -> 
     return None
 
 
-def _download_target(save: str | None, download: str | None, context: ToolContext) -> Path | str | None:
-    if save and download and save != download:
-        return "ERROR: save and download point to different paths"
-    target = save or download
-    return context.resolve_path(target) if target else None
+def _download_target(save: str | None, context: ToolContext) -> Path | None:
+    return context.resolve_path(save) if save else None
 
 
 def _write_download(target: Path, data: bytes, content_type: str, context: ToolContext) -> str:
@@ -336,7 +333,6 @@ def fetch(
     body: str | None = None,
     json_body: Any = None,
     save: str | None = None,
-    download: str | None = None,
     context: ToolContext | None = None,
 ) -> str:
     if context is None:
@@ -349,9 +345,7 @@ def fetch(
         data = _request_body(normalized_headers, body, json_body)
         if isinstance(data, str):
             return data
-        save_target = _download_target(save, download, context)
-        if isinstance(save_target, str):
-            return save_target
+        save_target = _download_target(save, context)
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme == "file":
             if method_name != "GET":
@@ -415,7 +409,6 @@ def tools() -> tuple[Tool, ...]:
                 "body": {"type": "string"},
                 "json_body": {"type": "object", "additionalProperties": True},
                 "save": {"type": "string"},
-                "download": {"type": "string"},
             },
             required=("url",),
         ),
