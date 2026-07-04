@@ -12,13 +12,18 @@ The token right after ``!`` names the SUBSYSTEM, so it is always unambiguous
 what an inline is activating. Subsystems are a registry:
 
   env, file   -- always on; they only READ (env var value / file contents).
-  sh, bash,   -- they EXECUTE arbitrary code embedded in the prompt file, so
-  python, py,    they run ONLY when allow_code is true (the CLI sets this from
-  c, node, js    --dangerously-evaluate-inline-code). Body is passed raw.
+  sh, bash,   -- they EXECUTE arbitrary code embedded in the prompt file. They
+  python, py,    run when ``allow_code`` is true, which is the DEFAULT
+  c, node, js    (``runtime.allow_inline_code``). Opt out with ``--im-a-pussy``
+                 (or ``set runtime.allow_inline_code off`` / ``JS_ALLOW_INLINE_CODE=0``);
+                 a code directive then stays literal. Body is passed raw.
 
 Expansion is a SINGLE pass: a directive's output is never re-scanned, so a value
 (or a command's stdout) that happens to contain another ``!{...}`` / ``{{...}}``
-cannot trigger further expansion. That is the injection guard.
+cannot trigger further expansion. That is the injection guard. A directive that
+fails to resolve is, by default, left literal (with a one-line stderr warning)
+rather than aborting the load — call with ``on_error="raise"`` for the strict
+behavior.
 
 A prompt that documents the directive syntax to itself must be able to show a
 directive without the loader running it. Two ways:
@@ -38,6 +43,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -81,11 +87,22 @@ def expand_prompt(
     allow_code: bool = False,
     env: dict | None = None,
     timeout_s: int = _DEFAULT_TIMEOUT_S,
+    on_error: str = "warn",
 ) -> str:
     """Return ``text`` with ``{{VAR}}`` / ``!{sub ...}`` / ```` ```!sub ```` directives expanded.
 
-    Raises :class:`PromptExpansionError` on an unknown subsystem, a code
-    subsystem invoked while ``allow_code`` is false, or any execution/read failure.
+    ``on_error`` governs what happens when a single directive cannot be resolved
+    (unknown subsystem, a code subsystem while ``allow_code`` is false, an
+    execution/read failure, a malformed token):
+
+      ``"warn"`` (default) -- leave that directive LITERAL in the output, print
+      one line to stderr, and keep going. A broken directive never aborts the
+      load: js starts, that spot just stays unexpanded.
+      ``"raise"`` -- raise :class:`PromptExpansionError` at the first failure
+      (the strict behavior; used by tests).
+
+    Either way, one bad directive never affects the others — every match is
+    resolved independently in a single, non-re-scanned pass (the injection guard).
 
     ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
     code subsystems (sh/bash/python/node/c) always execute against the real
@@ -100,19 +117,26 @@ def expand_prompt(
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
         if m.group("bs") is not None:
             return m.group(0)[1:]
-        if m.group("fsub") is not None:
-            return _run_subsystem(m.group("fsub"), m.group("fbody"), allow_code, environ, timeout_s)
-        # A directive wrapped in a backtick code span is documentation, not a
-        # request to run -- hand it back verbatim (backticks included).
-        if m.group("itick") is not None or m.group("etick") is not None:
+        try:
+            if m.group("fsub") is not None:
+                return _run_subsystem(m.group("fsub"), m.group("fbody"), allow_code, environ, timeout_s)
+            # A directive wrapped in a backtick code span is documentation, not a
+            # request to run -- hand it back verbatim (backticks included).
+            if m.group("itick") is not None or m.group("etick") is not None:
+                return m.group(0)
+            if m.group("isub") is not None:
+                return _run_subsystem(m.group("isub"), (m.group("iargs") or "").strip(), allow_code, environ, timeout_s)
+            # {{...}} env shorthand
+            name = m.group("env").strip()
+            if not _NAME.fullmatch(name):
+                return m.group(0)  # not a real placeholder -> leave the literal alone
+            return environ.get(name, "")
+        except PromptExpansionError as exc:
+            if on_error == "raise":
+                raise
+            # Degrade: keep the directive literal, warn once, don't brick startup.
+            print(f"js: prompt directive left literal: {exc}", file=sys.stderr)
             return m.group(0)
-        if m.group("isub") is not None:
-            return _run_subsystem(m.group("isub"), (m.group("iargs") or "").strip(), allow_code, environ, timeout_s)
-        # {{...}} env shorthand
-        name = m.group("env").strip()
-        if not _NAME.fullmatch(name):
-            return m.group(0)  # not a real placeholder -> leave the literal alone
-        return environ.get(name, "")
 
     return _DIRECTIVE.sub(_resolve, text)
 
@@ -131,8 +155,8 @@ def _run_subsystem(name: str, body: str, allow_code: bool, environ: dict, timeou
     is_code, runner = spec
     if is_code and not allow_code:
         raise PromptExpansionError(
-            f"inline '{name}' executes code, but inline-code execution is off; "
-            f"pass --dangerously-evaluate-inline-code to enable"
+            f"inline '{name}' executes code, but inline-code execution is off "
+            f"(--im-a-pussy / set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0)"
         )
     if is_code:
         # Code subsystems run against the real process environment, always.
