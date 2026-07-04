@@ -109,7 +109,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str", None,
-                "Thinking effort: off|low|medium|high|max|minimal|xhigh; min=low.",
+                "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
+                "any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
@@ -251,6 +252,13 @@ _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 
+# The only values `model.reasoning_effort` accepts. "off" disables reasoning
+# (stored as the literal "none"); everything else is rejected outright — no
+# default/auto/unset synonyms. Clearing the knob back to provider-default is
+# `set -model.reasoning_effort`, never a magic value here.
+REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+_REASONING_EFFORT_ERROR = "expected off|minimal|low|medium|high|xhigh|max"
+
 
 def parse_bool(raw: str) -> bool | None:
     v = raw.strip().lower()
@@ -267,8 +275,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     special-casing); the only way to clear a knob back to its default/unset
     state is `set -key` (see `apply_unset` in `js.setcmd`)."""
     text = raw.strip()
-    if spec.key == "model.reasoning_effort" and text.lower() in {"off", "none", "0"}:
-        return "none", None
+    if spec.key == "model.reasoning_effort":
+        v = text.lower()
+        if v not in REASONING_EFFORT_VALUES:
+            return None, _REASONING_EFFORT_ERROR
+        return ("none" if v == "off" else v), None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
