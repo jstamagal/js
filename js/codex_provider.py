@@ -670,7 +670,17 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         continue
                     if event_type in {"response.completed", "response.done", "response.incomplete"}:
                         response_obj = raw.get("response")
-                        terminal_usage = _usage_from_response(response_obj if isinstance(response_obj, Mapping) else None)
+                        response_map = response_obj if isinstance(response_obj, Mapping) else None
+                        terminal_usage = _usage_from_response(response_map)
+                        provider_metadata: dict[str, Any] | None = None
+                        if event_type == "response.incomplete":
+                            # A cut-short turn must not look like a normal stop: carry
+                            # the reason onto the assistant message (ai's Stream copies
+                            # StreamEnd.provider_metadata onto stream.message) instead of
+                            # dropping incomplete_details on the floor.
+                            details = response_map.get("incomplete_details") if response_map else None
+                            reason = details.get("reason") if isinstance(details, Mapping) else None
+                            provider_metadata = {"incomplete": True, "incomplete_reason": reason}
                         if reasoning_open:
                             reasoning_open = False
                             yield ai.events.ReasoningEnd(block_id="reasoning")
@@ -679,7 +689,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             yield ai.events.TextEnd(block_id="text")
                         for ev in close_tool():
                             yield ev
-                        yield ai.events.StreamEnd(usage=terminal_usage)
+                        yield ai.events.StreamEnd(usage=terminal_usage, provider_metadata=provider_metadata)
                         return
                     if event_type in {"response.failed", "error"}:
                         message, code, error_type = _error_message(raw, "OpenAI Codex stream failed")

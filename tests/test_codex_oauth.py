@@ -420,6 +420,59 @@ def test_codex_stream_400_names_model_and_captures_body():
     assert err.code == "model_not_found"
 
 
+class _IncompleteStreamResponse:
+    status_code = 200
+
+    async def aiter_lines(self):
+        events = [
+            {"type": "response.output_text.delta", "delta": "partial"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "usage": {"input_tokens": 5, "output_tokens": 4},
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            },
+        ]
+        for event in events:
+            yield f"event: {event['type']}"
+            yield f"data: {json.dumps(event)}"
+            yield ""
+
+
+class _IncompleteStreamClient:
+    def stream(self, method, url, *, headers=None, json=None):
+        return _FakeStreamContext(_IncompleteStreamResponse())
+
+    async def aclose(self):
+        return None
+
+
+def test_codex_stream_incomplete_marks_provider_metadata_instead_of_looking_clean():
+    # A truncated turn must not look like a normal stop: the partial text
+    # still comes through, but the StreamEnd carries the incomplete reason
+    # instead of silently dropping incomplete_details on the floor.
+    provider = _provider_with_client(_IncompleteStreamClient())
+
+    async def drain():
+        events = []
+        async for event in provider.stream(
+            ai.Model(id="gpt-5.5", provider=provider),
+            [ai.user_message("hello")],
+            tools=None,
+            params=None,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(drain())
+    assert any(isinstance(e, ai.events.TextDelta) and e.chunk == "partial" for e in events)
+    end = events[-1]
+    assert isinstance(end, ai.events.StreamEnd)
+    assert end.provider_metadata == {"incomplete": True, "incomplete_reason": "max_output_tokens"}
+    assert end.usage.output_tokens == 4
+
+
 def test_codex_refresh_preserves_refresh_token_and_profile():
     previous = codex_auth.CodexToken(
         access="old-access",
