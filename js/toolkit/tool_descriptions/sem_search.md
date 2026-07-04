@@ -17,8 +17,8 @@ When not to use:
 - Use `fs_search` when you need all occurrences of a variable or function name.
 {{/if}}
 {{#unless fs_search}}
-- Use `shell` with `rg` for exact strings, TODOs, identifiers, literals, regex,
-  or all occurrences of a variable or function name.
+- This tool is not for exact strings, TODOs, identifiers, literals, regex, or all
+  occurrences of a variable or function name.
 {{/unless}}
 {{#if read}}
 - Use `read` when you already know the file path.
