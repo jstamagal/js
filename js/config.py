@@ -21,19 +21,21 @@ _DEFAULT_MODEL = _settings.DEFAULT_MODEL
 _DEFAULT_AGENT_ID = "defaultagent"
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-_EFFORT_ALIASES = {"max": "high", "min": "low", "none": "none", "off": "none", "0": "none", "": None}
+_EFFORT_ALIASES = {"min": "low", "none": "none", "off": "none", "0": "none", "": None}
 
 # DeepSeek reasoning: xhigh is forwarded verbatim for deepseek-native models.
+# `max` is a real ladder stop (reasoning.py) and is NOT aliased away here —
+# reasoning.snap_effort floors it for families that don't serve it.
 
 def _norm_effort(raw: str | None) -> str | None:
-    """Normalize a thinking-effort value. max->high, off/none->\"none\", unset->None.
-    Pass through low|medium|high|minimal|xhigh."""
+    """Normalize a thinking-effort value. off/none->\"none\", unset->None.
+    Pass through low|medium|high|minimal|xhigh|max."""
     if raw is None:
         return None
     v = raw.strip().lower()
     if v in _EFFORT_ALIASES:
         return _EFFORT_ALIASES[v]
-    return v  # low | medium | high | minimal | xhigh — forwarded as-is to the SDK
+    return v  # low | medium | high | minimal | xhigh | max — forwarded as-is to the SDK
 
 
 def validate_agent_id(agent_id: str) -> str:
