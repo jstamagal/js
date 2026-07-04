@@ -18,6 +18,13 @@ from .sanitize import int_or_default
 
 _ALLOWED_STATUS = {"pending", "in_progress", "completed", "cancelled"}
 _DEFAULT_TASK_DEPTH = 2
+# Concurrency ceiling for a single fan-out. The parent tool-dispatch pool is 32
+# threads (cli.py); a sub-fan-out sits well below that so one wide `task(...)`
+# — or a nested one two levels deep — can't storm the provider with dozens of
+# simultaneous calls. Kept a module default (not a settings knob) to stay inside
+# the meta/registry surface; `context.subagent_max_workers` overrides it when a
+# future knob threads one through.
+_DEFAULT_SUBAGENT_MAX_WORKERS = 8
 
 
 def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
@@ -287,7 +294,7 @@ async def _run_one_task_async(
             provider_headers=route.headers,
         )
 
-    registry = full_registry.select(prompt_spec.tool_selectors)
+    registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
     system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)
     sampling = (
         cfg.sampling_setscript
@@ -419,6 +426,17 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
     return results
 
 
+def _subagent_worker_cap(context: ToolContext, total: int) -> int:
+    """Concurrency ceiling for one fan-out: at most `total` workers, never above
+    the configured/module width limit."""
+    limit = int_or_default(
+        getattr(context, "subagent_max_workers", _DEFAULT_SUBAGENT_MAX_WORKERS),
+        _DEFAULT_SUBAGENT_MAX_WORKERS,
+        minimum=1,
+    )
+    return max(1, min(total, limit))
+
+
 def _prepare_fan_out(
     tasks: list[Any],
     agent_id: str,
@@ -431,7 +449,8 @@ def _prepare_fan_out(
     Returns ``(error_message, None)`` on a validation/depth failure, else
     ``(None, (indexed_items, coro_factory))``. Shared verbatim by the sync
     ``task`` (``-p``/bench) and async ``task_async`` (non-blocking REPL) paths so
-    the two rails can never drift."""
+    the two rails can never drift. Each coroutine is gated by a shared semaphore
+    so a wide (or nested) fan-out never runs more than the worker cap at once."""
     if not agent_id:
         return "ERROR: task requires agent_id", None
     if not isinstance(tasks, list):
@@ -441,6 +460,12 @@ def _prepare_fan_out(
     normalized_items = [item.strip() for item in tasks if item.strip()]
     if not normalized_items:
         return "ERROR: task requires at least one non-empty task", None
+    if session_id and len(normalized_items) > 1:
+        return (
+            "ERROR: session_id runs one task per session. Pass a single task, or omit "
+            "session_id so each parallel worker gets its own fresh session.",
+            None,
+        )
 
     max_depth = int_or_default(getattr(context, "task_max_depth", _DEFAULT_TASK_DEPTH), _DEFAULT_TASK_DEPTH, minimum=1)
     if getattr(context, "task_depth", 0) >= max_depth:
@@ -450,13 +475,23 @@ def _prepare_fan_out(
     from .registry import build_default_registry
 
     parent_cfg = getattr(context, "config", None) or from_env(save_session=True)
-    full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None))
+    # Honor the subagent-model lock at every depth: when locked, rebuild the
+    # nested registry without the `model_override` flag so the task tool's
+    # `model` param is gone from the schema/description, not just ignored
+    # (mirrors cli._registry_for).
+    reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
+    full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
     total = len(normalized_items)
+    gate = asyncio.Semaphore(_subagent_worker_cap(context, total))
 
     def _coro(idx: int, item: Any):
-        return _run_one_task_async(
-            idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
-        )
+        async def _gated() -> str:
+            async with gate:
+                return await _run_one_task_async(
+                    idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
+                )
+
+        return _gated()
 
     indexed_items = [(idx, item) for idx, item in enumerate(normalized_items, 1)]
     return None, (indexed_items, _coro)
@@ -566,7 +601,7 @@ def _task_params(flags: tuple[str, ...]) -> dict:
         "session_id": {"type": "string", "description": "Optional session id for a worker context."},
     }
     if "model_override" in flags:
-        params["model"] = {"type": "string", "description": "Model id for the subagent(s). ONLY set this when the operator explicitly asks for behavior the agent isn't configured for; otherwise omit it and the agent's configured model is used."}
+        params["model"] = {"type": "string", "description": "Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise."}
     return params
 
 
