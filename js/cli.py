@@ -1946,7 +1946,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="show streamed text/tool debug output in prompt mode")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the rich debug trace (system prompt, messages sent, tool schemas, per-call timings) to PATH and keep the clean answer on stdout")
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
     parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
