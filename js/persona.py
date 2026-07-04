@@ -183,6 +183,27 @@ def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_age
     return repo_prompts_root / agent_id
 
 
+def _has_manifest(prompts_dir: Path) -> bool:
+    """Whether a prompt dir carries its own tool manifest (00-tools.yaml, or a
+    deprecated 00*.md with frontmatter) — independent of whether it has any
+    other prompt text."""
+    if _find_yaml_zero_file(prompts_dir) is not None:
+        return True
+    return any(_is_zero_file(p) for p in prompts_dir.glob("*.md"))
+
+
+def _find_manifest_dir(agent_id: str, *roots: Path) -> Path | None:
+    """Highest-priority root (in the order given) whose agent_id dir actually
+    carries a manifest. Used to fall back past a winning prompt dir that
+    supplies prompt text but no 00-tools.yaml, so it doesn't silently shadow a
+    lower layer's tool selection."""
+    for root in roots:
+        candidate = root / agent_id
+        if candidate.is_dir() and _has_manifest(candidate):
+            return candidate
+    return None
+
+
 def load_agent_prompt_spec(
     agent_id: str,
     *,
@@ -193,6 +214,22 @@ def load_agent_prompt_spec(
 ) -> PromptSpec:
     prompt_dir = _most_specific_prompt_dir(agent_id, repo_prompts_root, global_agents_root, project_agents_root)
     spec = load_prompt_spec(prompt_dir)
+    if not _has_manifest(prompt_dir):
+        # This dir won on prompt text alone (e.g. a project override that only
+        # tweaks wording) and carries no manifest of its own — fall back to the
+        # nearest lower layer's 00-tools.yaml rather than silently booting with
+        # zero tools and default model/sampling.
+        manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
+        if manifest_dir is not None and manifest_dir != prompt_dir:
+            manifest_spec = load_prompt_spec(manifest_dir)
+            spec = PromptSpec(
+                system=spec.system,
+                tool_selectors=manifest_spec.tool_selectors,
+                sampling=manifest_spec.sampling,
+                model=manifest_spec.model,
+                secondary_model=manifest_spec.secondary_model,
+                max_output_tokens=manifest_spec.max_output_tokens,
+            )
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
