@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -116,13 +117,40 @@ def _line_hash(line: str) -> str:
     return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
 
 
+def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
+    """Read bytes from *path*, refusing anything that is not a regular file and
+    never blocking on a FIFO/socket/device.
+
+    O_NONBLOCK makes the open return immediately for a pipe with no writer (the
+    kernel would otherwise park the caller in fifo_open->wait_for_partner);
+    on a regular file the flag has no effect and the read proceeds normally.
+    Raises OSError for a non-regular file or any read error so callers degrade
+    exactly as they do for a plain OSError."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        chunks: list[bytes] = []
+        read_so_far = 0
+        while limit is None or read_so_far < limit:
+            want = 65536 if limit is None else min(65536, limit - read_so_far)
+            chunk = os.read(fd, want)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            read_so_far += len(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in _BINARY_EXTS:
         return True
     if path.suffix.lower() in _TEXT_EXTS:
         return False
     try:
-        chunk = path.read_bytes()[:4096]
+        chunk = _read_regular_bytes(path, 4096)
     except OSError:
         return False
     return b"\x00" in chunk
@@ -154,7 +182,7 @@ def _image_marker(path: Path, mime: str, size: int) -> str:
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = path.read_bytes()
+    data = _read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
         return out[: context.max_tool_result_bytes], data
@@ -170,7 +198,7 @@ def _truncate_line(line: str, max_chars: int) -> str:
 
 
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = path.read_bytes()
+    data = _read_regular_bytes(path)
     if len(data) > context.max_file_bytes:
         raise ValueError(
             f"File size ({len(data)} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -236,8 +264,7 @@ def fs_read(
 
     try:
         size = target.stat().st_size
-        with target.open("rb") as fh:
-            header = fh.read(16)
+        header = _read_regular_bytes(target, 16)
     except OSError as exc:
         return f"ERROR: {exc}"
 
@@ -246,7 +273,7 @@ def fs_read(
         if size > context.max_file_bytes:
             return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
         try:
-            data = target.read_bytes()
+            data = _read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         content_hash = _hash_bytes(data)
@@ -275,7 +302,7 @@ def fs_read(
     all_lines = text.splitlines()
     total = len(all_lines)
     if total == 0:
-        return f"{file_path} is empty (hash {content_hash})"
+        return f"{target} is empty (hash {content_hash})"
 
     start = max(1, int_or_default(start_line, 1, minimum=1))
     end = min(total, int_or_default(end_line, min(total, context.max_read_lines), minimum=1))
@@ -495,7 +522,13 @@ def _iter_files(root: Path) -> Iterable[Path]:
     for base, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}]
         for name in files:
-            yield Path(base) / name
+            candidate = Path(base) / name
+            # Regular files only: a FIFO/socket/device (or a symlink to one) in
+            # the walk would otherwise reach a reader and, for a pipe with no
+            # writer, hang the whole turn on open(). is_file() stats (never
+            # opens) and follows symlinks, so only true regular files pass.
+            if candidate.is_file():
+                yield candidate
 
 
 def fs_search(
