@@ -79,6 +79,43 @@ def test_collect_api_login_uses_env_key_without_prompt(monkeypatch, tmp_path: Pa
         _reset_logins()
 
 
+def test_local_providers_always_show_base_url_prompt():
+    # Finding 58: llama.cpp/ollama/cliproxyapi ship a default 127.0.0.1-style
+    # endpoint that "established"/no-established-flag logic treated as fixed,
+    # so the login prompt was skipped and a fresh box silently aimed at a
+    # port nothing was listening on. The endpoint differs per box, so the
+    # prompt must never be skippable for these — the default only seeds it.
+    for provider_id in ("ollama", "llama.cpp", "cliproxyapi"):
+        assert providers.provider_for_login(provider_id).login_base_url_field is True
+
+    # A genuinely fixed remote endpoint is unaffected and still skips the prompt.
+    assert providers.provider_for_login("deepseek").login_base_url_field is False
+    assert providers.provider_for_login("ollama-cloud").login_base_url_field is False
+
+
+def test_collect_api_login_prompts_for_base_url_on_local_providers(tmp_path: Path, monkeypatch):
+    logins.set_config_dir(tmp_path)
+    # This box has real LLAMACPP_* env vars set (the owner's actual llama.cpp
+    # box) — clear them so the test sees the registry's own hardcoded default.
+    for name in ("LLAMACPP_BASE_URL", "LLAMA_CPP_BASE_URL", "LLAMACPP_API_KEY", "LLAMA_CPP_API_KEY", "LLAMACPP_MODEL", "LLAMA_CPP_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    prompted: dict[str, str | None] = {}
+
+    def fake_input(prompt, *, default=None, secret=False):
+        prompted[prompt] = default
+        return default
+
+    monkeypatch.setattr(login_cli, "_input", fake_input)
+    try:
+        login = login_cli._collect_api_login("llama.cpp", "openai", providers.provider_for_login("llama.cpp"))
+        assert login is not None
+        # The hardcoded default only seeds the prompt — it never skips it.
+        assert prompted == {"Base URL": "http://127.0.0.1:8080/v1"}
+        assert login.provider_base_url == "http://127.0.0.1:8080/v1"
+    finally:
+        _reset_logins()
+
+
 def test_opencode_go_anthropic_uses_anthropic_root_base_url():
     provider = providers.provider_for_login("opencode-go-anthropic")
     assert provider.default_base_url == "https://opencode.ai/zen/go"
