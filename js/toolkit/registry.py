@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+import sys
 
 from .core import Tool
 from . import artifact, fs, meta, process_net, wiki
@@ -33,8 +34,8 @@ class ToolRegistry:
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
 
-    def select(self, selectors: Iterable[str] | None) -> ToolRegistry:
-        wanted = _selected_names(self, selectors or ())
+    def select(self, selectors: Iterable[str] | None, agent_id: str | None = None) -> ToolRegistry:
+        wanted = _selected_names(self, selectors or (), agent_id)
         selected = tuple(tool for tool in self.tools if tool.name in wanted)
         return _registry_from_tools(selected)
 
@@ -69,7 +70,7 @@ def _registry_from_tools(tools: tuple[Tool, ...]) -> ToolRegistry:
     return ToolRegistry(tools=tools, aliases=aliases)
 
 
-def _selected_names(registry: ToolRegistry, selectors: Iterable[str]) -> set[str]:
+def _selected_names(registry: ToolRegistry, selectors: Iterable[str], agent_id: str | None = None) -> set[str]:
     selected: set[str] = set()
     full_aliases = registry.aliases
     full_names = registry.by_name
@@ -81,7 +82,7 @@ def _selected_names(registry: ToolRegistry, selectors: Iterable[str]) -> set[str
         if folded == "*":
             selected.update(full_names)
             continue
-        if "*" in folded:
+        if any(ch in folded for ch in "*?["):
             for public_name, canonical in full_aliases.items():
                 if fnmatchcase(public_name, folded):
                     selected.add(canonical)
@@ -89,6 +90,13 @@ def _selected_names(registry: ToolRegistry, selectors: Iterable[str]) -> set[str
         canonical = full_aliases.get(folded)
         if canonical is not None:
             selected.add(canonical)
+        else:
+            # An exact (non-glob) selector that matches nothing is almost always
+            # a typo or a removed tool name — a silent drop shrinks the agent's
+            # surface with no signal until a mid-run dispatch error. Warn at load;
+            # glob misses stay silent (leniency is correct for patterns).
+            where = f" for agent {agent_id!r}" if agent_id else ""
+            print(f"js: tool selector {selector!r}{where} matched no tool; ignoring", file=sys.stderr)
     return selected
 
 
