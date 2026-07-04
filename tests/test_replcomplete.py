@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from js.replcomplete import JsCompleter, command_candidates, path_candidates
+import pytest
+
+from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
 
 
 # ---- command context (first word) ----
@@ -57,6 +59,39 @@ def test_show_arg_completes_keys():
     assert cands == ["model.id", "model.reasoning_effort"]
 
 
+def test_value_candidates_prefix_matches_reasoning_effort_stops():
+    assert value_candidates("model.reasoning_effort", "m") == ["max", "medium", "minimal"]
+    assert value_candidates("model.reasoning_effort", "zzz") == []
+
+
+def test_value_candidates_empty_for_unknown_key():
+    assert value_candidates("model.id", "de") == []
+
+
+def test_set_reasoning_effort_value_completes_xhigh():
+    # FINDING 54: `/set model.reasoning_effort x<tab>` must offer `xhigh`.
+    cands, n = _completer().candidates("/set model.reasoning_effort x")
+    assert cands == ["xhigh"]
+    assert n == len("x")
+
+
+def test_set_reasoning_effort_value_lists_all_stops_when_empty():
+    cands, _ = _completer().candidates("/set model.reasoning_effort ")
+    assert cands == ["high", "low", "max", "medium", "minimal", "off", "xhigh"]
+
+
+def test_set_non_enum_key_value_has_no_candidates():
+    cands, _ = _completer().candidates("/set model.id de")
+    assert cands == []
+
+
+def test_show_second_word_still_completes_keys_not_values():
+    # /show never takes a value, so a second word still completes knob keys
+    # (not the reasoning-effort enum), unlike /set.
+    cands, _ = _completer().candidates("/show model.reasoning_effort m")
+    assert cands == ["model.id", "model.reasoning_effort"]
+
+
 def test_login_arg_completes_names():
     cands, _ = _completer().candidates("/login dee")
     assert cands == ["deepseek"]
@@ -76,6 +111,21 @@ def test_midline_word_routes_to_spell():
     cands, n = _completer().candidates("fix teh")
     assert cands == ["the"]
     assert n == len("teh")
+
+
+@pytest.mark.parametrize("cmd", ["/model", "/baseurl", "/apikey", "/models", "/compact"])
+def test_known_command_args_never_reach_spellchecker(cmd):
+    # A model id like "qwen" would otherwise get English spelling suggestions
+    # ("wen", "Owen", "Gwen", ...) that silently replace it on Tab.
+    always_spell = JsCompleter(spell=lambda _w: ["SHOULD_NOT_APPEAR"])
+    cands, _ = always_spell.candidates(f"{cmd} qwen")
+    assert cands == []
+
+
+def test_unknown_command_prose_still_reaches_spellchecker():
+    always_spell = JsCompleter(spell=lambda _w: ["SHOULD_APPEAR"])
+    cands, _ = always_spell.candidates("fix teh")
+    assert cands == ["SHOULD_APPEAR"]
 
 
 def test_path_like_token_routes_to_filesystem(tmp_path):

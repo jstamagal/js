@@ -1,13 +1,21 @@
 """REPL Tab completion — prefix match, rotating menu. No fuzzyfind.
 
-Routed by where the word under the cursor sits (a port of an ircII `bind ^I`):
+Routed by where the word under the cursor sits (a port of an ircII `bind ^I`).
+First word of the line is always command completion (a bare word gets an
+implicit leading ``/`` — ``comp`` -> ``/compact``). For every other word,
+path detection runs FIRST — a token that looks like a path (``/a/b`` or
+``@/a/b``) always wins filesystem completion regardless of which command it's
+an argument to — then:
 
-1. first word of the line  -> command completion. A bare word gets an implicit
-   leading ``/`` (``comp`` -> ``/compact``).
-2. arg of ``/set``/``/show``      -> setting keys.
-3. arg of ``/login``/``/provider`` -> provider ids + saved login names.
-4. mid-line word that looks like a path (``/a/b`` or ``@/a/b``) -> filesystem.
-5. mid-line word, anything else   -> spellcheck (backend injected via ``spell``).
+1. arg of ``/set``/``/show``       -> setting keys; a second `/set` word (the
+   key already typed) completes known enum values instead, e.g.
+   ``model.reasoning_effort``.
+2. arg of ``/login``/``/provider`` -> provider ids + saved login names.
+3. arg of ``/on``                  -> event names.
+4. arg of ``/load``                -> filesystem.
+5. mid-line word whose command is any other known ``COMMANDS`` entry ->
+   no completion (a command argument never reaches the spellchecker).
+6. anything else (genuine prose)   -> spellcheck (backend injected via ``spell``).
 
 Always PREFIX match (``startswith``), never fuzzy subsequence. Tab-triggered,
 rotating menu is configured on the PromptSession, not here.
@@ -24,6 +32,7 @@ from collections.abc import Callable, Iterable
 from prompt_toolkit.completion import Completer, Completion
 
 from . import events
+from . import settings as _settings
 
 # Real REPL commands only — what _handle_command / _handle_provider_command actually dispatch.
 COMMANDS: tuple[str, ...] = (
@@ -61,9 +70,23 @@ _ON_CMDS = ("/on",)
 _PATH_ARG_CMDS = ("/load",)
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
+# `/set <key> <value>` — keys whose value is a known small enum get their
+# legal values completed instead of falling through to no candidates.
+_VALUE_ENUM_KNOBS: dict[str, tuple[str, ...]] = {
+    "model.reasoning_effort": _settings.REASONING_EFFORT_VALUES,
+}
+
 
 def _prefix(pool: Iterable[str], token: str) -> list[str]:
     return sorted({c for c in pool if c.startswith(token)})
+
+
+def value_candidates(key: str, token: str) -> list[str]:
+    """Known-good values for `key` (e.g. reasoning-effort stops), prefix-matched."""
+    values = _VALUE_ENUM_KNOBS.get(key)
+    if values is None:
+        return []
+    return _prefix(values, token.lower())
 
 
 def command_candidates(token: str) -> list[str]:
@@ -157,6 +180,9 @@ class JsCompleter(Completer):
         if looks_like_path(token):
             return path_candidates(token), len(token)
         if norm in _SET_CMDS:
+            words = before.split()
+            if norm == "/set" and len(words) >= 2:
+                return value_candidates(words[1], token), len(token)
             return _prefix(self._setting_keys, token), len(token)
         if norm in _NAME_CMDS:
             names = list(self._names()) if self._names else []
@@ -165,6 +191,11 @@ class JsCompleter(Completer):
             return event_candidates(token), len(token)
         if norm in _PATH_ARG_CMDS:
             return path_candidates(token), len(token)
+        if norm in COMMANDS:
+            # A known command's argument with no specific completion source
+            # above (e.g. /model, /baseurl, /apikey, /models, /compact) —
+            # never let it fall through to the prose spellchecker.
+            return [], len(token)
         if self._spell is not None:
             return self._spell(token), len(token)
         return [], len(token)
