@@ -206,6 +206,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`just install` now catches stale or shadowed launchers.** After reinstalling, the recipe verifies that the `js` command on `PATH` imports this working tree so users do not keep running an old or foreign install by mistake.
 - **Inline-code documentation matches default-on execution.** Operator docs and repo guidance now describe `runtime.allow_inline_code` as enabled by default, `--im-a-pussy` / `JS_ALLOW_INLINE_CODE=0` as opt-outs, literal directive escaping, and non-fatal expansion failures so users understand the current prompt-security model.
 - **Claude local configuration can be tracked deliberately.** The root `.claude/` directory is no longer ignored, so project-specific Claude settings and guidance can be reviewed and committed when they are real repo work.
 - **Commit-agent subject guidance.** Claude Code repo instructions now require plain-English commit subjects so automated commits keep the owner's voice instead of leaking conventional-commit syntax.
