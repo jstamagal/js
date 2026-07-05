@@ -59,7 +59,28 @@ install:
     set -euo pipefail
     uv tool install --force --editable .
     just ensure-tools
-    echo "installed js + js-drain. if they aren't on PATH yet: uv tool update-shell"
+    # verify the install took: whatever `js` PATH resolves must load code from
+    # THIS working tree, or an old/foreign install is still answering.
+    repo="$(pwd)"
+    shim="$(command -v js || true)"
+    if [ -z "$shim" ]; then
+        echo "!! js not on PATH after install — run: uv tool update-shell" >&2
+        exit 1
+    fi
+    pybin="$(sed -n '1s/^#!//p' "$shim")"
+    if [ ! -x "$pybin" ]; then
+        echo "!! $shim is not a uv tool shim (foreign install shadowing PATH?) — remove it and rerun" >&2
+        exit 1
+    fi
+    loaded="$("$pybin" -c 'import js, pathlib; print(pathlib.Path(js.__file__).resolve().parent)')"
+    case "$loaded" in
+        "$repo"/*) echo "ok: $shim loads $loaded — editable, tracks this tree (deps changes still need a rerun of: just install)" ;;
+        *)
+            echo "!! STALE INSTALL: $shim loads $loaded, NOT this tree ($repo)." >&2
+            echo "!! an old or non-editable install is still active — uv tool uninstall js, then rerun: just install" >&2
+            exit 1
+            ;;
+    esac
 
 # ensure the CLI binaries js leans on are present, installing any that are
 # missing via the detected package manager. fs_search shells out to `rg`; `fd`,
