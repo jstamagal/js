@@ -139,7 +139,7 @@ the seam between the `.irc` language and the harness:
 - where handlers load: global / per-agent / per-session; scripts
   loading scripts
 - retry caps + escalation policy to avoid infinite loops
-- trust gate on `exec` (same concern as --dangerously-evaluate-inline-code)
+- trust gate on `exec` (same concern as default-on inline-code execution / `--im-a-pussy`)
 
 ## Relationship to ircii_dsl.py
 The DSL already gives the engine: variables, loops, aliases, recursion,

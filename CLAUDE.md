@@ -112,8 +112,9 @@ need reading many files to see:
   frontmatter pick the tool surface. id rule in `config.py`.
 - **`js/promptexpand.py` — inline directive expansion at load.** `{{VAR}}` (env),
   `!{sub ...}` inline, `` ```!sub `` fenced block. read-only subs (`env`,`file`)
-  always on; code subs (`sh`,`bash`,`python`,`node`,`c`) gated behind
-  `--dangerously-evaluate-inline-code`. SINGLE pass = injection guard, output
+  always on; code subs (`sh`,`bash`,`python`,`node`,`c`) ON by default
+  (`runtime.allow_inline_code`), opt out per-run with `--im-a-pussy` or
+  `JS_ALLOW_INLINE_CODE=0`. SINGLE pass = injection guard, output
   never re-scanned. backtick-wrap or a leading `\` keep a directive LITERAL (for
   docs). 🦍 keep that property if 🦍 touch it.
 - **`js/config.py` + `js/settings.py` — config layering.** jsrc (global)
