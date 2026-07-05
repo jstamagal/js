@@ -11,7 +11,7 @@ Root `README.md` is only a launch pad.
    config/data layout, session files, reset/wipe/rollback, and compaction.
 3. [Inline Directives](inline-directives.md): `{{VAR}}`, `!{sub args}`, and
    ` ```!lang ` fences in system prompts, the subsystems, and the
-   `--dangerously-evaluate-inline-code` flag.
+   `--im-a-pussy` opt-out (code directives run by default).
 4. [Technical Guide](technical-guide.md): module map and runtime architecture.
 5. [Tool System](tool-system.md): registry, schemas, descriptions, dispatch, and
    Forge-style behavior.

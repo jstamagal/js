@@ -69,7 +69,7 @@ as `<set>`.
 | `limits.wiki_vault_lock_timeout_s` | `30` | Wiki vault lock timeout in seconds. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
-| `runtime.allow_inline_code` | `off` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; same as --dangerously-evaluate-inline-code. |
+| `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
 | `compact.auto` | `on` | Automatic cache-aware context compaction. |
 | `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
 | `compact.notify_threshold` | `0.5` | Notify once when context reaches this fraction. |
@@ -152,8 +152,8 @@ The byte caps use the canonical `_BYTES` env names only
 aliases. Note there is **no** env var for `limits.task_max_depth` or
 `limits.subagent_max_workers` — set them in `jsrc` or via `--extra limits.*=N`.
 
-`JS_ALLOW_INLINE_CODE=1` permits code-running inline prompt directives; it is set
-automatically by `--dangerously-evaluate-inline-code`. See
+Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0`
+disables them (`--im-a-pussy` sets exactly that for one run). See
 [inline-directives.md](inline-directives.md).
 
 ## CLI Overrides
@@ -170,7 +170,7 @@ js --debug-file /tmp/js-debug.log
 js --reasoning off
 js --max-out 64000
 js --extra limits.task_max_depth=3
-js --dangerously-evaluate-inline-code
+js --im-a-pussy
 js --migrate-config
 ```
 
@@ -204,9 +204,9 @@ dispatch from inside a handler is skipped.
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
 temporary and is removed after 2 releases.
 
-`--dangerously-evaluate-inline-code` (alias `--dangerously-evaluate-shell-commands`)
-enables the code-running inline prompt directives. It compiles and runs arbitrary
-code from prompt files -- see [inline-directives.md](inline-directives.md).
+`--im-a-pussy` opts OUT of the code-running inline prompt directives for the
+run; they are on by default and compile and run arbitrary code from prompt
+files -- see [inline-directives.md](inline-directives.md).
 
 `--reasoning off` is an explicit override. It disables reasoning even when
 `JS_REASONING` is set.

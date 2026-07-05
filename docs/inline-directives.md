@@ -66,32 +66,45 @@ the inline form when both could match.
 | `c` | code | Write the body to a temp `.c`, compile with `cc`, run the binary, inject stdout. |
 
 `env` and `file` are **always on** — they only read. The remaining subsystems
-**execute code embedded in the prompt file** and are gated (see below).
+**execute code embedded in the prompt file**; they run by default (see below
+for opting out).
 
 Command execution captures stdout only; a trailing newline is stripped. A
-nonzero exit, a missing interpreter/compiler, or a timeout raises an error and
-aborts prompt assembly. The default per-directive timeout is 300 seconds; set
+directive that fails to resolve — nonzero exit, missing interpreter/compiler,
+timeout, unknown subsystem — is left **literal** in the prompt with a one-line
+warning on stderr; it does not abort prompt assembly. (Callers of
+`expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
+default per-directive timeout is 300 seconds; set
 `limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT` to override it.
 
-## Enabling code execution
+## Code execution is on by default
 
-Code subsystems run only when inline-code execution is enabled:
+Code subsystems run by default (`runtime.allow_inline_code`, default `on`).
+Opting out:
 
 ```bash
-js --dangerously-evaluate-inline-code -p "..."
-# alias:
-js --dangerously-evaluate-shell-commands -p "..."
+js --im-a-pussy -p "..."               # this run only (sets JS_ALLOW_INLINE_CODE=0)
+set runtime.allow_inline_code off      # permanent, in jsrc
+JS_ALLOW_INLINE_CODE=0 js -p "..."     # via environment
 ```
 
-The flag sets `JS_ALLOW_INLINE_CODE=1`, which the runtime reads into
-`Config.allow_inline_code`. Without it, any `!{sh ...}`, `!{python ...}`,
-` ```!c ` etc. raises an error telling you to pass the flag; `{{VAR}}`,
-`!{env}`, and `!{file}` still work.
+With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc. is
+left literal in the prompt (no error); `{{VAR}}`, `!{env}`, and `!{file}` still
+expand.
 
-> **Security note.** With the flag on, `js` compiles and runs arbitrary code
-> taken from your prompt files (the agent's `*.md` and any stacked `AGENTS.md`).
-> Only enable it for prompts you wrote or fully trust. Treat it like running a
-> script: a prompt directory is executable input once this flag is set.
+> **Security note.** By default `js` compiles and runs arbitrary code taken
+> from your prompt files (the agent's `*.md` and any stacked `AGENTS.md`).
+> Treat a prompt directory as executable input: only add prompt dirs you wrote
+> or fully trust, or run with `--im-a-pussy` / `runtime.allow_inline_code off`.
+
+## Keeping a directive literal
+
+A prompt that documents the syntax to itself needs to show a directive without
+running it. A backslash immediately before any form (`\!{sh ...}`, `\{{VAR}}`,
+`` \``` ``!sub) emits it verbatim minus the escape backslash — the universal
+escape, and the only one for fenced blocks. An inline `!{...}` / `{{...}}`
+fully wrapped in a markdown backtick code span is also left literal, backticks
+and all.
 
 ## Single-pass / injection safety
 
