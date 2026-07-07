@@ -19,10 +19,16 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Input, RichLog
 
-from . import attach, events, logins, memory as M, providers, replcomplete, runtime, setcmd, settings, supervisor
+from . import attach, events, logins, memory as M, providers, replcomplete, routing, runtime, setcmd, settings, supervisor
 from . import transcript as transcript_mod
 from .config import Config
 from .sampling import Sampling
+
+
+def _error_text(e: BaseException) -> str:
+    if isinstance(e, routing.ProviderNotLoggedInError):
+        return str(e)
+    return f"{type(e).__name__}: {e}"
 
 
 @dataclass(frozen=True)
@@ -289,10 +295,10 @@ class JsTuiApp(App[int]):
                 M.append_mark(self.cfg.session_file, "turn_aborted")
             raise
         except Exception as e:  # noqa: BLE001
-            self._write_transcript(f"[orange1]error: {type(e).__name__}: {e}[/]")
+            self._write_transcript(f"[orange1]error: {_error_text(e)}[/]")
             self.state["messages"][:] = self.state["messages"][:before_len]
             M.append_mark(self.cfg.session_file, f"rollback_to:{before_len}")
-            M.append_mark(self.cfg.session_file, f"error: {type(e).__name__}: {e}")
+            M.append_mark(self.cfg.session_file, f"error: {_error_text(e)}")
 
     def _sampling_for_turn(self, turn_cfg: Config, sampling_cli: Sampling):
         # Import lazily to avoid a cli.py import cycle at module load.
