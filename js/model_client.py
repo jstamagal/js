@@ -51,6 +51,83 @@ class ModelStreamResult:
     incomplete_reason: str | None = None
 
 
+class FriendlyProviderError(routing.ProviderNotLoggedInError):
+    """Provider-boundary failure already formatted for one-line user display."""
+
+
+def _provider_label(provider_id: str | None, exc: BaseException | None = None) -> str:
+    provider = getattr(exc, "provider", None) if exc is not None else None
+    if isinstance(provider, str) and provider:
+        return provider
+    return provider_id or "default"
+
+
+def _detail(exc: BaseException, *, max_len: int = 220) -> str:
+    text = " ".join(str(exc).split())
+    if not text:
+        return exc.__class__.__name__
+    if len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
+    return text
+
+
+def _friendly_provider_error(
+    exc: BaseException,
+    *,
+    provider_id: str | None,
+) -> FriendlyProviderError | None:
+    provider = _provider_label(provider_id, exc)
+    detail = _detail(exc)
+
+    if isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc):
+        return FriendlyProviderError(
+            f"provider {provider!r} needs an API key; run `js --login {provider}` "
+            "or `set provider.api_key <value>`; detail: SDK could not resolve authentication"
+        )
+
+    if isinstance(exc, ValueError) and str(exc).startswith("unknown provider id:"):
+        unknown = str(exc).partition(":")[2].strip()
+        if unknown.startswith(("'", '"')) and len(unknown) >= 2:
+            provider = unknown[1:-1]
+        return FriendlyProviderError(
+            f"unknown provider {provider!r}; run `js --login {provider}` "
+            "(js --list-models shows what's runnable)"
+        )
+
+    if isinstance(exc, ai.ProviderAuthenticationError):
+        return FriendlyProviderError(
+            f"provider {provider!r} authentication failed; detail: {detail}; "
+            f"run `js --login {provider}` or `set provider.api_key <value>`"
+        )
+
+    if isinstance(exc, ai.ProviderNotConfiguredError):
+        return FriendlyProviderError(
+            f"provider {provider!r} is not configured; detail: {detail}; "
+            f"run `js --login {provider}` or `set provider.api_key <value>`"
+        )
+
+    if isinstance(exc, ai.ProviderConnectionError):
+        return FriendlyProviderError(
+            f"provider {provider!r} connection failed; detail: {detail}; "
+            "`set provider.base_url <url>` or check the endpoint"
+        )
+
+    if isinstance(exc, ai.ProviderStatusError):
+        return FriendlyProviderError(
+            f"provider {provider!r} request failed; detail: {detail}; "
+            f"run `js --login {provider}`, `set provider.api_key <value>`, "
+            "or `set provider.base_url <url>`"
+        )
+
+    if isinstance(exc, ai.ProviderAPIError):
+        return FriendlyProviderError(
+            f"provider {provider!r} request failed; detail: {detail}; "
+            f"run `js --login {provider}` or check `set provider.base_url <url>`"
+        )
+
+    return None
+
+
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
     """Return a stable incomplete reason from provider metadata, if present.
 
@@ -639,13 +716,21 @@ async def stream_model_async(
     so many turns/subagents can run concurrently on one shared loop. The sync
     ``stream_model`` below wraps this for callers not yet on the async runtime.
     """
-    model = resolve_model(
-        model_id,
-        provider_id=provider_id,
-        provider_base_url=provider_base_url,
-        provider_api_key=provider_api_key,
-        provider_headers=provider_headers,
-    )
+    try:
+        model = resolve_model(
+            model_id,
+            provider_id=provider_id,
+            provider_base_url=provider_base_url,
+            provider_api_key=provider_api_key,
+            provider_headers=provider_headers,
+        )
+    except routing.ProviderNotLoggedInError:
+        raise
+    except Exception as exc:
+        friendly = _friendly_provider_error(exc, provider_id=provider_id)
+        if friendly is not None:
+            raise friendly from exc
+        raise
     # Per-provider params: this is the canonical place to encode quirks. We build
     # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
     # field to the provider's wire shape, so js no longer hand-routes sampling
@@ -760,6 +845,13 @@ async def stream_model_async(
             executor=executor,
             on_text=on_text,
         )
+    except routing.ProviderNotLoggedInError:
+        raise
+    except Exception as exc:
+        friendly = _friendly_provider_error(exc, provider_id=provider_id)
+        if friendly is not None:
+            raise friendly from exc
+        raise
     finally:
         try:
             await model.provider.aclose()
