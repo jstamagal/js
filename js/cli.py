@@ -2027,6 +2027,60 @@ def _run_artifact(artifact_arg: str, target: str | None,
     return rc
 
 
+def _commit_backup_root() -> Path:
+    return _paths.data_dir() / "commit-backups"
+
+
+def _worktree_patch(repo_dir: Path, commit_helper) -> str:
+    """The unified diff of every tracked uncommitted change.
+
+    `git diff HEAD` is staged+unstaged against the last commit. A repo with no
+    commits yet has no HEAD, so fall back to staged+unstaged separately.
+    """
+    diff = commit_helper._git("diff", "HEAD", check=False, repo=repo_dir)
+    if diff.returncode == 0:
+        return diff.stdout
+    staged = commit_helper._git("diff", "--cached", check=False, repo=repo_dir)
+    unstaged = commit_helper._git("diff", check=False, repo=repo_dir)
+    return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
+
+
+def _prune_commit_backups(root: Path, keep: int = 10) -> None:
+    dirs = sorted((d for d in root.iterdir() if d.is_dir()), key=lambda p: p.name)
+    for old in dirs[:-keep]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _snapshot_worktree(repo_dir: Path) -> Path | None:
+    """Copy all uncommitted work into a timestamped backup before the agent touches the tree.
+
+    The commit agent can revert files while splitting commits; a snapshot means any
+    failure path is recoverable. Returns the backup dir, or None on a clean tree.
+    """
+    from . import commit_helper
+
+    patch = _worktree_patch(repo_dir, commit_helper)
+    others = commit_helper._git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
+    untracked = [p for p in others.stdout.split("\0") if p] if others.returncode == 0 else []
+    if not patch.strip() and not untracked:
+        return None
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_dir = _commit_backup_root() / stamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    if patch:
+        (backup_dir / "tracked.patch").write_text(patch, encoding="utf-8")
+    for rel in untracked:
+        dest = backup_dir / "untracked" / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo_dir / rel, dest)
+        except OSError:
+            continue  # a vanished/unreadable file must not abort the whole snapshot
+    _prune_commit_backups(_commit_backup_root())
+    return backup_dir
+
+
 def _run_commit(target: str | None,
                 model: str | None = None, debug: bool = False, debug_file: str | None = None,
                 session: str | None = None, save: bool = True,
@@ -2057,6 +2111,14 @@ def _run_commit(target: str | None,
             detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
             print(f"{C.ORANGE}error: git init failed in {target_dir}: {detail}{C.RESET}", file=sys.stderr)
             return 1
+
+    try:
+        backup_dir = _snapshot_worktree(target_dir)
+    except Exception as e:  # noqa: BLE001 — a snapshot failure must never block the commit run
+        print(f"{C.ORANGE}warning: could not snapshot worktree before commit: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+    else:
+        if backup_dir is not None:
+            print(f"{C.GREY}(worktree snapshot saved: {backup_dir}){C.RESET}")
 
     survey_out = io.StringIO()
     survey_err = io.StringIO()
