@@ -692,7 +692,9 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
         assert any(
             msg.role == "tool"
             and any(
-                getattr(p, "result", None) and "--- stdout ---\nabc" in str(p.result)
+                getattr(p, "result", None)
+                and "--- stdout ---" in str(p.result)
+                and "[truncated: limits.max_bash_output_bytes (3) reached]" in str(p.result)
                 for p in msg.parts
             )
             for msg in kwargs["messages"]
