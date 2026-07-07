@@ -59,6 +59,12 @@ from .toolkit import ToolContext
 _FULL_REGISTRY = build_default_registry()
 
 
+def _error_text(e: BaseException) -> str:
+    if isinstance(e, routing.ProviderNotLoggedInError):
+        return str(e)
+    return f"{type(e).__name__}: {e}"
+
+
 def _registry_for(cfg) -> object:
     # The default registry exposes the subagent `model` override on the task tool.
     # When the operator has locked subagent model selection, rebuild without that
@@ -1667,7 +1673,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     telemetry.transcript_log = visible_transcript
         except Exception as e:  # noqa: BLE001
             with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+                print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
             return 1
     finally:
         if trace_sink is not None:
@@ -2271,7 +2277,7 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
         result = runtime.compact_messages(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
         return 1
     print(result)
     return 0
@@ -2489,10 +2495,10 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}")
+        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
         state["messages"][:] = state["messages"][:before_len]
         M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
-        M.append_mark(cfg.session_file, f"error: {type(e).__name__}: {e}")
+        M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
 
 
 async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -> None:
@@ -3290,10 +3296,10 @@ def main(argv: list[str] | None = None) -> int:
                 M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}")
+            print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
-            M.append_mark(cfg.session_file, f"error: {type(e).__name__}: {e}")
+            M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
     transcript_stack.close()
     return 0
 if __name__ == "__main__":
