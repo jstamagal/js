@@ -75,6 +75,8 @@ def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp
 
     def scripted_input(prompt, *, default=None, secret=False):
         prompts.append(prompt)
+        if prompt == "Base URL":
+            return default
         if "use it?" in prompt:
             return "y"
         raise AssertionError(f"unexpected prompt: {prompt}")
@@ -95,6 +97,8 @@ def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_pa
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-decoy")
 
     def scripted_input(prompt, *, default=None, secret=False):
+        if prompt == "Base URL":
+            return default
         if "use it?" in prompt:
             return "n"
         if prompt.startswith("Enter API Key"):
@@ -168,6 +172,80 @@ def test_collect_api_login_prompts_for_base_url_on_local_providers(tmp_path: Pat
         _reset_logins()
 
 
+def test_collect_api_login_enter_keeps_empty_base_url_for_official_provider(tmp_path: Path, monkeypatch):
+    logins.set_config_dir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    prompted: dict[str, str | None] = {}
+
+    def fake_input(prompt, *, default=None, secret=False):
+        prompted[prompt] = default
+        if prompt == "Base URL":
+            return default
+        if prompt.startswith("Enter API Key"):
+            return "sk-test"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(login_cli, "_input", fake_input)
+    try:
+        login = login_cli._collect_api_login("openai", "openai", providers.provider_for_login("openai"))
+        assert login is not None
+        assert prompted["Base URL"] == ""
+        assert login.provider_base_url is None
+        assert login.provider_api_key == "sk-test"
+    finally:
+        _reset_logins()
+
+
+def test_collect_api_login_variable_provider_prompts_with_default_and_keeps_enter(tmp_path: Path, monkeypatch):
+    logins.set_config_dir(tmp_path)
+    for name in ("VLLM_BASE_URL", "VLLM_API_KEY", "VLLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    prompted: dict[str, str | None] = {}
+
+    def fake_input(prompt, *, default=None, secret=False):
+        prompted[prompt] = default
+        if prompt == "Base URL":
+            return default
+        if prompt.startswith("Enter API Key"):
+            return ""
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(login_cli, "_input", fake_input)
+    try:
+        provider = providers.provider_for_login("vllm")
+        login = login_cli._collect_api_login("vllm", "openai", provider)
+        assert login is not None
+        assert prompted["Base URL"] == "http://127.0.0.1:8000/v1"
+        assert login.provider_base_url == "http://127.0.0.1:8000/v1"
+    finally:
+        _reset_logins()
+
+
+def test_collect_api_login_variable_provider_prompts_even_with_env_base(tmp_path: Path, monkeypatch):
+    logins.set_config_dir(tmp_path)
+    monkeypatch.setenv("VLLM_BASE_URL", "http://gpu-box.test/v1")
+    prompted: dict[str, str | None] = {}
+
+    def fake_input(prompt, *, default=None, secret=False):
+        prompted[prompt] = default
+        if prompt == "Base URL":
+            return default
+        if prompt.startswith("Enter API Key"):
+            return ""
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(login_cli, "_input", fake_input)
+    try:
+        provider = providers.provider_for_login("vllm")
+        login = login_cli._collect_api_login("vllm", "openai", provider)
+        assert login is not None
+        assert prompted["Base URL"] == "http://gpu-box.test/v1"
+        assert login.provider_base_url == "http://gpu-box.test/v1"
+    finally:
+        _reset_logins()
+
+
 def test_opencode_go_anthropic_uses_anthropic_root_base_url():
     provider = providers.provider_for_login("opencode-go-anthropic")
     assert provider.default_base_url == "https://opencode.ai/zen/go"
@@ -197,6 +275,40 @@ def test_fetch_models_passes_through_live_list_without_allowlist(monkeypatch):
         provider_api_key="k",
     )
     assert logins.test_login(login) == live  # nothing filtered out
+
+
+def test_run_login_caches_server_model_metadata(monkeypatch, tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+
+    def fake_input(prompt, *, default=None, secret=False):
+        if prompt == "Base URL":
+            return default
+        if prompt.startswith("Enter API Key"):
+            return ""
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    metadata = {
+        "served-model": logins.ModelCacheMetadata(
+            context_window=32768,
+            max_output_tokens=4096,
+            training_context_window=262144,
+        )
+    }
+
+    try:
+        monkeypatch.setattr(login_cli, "_input", fake_input)
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["served-model"], metadata))
+        monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
+        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda _provider_id, models: models)
+
+        assert login_cli._run_login("vllm") == 0
+        assert logins.load_model_cache()["vllm"] == ["served-model"]
+        cached = logins.load_model_cache_metadata()["vllm"]["served-model"]
+        assert cached.context_window == 32768
+        assert cached.max_output_tokens == 4096
+        assert cached.training_context_window == 262144
+    finally:
+        _reset_logins()
 
 
 class _FakeStdscr:

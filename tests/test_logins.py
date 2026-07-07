@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from js import logins, paths
+from js import logins, model_metadata, paths, runtime
 
 @pytest.fixture
 def tmp_logins_dir(tmp_path: Path, monkeypatch):
@@ -84,6 +84,21 @@ def test_login_effective_provider_id_round_trip(tmp_logins_dir):
     assert loaded.provider_base_url == "http://proxy.test/v1"
 
 
+def test_login_shape_provider_id_round_trip(tmp_logins_dir):
+    logins.save_login(
+        logins.Login(
+            provider_id="my-responses-proxy",
+            sdk_provider_id="openai",
+            shape_provider_id="openai-responses",
+            provider_base_url="http://proxy.test/v1",
+            provider_api_key="sk-proxy",
+        )
+    )
+    loaded = logins.load_logins()["my-responses-proxy"]
+    assert loaded.sdk_provider_id == "openai"
+    assert loaded.shape_provider_id == "openai-responses"
+
+
 def test_test_login_uses_effective_provider_id(monkeypatch, tmp_logins_dir):
     captured = {}
 
@@ -118,6 +133,46 @@ def test_test_login_uses_effective_provider_id(monkeypatch, tmp_logins_dir):
         "closed": True,
     }
 
+
+def test_test_login_with_metadata_uses_shape_for_unsaved_custom_provider(monkeypatch, tmp_logins_dir):
+    captured = {}
+
+    class Provider:
+        async def list_models(self):
+            return ["served-model"]
+
+        async def aclose(self):
+            captured["closed"] = True
+
+    def fake_get_provider(provider_id, **kwargs):
+        captured["provider_id"] = provider_id
+        captured.update(kwargs)
+        return Provider()
+
+    async def fake_metadata(_login, provider_def):
+        captured["metadata_provider_id"] = provider_def.id
+        return {"served-model": logins.ModelCacheMetadata(context_window=32768)}
+
+    monkeypatch.setattr(logins.ai, "get_provider", fake_get_provider)
+    monkeypatch.setattr(logins, "_fetch_openai_model_metadata", fake_metadata)
+
+    models, metadata = logins.test_login_with_metadata(
+        logins.Login(
+            provider_id="new-proxy",
+            sdk_provider_id="openai",
+            shape_provider_id="openai-completions",
+            provider_base_url="http://proxy.test/v1",
+            provider_api_key="sk-proxy",
+        )
+    )
+
+    assert models == ["served-model"]
+    assert metadata["served-model"].context_window == 32768
+    assert captured["provider_id"] == "openai"
+    assert captured["metadata_provider_id"] == "openai-completions"
+    assert captured["closed"] is True
+
+
 def test_remove_login(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="x", provider_api_key="k"))
     assert logins.remove_login("x") is True
@@ -129,6 +184,88 @@ def test_model_cache_round_trip(tmp_logins_dir):
     logins.cache_models("openai", ["gpt-4o", "gpt-4.1"])
     cache = logins.load_model_cache()
     assert cache["openai"] == ["gpt-4o", "gpt-4.1"]
+
+
+def test_model_cache_metadata_round_trip_keeps_old_list_view(tmp_logins_dir):
+    logins.cache_models(
+        "vllm",
+        ["served-model"],
+        metadata={
+            "served-model": logins.ModelCacheMetadata(
+                context_window=32768,
+                max_output_tokens=4096,
+                training_context_window=262144,
+            )
+        },
+    )
+
+    assert logins.load_model_cache()["vllm"] == ["served-model"]
+    metadata = logins.load_model_cache_metadata()["vllm"]["served-model"]
+    assert metadata.context_window == 32768
+    assert metadata.max_output_tokens == 4096
+    assert metadata.training_context_window == 262144
+
+
+def test_model_cache_metadata_parser_prefers_served_limit_over_n_ctx_train(tmp_logins_dir):
+    metadata = logins.metadata_from_openai_models_payload(
+        {
+            "data": [
+                {
+                    "id": "served-model",
+                    "max_model_len": 32768,
+                    "context_window": 0,
+                    "meta": {"n_ctx_train": 262144},
+                    "max_output_tokens": 4096,
+                },
+                {
+                    "id": "train-only",
+                    "max_model_len": 0,
+                    "context_window": 0,
+                    "meta": {"n_ctx_train": 262144},
+                },
+            ]
+        }
+    )
+
+    assert metadata["served-model"].context_window == 32768
+    assert metadata["served-model"].training_context_window == 262144
+    assert metadata["served-model"].max_output_tokens == 4096
+    assert metadata["train-only"].context_window is None
+    assert metadata["train-only"].training_context_window == 262144
+
+
+def test_runtime_resolves_server_cached_metadata_before_catalog(monkeypatch, tmp_logins_dir):
+    logins.cache_models(
+        "vllm",
+        ["served-model", "train-only"],
+        metadata={
+            "served-model": logins.ModelCacheMetadata(
+                context_window=32768,
+                max_output_tokens=4096,
+                training_context_window=262144,
+            ),
+            "train-only": logins.ModelCacheMetadata(training_context_window=262144),
+        },
+    )
+    monkeypatch.setattr(model_metadata, "probe_local_context_window", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(model_metadata, "context_window", lambda model, _provider: 500000 if model == "train-only" else 999999)
+    monkeypatch.setattr(model_metadata, "max_output_tokens", lambda _model, _provider: 1234)
+
+    assert runtime._resolve_context_window("served-model", "vllm") == 32768
+    assert runtime._resolve_max_output("served-model", "vllm") == 4096
+    assert runtime._resolve_context_window("train-only", "vllm") == 262144
+
+
+def test_runtime_does_not_use_n_ctx_train_as_context_without_fallback(monkeypatch, tmp_logins_dir):
+    logins.cache_models(
+        "vllm",
+        ["train-only"],
+        metadata={"train-only": logins.ModelCacheMetadata(training_context_window=262144)},
+    )
+    monkeypatch.setattr(model_metadata, "probe_local_context_window", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: None)
+
+    assert runtime._resolve_context_window("train-only", "vllm") is None
 
 
 def test_remove_login_clears_cache(tmp_logins_dir):

@@ -25,11 +25,12 @@ def isolated_login_store(monkeypatch, tmp_path):
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "login-store")
 
 
-def _save_custom_login(provider_id: str, sdk: str = "openai") -> None:
+def _save_custom_login(provider_id: str, sdk: str = "openai", shape: str | None = None) -> None:
     logins.save_login(
         Login(
             provider_id=provider_id,
             sdk_provider_id=sdk,
+            shape_provider_id=shape,
             provider_base_url=BASE_URL,
             provider_api_key="x",
         )
@@ -62,6 +63,14 @@ def test_anthropic_shape_login_gets_anthropic_transport():
     provider = providers.get_provider("myclaude")
     assert provider is not None
     assert provider.transport == "custom_anthropic"
+
+
+def test_openai_responses_shape_login_gets_responses_transport():
+    _save_custom_login("myresponses", sdk="openai", shape="openai-responses")
+    provider = providers.get_provider("myresponses")
+    assert provider is not None
+    assert provider.transport == "custom_responses"
+    assert provider.effective_sdk_provider_id == "openai"
 
 
 def test_prefix_splits_on_saved_login():

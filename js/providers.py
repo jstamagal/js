@@ -538,6 +538,11 @@ def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
         return None
     sdk = (login.sdk_provider_id or "openai").strip().lower()
     transport: Transport = "custom_anthropic" if sdk == "anthropic" else "custom_openai"
+    shape_id = getattr(login, "shape_provider_id", None)
+    if shape_id:
+        shape = _BUILTIN_BY_ID.get(normalize_provider_id(shape_id) or shape_id)
+        if shape is not None:
+            transport = shape.transport
     return _p(
         provider_id,
         provider_id,
