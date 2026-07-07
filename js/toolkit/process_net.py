@@ -34,6 +34,61 @@ def _default_shell() -> str:
     return os.environ.get("SHELL", "/bin/sh")
 
 
+def _drain_capped(stream, cap: int) -> bytes:
+    """Read a pipe to EOF keeping at most ``cap`` bytes.
+
+    subprocess.run(capture_output=True) buffers EVERYTHING before any cap is
+    applied — one `yes`-style command took a js process to 92 GB RSS and the
+    OOM killer. Past the cap we keep draining (so the child never blocks on a
+    full pipe) but discard, holding memory at the cap.
+    """
+    kept = bytearray()
+    while True:
+        chunk = stream.read(65536)
+        if not chunk:
+            return bytes(kept)
+        if len(kept) < cap:
+            kept.extend(chunk[: cap - len(kept)])
+
+
+def _run_capped(
+    argv: list[str], *, timeout: int, cwd: str, env: dict[str, str], cap: int
+) -> tuple[int, bytes, bytes]:
+    """Run ``argv`` capturing at most ``cap`` bytes per stream.
+
+    Raises subprocess.TimeoutExpired like subprocess.run; the child is killed
+    on timeout either way.
+    """
+    import threading
+
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env
+    )
+    out: dict[str, bytes] = {"stdout": b"", "stderr": b""}
+
+    def _reader(name: str, stream) -> None:
+        try:
+            out[name] = _drain_capped(stream, cap)
+        finally:
+            stream.close()
+
+    threads = [
+        threading.Thread(target=_reader, args=("stdout", proc.stdout), daemon=True),
+        threading.Thread(target=_reader, args=("stderr", proc.stderr), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    for t in threads:
+        t.join(timeout=10)
+    return rc, out["stdout"], out["stderr"]
+
+
 def shell(
     command: str,
     cwd: str | None = None,
@@ -52,24 +107,24 @@ def shell(
     shell_path = _default_shell()
     shell_arg = "/C" if sys.platform == "win32" else "-c"
     try:
-        proc = subprocess.run(
+        returncode, raw_stdout, raw_stderr = _run_capped(
             [shell_path, shell_arg, command],
-            capture_output=True,
             timeout=timeout,
             cwd=str(workdir),
             env=safe_env,
+            cap=context.max_bash_output_bytes,
         )
     except subprocess.TimeoutExpired:
         return f"ERROR: command timed out after {timeout}s"
     except OSError as exc:
         return f"ERROR: {exc}"
 
-    stdout = proc.stdout[: context.max_bash_output_bytes].decode("utf-8", errors="replace")
-    stderr = proc.stderr[: context.max_bash_output_bytes].decode("utf-8", errors="replace")
+    stdout = raw_stdout.decode("utf-8", errors="replace")
+    stderr = raw_stderr.decode("utf-8", errors="replace")
     if not keep_ansi:
         stdout = _ANSI_RE.sub("", stdout)
         stderr = _ANSI_RE.sub("", stderr)
-    parts = [f"shell={shell_path}", f"exit={proc.returncode}"]
+    parts = [f"shell={shell_path}", f"exit={returncode}"]
     if description:
         parts.append(f"description={description}")
     if stdout:
