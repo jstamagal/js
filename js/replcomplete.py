@@ -39,6 +39,7 @@ COMMANDS: tuple[str, ...] = (
     "/help",
     "/set",
     "/show",
+    "/save",
     "/load",
     "/on",
     "/model",
