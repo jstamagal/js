@@ -192,6 +192,10 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
+    # A `-m provider/model` override routes only when that provider is logged in.
+    from js import logins
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
+    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="x"))
 
     seen = {}
 
@@ -225,6 +229,10 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
     monkeypatch.delenv("JS_BASE_URL", raising=False)
     monkeypatch.delenv("JS_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    # A `--model provider/model` override routes only when that provider is logged in.
+    from js import logins
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
+    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="x"))
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     seen = {}
 

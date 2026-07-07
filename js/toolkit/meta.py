@@ -283,7 +283,6 @@ async def _run_one_task_async(
             configured_headers=getattr(cfg, "provider_headers", {}),
             explicit_model=True,
             prefix_overrides_provider=True,
-            discover_env=False,
         )
         cfg = replace(
             cfg,

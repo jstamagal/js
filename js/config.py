@@ -321,14 +321,30 @@ def from_env(
     sampling_cli = _sampling_from_extras(extras)
     raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or _DEFAULT_MODEL
     explicit_model = bool(env.get("JS_MODEL")) or raw_model != _DEFAULT_MODEL
-    route = _routing.resolve_model_route(
-        raw_model,
-        configured_provider_id=_settings.get_dotted(js_root_settings, ("provider", "id")),
-        configured_base_url=_settings.get_dotted(js_root_settings, ("provider", "base_url")),
-        configured_api_key=_settings.get_dotted(js_root_settings, ("provider", "api_key")),
-        env=env,
-        explicit_model=explicit_model,
-    )
+    _cfg_provider_id = _settings.get_dotted(js_root_settings, ("provider", "id"))
+    _cfg_base_url = _settings.get_dotted(js_root_settings, ("provider", "base_url"))
+    _cfg_api_key = _settings.get_dotted(js_root_settings, ("provider", "api_key"))
+    try:
+        route = _routing.resolve_model_route(
+            raw_model,
+            configured_provider_id=_cfg_provider_id,
+            configured_base_url=_cfg_base_url,
+            configured_api_key=_cfg_api_key,
+            env=env,
+            explicit_model=explicit_model,
+        )
+    except _routing.ProviderNotLoggedInError:
+        # The base/default model names a provider the operator never logged into.
+        # Don't fail config-build: a -m override, an agent `model:`, or a later
+        # /model may replace it, and a plain run surfaces the friendly
+        # not-logged-in error at the model boundary (model_client). Carry NO
+        # provider so nothing farms the vendor's env keys in the meantime.
+        route = _routing.ModelRoute(
+            model=raw_model,
+            provider_id=None,
+            base_url=_cfg_base_url,
+            api_key=_cfg_api_key,
+        )
     model = route.model
     provider_id = route.provider_id
     provider_base_url = route.base_url

@@ -33,6 +33,35 @@ class ModelRoute:
     transport: str | None = None
 
 
+class ProviderNotLoggedInError(ValueError):
+    """A model id names a known provider the operator has not logged into.
+
+    Subclasses ``ValueError`` so the friendly one-line error handling that already
+    wraps route/config resolution (``error: {e}``, never a traceback) catches it
+    everywhere those failures already surface.
+    """
+
+
+def not_logged_in_message(provider_id: str) -> str:
+    return (
+        f"provider {provider_id!r} is not logged in; run `js --login {provider_id}` "
+        "(js --list-models shows what's runnable)"
+    )
+
+
+def unconfigured_model_message(model: str) -> str:
+    # A known-provider prefix (deferred here from config resolution) names exactly
+    # which login is missing — say so, don't fall back to the generic hint.
+    prefix_provider, _ = providers.parse_model_prefix(str(model))
+    if prefix_provider is not None:
+        return not_logged_in_message(prefix_provider)
+    return (
+        f"model {model!r} has no provider configured and no login; set provider.id "
+        "(or JS_PROVIDER), run `js --login`, or prefix a logged-in provider "
+        "(js --list-models shows what's runnable)"
+    )
+
+
 def _saved_login(provider_id: str | None):
     """Return the saved Login for ``provider_id`` (normalized), or None.
 
@@ -60,19 +89,28 @@ def resolve_model_route(
     env: Mapping[str, str] | None = None,
     explicit_model: bool = False,
     prefix_overrides_provider: bool = False,
-    discover_env: bool = True,
     use_saved_login: bool = True,
 ) -> ModelRoute:
     """Resolve ``requested_model`` into a full route.
 
-    - A ``provider/model`` prefix selects that provider, but only when no
-      provider is pinned or the prefix names the same one (so a gateway id like
-      ``anthropic/claude-...`` under provider ``omp`` does not hijack routing).
-    - ``prefix_overrides_provider``: let a known prefix route even when a different
-      provider is pinned (for explicit agent/subagent `model:` choices); the
-      pinned provider's base/key/headers are then dropped for the new provider.
-    - ``discover_env``: when no provider is set, sniff provider-specific env vars
-      (e.g. ``DEEPSEEK_API_KEY``) so a fresh shell works without ``js --login``.
+    A ``provider/model`` prefix routes ONLY when the operator has authorized that
+    provider — env keys alone never create a route (the login/model cache is the
+    single source of truth for what is runnable):
+
+    - ``prefix_login``: a saved ``js --login`` exists for the prefixed provider.
+      This is authoritative: it overrides a pinned ``provider.id`` and carries the
+      login's base/key.
+    - the prefix names the explicitly pinned ``configured_provider_id``.
+    - ``prefix_overrides_provider`` (explicit agent/subagent ``model:`` choices)
+      routes a prefix past a differently-pinned provider, but still only when a
+      login exists for it.
+
+    A prefix naming a KNOWN provider (builtin or catalog) with no login and no
+    explicit pin raises :class:`ProviderNotLoggedInError` instead of silently
+    riding the pinned/gateway provider on that vendor's env keys. An UNKNOWN first
+    segment is not a prefix at all — parse leaves the slashy id whole (OpenRouter /
+    Hugging Face style model names).
+
     - ``use_saved_login``: fill base/key/headers from a saved login when the
       caller has not supplied them.
     - ``explicit_model``: when False and no prefix routed, the provider's default
@@ -82,29 +120,24 @@ def resolve_model_route(
     configured_provider_id = providers.normalize_provider_id(configured_provider_id)
 
     parsed_provider_id, parsed_model = providers.parse_model_prefix(str(requested_model))
-    # A model-id prefix that names a provider the operator has explicitly logged
-    # into is an authoritative routing signal: it overrides a pinned provider
-    # (e.g. a stale `provider.id` in jsrc) the same way ``prefix_overrides_provider``
-    # does. It does NOT hijack a gateway id like ``anthropic/claude-...`` under a
-    # pinned ``omp`` — there is no saved ``anthropic`` login, so the prefix yields.
     prefix_login = _saved_login(parsed_provider_id) if parsed_provider_id is not None else None
     routes_by_prefix = parsed_provider_id is not None and (
-        prefix_overrides_provider
-        or configured_provider_id is None
+        prefix_login is not None
         or parsed_provider_id == configured_provider_id
-        or prefix_login is not None
+        or (prefix_overrides_provider and prefix_login is not None)
     )
     if routes_by_prefix:
         model = parsed_model or str(requested_model)
         provider_id = parsed_provider_id
     else:
+        # A known-provider prefix that carries no login and does not name the
+        # pinned provider is legitimate only as a gateway id UNDER an explicit pin
+        # (`anthropic/claude-...` on a pinned `omp` yields to omp). With nothing
+        # pinned it is simply a provider the operator never logged into.
+        if parsed_provider_id is not None and configured_provider_id is None:
+            raise ProviderNotLoggedInError(not_logged_in_message(parsed_provider_id))
         model = str(requested_model)
         provider_id = configured_provider_id
-
-    if provider_id is None and discover_env:
-        discovered = providers.discover_env_provider(source)
-        if discovered is not None:
-            provider_id = discovered.id
 
     # When a prefix switched to a DIFFERENT provider than the one configured, the
     # configured base/key/headers belong to the old provider — start fresh so the

@@ -1411,8 +1411,13 @@ def test_cfg_for_active_model_strips_same_provider_prefix(tmp_path):
     assert active.provider_api_key == "sk-deepseek"
 
 
-def test_cfg_for_active_model_routes_prefix_when_provider_unset(tmp_path):
-    # With no explicit provider, the model prefix still routes (AI-gateway case).
+def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp_path):
+    # With no explicit provider, a `provider/model` prefix routes ONLY when the
+    # operator logged into that provider (an env key never creates a route).
+    from js import logins
+
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="x"))
     cfg = make_cfg(tmp_path)
     state = {
         "model": "deepseek/deepseek-v4-flash",
