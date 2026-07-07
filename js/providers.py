@@ -366,6 +366,39 @@ def normalize_provider_id(provider_id: str | None) -> str | None:
     return key
 
 
+def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
+    """Synthesize a ProviderDef for a provider that exists only as a saved
+    login — a custom ``js --login`` endpoint like a local llama.cpp box.
+
+    Without this, a custom login is visible to ``/model`` and ``--list-models``
+    but invisible to routing: its ``provider/model`` prefix never splits and
+    model_client hands the raw js id to the SDK, which rejects it. The stored
+    SDK shape picks the transport; the stored base URL and key are defaults, so
+    explicit /set or env values still win. Lazy import + broad except because
+    a missing or corrupt login store must never break routing.
+    """
+    try:
+        from . import logins as _logins
+
+        login = _logins.load_logins().get(provider_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if login is None:
+        return None
+    sdk = (login.sdk_provider_id or "openai").strip().lower()
+    transport: Transport = "custom_anthropic" if sdk == "anthropic" else "custom_openai"
+    return _p(
+        provider_id,
+        provider_id,
+        transport,
+        sdk=sdk,
+        base=login.provider_base_url,
+        key=login.provider_api_key,
+        established=False,
+        requires_api_key=False,
+    )
+
+
 def get_provider(provider_id: str | None) -> ProviderDef | None:
     normalized = normalize_provider_id(provider_id)
     if normalized is None:
@@ -376,12 +409,18 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
     for candidate in _dynamic_login_providers():
         if candidate.id == normalized:
             return candidate
-    return None
+    return _saved_login_provider_def(normalized)
 
 
 def known_provider_ids() -> set[str]:
     ids = set(_ALIAS)
     ids.update(provider.id for provider in login_providers())
+    try:
+        from . import logins as _logins
+
+        ids.update(_logins.load_logins())
+    except Exception:  # noqa: BLE001
+        pass
     return ids
 
 
