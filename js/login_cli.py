@@ -10,7 +10,16 @@ from getpass import getpass
 import ai
 
 from . import codex_auth, colors as C, model_client, providers
-from .logins import Login, LoginsCorruptError, cache_models, load_logins, remove_login, save_login, test_login
+from .logins import (
+    Login,
+    LoginsCorruptError,
+    cache_models,
+    load_logins,
+    load_model_cache,
+    remove_login,
+    save_login,
+    test_login,
+)
 
 _API_SHAPES: list[tuple[str, str, str]] = [
     ("openai-completions", "openai", "OpenAI-compatible chat completions"),
@@ -178,28 +187,32 @@ def _curses_multiselect(
 def _select_models_to_cache(provider_id: str, models: list[str]) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
-    Interactive: a spacebar checklist (nothing preselected — pick what you
-    actually want cached for /model + --list-models) plus a free-text line to
-    add ids the endpoint omitted. Non-interactive (piped/no TTY): keep every
-    fetched model, the prior behavior.
+    Interactive: a spacebar checklist (freshly fetched models preselected, stale
+    cached-only rows visible but unselected) plus a free-text line to add ids the
+    endpoint omitted. Non-interactive (piped/no TTY): keep every fetched model,
+    the prior behavior.
     """
     if not models:
         return models
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return models
     dialects = _dialect_map(provider_id)
-    rows = [(model_id, dialects.get(model_id, "")) for model_id in models]
+    cache = load_model_cache()
+    cached = cache.get(provider_id, [])
+    options = list(dict.fromkeys([*models, *cached]))
+    rows = [(model_id, dialects.get(model_id, "")) for model_id in options]
+    fetched = set(models)
+    preselected = {idx for idx, model_id in enumerate(options) if model_id in fetched}
     title = f"select models to keep for {provider_id}  (cached for /model + --list-models)"
     sys.stdout.flush()
-    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=set())
+    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=preselected)
     if chosen is None:
         return None
-    selected = [models[i] for i in chosen]
-    known = set(models)
+    selected = [options[i] for i in chosen]
     extra = _input("add model ids the list missed (comma-separated, enter to skip)", default="")
     for raw in (extra or "").split(","):
         model_id = raw.strip()
-        if model_id and model_id not in known and model_id not in selected:
+        if model_id and model_id not in selected:
             selected.append(model_id)
     return selected
 
