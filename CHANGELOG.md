@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Provider validation at set time.** `set provider.id` now rejects unknown provider ids with a clear error; `set provider.base_url` rejects values without an http(s) scheme. Invalid env-var overrides (`JS_PROVIDER`, `JS_BASE_URL`) now print a warning to stderr instead of silently skipping.
+- **Regression coverage for capped shell output.** Added a test proving the capped reader holds memory at the cap while draining to EOF, preventing OOM from runaway commands.
 - **Regression coverage for byte-limited UTF-8 previews.** Added tests proving attachment sniffing and artifact previews survive when a byte cap splits a multibyte character.
 - **Regression coverage for non-blocking state commands.** Added tests for detecting `/reset`, `/wipe`, and `/compact` commands that would mutate live turn state.
 - **Regression coverage for drain staging collisions.** Added a test proving split text files with the same name in different inbox subdirectories keep distinct staged pieces.
@@ -206,6 +208,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`show <key>` output includes the setting's doc string.** The single-key variant now prints the setting's documentation on a second line below the value, so users can see what a knob does without leaving the REPL.
 - **`just install` now catches stale or shadowed launchers.** After reinstalling, the recipe verifies that the `js` command on `PATH` imports this working tree so users do not keep running an old or foreign install by mistake.
 - **Inline-code documentation matches default-on execution.** Operator docs and repo guidance now describe `runtime.allow_inline_code` as enabled by default, `--im-a-pussy` / `JS_ALLOW_INLINE_CODE=0` as opt-outs, literal directive escaping, and non-fatal expansion failures so users understand the current prompt-security model.
 - **Claude local configuration can be tracked deliberately.** The root `.claude/` directory is no longer ignored, so project-specific Claude settings and guidance can be reviewed and committed when they are real repo work.
