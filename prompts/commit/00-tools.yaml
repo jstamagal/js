@@ -1,4 +1,4 @@
-# model: anthropic/claude-sonnet-4   # optional: pin this agent's model (provider-prefixed re-routes)
+model: deepseek/deepseek-v4-flash   # commitbot floor — a weak local default once reverted files mid-split and lost work
 tools:
   - read
   - write
