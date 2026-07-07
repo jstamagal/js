@@ -215,6 +215,12 @@ def _compact_thresholds(cfg: Config) -> tuple[float, float, float]:
         return 0.50, 0.80, 0.90
     return notify_at, trigger_at, force_at
 
+
+def _is_max_output_incomplete(reason: object) -> bool:
+    text = str(reason or "").lower()
+    return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text
+
+
 def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
     model = state.get("model")
     if not (isinstance(model, str) and model):
@@ -925,6 +931,16 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 def _maybe_auto_compact(cfg: Config, state: dict) -> None:
     if not _compact_bool(cfg, "auto", True):
         return
+    output_limited = _is_max_output_incomplete(
+        getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
+    )
+    if output_limited:
+        state["compact_incomplete_consecutive"] = int(
+            state.get("compact_incomplete_consecutive", 0) or 0
+        ) + 1
+    else:
+        state["compact_incomplete_consecutive"] = 0
+    incomplete_forced = state.get("compact_incomplete_consecutive", 0) >= 2
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
     active_cfg = _cfg_for_active_model(cfg, state)
     inferred_window = runtime._resolve_context_window(
@@ -934,10 +950,13 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
     )
     context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
     if prompt_tokens <= 0 or context_window <= 0:
-        return
-    fullness = prompt_tokens / context_window
+        if not incomplete_forced:
+            return
+        fullness = 0.0
+    else:
+        fullness = prompt_tokens / context_window
     notify_at, trigger_at, force_at = _compact_thresholds(cfg)
-    if fullness < trigger_at:
+    if fullness < trigger_at and not incomplete_forced:
         state["compact_consecutive"] = 0
         state["compact_paused"] = False
         if fullness < notify_at:
@@ -951,10 +970,14 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
     if fullness >= notify_at and not state.get("compact_notified"):
         print(f"{C.ORANGE}(context {fullness:.0%} full; auto-compaction armed){C.RESET}")
         state["compact_notified"] = True
-    forced = fullness >= force_at
+    if incomplete_forced:
+        print(f"{C.ORANGE}(response incomplete from max output tokens twice; auto-compacting){C.RESET}")
+    forced = fullness >= force_at or incomplete_forced
     compact_cfg = _cfg_for_active_model(cfg, state)
     result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], forced=forced)
     print(f"{C.GREY}({result}){C.RESET}")
+    if incomplete_forced:
+        state["compact_incomplete_consecutive"] = 0
     state["compact_consecutive"] = int(state.get("compact_consecutive", 0) or 0) + 1
     if state["compact_consecutive"] >= 2:
         state["compact_paused"] = True
@@ -3137,6 +3160,7 @@ def main(argv: list[str] | None = None) -> int:
         "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
         "compact_consecutive": 0,
+        "compact_incomplete_consecutive": 0,
         "compact_paused": False,
     }
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
