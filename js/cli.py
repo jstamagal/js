@@ -1409,7 +1409,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         configured_api_key=cfg.provider_api_key,
         configured_headers=getattr(cfg, "provider_headers", {}),
         explicit_model=True,
-        prefix_overrides_provider=True,
+        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
     )
     return replace(
         cfg,
@@ -2227,7 +2227,7 @@ def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
         configured_headers=getattr(cfg, "provider_headers", {}),
         env=os.environ,
         explicit_model=True,
-        prefix_overrides_provider=True,
+        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
     )
     return replace(
         cfg,

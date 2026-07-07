@@ -141,6 +141,7 @@ class Config:
     sampling_env: Sampling = field(default_factory=Sampling)
     sampling_cli: Sampling = field(default_factory=Sampling)
     explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent frontmatter model
+    explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -322,8 +323,10 @@ def from_env(
     sampling_env = Sampling.from_env(env)
     sampling_cli = _sampling_from_extras(extras)
     raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or _DEFAULT_MODEL
-    explicit_model = bool(env.get("JS_MODEL")) or raw_model != _DEFAULT_MODEL
+    invocation_explicit_model = bool(env.get("JS_MODEL"))
+    explicit_model = invocation_explicit_model or raw_model != _DEFAULT_MODEL
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("provider", "id"))
+    explicit_provider = _cfg_provider_id is not None
     _cfg_base_url = _settings.get_dotted(js_root_settings, ("provider", "base_url"))
     _cfg_api_key = _settings.get_dotted(js_root_settings, ("provider", "api_key"))
     try:
@@ -334,8 +337,11 @@ def from_env(
             configured_api_key=_cfg_api_key,
             env=env,
             explicit_model=explicit_model,
+            prefix_overrides_provider=invocation_explicit_model and not explicit_provider,
         )
     except _routing.ProviderNotLoggedInError:
+        if invocation_explicit_model:
+            raise
         # The base/default model names a provider the operator never logged into.
         # Don't fail config-build: a -m override, an agent `model:`, or a later
         # /model may replace it, and a plain run surfaces the friendly
@@ -444,4 +450,5 @@ def from_env(
         debug_autolog=debug_autolog,
         debug_autolog_dir=debug_autolog_dir,
         explicit_model=explicit_model,
+        explicit_provider=explicit_provider,
     )

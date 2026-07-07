@@ -101,9 +101,10 @@ def resolve_model_route(
       This is authoritative: it overrides a pinned ``provider.id`` and carries the
       login's base/key.
     - the prefix names the explicitly pinned ``configured_provider_id``.
-    - ``prefix_overrides_provider`` (explicit agent/subagent ``model:`` choices)
-      routes a prefix past a differently-pinned provider, but still only when a
-      login exists for it.
+    - ``prefix_overrides_provider`` (invocation-explicit ``-m``/``JS_MODEL`` and
+      agent/subagent ``model:`` choices) makes a known prefix authoritative: a
+      saved-login prefix routes past a stale pin, while an unlogged different
+      known provider raises instead of riding the stale pin.
 
     A prefix naming a KNOWN provider (builtin or catalog) with no login and no
     explicit pin raises :class:`ProviderNotLoggedInError` instead of silently
@@ -130,6 +131,12 @@ def resolve_model_route(
         model = parsed_model or str(requested_model)
         provider_id = parsed_provider_id
     else:
+        if (
+            prefix_overrides_provider
+            and parsed_provider_id is not None
+            and parsed_provider_id != configured_provider_id
+        ):
+            raise ProviderNotLoggedInError(not_logged_in_message(parsed_provider_id))
         # A known-provider prefix that carries no login and does not name the
         # pinned provider is legitimate only as a gateway id UNDER an explicit pin
         # (`anthropic/claude-...` on a pinned `omp` yields to omp). With nothing
