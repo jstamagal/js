@@ -124,6 +124,27 @@ def test_local_providers_always_show_base_url_prompt():
     assert providers.provider_for_login("ollama-cloud").login_base_url_field is False
 
 
+def test_variable_endpoint_providers_show_base_url_field():
+    for provider_id in (
+        "llama.cpp",
+        "ollama",
+        "vllm",
+        "lmstudio",
+        "koboldcpp",
+        "text-generation-webui",
+        "localai",
+        "tabbyapi",
+        "tgi",
+        "sglang",
+        "llamafile",
+        "jan",
+        "xinference",
+    ):
+        provider = providers.provider_for_login(provider_id)
+        assert provider.variable_endpoint is True
+        assert provider.login_base_url_field is True
+
+
 def test_collect_api_login_prompts_for_base_url_on_local_providers(tmp_path: Path, monkeypatch):
     logins.set_config_dir(tmp_path)
     # This box has real LLAMACPP_* env vars set (the owner's actual llama.cpp

@@ -53,6 +53,11 @@ class ProviderDef:
     # skipping the prompt here is the catch-22 that silently aims a fresh
     # login at 127.0.0.1 on a box where nothing is listening there.
     local: bool = False
+    # An endpoint family where the operator supplies the actual host, even when
+    # the provider is not strictly local/keyless. This deliberately stays
+    # separate from ``local`` so editable endpoint URLs do not imply local auth
+    # semantics.
+    variable_endpoint: bool = False
 
     @property
     def effective_sdk_provider_id(self) -> str | None:
@@ -63,6 +68,7 @@ class ProviderDef:
         return (
             not self.established
             or self.local
+            or self.variable_endpoint
             or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
         )
 
@@ -87,6 +93,7 @@ def _p(
     models_list_validates_auth: bool = True,
     headers: Mapping[str, str] | None = None,
     local: bool = False,
+    variable_endpoint: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
         id=id,
@@ -107,6 +114,7 @@ def _p(
         models_list_validates_auth=models_list_validates_auth,
         headers=headers or {},
         local=local,
+        variable_endpoint=variable_endpoint,
     )
 
 
@@ -138,6 +146,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("ollama-local",),
         requires_api_key=False,
         local=True,
+        variable_endpoint=True,
     ),
     _p(
         "ollama-cloud",
@@ -162,6 +171,148 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("llamacpp", "llama-cpp"),
         requires_api_key=False,
         local=True,
+        variable_endpoint=True,
+    ),
+    _p(
+        "vllm",
+        "vLLM",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:8000/v1",
+        key_env=("VLLM_API_KEY",),
+        base_env=("VLLM_BASE_URL",),
+        model_env=("VLLM_MODEL",),
+        aliases=("vllm-openai",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "lmstudio",
+        "LM Studio",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:1234/v1",
+        key_env=("LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY"),
+        base_env=("LMSTUDIO_BASE_URL", "LM_STUDIO_BASE_URL"),
+        model_env=("LMSTUDIO_MODEL", "LM_STUDIO_MODEL"),
+        aliases=("lm-studio",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "koboldcpp",
+        "KoboldCpp",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:5001/v1",
+        key_env=("KOBOLDCPP_API_KEY", "KOBOLD_API_KEY"),
+        base_env=("KOBOLDCPP_BASE_URL", "KOBOLD_BASE_URL"),
+        model_env=("KOBOLDCPP_MODEL", "KOBOLD_MODEL"),
+        aliases=("kobold-cpp",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "text-generation-webui",
+        "text-generation-webui",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:5000/v1",
+        key_env=("TEXT_GENERATION_WEBUI_API_KEY", "OOBABOOGA_API_KEY"),
+        base_env=("TEXT_GENERATION_WEBUI_BASE_URL", "OOBABOOGA_BASE_URL"),
+        model_env=("TEXT_GENERATION_WEBUI_MODEL", "OOBABOOGA_MODEL"),
+        aliases=("oobabooga", "textgen-webui", "text-generation-ui"),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "localai",
+        "LocalAI",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:8080/v1",
+        key_env=("LOCALAI_API_KEY", "LOCAL_AI_API_KEY"),
+        base_env=("LOCALAI_BASE_URL", "LOCAL_AI_BASE_URL"),
+        model_env=("LOCALAI_MODEL", "LOCAL_AI_MODEL"),
+        aliases=("local-ai",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "tabbyapi",
+        "TabbyAPI",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:5000/v1",
+        key_env=("TABBYAPI_API_KEY", "TABBY_API_KEY"),
+        base_env=("TABBYAPI_BASE_URL", "TABBY_BASE_URL"),
+        model_env=("TABBYAPI_MODEL", "TABBY_MODEL"),
+        aliases=("tabby-api",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "tgi",
+        "TGI",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:8080/v1",
+        key_env=("TGI_API_KEY", "TEXT_GENERATION_INFERENCE_API_KEY"),
+        base_env=("TGI_BASE_URL", "TEXT_GENERATION_INFERENCE_BASE_URL"),
+        model_env=("TGI_MODEL", "TEXT_GENERATION_INFERENCE_MODEL"),
+        aliases=("text-generation-inference",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "sglang",
+        "SGLang",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:30000/v1",
+        key_env=("SGLANG_API_KEY",),
+        base_env=("SGLANG_BASE_URL",),
+        model_env=("SGLANG_MODEL",),
+        aliases=("sgl",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "llamafile",
+        "llamafile",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:8080/v1",
+        key_env=("LLAMAFILE_API_KEY",),
+        base_env=("LLAMAFILE_BASE_URL",),
+        model_env=("LLAMAFILE_MODEL",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "jan",
+        "Jan",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:1337/v1",
+        key_env=("JAN_API_KEY",),
+        base_env=("JAN_BASE_URL",),
+        model_env=("JAN_MODEL",),
+        established=False,
+        variable_endpoint=True,
+    ),
+    _p(
+        "xinference",
+        "Xinference",
+        "openai_compatible",
+        sdk="openai",
+        base="http://127.0.0.1:9997/v1",
+        key_env=("XINFERENCE_API_KEY",),
+        base_env=("XINFERENCE_BASE_URL",),
+        model_env=("XINFERENCE_MODEL",),
+        aliases=("xinference-local",),
+        established=False,
+        variable_endpoint=True,
     ),
     _p(
         "opencode-go",
@@ -509,5 +660,4 @@ def provider_for_login(provider_id: str) -> ProviderDef:
     if provider is None:
         return _p(normalized, normalized, "custom_openai", sdk="openai", established=False)
     return provider
-
 
