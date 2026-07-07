@@ -847,3 +847,21 @@ def test_shell_output_capped_while_streaming(tmp_path):
     out = process_net.shell("head -c 10000000 /dev/zero | tr '\\0' 'a'", context=context)
     assert "exit=0" in out
     assert len(out) <= context.max_bash_output_bytes + 200
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
+def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path):
+    # A backgrounded grandchild inherits the pipe and never closes it; the
+    # child's own output must still come back instead of being lost to a
+    # reader parked waiting for EOF.
+    context = ToolContext(cwd=tmp_path)
+    out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
+    assert "exit=0" in out
+    assert "done" in out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
+def test_shell_marks_truncated_output(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
+    assert "[truncated: limits.max_bash_output_bytes" in out

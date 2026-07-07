@@ -1737,7 +1737,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             eff_max = bench.max_tokens
         else:
             eff_max = agent_default_max
-        prompt_text = expand_prompt(bench.prompt, allow_code=allow_code, timeout_s=cfg.inline_code_timeout_s)
+        prompt_text = expand_prompt(
+            bench.prompt,
+            allow_code=allow_code,
+            timeout_s=cfg.inline_code_timeout_s,
+            max_output_bytes=cfg.max_bash_output_bytes,
+        )
         messages = [{"role": "user", "content": prompt_text}]
         call_stats: list[dict] = []
         turn_kwargs = {
@@ -2631,15 +2636,32 @@ def _printonly_run(args, cli_agent, presets) -> int:
             return "(no NN-benchmark.md files)"
         blocks = []
         for bm in benches:
-            body = expand_prompt(bm.prompt, allow_code=allow_code, timeout_s=timeout_s, on_error="warn")
+            body = expand_prompt(
+                bm.prompt,
+                allow_code=allow_code,
+                timeout_s=timeout_s,
+                max_output_bytes=cfg.max_bash_output_bytes,
+                on_error="warn",
+            )
             blocks.append(f"# bench {bm.name}\n{body}")
         return "\n\n".join(blocks)
 
     builders = {
         "t": _tools,
         "p": lambda: system,
-        "e": lambda: expand_prompt(system, allow_code=False, on_error="warn"),
-        "i": lambda: expand_prompt(system, allow_code=allow_code, timeout_s=timeout_s, on_error="warn"),
+        "e": lambda: expand_prompt(
+            system,
+            allow_code=False,
+            max_output_bytes=cfg.max_bash_output_bytes,
+            on_error="warn",
+        ),
+        "i": lambda: expand_prompt(
+            system,
+            allow_code=allow_code,
+            timeout_s=timeout_s,
+            max_output_bytes=cfg.max_bash_output_bytes,
+            on_error="warn",
+        ),
         "b": _bench,
     }
 

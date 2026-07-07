@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from js import memory, persona, runtime, settings
+from js.capped_process import CappedProcessResult
 from js.config import Config, from_env
 from js.toolkit.registry import build_default_registry
 
@@ -191,7 +192,7 @@ def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_pa
         calls.append(cmd)
         raise AssertionError(f"pre_hook should not run for malformed value: {cmd!r}")
 
-    monkeypatch.setattr(runtime.subprocess, "run", run_stub)
+    monkeypatch.setattr(runtime, "_run_capped", run_stub)
 
     for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
         cfg = _compact_test_cfg(tmp_path, {"pre_hook": raw})
@@ -203,22 +204,37 @@ def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_pa
 def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    class Result:
-        returncode = 0
-        stdout = "hook guidance\n"
-        stderr = ""
-
     def run_stub(cmd, **kwargs):
         captured["cmd"] = cmd
         captured.update(kwargs)
-        return Result()
+        return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
 
-    monkeypatch.setattr(runtime.subprocess, "run", run_stub)
+    monkeypatch.setattr(runtime, "_run_capped", run_stub)
     cfg = _compact_test_cfg(tmp_path, {"pre_hook": "  echo guidance  "})
 
     assert runtime._run_compact_pre_hook(cfg) == "hook guidance"
-    assert captured["cmd"] == "echo guidance"
-    assert captured["shell"] is True
+    assert captured["cmd"][-2:] == ["-c", "echo guidance"]
+    assert captured["timeout"] == 30
+
+
+def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
+    def run_stub(cmd, **kwargs):
+        assert kwargs["cap"] == 128
+        return CappedProcessResult(
+            returncode=0,
+            stdout=b"x" * 128,
+            stderr=b"",
+            stdout_truncated=True,
+        )
+
+    monkeypatch.setattr(runtime, "_run_capped", run_stub)
+    cfg = _compact_test_cfg(tmp_path, {"pre_hook": "yes"})
+    cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
+
+    actual = runtime._run_compact_pre_hook(cfg)
+
+    assert actual.startswith("x" * 128)
+    assert "[truncated: limits.max_bash_output_bytes (128) reached]" in actual
 
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):
     seen_models: list[str] = []
