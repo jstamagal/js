@@ -283,7 +283,7 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
     assert "WORKER BODY" in system
 
 def test_prefixed_model_overrides_pinned_parent_provider():
-    from js.routing import resolve_model_route
+    from js.routing import ProviderNotLoggedInError, resolve_model_route
 
     # An explicit agent/subagent prefixed model the operator LOGGED INTO overrides a
     # differently-pinned parent provider, and does NOT inherit the parent's base/key.
@@ -302,21 +302,19 @@ def test_prefixed_model_overrides_pinned_parent_provider():
     assert route.base_url != OLLAMA_BASE_URL
     assert route.api_key != "ollama-parent-key"
 
-    # The override flag alone never authorizes an UN-logged-in prefix: it yields to
-    # the pinned provider (an env key never creates a route) rather than routing to
-    # the vendor. A pin exists, so this is not an error.
-    kept = resolve_model_route(
-        "minimax/some-model",
-        configured_provider_id="ollama",
-        configured_base_url=OLLAMA_BASE_URL,
-        configured_api_key="ollama-parent-key",
-        explicit_model=True,
-        use_saved_login=False,
-        prefix_overrides_provider=True,
-    )
-    assert kept.provider_id == "ollama"
-    assert kept.model == "minimax/some-model"
-    assert kept.base_url == OLLAMA_BASE_URL
+    # An invocation-explicit provider prefix is authoritative. If it names a
+    # different known provider without a login, fail instead of riding the stale
+    # pinned provider.
+    with pytest.raises(ProviderNotLoggedInError):
+        resolve_model_route(
+            "anthropic/claude-sonnet-4",
+            configured_provider_id="ollama",
+            configured_base_url=OLLAMA_BASE_URL,
+            configured_api_key="ollama-parent-key",
+            explicit_model=True,
+            use_saved_login=False,
+            prefix_overrides_provider=True,
+        )
 
 
 def test_saved_login_prefix_overrides_pinned_provider_without_flag():

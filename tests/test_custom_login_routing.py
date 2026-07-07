@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from js import logins, providers
+from js import cli, logins, providers
+from js.config import from_env
 from js.logins import Login
-from js.routing import resolve_model_route
+from js.routing import ProviderNotLoggedInError, resolve_model_route
 
 BASE_URL = "http://localhost:8050/v1"
 GGUF = "/home/ronald_rump/.cache/huggingface/models/ornith-1.0-35b-Q5_K_M.gguf"
@@ -33,6 +34,17 @@ def _save_custom_login(provider_id: str, sdk: str = "openai") -> None:
             provider_api_key="x",
         )
     )
+
+
+def _isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    config_home = home / ".config"
+    data_home = home / ".local" / "share"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    for name in ("JS_MODEL", "JS_PROVIDER", "JS_BASE_URL", "JS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_get_provider_synthesizes_def_from_saved_login():
@@ -110,3 +122,113 @@ def test_known_provider_ids_includes_saved_logins():
 
 def test_missing_login_store_never_breaks_lookup():
     assert providers.get_provider("testes") is None
+
+
+def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
+    monkeypatch, tmp_path
+):
+    _isolate_config(monkeypatch, tmp_path)
+    _save_custom_login("testes")
+    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+    monkeypatch.setenv("HF_TOKEN", "hf-decoy")
+
+    cfg = from_env(cwd=tmp_path, save_session=False)
+    assert cfg.provider_id == "testes"
+    assert cfg.model == "test"
+
+    with pytest.raises(ProviderNotLoggedInError) as excinfo:
+        cli._resolve_cli_model_override(cfg, "huggingface/foo")
+
+    assert "provider 'huggingface' is not logged in" in str(excinfo.value)
+
+
+def test_js_model_known_unlogged_prefix_does_not_ride_saved_default(monkeypatch, tmp_path):
+    _isolate_config(monkeypatch, tmp_path)
+    _save_custom_login("testes")
+    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+    monkeypatch.setenv("JS_MODEL", "huggingface/foo")
+    monkeypatch.setenv("HF_TOKEN", "hf-decoy")
+
+    with pytest.raises(ProviderNotLoggedInError) as excinfo:
+        from_env(cwd=tmp_path, save_session=False)
+
+    assert "provider 'huggingface' is not logged in" in str(excinfo.value)
+
+
+def test_explicit_gateway_provider_keeps_known_provider_model_id(monkeypatch, tmp_path):
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("JS_PROVIDER", "omp")
+    monkeypatch.setenv("JS_BASE_URL", "https://omp.test/v1")
+    monkeypatch.setenv("JS_MODEL", "anthropic/claude-x")
+
+    cfg = from_env(cwd=tmp_path, save_session=False)
+
+    assert cfg.provider_id == "omp"
+    assert cfg.model == "anthropic/claude-x"
+    assert cfg.provider_base_url == "https://omp.test/v1"
+    assert cfg.explicit_provider is True
+
+
+def test_cli_model_override_keeps_known_provider_id_under_explicit_gateway(monkeypatch, tmp_path):
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("JS_PROVIDER", "omp")
+    monkeypatch.setenv("JS_BASE_URL", "https://omp.test/v1")
+
+    cfg = from_env(cwd=tmp_path, save_session=False)
+    actual = cli._resolve_cli_model_override(cfg, "anthropic/claude-x")
+
+    assert actual.provider_id == "omp"
+    assert actual.model == "anthropic/claude-x"
+    assert actual.provider_base_url == "https://omp.test/v1"
+
+
+def test_explicit_gateway_provider_still_yields_to_saved_login_prefix(monkeypatch, tmp_path):
+    _isolate_config(monkeypatch, tmp_path)
+    _save_custom_login("testes")
+    monkeypatch.setenv("JS_PROVIDER", "omp")
+    monkeypatch.setenv("JS_BASE_URL", "https://omp.test/v1")
+    monkeypatch.setenv("JS_MODEL", "testes/test")
+
+    cfg = from_env(cwd=tmp_path, save_session=False)
+
+    assert cfg.provider_id == "testes"
+    assert cfg.model == "test"
+    assert cfg.provider_base_url == BASE_URL
+    assert cfg.provider_api_key == "x"
+
+
+def test_explicit_model_same_saved_prefix_routes_to_saved_login(monkeypatch, tmp_path):
+    _isolate_config(monkeypatch, tmp_path)
+    _save_custom_login("testes")
+    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+
+    cfg = from_env(cwd=tmp_path, save_session=False)
+    actual = cli._resolve_cli_model_override(cfg, "testes/other")
+
+    assert actual.provider_id == "testes"
+    assert actual.model == "other"
+    assert actual.provider_base_url == BASE_URL
+    assert actual.provider_api_key == "x"
+
+
+def test_pinned_gateway_unknown_prefix_passes_through_whole_model_id():
+    route = resolve_model_route(
+        "unknown-vendor/model-name",
+        configured_provider_id="omp",
+        configured_base_url="https://gateway.test/v1",
+        configured_api_key="sk-omp",
+        env={},
+        explicit_model=True,
+        prefix_overrides_provider=True,
+    )
+
+    assert route.provider_id == "omp"
+    assert route.model == "unknown-vendor/model-name"
+    assert route.base_url == "https://gateway.test/v1"
+    assert route.api_key == "sk-omp"
