@@ -12,6 +12,7 @@ node_modules/
 .pi/
 .llxprt/
 .gemini/
+.claude/
 banks/
 /handoff/
 
