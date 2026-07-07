@@ -241,6 +241,24 @@ the cached ids; `runtime._resolve_max_output` and compaction's context-window
 guess consult it before falling back. llama.cpp reports `meta.n_ctx_train`;
 vLLM reports `max_model_len`. Best-effort — absent metadata keeps today's behavior.
 
+Owner refinement (2026-07-07): the SERVED limit beats the trained limit. On
+llama.cpp the real context is often HALF or a QUARTER of `n_ctx_train`
+depending on GPU/what he's running (his observed `/v1/models` had
+`n_ctx_train: 262144` but `max_model_len: 0` and `context_window: 0` —
+i.e. the served cap unknown/uncapped). So: prefer `max_model_len` /
+`context_window` when the server gives a nonzero value; fall back to
+`n_ctx_train` only as a ceiling hint, never as the hard cap. Many providers
+volunteer this in `/v1/models` — if we already fetch that list at login,
+harvest the metadata there.
+
+ALSO (owner, 2026-07-07): models.dev catalog refresh is INVISIBLE. The
+mechanism exists — `model_metadata.ensure_fresh_catalog()` refreshes into a
+local DB when older than 8h (NOT daily) — but it prints nothing, so he never
+sees "updating models.dev cache" and can't tell if it's even running. Fix:
+(a) print a one-line notice when a refresh actually fires; (b) verify it isn't
+failing silently (wrap + surface errors) — a silent exception would also
+explain never seeing it. Confirm the 8h TTL is intended or make it a knob.
+
 ### 4. Friendly provider errors at the model_client boundary
 
 Raw leaks observed: `TypeError: "Could not resolve authentication method..."`
@@ -260,6 +278,15 @@ providers aren't marked local. Design: in `js/login_cli.py`, prompt for Base
 URL whenever the resolved default base URL is empty, regardless of
 `login_base_url_field`. Prefill with the provider default when present.
 
+Owner refinement (2026-07-07): EVEN WHEN the base URL is known, always OFFER
+to change it (prefilled, enter-to-keep) — not just when empty. And mark a set
+of providers as DELIBERATELY-VARIABLE endpoints (their address changes per box
+/ per run), so they always prompt: llama.cpp, ollama, vllm, lmstudio, plus
+koboldcpp, text-generation-webui (oobabooga), LocalAI, TabbyAPI, TGI, SGLang,
+llamafile, Jan, Xinference. Add a `variable_endpoint: bool` (or reuse/extend
+`local`) on ProviderDef for these; when set, the Base URL prompt is never
+skipped.
+
 ### 6. Custom logins with the openai-responses shape
 
 `Login` (js/logins.py) stores only `sdk_provider_id` ("openai"/"anthropic"),
@@ -269,6 +296,15 @@ created with the openai-responses shape would get the wrong transport.
 Design: add optional `shape_provider_id` to `Login` + logins.toml (absent →
 current sdk mapping, so existing stores keep working); `login_cli` stores the
 chosen `shape_id`; `_saved_login_provider_def` prefers it for the transport.
+
+CONFIRMED TRUE (2026-07-07, code-verified): the picker DOES ask the shape —
+`_API_SHAPES` in login_cli.py offers openai-completions / openai-responses /
+anthropic-custom / cliproxyapi. But `_ask_custom_provider` only carries
+`sdk_id` (openai|anthropic) into the Login, and `_saved_login_provider_def`
+(js/providers.py:389) does `transport = "custom_anthropic" if sdk=="anthropic"
+else "custom_openai"` — so on RELOAD an openai-responses login collapses to
+completions. The distinction is captured at the prompt and thrown away at
+storage. Persist the chosen shape/transport itself, not just the sdk family.
 
 ### 7. Remaining unbounded subprocess captures (same OOM class as the fixed shell tool)
 
