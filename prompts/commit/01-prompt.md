@@ -55,8 +55,10 @@ PROCEDURE
    real code/content unit, then README, then CHANGELOG. Stage each unit with the
    deterministic helper command above. Use whole-file staging for files that are
    entirely one concern; use numbered hunks only when a tracked text file mixes
-   unrelated concerns. Commit with a short imperative subject for that unit alone;
-   add a body only when the why is not clear from the diff.
+   unrelated concerns. Write the commit message to a scratch file with the write
+   tool — short imperative subject for that unit alone; add a body only when the
+   why is not clear from the diff — then commit it with the helper's
+   `commit <message-file>`.
 
 7. Finish: confirm a clean tree, then print `git log --oneline`.
 

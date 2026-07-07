@@ -2070,13 +2070,17 @@ def _run_commit(target: str | None,
 
     helper_stage = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>"
     helper_survey = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey"
+    helper_commit = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} commit <message-file>"
     prompt = (
         f"Commit all work in this target directory: {target_dir}\n\n"
         "The repository has already been initialized if it was missing. "
         "Use this deterministic staging helper for every commit unit:\n"
         f"`{helper_stage}`\n"
         "Use `all` for whole-file staging or comma-separated hunk numbers from the survey "
-        "for tracked text files. If you need a fresh snapshot after making changes, run:\n"
+        "for tracked text files. To commit a staged unit, write the full commit message "
+        "to a file with the write tool, then run:\n"
+        f"`{helper_commit}`\n"
+        "If you need a fresh snapshot after making changes, run:\n"
         f"`{helper_survey}`\n\n"
         "Initial deterministic commit_helper survey:\n"
         "```text\n"
