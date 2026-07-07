@@ -56,6 +56,10 @@ def logs_root() -> Path:
     return data_dir() / "logs"
 
 
+def transcript_root() -> Path:
+    return data_dir() / "transcript"
+
+
 def login_store_dir() -> Path:
     return config_dir()
 

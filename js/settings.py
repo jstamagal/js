@@ -174,6 +174,14 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.debug_autolog_dir", "str", None,
                 "Directory for the debug autolog; unset = logs/<agent> under the js data dir.",
                 env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
+    SettingSpec("runtime.transcript_log", "bool", True,
+                "Append the visible terminal/TUI transcript to transcript/<agent>/<session>.log "
+                "under the js data dir. On by default; records what printed to the user with "
+                "IRC-style <KING>/<APE> tags for user/assistant turns.",
+                env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
+    SettingSpec("runtime.transcript_log_dir", "str", None,
+                "Directory for the visible transcript log; unset = transcript/<agent> under the js data dir.",
+                env="JS_TRANSCRIPT_LOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.allow_inline_code", "bool", True,
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
                 "prompt files and inject their stdout. On by default (runs arbitrary code "
