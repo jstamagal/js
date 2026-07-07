@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Tool-call argument JSON helpers extracted into `js/tool_args.py`.** The `repair_jsonish`, canonicalization, and SDK-safe sanitization logic previously inlined in `runtime.py` now lives in a dedicated module with explicit public API: `repair_jsonish()`, `is_json_object()`, `canonical_tool_args()`, and `sdk_safe_tool_args()`. Used by both `runtime.py` (dispatch/history replay) and `model_client.py` (SDK message construction).
+- **Incomplete-reason and token tracking on `ToolContext`.** `last_incomplete_reason`, `last_output_tokens`, `last_max_output_tokens` fields are now set on `T.DEFAULT_CONTEXT` after each turn, so downstream logic (auto-compaction, telemetry) can inspect why a response ended and what was produced.
+- **Truncated tool-call arguments from incomplete responses are dropped instead of dispatched.** When a response ends with `incomplete:max_output_tokens` (or similar) and any pending tool call has malformed/dangling argument JSON, the tool calls are silently dropped and a user-facing notice is emitted explaining why. A telemetry event `tool_call_dropped` fires so integrations can observe the truncation.
+- **Auto-compaction triggers after two consecutive max-output-token incomplete responses.** `_maybe_auto_compact` now detects when the last two turns both ended with `max_output_tokens` or similar length-related incomplete reasons (via `_is_max_output_incomplete`), and forces a compaction even when the context fullness is zero or below the usual trigger threshold. A status message is printed and the counter resets after the forced compaction.
+- **`_fetch_model_ids` internal helper in `logins.py`.** The shared model-fetching logic (codex-detour, provider resolution, endoint assertion, SDK list call) is extracted into a single private helper consumed by both `fetch_models` and `fetch_models_with_metadata`, removing the code duplication that caused metadata to be fetched with a potentially stale provider definition.
+
+### Changed
+
+- **`_dispatch_batch` now uses explicit `ThreadPoolExecutor` with guaranteed cleanup.** Replaced `functools.partial` + `loop.run_in_executor` with direct `ThreadPoolExecutor` construction and a `finally` block that calls `executor.shutdown(wait=True)`, so leaf-tool threads are reliably joined before the coroutine returns even when fan-out tasks raise.
+- **`_login_for_provider` validates API key before constructing a `Login`.** The API key is resolved early via `providers.provider_api_key` and checked against `provider_def.requires_api_key`. A missing required key now raises a `ValueError` with a clear message suggesting `--login` or `set provider.api_key`, rather than passing `None` through to a confusing downstream failure.
+- **`_canonical_tool_args` and `_repair_jsonish` delegate to `tool_args` module.** Inline implementations in `runtime.py` now call through to the extracted module; behavior is unchanged.
+- **`history_to_ai_messages` uses `tool_args.sdk_safe_tool_args`.** Tool-call arguments in persisted history are sanitized through the new module so the SDK integrity pass always receives valid JSON objects.
+- **`test_run_turn_hydrates_tool_context_caps_from_config` assertion tightened.** The truncation check now also requires the `[truncated: limits.max_bash_output_bytes (3) reached]` marker in the result string, matching the actual capped-process output format.
+
+### Fixed
+
+- **Test `test_run_turn_hydrates_tool_context_caps_from_config` assertion was too loose.** The old assertion only checked for `"--- stdout ---\nabc"` in the result; the capped subprocess runner appends a truncation marker that the assertion now also verifies, preventing false passes when the truncation message is absent.
+
+### Added
+
 - **11 self-hosted local provider definitions.** New built-in `ProviderDef` entries for vllm, lmstudio, koboldcpp, text-generation-webui, localai, tabbyapi, tgi, sglang, llamafile, jan, and xinference — each with sensible defaults for port, env vars, and aliases.
 - **`variable_endpoint` flag on ProviderDef.** Marks providers whose endpoint address changes per box/run, separate from `local`, so the Base URL prompt is never skipped for these providers.
 - **`shape_provider_id` on Login.** The login picker offered shape choices (openai-completions, openai-responses, anthropic-custom, cliproxyapi) but was discarding the choice at storage. Now the chosen shape is persisted in `logins.toml` and used by the provider resolver to pick the correct transport, so an openai-responses login no longer collapses to completions on reload.
