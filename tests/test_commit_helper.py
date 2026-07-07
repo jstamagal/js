@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import uuid
 
 import pytest
 
@@ -155,3 +156,97 @@ def test_repo_flag_binds_stage_to_target_not_process_cwd(repo, monkeypatch):
     assert commit_helper.main(["-C", str(repo), "stage", "bound.txt", "all"]) == 0
 
     assert "bound.txt" in _git(repo, "diff", "--cached", "--name-only").stdout
+
+
+def _stage_change(repo):
+    (repo / "f.txt").write_text("changed1\n" + "\n".join(f"line{i}" for i in range(2, 31)) + "\n")
+    _git(repo, "add", "f.txt")
+
+
+def test_commit_writes_message_verbatim_keeping_markdown_header(repo):
+    _stage_change(repo)
+    # A body with every character class that used to detonate through bash:
+    # backticks, $(...), both quote kinds, blank lines, and a `#` header line
+    # that only survives because commit uses cleanup=whitespace.
+    message = (
+        "Restore removed files through symlinked paths\n"
+        "\n"
+        "Body names `yes` and $(date) plus 'single' and \"double\" quotes.\n"
+        "# markdown header line that must survive\n"
+        "Trailing prose after the header.\n"
+    )
+    msg_file = repo / "MSG.txt"
+    msg_file.write_text(message)
+
+    assert commit_helper.main(["commit", str(msg_file)]) == 0
+
+    body = _git(repo, "log", "-1", "--format=%B").stdout
+    # `git log --format=%B` emits the stored message plus one trailing newline;
+    # everything up to that is byte-for-byte what we wrote.
+    assert body == message + "\n"
+    assert "`yes`" in body
+    assert "$(date)" in body
+    assert "'single'" in body and '"double"' in body
+    assert "# markdown header line that must survive" in body
+
+
+def test_commit_never_executes_message_substitutions(repo, tmp_path):
+    _stage_change(repo)
+    token = uuid.uuid4().hex
+    inside = repo / f"must-not-exist-{token}"
+    tmp_target = tmp_path / f"must-not-exist-{token}-b"
+    message = (
+        "Commit body that must never run a command\n"
+        "\n"
+        f"$(touch {tmp_target})\n"
+        f"`touch {inside}`\n"
+    )
+    msg_file = repo / "MSG.txt"
+    msg_file.write_text(message)
+
+    assert commit_helper.main(["commit", str(msg_file)]) == 0
+
+    assert not inside.exists()
+    assert not tmp_target.exists()
+    body = _git(repo, "log", "-1", "--format=%B").stdout
+    assert f"$(touch {tmp_target})" in body
+
+
+def test_commit_amend_replaces_head_message_verbatim(repo):
+    _stage_change(repo)
+    first = repo / "M1.txt"
+    first.write_text("First commit subject\n")
+    assert commit_helper.main(["commit", str(first)]) == 0
+    count_before = _git(repo, "rev-list", "--count", "HEAD").stdout.strip()
+
+    second = repo / "M2.txt"
+    second.write_text("Amended subject keeps `backticks`\n\n# header stays\n")
+    assert commit_helper.main(["commit", str(second), "--amend"]) == 0
+
+    assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == count_before
+    body = _git(repo, "log", "-1", "--format=%B").stdout
+    assert "Amended subject keeps `backticks`" in body
+    assert "# header stays" in body
+    assert "First commit subject" not in body
+
+
+def test_commit_missing_message_file_returns_2(repo, capsys):
+    assert commit_helper.main(["commit", str(repo / "nope.txt")]) == 2
+    assert "cannot read message file" in capsys.readouterr().err
+
+
+def test_commit_empty_message_file_returns_2(repo, capsys):
+    empty = repo / "EMPTY.txt"
+    empty.write_text("   \n\n")
+    assert commit_helper.main(["commit", str(empty)]) == 2
+    assert "empty" in capsys.readouterr().err
+
+
+def test_commit_dispatch_wrong_arity_prints_usage_returns_2(repo, capsys):
+    assert commit_helper.main(["commit"]) == 2
+    err = capsys.readouterr().err
+    assert "usage:" in err
+    assert "commit <message-file>" in err
+
+    assert commit_helper.main(["commit", "a.txt", "b.txt"]) == 2
+    assert "usage:" in capsys.readouterr().err

@@ -287,6 +287,39 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
     return 0
 
 
+def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool = False) -> int:
+    """Commit staged changes with the message read VERBATIM from a file.
+
+    The message never transits a shell. Composed as `git commit -m "..."`
+    through `bash -c`, a message body containing backticks is command
+    substitution — one that described a `yes` bug executed yes(1) and got the
+    box OOM-killed three times. Prose goes in a file; only the path rides argv.
+    """
+    repo_path = _repo_path(repo)
+    msg_path = Path(message_file).expanduser()
+    if not msg_path.is_absolute():
+        msg_path = repo_path / msg_path
+    try:
+        message = msg_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot read message file: {exc}", file=sys.stderr)
+        return 2
+    if not message.strip():
+        print(f"commit message file is empty: {msg_path}", file=sys.stderr)
+        return 2
+    # cleanup=whitespace keeps `#`-prefixed lines (markdown headers in bodies).
+    args = ["commit", "--file", str(msg_path), "--cleanup=whitespace"]
+    if amend:
+        args.append("--amend")
+    try:
+        proc = _git(*args, repo=repo_path)
+    except GitCommandError as exc:
+        print(_git_failure_message(exc), file=sys.stderr)
+        return 1
+    print(proc.stdout.strip() or "committed")
+    return 0
+
+
 def _extract_repo(argv: list[str]) -> tuple[Path | None, list[str], str | None]:
     repo: Path | None = None
     rest = list(argv)
@@ -312,11 +345,18 @@ def main(argv: list[str] | None = None) -> int:
     if error:
         print(error, file=sys.stderr)
         return 2
-    if not argv or argv[0] not in ("survey", "stage"):
+    if not argv or argv[0] not in ("survey", "stage", "commit"):
         print(__doc__)
         return 0 if argv else 2
     if argv[0] == "survey":
         return cmd_survey(repo)
+    if argv[0] == "commit":
+        rest = [a for a in argv[1:] if a != "--amend"]
+        amend = "--amend" in argv[1:]
+        if len(rest) != 1:
+            print("usage: python3 -m js.commit_helper [-C DIR|--repo DIR] commit <message-file> [--amend]", file=sys.stderr)
+            return 2
+        return cmd_commit(rest[0], repo, amend=amend)
     if len(argv) != 3:
         print("usage: python3 -m js.commit_helper [-C DIR|--repo DIR] stage <file> <hunks|all>", file=sys.stderr)
         return 2
