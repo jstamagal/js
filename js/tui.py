@@ -20,6 +20,7 @@ from textual.containers import Container
 from textual.widgets import Input, RichLog
 
 from . import attach, events, logins, memory as M, providers, replcomplete, runtime, setcmd, settings, supervisor
+from . import transcript as transcript_mod
 from .config import Config
 from .sampling import Sampling
 
@@ -187,7 +188,7 @@ class JsTuiApp(App[int]):
             self.deps.sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
             self._refresh_status()
             return
-        self._write_transcript(Text(f"KING 👑 {line}", style="bold #ebcb8b"))
+        self._write_transcript(Text(f"KING 👑 {line}", style="bold #ebcb8b"), speaker="KING", log_text=line)
         self.queue.put_nowait(line)
         if self.sup.turn_active() or self.queue.qsize() > 1:
             self._write_transcript(f"[dim](queued — {self.queue.qsize()} ahead)[/]")
@@ -322,7 +323,7 @@ class JsTuiApp(App[int]):
         if event == "response":
             text = str(payload.get("text", "")).strip()
             if text:
-                self._write_transcript(Markdown(text))
+                self._write_transcript(Markdown(text), speaker="APE")
                 self._response_rendered = True
             return
         if event == "tool_call":
@@ -342,7 +343,8 @@ class JsTuiApp(App[int]):
     def _render_latest_assistant(self, before_len: int) -> None:
         for message in reversed(self.state["messages"][before_len + 1:]):
             if message.get("role") == "assistant" and message.get("content"):
-                self._write_transcript(Markdown(str(message["content"]).strip()))
+                text = str(message["content"]).strip()
+                self._write_transcript(Markdown(text), speaker="APE")
                 return
         self._write_transcript("[orange1](turn ended with no assistant text)[/]")
 
@@ -378,8 +380,25 @@ class JsTuiApp(App[int]):
     def _refresh_status(self) -> None:
         return
 
-    def _write_transcript(self, obj: object) -> None:
+    def _write_transcript(self, obj: object, *, speaker: str | None = None, log_text: str | None = None) -> None:
         self.query_one("#transcript", RichLog).write(obj)
+        sink = getattr(self.telemetry, "transcript_log", None)
+        if sink is None:
+            return
+        text = log_text if log_text is not None else transcript_mod.render_plain(obj)
+        if speaker == "KING":
+            write_user = getattr(sink, "write_user", None)
+            if callable(write_user):
+                write_user(text)
+            return
+        if speaker == "APE":
+            write_assistant = getattr(sink, "write_assistant", None)
+            if callable(write_assistant):
+                write_assistant(text)
+            return
+        write_plain = getattr(sink, "write_plain", None)
+        if callable(write_plain):
+            write_plain(text.rstrip("\n") + "\n")
 
     def action_history_prev(self) -> None:
         if not self._history:

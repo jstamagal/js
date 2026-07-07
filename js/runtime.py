@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+import contextlib
 import functools
 import inspect
 import json
@@ -188,6 +189,7 @@ def _backoff(attempt: int) -> float:
 class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
     trace_sink: object = None  # a .write()-able sink for the full request trace, or None
+    transcript_log: object = None  # visible transcript sink; never raises
 
     def event(self, kind: str, **fields: Any) -> None:
         if not self.debug_log:
@@ -931,6 +933,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # Streaming text: open WHITE once at first chunk, close RESET + newline
     # once after the stream completes. Avoids per-chunk escape wrapping.
     text_started = {"value": False}
+    _transcript_log = getattr(telemetry, "transcript_log", None)
+
+    def _muted_transcript_tee():
+        mute = getattr(_transcript_log, "mute_tee", None)
+        if callable(mute):
+            return mute()
+        return contextlib.nullcontext()
 
     def _emit_text(t: str) -> None:
         if not t:
@@ -938,19 +947,30 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         _emit_event("stream", text=t)
         if suppress_output:
             return
+        if _transcript_log is not None:
+            write_chunk = getattr(_transcript_log, "write_assistant_chunk", None)
+            if callable(write_chunk):
+                write_chunk(t)
         if not text_started["value"]:
-            sys.stdout.write(C.WHITE)
+            with _muted_transcript_tee():
+                sys.stdout.write(C.WHITE)
             text_started["value"] = True
-        sys.stdout.write(t)
-        sys.stdout.flush()
+        with _muted_transcript_tee():
+            sys.stdout.write(t)
+            sys.stdout.flush()
 
     def _close_text() -> None:
         if suppress_output:
             text_started["value"] = False
             return
         if text_started["value"]:
-            sys.stdout.write(C.RESET + "\n")
-            sys.stdout.flush()
+            if _transcript_log is not None:
+                end_stream = getattr(_transcript_log, "end_assistant_stream", None)
+                if callable(end_stream):
+                    end_stream()
+            with _muted_transcript_tee():
+                sys.stdout.write(C.RESET + "\n")
+                sys.stdout.flush()
             text_started["value"] = False
 
     # Full request trace: dump system prompt + full tool schemas once (first
