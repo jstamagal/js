@@ -490,22 +490,14 @@ async def _fetch_openai_model_metadata(
     return metadata_from_openai_models_payload(payload)
 
 
-async def fetch_models(login: Login) -> list[str]:
-    """Fetch model ids from a provider; raises on failure."""
-    models, _metadata = await fetch_models_with_metadata(login)
-    return models
-
-
-async def fetch_models_with_metadata(login: Login) -> tuple[list[str], dict[str, ModelCacheMetadata]]:
-    """Fetch model ids plus best-effort server-advertised per-model limits."""
+async def _fetch_model_ids(login: Login) -> list[str]:
     if _normalize_provider_id(login.provider_id) == "openai-codex":
         from . import codex_provider
 
-        return await codex_provider.fetch_models_for_login(login), {}
+        return await codex_provider.fetch_models_for_login(login)
 
     provider_def = providers.get_provider(login.provider_id)
     shape_provider_def = providers.get_provider(login.shape_provider_id) if login.shape_provider_id else None
-    metadata_provider_def = provider_def or shape_provider_def
     endpoint_provider_def = provider_def or shape_provider_def
     if endpoint_provider_def is not None:
         providers.assert_endpoint_configured(endpoint_provider_def, login.provider_base_url)
@@ -524,7 +516,20 @@ async def fetch_models_with_metadata(login: Login) -> tuple[list[str], dict[str,
     # No client-side allowlist: the live API list is the source of truth, so the
     # login picker shows exactly what the endpoint serves (e.g. opencode-go's
     # glm-5.2) instead of a curated tuple that goes stale the moment a model ships.
-    models = [str(mid) for mid in model_ids]
+    return [str(mid) for mid in model_ids]
+
+
+async def fetch_models(login: Login) -> list[str]:
+    """Fetch model ids from a provider; raises on failure."""
+    return await _fetch_model_ids(login)
+
+
+async def fetch_models_with_metadata(login: Login) -> tuple[list[str], dict[str, ModelCacheMetadata]]:
+    """Fetch model ids plus best-effort server-advertised per-model limits."""
+    models = await _fetch_model_ids(login)
+    provider_def = providers.get_provider(login.provider_id)
+    shape_provider_def = providers.get_provider(login.shape_provider_id) if login.shape_provider_id else None
+    metadata_provider_def = provider_def or shape_provider_def
     metadata = await _fetch_openai_model_metadata(login, metadata_provider_def)
     return models, metadata
 
