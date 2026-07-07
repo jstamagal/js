@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Visible-screen transcript logging.** The operator's terminal output (user input in REPL/one-shot mode, streamed assistant text, final answers, error messages, and the startup banner) is now recorded to `transcript/<agent>/<session>.log` under the js data directory, with IRC-style `<KING>` and `<APE>` speaker tags for user and assistant turns. ANSI escape codes are stripped so the log is plain text. Controlled by `runtime.transcript_log` (default on) and `runtime.transcript_log_dir` knobs; same shape as the existing debug autolog but records what the user saw, not the raw request trace.
 - **Debug trace autolog.** Full request traces (unclipped system prompt, tool schemas, and per-call messages) are appended to `logs/<agent>/<session>.log` by default, with `runtime.debug_autolog` and `runtime.debug_autolog_dir` knobs; the terminal still only shows the concise trace when `-d` is used.
 - **Effective settings save.** `/save` writes the live REPL configuration back to the global `jsrc`, including off-store values such as the current model, provider login, and sampling overrides, while backing up the previous file.
 - **Commit-agent worktree snapshots.** `js --commit` saves tracked diffs and untracked files under `commit-backups/` before the commit agent touches a dirty tree, keeping the latest snapshots for recovery.
