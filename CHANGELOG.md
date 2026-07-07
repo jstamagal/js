@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Debug trace autolog.** Full request traces (unclipped system prompt, tool schemas, and per-call messages) are appended to `logs/<agent>/<session>.log` by default, with `runtime.debug_autolog` and `runtime.debug_autolog_dir` knobs; the terminal still only shows the concise trace when `-d` is used.
+- **Effective settings save.** `/save` writes the live REPL configuration back to the global `jsrc`, including off-store values such as the current model, provider login, and sampling overrides, while backing up the previous file.
+- **Commit-agent worktree snapshots.** `js --commit` saves tracked diffs and untracked files under `commit-backups/` before the commit agent touches a dirty tree, keeping the latest snapshots for recovery.
+- **Safe commit-message helper.** `js.commit_helper commit <message-file>` commits staged changes with a message read verbatim from a file, including markdown headers and shell-looking text.
+- **Capped subprocess runner shared across all shell paths.** `_run_capped` with `CappedProcessResult` is extracted from `js/toolkit/process_net.py` into `js/capped_process.py` and used in the shell tool, the compact pre-hook, and all prompt-expansion directives (`!{sh}`, `!{bash}`, `!{python}`, `!{node}`, `!{c}`, and fenced code blocks), so every subprocess path respects `limits.max_bash_output_bytes` with a `[truncated: ...]` marker instead of buffering unlimited output.
 - **Provider validation at set time.** `set provider.id` now rejects unknown provider ids with a clear error; `set provider.base_url` rejects values without an http(s) scheme. Invalid env-var overrides (`JS_PROVIDER`, `JS_BASE_URL`) now print a warning to stderr instead of silently skipping.
 - **Regression coverage for capped shell output.** Added a test proving the capped reader holds memory at the cap while draining to EOF, preventing OOM from runaway commands.
 - **Regression coverage for byte-limited UTF-8 previews.** Added tests proving attachment sniffing and artifact previews survive when a byte cap splits a multibyte character.
@@ -208,6 +213,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`/set` and `/show` display effective live values.** Read-only settings views now annotate values supplied by flags, saved logins, agent sampling, or env aliases, so the displayed configuration matches the next turn instead of only the stored `jsrc` layer.
+- **Commit agent model is pinned.** The bundled commit agent now uses `deepseek/deepseek-v4-flash` by default instead of inheriting a potentially unsuitable saved model.
+- **Local Claude editor state is ignored.** The root `.claude/` directory is ignored again so local Claude workspace files do not appear as repo changes.
+- **Login model curation preselects freshly fetched models.** The interactive checklist now preselects models returned by the live provider listing (and shows stale cached-only rows as unselected), so a bare Enter on first login keeps all fetched models instead of caching zero.
+- **Commit-safety design notes are backfilled.** `PLAN.md` records the P0 root causes found during the commit-session autopsy, including stale model precedence and commit-agent worktree destruction risks.
 - **`show <key>` output includes the setting's doc string.** The single-key variant now prints the setting's documentation on a second line below the value, so users can see what a knob does without leaving the REPL.
 - **`just install` now catches stale or shadowed launchers.** After reinstalling, the recipe verifies that the `js` command on `PATH` imports this working tree so users do not keep running an old or foreign install by mistake.
 - **Inline-code documentation matches default-on execution.** Operator docs and repo guidance now describe `runtime.allow_inline_code` as enabled by default, `--im-a-pussy` / `JS_ALLOW_INLINE_CODE=0` as opt-outs, literal directive escaping, and non-fatal expansion failures so users understand the current prompt-security model.
@@ -331,6 +341,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Explicit provider-prefixed models no longer ride a stale saved provider.** `-m`/`--model` and `JS_MODEL` now treat a known provider prefix as authoritative: logged-in prefixes reroute, known unlogged prefixes raise the friendly `js --login <provider>` error, and unknown slashy ids still pass through pinned gateway providers.
+- **Provider-native env keys no longer authorize routing by themselves.** A model prefix such as `deepseek/...` or `huggingface/...` now requires a saved login or explicit provider selection instead of silently farming vendor env vars and sending traffic to an unintended backend.
+- **Commit messages no longer execute shell substitutions.** The commit agent now writes messages to a file and uses the helper's `commit <message-file>` path, so backticks, `$()`, quotes, and newlines are committed as prose instead of passing through shell quoting.
 - **Byte-limited UTF-8 reads no longer misclassify valid text as binary.** Attachment detection drops only an incomplete trailing multibyte sequence, and artifact previews decode split characters leniently so non-ASCII content still shows useful text.
 - **Non-blocking REPL state resets no longer race active turns.** `/reset`, `/wipe`, and `/compact` are refused while a turn is running so they cannot clear the live message list mid-append and corrupt output.
 - **Drain staging no longer overwrites split files that share a stem.** Large text pieces include a per-source sequence prefix, so same-named files in different subdirectories both survive staging.
