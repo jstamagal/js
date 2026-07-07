@@ -46,6 +46,7 @@ from .promptexpand import expand_prompt
 from . import setcmd
 from . import settings
 from . import routing
+from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
 from .toolkit.artifact import build_artifact_system
@@ -533,6 +534,170 @@ def _sampling_for_turn(
     )
 
 
+# ---------------------------------------------------------------------------
+# Effective /set view — annotate knobs whose live value bypasses the store
+# ---------------------------------------------------------------------------
+
+_SAMPLING_FIELDS: tuple[str, ...] = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty",
+    "presence_penalty",
+)
+
+
+def _sampling_env_var(field: str, environ) -> str:
+    """The env var actually setting ``field`` (short alias preferred), or ''."""
+    for name in sampling_mod._ENV_KEYS.get(field, ()):
+        if environ.get(name):
+            return name
+    return ""
+
+
+def _live_settings_overlay(
+    settings_store: dict,
+    *,
+    live_model: str | None,
+    model_source: str | None,
+    provider_id: str | None,
+    provider_base_url: str | None,
+    provider_api_key: str | None,
+    saved_login,
+    provider_default_base_url: str | None,
+    eff_sampling: Sampling,
+    env_sampling: Sampling,
+    manifest_sampling: Sampling,
+    environ,
+) -> dict[str, setcmd.LiveValue]:
+    """Build the per-knob live overlay for `show_lines_effective`.
+
+    Pure: every effective value and its source is passed in, so the display and
+    source-detection logic is testable without a Config/login store. Only knobs
+    whose effective value differs from the settings store get an entry."""
+    overlay: dict[str, setcmd.LiveValue] = {}
+
+    def _mark(key: str, value, source: str) -> None:
+        spec = settings.SPEC_BY_KEY[key]
+        overlay[key] = setcmd.LiveValue(display=setcmd.render_value(spec, value), source=source)
+
+    # model.id — the --model flag / `/model` command never lands in the store.
+    store_model = settings.get_dotted(settings_store, ("model", "id"))
+    if live_model and model_source and live_model != store_model:
+        _mark("model.id", live_model, model_source)
+
+    # provider.* — a saved login / provider default fills these outside the store.
+    store_pid = settings.get_dotted(settings_store, ("provider", "id"))
+    if provider_id and provider_id != store_pid:
+        _mark("provider.id", provider_id, f"login {provider_id}" if saved_login is not None else "session")
+
+    store_base = settings.get_dotted(settings_store, ("provider", "base_url"))
+    if provider_base_url and provider_base_url != store_base:
+        if saved_login is not None and saved_login.provider_base_url == provider_base_url:
+            source = f"login {provider_id}"
+        elif provider_default_base_url and provider_default_base_url == provider_base_url:
+            source = "provider default"
+        else:
+            source = "session"
+        _mark("provider.base_url", provider_base_url, source)
+
+    store_key = settings.get_dotted(settings_store, ("provider", "api_key"))
+    if provider_api_key and provider_api_key != store_key:
+        if saved_login is not None and saved_login.provider_api_key == provider_api_key:
+            source = f"login {provider_id}"
+        else:
+            source = "session"
+        _mark("provider.api_key", provider_api_key, source)  # render masks it to <set>
+
+    # sampling.* — js/sampling.py reads JS_TEMP/JS_TOPK/... directly, so the short
+    # env aliases never reach the store; the agent manifest is off-store too.
+    for field in _SAMPLING_FIELDS:
+        eff = getattr(eff_sampling, field)
+        if eff is None:
+            continue
+        store_val = settings.get_dotted(settings_store, ("sampling", field))
+        if store_val is not None and _same_number(store_val, eff):
+            continue
+        if getattr(env_sampling, field) is not None and _same_number(getattr(env_sampling, field), eff):
+            env_var = _sampling_env_var(field, environ)
+            source = f"env {env_var}" if env_var else "env"
+        elif getattr(manifest_sampling, field) is not None and _same_number(getattr(manifest_sampling, field), eff):
+            source = "agent sampling"
+        else:
+            source = "session"
+        _mark(f"sampling.{field}", eff, source)
+
+    return overlay
+
+
+def _same_number(a, b) -> bool:
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setcmd.LiveValue]:
+    """Resolve the same route the next turn uses and diff it against the store."""
+    turn_cfg = _cfg_for_live_state(cfg, state)
+    provider_id = turn_cfg.provider_id
+    saved_login = routing._saved_login(provider_id) if provider_id else None
+    provider_def = providers.get_provider(provider_id) if provider_id else None
+    provider_default_base_url = (
+        providers.provider_base_url(provider_def, None, os.environ) if provider_def is not None else None
+    )
+    prompt_spec = state.get("prompt_spec")
+    manifest_sampling = Sampling.from_mapping(getattr(prompt_spec, "sampling", {}) if prompt_spec else {})
+    eff_sampling = _sampling_for_turn(turn_cfg, prompt_spec, state.get("sampling_cli", Sampling()))
+    return _live_settings_overlay(
+        state["settings"],
+        live_model=state.get("model"),
+        model_source=state.get("model_source"),
+        provider_id=provider_id,
+        provider_base_url=turn_cfg.provider_base_url,
+        provider_api_key=turn_cfg.provider_api_key,
+        saved_login=saved_login,
+        provider_default_base_url=provider_default_base_url,
+        eff_sampling=eff_sampling,
+        env_sampling=turn_cfg.sampling_env,
+        manifest_sampling=manifest_sampling,
+        environ=os.environ,
+    )
+
+
+def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
+    """A copy of the live settings store with the off-store live values (flag
+    model, login provider, env/manifest sampling) folded in — what `/save` writes
+    so a reload reproduces the running configuration."""
+    eff = copy.deepcopy(state["settings"]) if isinstance(state.get("settings"), dict) else {}
+    turn_cfg = _cfg_for_live_state(cfg, state)
+    live_model = state.get("model")
+    if isinstance(live_model, str) and live_model:
+        settings.set_dotted(eff, ("model", "id"), live_model)
+    if turn_cfg.provider_id:
+        settings.set_dotted(eff, ("provider", "id"), turn_cfg.provider_id)
+    if turn_cfg.provider_base_url:
+        settings.set_dotted(eff, ("provider", "base_url"), turn_cfg.provider_base_url)
+    if turn_cfg.provider_api_key:
+        settings.set_dotted(eff, ("provider", "api_key"), turn_cfg.provider_api_key)
+    eff_sampling = _sampling_for_turn(turn_cfg, state.get("prompt_spec"), state.get("sampling_cli", Sampling()))
+    for field, value in eff_sampling.as_dict_nonnull().items():
+        settings.set_dotted(eff, ("sampling", field), value)
+    return eff
+
+
+def _handle_save(state: dict, cfg: Config) -> None:
+    eff = _effective_settings_snapshot(cfg, state)
+    path = _paths.global_config_file()
+    try:
+        count, backup = settings.save_settings_to_jsrc(path, eff)
+    except OSError as exc:
+        print(f"{C.ORANGE}save failed: {type(exc).__name__}: {exc}{C.RESET}")
+        return
+    note = f"  (backed up prior file to {backup.name})" if backup is not None else ""
+    print(f"{C.GREEN}saved {count} knob{'' if count == 1 else 's'} to {path}{C.RESET}{C.GREY}{note}{C.RESET}")
+
+
 def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
     body = line.strip()
     if body.startswith("/"):
@@ -578,6 +743,8 @@ def _sync_model_from_live_settings(state: dict) -> None:
     model = _model_from_live_settings(state["settings"])
     if model is not None:
         state["model"] = model
+        # The store now drives the model, so it is no longer a flag/command override.
+        state["model_source"] = None
 
 
 def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str | None, str | None]:
@@ -814,6 +981,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     configured_headers = _state_value(state, "provider_headers", getattr(cfg, "provider_headers", {}))
     parsed_provider_id, _parsed_model = providers.parse_model_prefix(model_value)
     prefix_login = routing._saved_login(parsed_provider_id) if parsed_provider_id is not None else None
+    state["model_source"] = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
         state["model"] = model_value
         if configured_provider_id:
@@ -864,7 +1032,8 @@ HELP_TEXT = f"""\
   {C.YELLOW}/help{C.RESET}            show this message
   {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
   {C.YELLOW}/set -key{C.RESET}        clear a knob back to its default (e.g. /set -sampling.temperature)
-  {C.YELLOW}/show [key]{C.RESET}      list every knob and its current value
+  {C.YELLOW}/show [key]{C.RESET}      list every knob and its effective value (annotates live overrides)
+  {C.YELLOW}/save{C.RESET}            write the current in-memory settings to the global jsrc
   {C.YELLOW}/load <file>{C.RESET}     load a slashless ircII-style script file
   {C.YELLOW}/on [event handler]{C.RESET} list or register an event hook
   {C.YELLOW}/model <name>{C.RESET}    switch model for this session
@@ -901,6 +1070,8 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     default_model_id = _provider_qualified_model_id(selected.get("provider_id"), selected["model"])
     if isinstance(state.get("settings"), dict):
         settings.set_dotted(state["settings"], ("model", "id"), default_model_id)
+    state["model_source"] = None  # the pick was persisted into the store
+
     _saved_path, save_error = _persist_default_model_id(default_model_id)
     if save_error:
         print(f"{C.ORANGE}selected {selected['provider_id']}:{selected['model']} but default save failed: {save_error}{C.RESET}")
@@ -1078,7 +1249,21 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/refresh-model-catalog":
         _force_refresh_model_catalog()
         return True
+    if line == "/save":
+        _handle_save(state, cfg)
+        return True
     if setcmd.is_repl_command(line, "/set", "/show", "/load", "/on"):
+        is_display, display_key = setcmd.settings_display_target(line)
+        if is_display:
+            # No-arg / single-key /set and /show render the values the NEXT turn
+            # uses, annotating knobs whose live source bypasses the store.
+            overlay = _live_settings_overlay_for_state(cfg, state)
+            result = setcmd.show_lines_effective(state["settings"], overlay, display_key)
+            for out in result.lines:
+                print(out)
+            if result.error:
+                print(f"{C.ORANGE}{result.error}{C.RESET}")
+            return True
         context = setcmd.CommandContext(
             cwd=getattr(cfg, "project_dir", Path.cwd()),
             events=state.setdefault("events", events.EventHooks()),
@@ -2753,11 +2938,16 @@ def main(argv: list[str] | None = None) -> int:
         "messages": messages,
         "system": system,
         "model": args.model if args.model is not None else cfg.model,
+        # Where state["model"] came from, for the effective /set view. A --model
+        # flag never lands in the settings store, so record it here so /set can
+        # annotate `model.id = ... (live: --model flag)`.
+        "model_source": "--model flag" if args.model is not None else None,
         "provider_id": cfg.provider_id,
         "provider_base_url": cfg.provider_base_url,
         "provider_api_key": cfg.provider_api_key,
         "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
         "settings": live_settings,
+        "prompt_spec": prompt_spec,
         "events": event_hooks,
         "tool_registry": active_registry,
         "tool_selectors": prompt_spec.tool_selectors,

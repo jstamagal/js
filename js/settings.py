@@ -637,3 +637,74 @@ def write_default_template(path: Path) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(_template_lines()), encoding="utf-8")
     return True
+
+
+# ---------------------------------------------------------------------------
+# /save — snapshot the live settings back into a jsrc set-script
+# ---------------------------------------------------------------------------
+
+_MISSING = object()
+
+
+def _config_line_value(spec: SettingSpec, value: Any) -> str:
+    """Render ``value`` as the right-hand side of a `set <key> <value>` line —
+    the inverse of `coerce_value`, so a saved line reloads to the same value."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value)
+
+
+def _equals_default(spec: SettingSpec, value: Any) -> bool:
+    """True when ``value`` is the knob's built-in default (nothing to persist)."""
+    default = spec.default
+    if value is None or value == "":
+        return default is None
+    return value == default
+
+
+def settings_diff_lines(settings: dict) -> list[str]:
+    """`set <key> <value>` lines for every knob whose current value differs from
+    its built-in default, in REGISTRY order. Secrets are written verbatim — the
+    jsrc key lines are plain (see the template's `#set provider.api_key`)."""
+    lines: list[str] = []
+    for spec in REGISTRY:
+        value = get_dotted(settings, spec.path, _MISSING)
+        if value is _MISSING:
+            value = None
+        if _equals_default(spec, value):
+            continue
+        lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
+    return lines
+
+
+def save_settings_to_jsrc(
+    path: Path,
+    settings: dict,
+    *,
+    stamp: str | None = None,
+    source: str = "/save",
+) -> tuple[int, Path | None]:
+    """Write the non-default knobs in ``settings`` to ``path`` as a jsrc script.
+
+    An existing file is copied to ``<name>.bak`` beside itself first. Returns
+    ``(knob_count, backup_path_or_None)``."""
+    lines = settings_diff_lines(settings)
+    backup: Path | None = None
+    if path.exists():
+        backup = path.with_name(path.name + ".bak")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    if stamp is None:
+        from datetime import datetime
+
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    header = [
+        f"# js config — written by {source} on {stamp}.",
+        "# Each non-comment line is a `set <key> <value>` command; only knobs that",
+        "# differ from built-in defaults are listed.",
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join([*header, *lines]) + "\n", encoding="utf-8")
+    return len(lines), backup

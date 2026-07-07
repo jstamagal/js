@@ -14,6 +14,7 @@ Callers own all I/O: `run_repl_command` and `apply_config_line` return a
 from __future__ import annotations
 
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -96,6 +97,90 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
         value = _s.get_dotted(settings, spec.path)
         lines.append(f"  {spec.key} = {render_value(spec, value)}")
     return CommandResult(handled=True, lines=lines)
+
+
+# ---------------------------------------------------------------------------
+# Effective ("live") view
+#
+# `show_lines` renders the settings STORE — the values in the jsrc-derived dict.
+# But a flag (`--model`), a saved login, and env-read sampling (JS_TEMP ...) feed
+# the next turn WITHOUT ever landing in the store, so the store lies about what
+# runs. The REPL overlays those live sources onto the display via a per-knob
+# ``LiveValue`` map computed at the call site (cli.py), keeping `show_lines`
+# itself pure for config-file processing.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LiveValue:
+    """One knob's effective value plus where it actually comes from."""
+
+    display: str   # already rendered + masked (secrets stay <set>)
+    source: str    # e.g. "--model flag", "login testes", "env JS_TEMP"
+
+
+def _annotate(line: str, live: LiveValue | None) -> str:
+    return line if live is None else f"{line}  (live: {live.source})"
+
+
+def show_lines_effective(
+    settings: dict,
+    overlay: Mapping[str, LiveValue] | None = None,
+    key: str | None = None,
+) -> CommandResult:
+    """Like `show_lines`, but a knob present in ``overlay`` shows its effective
+    value and a ``(live: <source>)`` tag instead of the store value."""
+    overlay = overlay or {}
+    if key is not None:
+        spec = _s.SPEC_BY_KEY.get(key)
+        if spec is None:
+            return CommandResult(handled=True, error=f"unknown knob: {key}")
+        live = overlay.get(key)
+        display = live.display if live is not None else render_value(spec, _s.get_dotted(settings, spec.path))
+        return CommandResult(
+            handled=True,
+            lines=[
+                _annotate(f"{spec.key} = {display}", live),
+                f"  {spec.doc}",
+            ],
+        )
+
+    lines: list[str] = []
+    current_section: str | None = None
+    for spec in _s.REGISTRY:
+        if spec.section != current_section:
+            if current_section is not None:
+                lines.append("")
+            lines.append(f"[{spec.section}]")
+            current_section = spec.section
+        live = overlay.get(spec.key)
+        display = live.display if live is not None else render_value(spec, _s.get_dotted(settings, spec.path))
+        lines.append(_annotate(f"  {spec.key} = {display}", live))
+    return CommandResult(handled=True, lines=lines)
+
+
+def settings_display_target(line: str) -> tuple[bool, str | None]:
+    """Classify a ``/set``/``/show`` line as a read-only display or a mutation.
+
+    Returns ``(is_display, key)``: ``is_display`` True for the value-listing forms
+    (`/set`, `/set <key>`, `/show`, `/show <key>`) so the REPL can route them
+    through the effective view; False for mutations (`/set k v`, `/set -k`) and
+    non-display verbs. ``key`` is the single knob when one was named, else None."""
+    body = _normalize(line)
+    if body is None:
+        return (False, None)
+    parts = body.split(maxsplit=2)
+    verb = parts[0].lower()
+    if verb == "show":
+        return (True, parts[1] if len(parts) > 1 else None)
+    if verb == "set":
+        if len(parts) == 1:
+            return (True, None)
+        if parts[1].startswith("-") and len(parts[1]) > 1:
+            return (False, None)  # `/set -knob` clears a knob
+        if len(parts) == 2:
+            return (True, parts[1])
+        return (False, None)  # `/set key value` mutates
+    return (False, None)
 
 
 # ---------------------------------------------------------------------------
