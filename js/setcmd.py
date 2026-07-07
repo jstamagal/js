@@ -77,7 +77,13 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
         if spec is None:
             return CommandResult(handled=True, error=f"unknown knob: {key}")
         value = _s.get_dotted(settings, spec.path)
-        return CommandResult(handled=True, lines=[f"{spec.key} = {render_value(spec, value)}"])
+        return CommandResult(
+            handled=True,
+            lines=[
+                f"{spec.key} = {render_value(spec, value)}",
+                f"  {spec.doc}",
+            ],
+        )
 
     lines: list[str] = []
     current_section: str | None = None

@@ -35,7 +35,8 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     assert changed.error is None
     assert settings.get_dotted(live_settings, spec.path) == expected
     assert shown.error is None
-    assert shown.lines == [f"{key} = {setcmd.render_value(spec, expected)}"]
+    assert shown.lines[0] == f"{key} = {setcmd.render_value(spec, expected)}"
+    assert shown.lines[1].strip() == spec.doc
 
 
 def test_tools_alias_profiles_rejects_non_list_json():
@@ -291,11 +292,11 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
         empty=settings.EMPTY_UNSET,
     )
 
-    assert off.lines == ["runtime.debug = off"]
-    assert none.lines == ["provider.id = <none>"]
+    assert off.lines[0] == "runtime.debug = off"
+    assert none.lines[0] == "provider.id = <none>"
     assert setcmd.render_value(unset_spec, None) == "<unset>"
     sampling = setcmd.run_repl_command(live_settings, "/show sampling.temperature")
-    assert sampling.lines == ["sampling.temperature = <unset>"]
+    assert sampling.lines[0] == "sampling.temperature = <unset>"
     template = "\n".join(settings._template_lines())
     assert "# Per-turn sampling overrides. Default display is <unset>;" in template
     # RULING A: "unset" is no longer a magic clear-token, so the template no
@@ -314,7 +315,7 @@ def test_secret_values_are_masked_when_shown():
     assert changed.error is None
     assert changed.lines == ["provider.api_key = <set>"]
     assert settings.get_dotted(live_settings, ("provider", "api_key")) == "sk-test"
-    assert shown.lines == ["provider.api_key = <set>"]
+    assert shown.lines[0] == "provider.api_key = <set>"
 
 
 def test_unknown_knob_returns_error_without_mutating_settings():
@@ -352,7 +353,7 @@ def test_map_sub_key_updates_parent_map_and_shows_parent():
     assert changed.lines == ["wiki.aliases.creative = /p"]
     assert settings.get_dotted(live_settings, ("wiki", "aliases", "creative")) == "/p"
     assert shown.error is None
-    assert shown.lines == ["wiki.aliases = creative=/p"]
+    assert shown.lines[0] == "wiki.aliases = creative=/p"
 
 
 @pytest.mark.parametrize("line", ["show model.id", "run something"])
