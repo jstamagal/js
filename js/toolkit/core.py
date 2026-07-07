@@ -81,6 +81,11 @@ class ToolContext:
     snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)
     search_cache: dict[str, str] = field(default_factory=dict)
     todos: dict[str, Todo] = field(default_factory=dict)
+    last_prompt_tokens: int = 0
+    last_cached_tokens: int = 0
+    last_output_tokens: int = 0
+    last_max_output_tokens: int | None = None
+    last_incomplete_reason: str | None = None
 
     def resolve_path(self, raw: str | os.PathLike[str]) -> Path:
         path = Path(os.path.expanduser(str(raw)))

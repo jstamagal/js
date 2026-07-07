@@ -73,6 +73,29 @@ def model_tool_call_result(
     )
 
 
+def model_incomplete_tool_call_result(
+    name: str,
+    args: str,
+    call_id: str = "call_cut",
+    reason: str = "max_output_tokens",
+) -> ModelStreamResult:
+    tool_calls = [ModelToolCall(id=call_id, name=name, arguments=args)]
+    provider_metadata = {"incomplete": True, "incomplete_reason": reason}
+    assistant_msg = _make_assistant_msg("", tool_calls).model_copy(
+        update={"provider_metadata": provider_metadata}
+    )
+    return ModelStreamResult(
+        text="",
+        tool_calls=tool_calls,
+        reasoning="",
+        usage=ai.types.usage.Usage(input_tokens=5, output_tokens=len(args)),
+        finish_reason=f"incomplete:{reason}",
+        assistant_message=assistant_msg,
+        provider_metadata=provider_metadata,
+        incomplete_reason=reason,
+    )
+
+
 def model_parallel_tool_calls_result(
     calls: list[tuple[str, str, str]],
 ) -> ModelStreamResult:
@@ -221,6 +244,154 @@ def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_pa
 
     replay = runtime.model_client.history_to_ai_messages("system", messages)
     assert getattr(replay[-1], "provider_metadata", None) == provider_metadata
+
+
+def test_incomplete_truncated_tool_call_is_not_persisted_or_dispatched(monkeypatch, tmp_path):
+    hooks = RecordingHooks()
+    truncated_args = '{"file_path":"synthetic.txt","content":"unterminated'
+
+    def stream_stub(**kwargs):
+        return model_incomplete_tool_call_result("write", truncated_args)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "write a synthetic file"}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+        event_hooks=hooks,
+    )
+
+    assert not (tmp_path / "synthetic.txt").exists()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assistant = messages[-1]
+    assert "tool_calls" not in assistant
+    assert "dropped truncated tool call arguments" in assistant["content"]
+    assert assistant["incomplete_reason"] == "max_output_tokens"
+    assert not any(event == "tool_call" for event, _payload in hooks.emitted)
+    assert hooks.emitted[-1][1]["reason"] == "incomplete"
+
+
+def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path):
+    from ai.types import integrity
+
+    calls: list[list[ai.messages.Message]] = []
+    first_turn_calls = {"count": 0}
+
+    def first_stream_stub(**kwargs):
+        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        calls.append(kwargs["messages"])
+        first_turn_calls["count"] += 1
+        if first_turn_calls["count"] == 1:
+            return model_tool_call_result(
+                "write",
+                ['{"file_path":"repaired.txt","content":"ok",}'],
+                call_id="call_repair",
+            )
+        return model_text_result("done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", first_stream_stub)
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "write repaired"}]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert (tmp_path / "repaired.txt").read_text(encoding="utf-8") == "ok"
+    tool_call = next(m for m in messages if m.get("tool_calls"))
+    json.loads(tool_call["tool_calls"][0]["function"]["arguments"])
+
+    def second_stream_stub(**kwargs):
+        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        calls.append(kwargs["messages"])
+        return model_text_result("clean")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", second_stream_stub)
+    messages.append({"role": "user", "content": "continue"})
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert calls
+    assert messages[-1] == {"role": "assistant", "content": "clean"}
+
+
+def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_runs(
+    monkeypatch, tmp_path
+):
+    from ai.types import integrity
+
+    poisoned_args = '{"file_path":"old.txt","content":"cut'
+    messages = [
+        {"role": "user", "content": "old request"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_old",
+                    "type": "function",
+                    "function": {"name": "write", "arguments": poisoned_args},
+                }
+            ],
+            "provider_metadata": {"incomplete": True, "incomplete_reason": "max_output_tokens"},
+            "incomplete_reason": "max_output_tokens",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_old",
+            "name": "write",
+            "content": "ERROR: synthetic prior parse failure",
+        },
+        {"role": "user", "content": "new request"},
+    ]
+    calls = {"count": 0}
+
+    def stream_stub(**kwargs):
+        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return model_tool_call_result(
+                "write",
+                [json.dumps({"file_path": "new.txt", "content": "new"})],
+                call_id="call_new",
+            )
+        return model_text_result("clean")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = offline_config(tmp_path)
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert calls["count"] == 2
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "new"
+    assert messages[-1] == {"role": "assistant", "content": "clean"}
 
 
 def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
