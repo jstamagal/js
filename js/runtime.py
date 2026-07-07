@@ -6,7 +6,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import contextlib
-import functools
 import inspect
 import json
 import os
@@ -554,51 +553,60 @@ async def _dispatch_batch(
     batch still run in the executor, concurrently. Without a supervisor (``-p``,
     bench, tests) the whole batch takes the executor path unchanged."""
     from . import supervisor
-    from .toolkit import meta
 
     fan_out_idx: list[int] = []
-    if supervisor.get_current() is not None:
+    current_supervisor = supervisor.get_current()
+    if current_supervisor is not None:
+        from .toolkit import meta
+
         for i, pc in enumerate(tool_calls):
             tool = registry.resolve(pc.name)
             if tool is not None and meta.is_fan_out_handler(tool.handler):
                 fan_out_idx.append(i)
 
     if not fan_out_idx:
-        return await loop.run_in_executor(
-            None,
-            functools.partial(
+        if current_supervisor is None:
+            return _dispatch_tool_calls(
+                tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
+            )
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") as executor:
+            future = executor.submit(
                 _dispatch_tool_calls,
                 tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
-            ),
-        )
+            )
+            return await asyncio.wrap_future(future, loop=loop)
 
     fan_out_set = set(fan_out_idx)
     records: list[tuple[_PendingToolCall, dict, str] | None] = [None] * len(tool_calls)
 
     leaf_calls = [pc for i, pc in enumerate(tool_calls) if i not in fan_out_set]
+    leaf_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") if leaf_calls else None
     leaf_future = (
-        loop.run_in_executor(
-            None,
-            functools.partial(
+        asyncio.wrap_future(
+            leaf_executor.submit(
                 _dispatch_tool_calls,
                 leaf_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
             ),
+            loop=loop,
         )
-        if leaf_calls else None
+        if leaf_executor is not None else None
     )
+    try:
+        fan_out_records = await asyncio.gather(*(
+            _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace, error_tracker, registry, tool_context)
+            for i in fan_out_idx
+        ))
+        for i, rec in zip(fan_out_idx, fan_out_records):
+            records[i] = rec
 
-    fan_out_records = await asyncio.gather(*(
-        _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace, error_tracker, registry, tool_context)
-        for i in fan_out_idx
-    ))
-    for i, rec in zip(fan_out_idx, fan_out_records):
-        records[i] = rec
-
-    if leaf_future is not None:
-        leaf_records = iter(await leaf_future)
-        for i in range(len(records)):
-            if records[i] is None:
-                records[i] = next(leaf_records)
+        if leaf_future is not None:
+            leaf_records = iter(await leaf_future)
+            for i in range(len(records)):
+                if records[i] is None:
+                    records[i] = next(leaf_records)
+    finally:
+        if leaf_executor is not None:
+            leaf_executor.shutdown(wait=True)
 
     return records  # type: ignore[return-value]
 
