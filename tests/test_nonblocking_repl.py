@@ -63,6 +63,29 @@ def test_nonblocking_repl_empty_line_then_eof_is_clean(monkeypatch, tmp_path):
     assert load_messages(_session_file(tmp_path)) == []
 
 
+def test_tui_flag_routes_to_textual_repl(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    seen = {}
+
+    def run_tui_repl_stub(cfg, state, telemetry, prompt_spec, deps):
+        seen["model"] = state["model"]
+        seen["system"] = state["system"]
+        seen["deps"] = deps
+        return 0
+
+    monkeypatch.setattr(cli.tui, "run_tui_repl", run_tui_repl_stub)
+
+    rc = cli.main(["--tui", "--model", "flag-model"])
+    assert rc == 0
+    assert seen["model"] == "flag-model"
+    assert seen["system"]
+    assert seen["deps"].handle_command is cli._handle_command
+
+
 def test_turn_state_commands_are_refused_while_a_turn_runs():
     """Commands that clear/rotate/compact the live message list must be gated while a
     turn is active — running them off-loop races the turn's single-writer append."""
