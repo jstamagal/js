@@ -19,6 +19,7 @@ from .logins import (
     remove_login,
     save_login,
     test_login,
+    test_login_with_metadata,
 )
 
 _API_SHAPES: list[tuple[str, str, str]] = [
@@ -27,6 +28,7 @@ _API_SHAPES: list[tuple[str, str, str]] = [
     ("anthropic-custom", "anthropic", "Anthropic-compatible endpoint"),
     ("cliproxyapi", "openai", "CLIProxyAPI / OpenAI-compatible proxy with optional headers"),
 ]
+_API_SHAPE_IDS = {shape_id for shape_id, _sdk, _desc in _API_SHAPES}
 _SECONDARY_TEST_PROMPT = "1+1="
 _MODEL_LIST_LIMIT = 20
 
@@ -282,7 +284,7 @@ def _input(prompt: str, *, default: str | None = None, secret: bool = False) -> 
     return default
 
 
-def _ask_custom_provider() -> tuple[str, str, providers.ProviderDef] | None:
+def _ask_custom_provider() -> tuple[str, str, str, providers.ProviderDef] | None:
     provider_id = _input("custom provider id")
     if not provider_id:
         return None
@@ -291,7 +293,7 @@ def _ask_custom_provider() -> tuple[str, str, providers.ProviderDef] | None:
         return None
     shape_id, sdk_id = selected
     provider = providers.provider_for_login(shape_id)
-    return provider_id, sdk_id, provider
+    return provider_id, sdk_id, shape_id, provider
 
 
 def _env_key_name(provider: providers.ProviderDef, env: dict[str, str]) -> str | None:
@@ -301,7 +303,13 @@ def _env_key_name(provider: providers.ProviderDef, env: dict[str, str]) -> str |
     return None
 
 
-def _collect_api_login(provider_id: str, sdk_provider_id: str | None, provider: providers.ProviderDef) -> Login | None:
+def _collect_api_login(
+    provider_id: str,
+    sdk_provider_id: str | None,
+    provider: providers.ProviderDef,
+    *,
+    shape_provider_id: str | None = None,
+) -> Login | None:
     existing = load_logins().get(providers.normalize_provider_id(provider_id) or provider_id)
     env = os.environ
     headers: dict[str, str] = dict(existing.provider_headers) if existing else {}
@@ -319,11 +327,16 @@ def _collect_api_login(provider_id: str, sdk_provider_id: str | None, provider: 
     # different one. Env keys are OFFERED below, never silently used.
     api_key = (existing.provider_api_key if existing else None) or provider.default_api_key
     effective_sdk = (existing.sdk_provider_id if existing and existing.sdk_provider_id else None) or sdk_provider_id or provider.effective_sdk_provider_id
+    effective_shape = (
+        shape_provider_id
+        or (existing.shape_provider_id if existing and existing.shape_provider_id else None)
+        or (provider.id if provider.id in _API_SHAPE_IDS else None)
+    )
 
-    if provider.login_base_url_field:
-        base_url = _input("Base URL", default=base_url)
-        if base_url is None:
-            return None
+    entered_base_url = _input("Base URL", default=base_url or "")
+    if entered_base_url is None:
+        return None
+    base_url = entered_base_url or None
 
     if env_key_name and env_key:
         answer = _input(f"Found ENV:{env_key_name} ({_mask(env_key)}); use it? [y/N]", default="n")
@@ -367,6 +380,7 @@ def _collect_api_login(provider_id: str, sdk_provider_id: str | None, provider: 
     return Login(
         provider_id=provider_id,
         sdk_provider_id=effective_sdk,
+        shape_provider_id=effective_shape,
         provider_base_url=base_url or None,
         provider_api_key=api_key or None,
         provider_headers=headers,
@@ -495,21 +509,22 @@ def _run_login(provider_id: str | None = None) -> int:
         custom = _ask_custom_provider()
         if custom is None:
             return 0
-        provider_id, sdk_provider_id, provider = custom
+        provider_id, sdk_provider_id, shape_provider_id, provider = custom
     else:
         provider = providers.provider_for_login(provider_id)
         sdk_provider_id = provider.effective_sdk_provider_id
+        shape_provider_id = provider.id if provider.id in _API_SHAPE_IDS else None
 
     if codex_auth.is_codex_provider(provider_id):
         return _run_codex_login(raw_provider_id)
 
-    login = _collect_api_login(provider_id, sdk_provider_id, provider)
+    login = _collect_api_login(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:
         return 0
 
     print("*** Fetching models...")
     try:
-        models = test_login(login)
+        models, model_metadata = test_login_with_metadata(login)
     except Exception as exc:  # noqa: BLE001
         print(f"{C.ORANGE}login failed: {type(exc).__name__}: {exc}{C.RESET}", file=sys.stderr)
         base = login.provider_base_url or ""
@@ -533,7 +548,7 @@ def _run_login(provider_id: str | None = None) -> int:
         return 0
     try:
         save_login(login)
-        cache_models(canonical_id, to_cache)
+        cache_models(canonical_id, to_cache, metadata=model_metadata)
     except LoginsCorruptError as exc:
         print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
         return 1
