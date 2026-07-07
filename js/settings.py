@@ -48,6 +48,7 @@ DEFAULT_COMPACT_CONTEXT_WINDOW = None
 DEFAULT_COMPACT_NOTIFY_THRESHOLD = 0.50
 DEFAULT_COMPACT_TRIGGER_THRESHOLD = 0.80
 DEFAULT_COMPACT_FORCE_THRESHOLD = 0.90
+DEFAULT_COMPACT_BUFFER_TOKENS = 4096
 DEFAULT_COMPACT_TAIL_TOKENS = 16384
 DEFAULT_COMPACT_MIN_SAVINGS_TOKENS = 400
 DEFAULT_COMPACT_CHARS_PER_TOKEN = 4.0
@@ -199,6 +200,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Auto-compact at this fullness fraction."),
     SettingSpec("compact.force_threshold", "float", DEFAULT_COMPACT_FORCE_THRESHOLD,
                 "Force compact at this fullness fraction."),
+    SettingSpec("compact.buffer_tokens", "int", DEFAULT_COMPACT_BUFFER_TOKENS,
+                "Extra input-token headroom reserved by preflight/mid-turn compaction."),
     SettingSpec("compact.tail_tokens", "int", DEFAULT_COMPACT_TAIL_TOKENS,
                 "Recent tail budget retained after compaction."),
     SettingSpec("compact.min_savings_tokens", "int", DEFAULT_COMPACT_MIN_SAVINGS_TOKENS,

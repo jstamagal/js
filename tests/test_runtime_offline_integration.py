@@ -10,7 +10,7 @@ import pytest
 from js import events, runtime, setcmd, settings, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext, build_default_registry
+from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 
 
 def _make_assistant_msg(
@@ -137,6 +137,31 @@ def offline_config(tmp_path, model: str = "offline-test-model", settings: dict |
         prompts_dir=tmp_path / "prompts",
         settings=settings or {},
     )
+
+
+def _budget_config(tmp_path, *, context_window: int, buffer_tokens: int = 0) -> Config:
+    return offline_config(
+        tmp_path,
+        settings={
+            "compact": {
+                "context_window": context_window,
+                "buffer_tokens": buffer_tokens,
+                "tail_tokens": 40,
+                "min_savings_tokens": 1,
+            }
+        },
+    )
+
+
+def _text_parts(messages: list[ai.types.messages.Message]) -> list[str]:
+    texts: list[str] = []
+    for message in messages:
+        for part in message.parts:
+            if getattr(part, "kind", None) == "text":
+                texts.append(part.text)
+            elif getattr(part, "kind", None) == "tool_result":
+                texts.append(str(getattr(part, "result", "")))
+    return texts
 
 
 _CLAUDE_ALIAS_SETTINGS = {
@@ -276,6 +301,145 @@ def test_incomplete_truncated_tool_call_is_not_persisted_or_dispatched(monkeypat
     assert assistant["incomplete_reason"] == "max_output_tokens"
     assert not any(event == "tool_call" for event, _payload in hooks.emitted)
     assert hooks.emitted[-1][1]["reason"] == "incomplete"
+
+
+def test_preflight_compacts_before_dispatch_when_request_would_overflow(monkeypatch, tmp_path):
+    order: list[str] = []
+    calls: list[list[ai.types.messages.Message]] = []
+
+    async def summarize_stub(*args, **kwargs):
+        order.append("compact")
+        return "Summary before current turn"
+
+    def stream_stub(**kwargs):
+        order.append("stream")
+        calls.append(list(kwargs["messages"]))
+        return model_text_result("OK")
+
+    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = _budget_config(tmp_path, context_window=220)
+    messages = [
+        {"role": "user", "content": "old " * 500},
+        {"role": "assistant", "content": "old answer " * 100},
+        {"role": "user", "content": "current user turn"},
+    ]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=build_default_registry().select([]),
+        suppress_output=True,
+    )
+
+    assert order == ["compact", "stream"]
+    sent_text = "\n".join(_text_parts(calls[0]))
+    assert "<compaction-summary>" in sent_text
+    assert "Summary before current turn" in sent_text
+    assert "current user turn" in sent_text
+    assert messages[-1] == {"role": "assistant", "content": "OK"}
+
+
+def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp_path):
+    order: list[str] = []
+    calls: list[list[ai.types.messages.Message]] = []
+
+    def bigtool(context=None):
+        return "Z" * 5000
+
+    registry = ToolRegistry(
+        tools=(Tool(name="bigtool", description="return a big result", handler=bigtool, params={}),),
+        aliases={},
+    )
+
+    async def summarize_stub(*args, **kwargs):
+        order.append("compact")
+        return "Summary before active tool turn"
+
+    def stream_stub(**kwargs):
+        calls.append(list(kwargs["messages"]))
+        if len(calls) == 1:
+            order.append("first_stream")
+            return model_tool_call_result("bigtool", ["{}"], call_id="call_big")
+        order.append("second_stream")
+        return model_text_result("DONE")
+
+    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = _budget_config(tmp_path, context_window=800)
+    messages = [
+        {"role": "user", "content": "old context"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "current tool turn"},
+    ]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=registry,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert order == ["first_stream", "compact", "second_stream"]
+    sent_text = "\n".join(_text_parts(calls[1]))
+    assert "Summary before active tool turn" in sent_text
+    assert "current tool turn" in sent_text
+    assert "Z" * 100 in sent_text
+    assert messages[-1] == {"role": "assistant", "content": "DONE"}
+
+
+def test_context_overflow_error_forces_compaction_and_retries_once(monkeypatch, tmp_path):
+    order: list[str] = []
+    calls: list[list[ai.types.messages.Message]] = []
+
+    async def summarize_stub(*args, **kwargs):
+        order.append("compact")
+        return "Overflow recovery summary"
+
+    def stream_stub(**kwargs):
+        calls.append(list(kwargs["messages"]))
+        if len(calls) == 1:
+            order.append("overflow")
+            raise ai.ProviderAPIError(
+                "context_length_exceeded: prompt too long",
+                provider="test",
+                is_retryable=False,
+            )
+        order.append("retry")
+        return model_text_result("RECOVERED")
+
+    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = _budget_config(tmp_path, context_window=100_000)
+    messages = [
+        {"role": "user", "content": "old " * 500},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "do not lose this request"},
+    ]
+
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=build_default_registry().select([]),
+        suppress_output=True,
+    )
+
+    assert order == ["overflow", "compact", "retry"]
+    retry_text = "\n".join(_text_parts(calls[1]))
+    assert "Overflow recovery summary" in retry_text
+    assert "do not lose this request" in retry_text
+    assert messages[-2]["content"] == "do not lose this request"
+    assert messages[-1] == {"role": "assistant", "content": "RECOVERED"}
 
 
 def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path):
