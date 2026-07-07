@@ -221,6 +221,20 @@ class _PendingToolCall:
         return "".join(self.arg_chunks)
 
 
+def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) -> bool:
+    return any(not tool_args.is_json_object(pc.arguments()) for pc in pending_calls)
+
+
+def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
+    names = sorted({pc.name or "unknown" for pc in pending_calls})
+    joined = ", ".join(names)
+    suffix = f" for {joined}" if joined else ""
+    return (
+        f"Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. "
+        "Retry the request or ask for the change in smaller chunks."
+    )
+
+
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
@@ -857,6 +871,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.artifact_dir = getattr(cfg, "artifact_dir", None)
     active_context.artifact_url = getattr(cfg, "artifact_url", None)
     active_context.artifact_bin = getattr(cfg, "artifact_bin", None)
+    active_context.last_incomplete_reason = None
+    active_context.last_output_tokens = 0
+    active_context.last_max_output_tokens = max_out
     _wiki_cfg = (getattr(cfg, "settings", {}) or {}).get("wiki")
     _aliases = _wiki_cfg.get("aliases") if isinstance(_wiki_cfg, dict) else None
     active_context.vault_aliases = _aliases if isinstance(_aliases, dict) else {}
@@ -1027,6 +1044,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     usage = result.usage
                     active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
+                    active_context.last_incomplete_reason = incomplete_reason
+                    active_context.last_max_output_tokens = max_out
                     telemetry.event("turn_complete", model=model,
                                     latency_ms=int((time.time() - t0) * 1000),
                                     finish_reason=finish, n_tool_calls=len(pending_calls),
@@ -1037,6 +1056,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     if usage:
                         _out_tok = int(getattr(usage, "output_tokens", 0)
                                        or getattr(usage, "completion_tokens", 0) or 0)
+                    active_context.last_output_tokens = _out_tok
                     if call_stats is not None:
                         # Stream-isolated numbers (model_client clocks `ai.stream` itself,
                         # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
@@ -1094,6 +1114,23 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 _end_turn("retry_budget_exhausted")
                 return
 
+            assistant_message_override: ai.messages.Message | None = None
+            if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
+                notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
+                telemetry.event(
+                    "tool_call_dropped",
+                    reason="incomplete_truncated_args",
+                    incomplete_reason=incomplete_reason,
+                    n_tool_calls=len(pending_calls),
+                    tools=[pc.name for pc in pending_calls],
+                )
+                if not suppress_output:
+                    _emit_text(("\n\n" if text else "") + notice)
+                    _close_text()
+                text = f"{text}\n\n{notice}" if text else notice
+                pending_calls = []
+                assistant_message_override = ai.assistant_message(text)
+
             # --- Record the assistant turn ---
             assistant_record: dict = {"role": "assistant", "content": text}
             history_assistant_record: dict = {"role": "assistant", "content": text}
@@ -1120,7 +1157,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 history_assistant_record["provider_metadata"] = provider_metadata
             if incomplete_reason:
                 history_assistant_record["incomplete_reason"] = incomplete_reason
-            assistant_message = result.assistant_message
+            assistant_message = assistant_message_override or result.assistant_message
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))
