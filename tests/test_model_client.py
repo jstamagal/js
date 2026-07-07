@@ -115,6 +115,17 @@ def _pview(p) -> dict:
     return out
 
 
+def _model_for_error_tests() -> ai.Model:
+    return ai.Model(id="test", provider=ai.get_provider("openai", api_key="x"))
+
+
+def _assert_one_line_friendly(message: str, *, provider: str, command: str) -> None:
+    assert "\n" not in message
+    assert provider in message
+    assert command in message
+    assert "Traceback" not in message
+
+
 def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
     from js.routing import ProviderNotLoggedInError
 
@@ -145,6 +156,94 @@ def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
     )
     assert captured["model_id"] == "deepseek/deepseek-v4-flash"
     assert result.id == "fake-id"
+
+
+def test_stream_model_maps_missing_api_key_typeerror(monkeypatch):
+    async def raise_missing_key(**_kwargs):
+        raise TypeError(
+            "Could not resolve authentication method. Expected either api_key or "
+            "admin_api_key to be set."
+        )
+
+    monkeypatch.setattr(model_client, "resolve_model", lambda *_args, **_kwargs: _model_for_error_tests())
+    monkeypatch.setattr(model_client, "_stream_async", raise_missing_key)
+
+    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
+        model_client.stream_model(
+            model_id="test",
+            provider_id="openai",
+            provider_base_url=None,
+            provider_api_key=None,
+            messages=[ai.user_message("hi")],
+            tools=None,
+            max_output_tokens=64,
+            reasoning_effort=None,
+            on_text=lambda _s: None,
+        )
+
+    message = str(excinfo.value)
+    _assert_one_line_friendly(message, provider="openai", command="js --login openai")
+    assert "set provider.api_key <value>" in message
+    assert "TypeError" not in message
+    assert "Could not resolve authentication method" not in message
+    assert "Expected either api_key or admin_api_key" not in message
+
+
+def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
+    def raise_unknown_provider(*_args, **_kwargs):
+        raise ValueError("unknown provider id: 'stale'")
+
+    monkeypatch.setattr(model_client, "resolve_model", raise_unknown_provider)
+
+    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
+        model_client.stream_model(
+            model_id="test",
+            provider_id="stale",
+            provider_base_url=None,
+            provider_api_key=None,
+            messages=[ai.user_message("hi")],
+            tools=None,
+            max_output_tokens=64,
+            reasoning_effort=None,
+            on_text=lambda _s: None,
+        )
+
+    message = str(excinfo.value)
+    _assert_one_line_friendly(message, provider="stale", command="js --login stale")
+    assert "js --list-models shows what's runnable" in message
+    assert "ValueError" not in message
+    assert "unknown provider id" not in message
+
+
+def test_stream_model_maps_provider_authentication_error(monkeypatch):
+    async def raise_auth(**_kwargs):
+        raise ai.ProviderAuthenticationError(
+            "Error code: 401 - Incorrect API key",
+            provider="openai",
+            http_context=ai.HTTPErrorContext(status_code=401),
+        )
+
+    monkeypatch.setattr(model_client, "resolve_model", lambda *_args, **_kwargs: _model_for_error_tests())
+    monkeypatch.setattr(model_client, "_stream_async", raise_auth)
+
+    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
+        model_client.stream_model(
+            model_id="test",
+            provider_id="openai",
+            provider_base_url=None,
+            provider_api_key="bad",
+            messages=[ai.user_message("hi")],
+            tools=None,
+            max_output_tokens=64,
+            reasoning_effort=None,
+            on_text=lambda _s: None,
+        )
+
+    message = str(excinfo.value)
+    _assert_one_line_friendly(message, provider="openai", command="js --login openai")
+    assert "set provider.api_key <value>" in message
+    assert "Incorrect API key" in message
+    assert "ProviderAuthenticationError" not in message
 
 
 def test_resolve_model_uses_explicit_provider_verbatim():
