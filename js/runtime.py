@@ -15,7 +15,6 @@ import threading
 from pathlib import Path
 import random
 import time
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,11 +25,12 @@ import ai
 from . import colors as C
 from . import model_metadata
 from . import tools as T
+from . import tool_args
 from . import routing
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
-from .toolkit.core import ToolContext, call_tool, compact_json
+from .toolkit.core import ToolContext, call_tool
 from .toolkit.registry import ToolRegistry
 
 
@@ -288,35 +288,8 @@ def _short_default(args: dict) -> str:
     return s if len(s) <= 80 else s[:77] + "..."
 
 
-_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
-
-
 def _repair_jsonish(raw: str) -> dict:
-    """Best-effort repair for common model-emitted argument JSON."""
-    if not raw:
-        return {}
-    candidates = [raw, raw.strip()]
-    stripped = raw.strip()
-    if stripped.startswith('"') and stripped.endswith('"'):
-        try:
-            decoded = json.loads(stripped)
-            if isinstance(decoded, str):
-                candidates.append(decoded)
-        except json.JSONDecodeError:
-            pass
-    candidates.extend(_TRAILING_COMMA_RE.sub(r"\1", item) for item in list(candidates))
-    if stripped and stripped.startswith("{") and not stripped.endswith("}"):
-        candidates.append(stripped + "}")
-    last_error: Exception | None = None
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-            if not isinstance(parsed, dict):
-                raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
-            return parsed
-        except (json.JSONDecodeError, ValueError) as exc:
-            last_error = exc
-    raise ValueError(str(last_error) if last_error else "could not parse arguments")
+    return tool_args.repair_jsonish(raw)
 
 
 def _canonical_tool_args(raw: str) -> str:
@@ -338,17 +311,7 @@ def _canonical_tool_args(raw: str) -> str:
     matches what executed. If even the repair fails, the raw string is returned
     unchanged (the SDK will blank it — nothing we can recover there).
     """
-    if not raw:
-        return raw
-    try:
-        if isinstance(json.loads(raw), dict):
-            return raw  # already a valid object — preserve exact bytes
-    except (json.JSONDecodeError, TypeError):
-        pass
-    try:
-        return compact_json(_repair_jsonish(raw))
-    except (ValueError, TypeError):
-        return raw
+    return tool_args.canonical_tool_args(raw)
 
 
 def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message:

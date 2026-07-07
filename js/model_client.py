@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import ai
 
-from . import codex_auth, codex_provider, providers, reasoning, routing
+from . import codex_auth, codex_provider, providers, reasoning, routing, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -341,7 +341,7 @@ def history_to_ai_messages(
                     ai.types.messages.ToolCallPart(
                         tool_call_id=tc.get("id", ""),
                         tool_name=fn.get("name", ""),
-                        tool_args=fn.get("arguments", ""),
+                        tool_args=tool_args.sdk_safe_tool_args(fn.get("arguments", "")),
                     )
                 )
             assistant = ai.assistant_message(*parts)
