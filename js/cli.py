@@ -41,6 +41,7 @@ from . import replcomplete
 from . import runtime
 from . import stats
 from . import paths as _paths
+from . import transcript as transcript_mod
 from . import tui
 from .promptexpand import expand_prompt
 from . import setcmd
@@ -354,6 +355,7 @@ def _sync_telemetry_from_live_settings(cfg: Config, state: dict, telemetry: runt
             pass
     telemetry.debug_log = debug_log
     _sync_trace_sink(cfg, state["settings"], telemetry)
+    _sync_transcript_sink(cfg, state["settings"], telemetry)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +438,67 @@ class _StdoutTee:
             return bool(self._primary.isatty())
         except Exception:
             return False
+
+
+def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
+    """Resolve the per-session visible transcript path, or None when disabled."""
+    if not _live_bool_setting(
+        live_settings, ("runtime", "transcript_log"), getattr(cfg, "transcript_log", True)
+    ):
+        return None
+    session = cfg.session_file
+    if not session or session == Path(os.devnull):
+        stem = f"{cfg.agent_id}-{os.getpid()}"
+    else:
+        stem = session.stem
+    override = _live_optional_str_setting(
+        live_settings, ("runtime", "transcript_log_dir"), getattr(cfg, "transcript_log_dir", None)
+    )
+    root = Path(override).expanduser() if override else (_paths.transcript_root() / cfg.agent_id)
+    return root / f"{stem}.log"
+
+
+def _open_transcript_log_sink(paths: list[Path]):
+    return transcript_mod.open_transcript_sink(paths)
+
+
+def _sync_transcript_sink(cfg: Config, live_settings: dict, telemetry: runtime.Telemetry) -> None:
+    desired: list[Path] = []
+    transcript_path = _transcript_log_path(cfg, live_settings)
+    if transcript_path is not None:
+        desired.append(transcript_path)
+    old = getattr(telemetry, "transcript_log", None)
+    if isinstance(old, transcript_mod.TranscriptLogSink) and old.paths == desired:
+        return
+    telemetry.transcript_log = _open_transcript_log_sink(desired) if desired else None
+    if isinstance(old, transcript_mod.TranscriptLogSink) and old is not telemetry.transcript_log:
+        old.close()
+
+
+def _transcript_sink(telemetry: runtime.Telemetry):
+    sink = getattr(telemetry, "transcript_log", None)
+    return sink if isinstance(sink, transcript_mod.TranscriptLogSink) else None
+
+
+def _enter_transcript_stdio(stack: contextlib.ExitStack, telemetry: runtime.Telemetry) -> None:
+    stack.enter_context(contextlib.redirect_stdout(
+        transcript_mod.TranscriptTee(sys.stdout, lambda: _transcript_sink(telemetry))
+    ))
+    stack.enter_context(contextlib.redirect_stderr(
+        transcript_mod.TranscriptTee(sys.stderr, lambda: _transcript_sink(telemetry))
+    ))
+
+
+@contextlib.contextmanager
+def _transcript_stdio(telemetry: runtime.Telemetry):
+    with contextlib.ExitStack() as stack:
+        _enter_transcript_stdio(stack, telemetry)
+        yield
+
+
+def _mute_transcript_tee(sink):
+    mute = getattr(sink, "mute_tee", None)
+    return mute() if callable(mute) else contextlib.nullcontext()
 
 
 def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
@@ -1497,6 +1560,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
+    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+    _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
 
     prompt_spec = None
     if system_override is not None:
@@ -1506,21 +1571,24 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         try:
             prompt_spec = P.load_configured_prompt_spec(cfg)
         except (FileNotFoundError, ValueError) as e:
-            print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
+            with _transcript_stdio(telemetry):
+                print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         try:
             cfg = _apply_agent_model(cfg, prompt_spec, model)
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            with _transcript_stdio(telemetry):
+                print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
             return 2
         cfg = _apply_agent_max_tokens(cfg, prompt_spec)
 
     try:
         cfg = _resolve_cli_model_override(cfg, model)
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        with _transcript_stdio(telemetry):
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
 
     attachment_cfg = (
@@ -1538,10 +1606,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             stdin_attachment=stdin_attachment,
         )
     except attach.AttachmentError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        with _transcript_stdio(telemetry):
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
     messages.append(user_bundle.runtime_message)
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+    if (sink := _transcript_sink(telemetry)) is not None:
+        sink.write_user(prompt)
     call_stats: list[dict] = []
     turn_kwargs = {
         "model_override": cfg.model,
@@ -1563,30 +1633,37 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         sink_paths.append(Path(debug_file))
     trace_sink = _open_debug_trace_sink(sink_paths)
     telemetry.trace_sink = trace_sink
-    _real_stdout = sys.stdout
     try:
         try:
             if debug:
                 # Concise trace + streamed answer live on the terminal; the giant
                 # request trace goes to the log only. Tee stdout so the log also
                 # keeps the concise lines and the answer.
-                stdout_ctx = (
-                    contextlib.redirect_stdout(_StdoutTee(_real_stdout, trace_sink))
-                    if trace_sink is not None
-                    else contextlib.nullcontext()
-                )
-                with stdout_ctx:
-                    runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
+                with _transcript_stdio(telemetry):
+                    _real_stdout = sys.stdout
+                    stdout_ctx = (
+                        contextlib.redirect_stdout(_StdoutTee(_real_stdout, trace_sink))
+                        if trace_sink is not None
+                        else contextlib.nullcontext()
+                    )
+                    with stdout_ctx:
+                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
             else:
                 # Plain and --debug-file: the terminal stays clean during the turn
                 # (only the final answer is reprinted below). The log captures the
                 # streamed answer plus, for --debug-file, the concise trace lines;
                 # the full request trace lands there via telemetry.trace_sink.
                 capture = trace_sink if trace_sink is not None else io.StringIO()
-                with contextlib.redirect_stdout(capture):
-                    runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
+                visible_transcript = telemetry.transcript_log
+                telemetry.transcript_log = None
+                try:
+                    with contextlib.redirect_stdout(capture):
+                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
+                finally:
+                    telemetry.transcript_log = visible_transcript
         except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+            with _transcript_stdio(telemetry):
+                print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
             return 1
     finally:
         if trace_sink is not None:
@@ -1608,32 +1685,38 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             # In debug, run_turn already streamed the answer live to stdout — a
             # second print here is the double-print bug. Only print when the
             # stream was suppressed (non-debug one-shot/pipe).
-            if not debug:
-                print(message["content"].strip())
-            if save:
-                for new_message in messages[before_len:]:
-                    _append_turn(cfg, new_message)
-                _maybe_auto_compact(cfg, {
-                    "system": system,
-                    "messages": messages,
-                    "model": cfg.model,
-                })
-                if show_continue:
-                    hint = _session_hint_arg(cfg)
-                    cont = resume_prefix or "js"
-                    # Plain -p has no resume_prefix; the session lives under
-                    # sessions/<agent>, so a non-default agent MUST be echoed or
-                    # the resume looks in the wrong dir and 404s the .jsonl.
-                    # (wiki/artifact/commit already fold the agent into resume_prefix.)
-                    if resume_prefix is None and agent:
-                        cont += f" --agent {shlex.quote(agent)}"
-                    if model:
-                        cont += f" --model {shlex.quote(model)}"
-                    cont += f" --session {hint}"
-                    print(f"Continue: {cont}")
+            with _transcript_stdio(telemetry):
+                if not debug:
+                    content = message["content"].strip()
+                    if (sink := _transcript_sink(telemetry)) is not None:
+                        sink.write_assistant(content)
+                    with _mute_transcript_tee(_transcript_sink(telemetry)):
+                        print(content)
+                if save:
+                    for new_message in messages[before_len:]:
+                        _append_turn(cfg, new_message)
+                    _maybe_auto_compact(cfg, {
+                        "system": system,
+                        "messages": messages,
+                        "model": cfg.model,
+                    })
+                    if show_continue:
+                        hint = _session_hint_arg(cfg)
+                        cont = resume_prefix or "js"
+                        # Plain -p has no resume_prefix; the session lives under
+                        # sessions/<agent>, so a non-default agent MUST be echoed or
+                        # the resume looks in the wrong dir and 404s the .jsonl.
+                        # (wiki/artifact/commit already fold the agent into resume_prefix.)
+                        if resume_prefix is None and agent:
+                            cont += f" --agent {shlex.quote(agent)}"
+                        if model:
+                            cont += f" --model {shlex.quote(model)}"
+                        cont += f" --session {hint}"
+                        print(f"Continue: {cont}")
             return 0
 
-    print(f"{C.ORANGE}error: no assistant response{C.RESET}", file=sys.stderr)
+    with _transcript_stdio(telemetry):
+        print(f"{C.ORANGE}error: no assistant response{C.RESET}", file=sys.stderr)
     return 1
 
 
@@ -2522,6 +2605,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
                 if handled:
                     _sync_telemetry_from_live_settings(cfg, state, telemetry)
                     continue
+                if (sink := _transcript_sink(telemetry)) is not None:
+                    sink.write_user(line)
                 queue.put_nowait(line)
                 if sup.turn_active() or queue.qsize() > 1:
                     print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
@@ -3049,9 +3134,9 @@ def main(argv: list[str] | None = None) -> int:
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
-    print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
-
     if args.tui:
+        with _transcript_stdio(telemetry):
+            print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
         deps = tui.TuiDeps(
             handle_command=_handle_command,
             is_turn_state_command=_is_turn_state_command,
@@ -3071,8 +3156,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return tui.run_tui_repl(cfg, state, telemetry, prompt_spec, deps)
 
+    transcript_stack = contextlib.ExitStack()
+    _enter_transcript_stdio(transcript_stack, telemetry)
+    print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
+
     if args.nonblocking:
-        return asyncio.run(_repl_main(cfg, state, telemetry, session, prompt_spec))
+        try:
+            return asyncio.run(_repl_main(cfg, state, telemetry, session, prompt_spec))
+        finally:
+            transcript_stack.close()
 
     while state["running"]:
         try:
@@ -3085,6 +3177,8 @@ def main(argv: list[str] | None = None) -> int:
         if _handle_command(line, state, cfg):
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             continue
+        if (sink := _transcript_sink(telemetry)) is not None:
+            sink.write_user(line)
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
         input_event = _emit_repl_event(
@@ -3196,6 +3290,7 @@ def main(argv: list[str] | None = None) -> int:
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, f"error: {type(e).__name__}: {e}")
+    transcript_stack.close()
     return 0
 if __name__ == "__main__":
     sys.exit(main())

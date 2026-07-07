@@ -56,11 +56,31 @@ class StdoutSink:
     else prints as a line. This is the byte-for-byte fallback for flag-off mode.
     """
 
+    def __init__(self, transcript_log: object | None = None) -> None:
+        self.transcript_log = transcript_log
+
     def emit(self, event: OutputEvent) -> None:
         if event.text is None:
             return
         if event.name == "stream":
-            sys.stdout.write(event.text)
-            sys.stdout.flush()
+            if self.transcript_log is not None:
+                write_chunk = getattr(self.transcript_log, "write_assistant_chunk", None)
+                if callable(write_chunk):
+                    write_chunk(event.text)
+                mute = getattr(self.transcript_log, "mute_tee", None)
+            else:
+                mute = None
+            ctx = mute() if callable(mute) else _NullContext()
+            with ctx:
+                sys.stdout.write(event.text)
+                sys.stdout.flush()
         else:
             print(event.text)
+
+
+class _NullContext:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *_args):
+        return False
