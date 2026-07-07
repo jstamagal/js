@@ -162,6 +162,8 @@ class Config:
     artifact_bin: str | None = None  # artifact CLI binary; None = ARTIFACT_BIN env or built-in default
     debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
     debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
+    transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
+    transcript_log_dir: str | None = None  # override dir for transcript logs; None = transcript/<agent> under data dir
 
 
 def _session_timestamp() -> str:
@@ -381,6 +383,8 @@ def from_env(
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
     debug_autolog = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug_autolog"), True))
     debug_autolog_dir = _settings.get_dotted(js_root_settings, ("runtime", "debug_autolog_dir"))
+    transcript_log = bool(_settings.get_dotted(js_root_settings, ("runtime", "transcript_log"), True))
+    transcript_log_dir = _settings.get_dotted(js_root_settings, ("runtime", "transcript_log_dir"))
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
     artifact_dir = _settings.get_dotted(js_root_settings, ("artifact", "dir"))
@@ -449,6 +453,8 @@ def from_env(
         artifact_bin=artifact_bin,
         debug_autolog=debug_autolog,
         debug_autolog_dir=debug_autolog_dir,
+        transcript_log=transcript_log,
+        transcript_log_dir=transcript_log_dir,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
     )
