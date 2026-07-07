@@ -23,6 +23,7 @@ import copy
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -283,6 +284,19 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if v not in REASONING_EFFORT_VALUES:
             return None, _REASONING_EFFORT_ERROR
         return ("none" if v == "off" else v), None
+    if spec.key == "provider.id" and text:
+        from . import providers as _providers
+
+        if _providers.get_provider(text) is None:
+            return None, (
+                f"unknown provider id: {text!r} — pick a known id or add a "
+                f"custom one with `js --login`"
+            )
+        return text, None
+    if spec.key == "provider.base_url" and text:
+        if not text.startswith(("http://", "https://")):
+            return None, f"expected a URL starting with http:// or https:// (got {text!r})"
+        return text, None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
@@ -472,7 +486,9 @@ def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> di
                 continue
             value, error = coerce_value(spec, source[name])
             if error is not None:
-                # garbage in the env: skip rather than clobber a working value
+                # garbage in the env: skip rather than clobber a working value,
+                # but say so — a silently dropped JS_BASE_URL costs an evening
+                print(f"js: ignoring {name}: {error}", file=sys.stderr)
                 continue
             set_dotted(settings, spec.path, value)
             break

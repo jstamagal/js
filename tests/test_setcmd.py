@@ -399,6 +399,12 @@ def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
         # restricted domain (RULING B): an arbitrary string is rejected, so
         # the generic str-fallback below doesn't apply to this one knob.
         return "high", "high"
+    if spec.key == "provider.id":
+        # validated domain: must name a known provider or saved login.
+        return "deepseek", "deepseek"
+    if spec.key == "provider.base_url":
+        # validated domain: must carry an http(s) scheme.
+        return "http://env.test/v1", "http://env.test/v1"
     if spec.type == "bool":
         return "on", True
     if spec.type == "int":
@@ -466,3 +472,22 @@ def test_hand_picked_env_alias_wins_over_canonical():
         {"JS_MODEL": "from-alias", "JS_MODEL_ID": "from-canonical"},
     )
     assert settings.get_dotted(overlaid, ("model", "id")) == "from-alias"
+
+
+def test_provider_id_and_base_url_validate_at_set_time():
+    live_settings = settings.seed_defaults()
+
+    bad_id = setcmd.run_repl_command(live_settings, "/set provider.id not-a-provider-anywhere")
+    assert bad_id.error is not None
+    assert "unknown provider id" in bad_id.error
+    assert settings.get_dotted(live_settings, ("provider", "id"), None) is None
+
+    ok_id = setcmd.run_repl_command(live_settings, "/set provider.id deepseek")
+    assert ok_id.error is None
+
+    bad_url = setcmd.run_repl_command(live_settings, "/set provider.base_url http//localhost:8050/v1")
+    assert bad_url.error is not None
+    assert "http://" in bad_url.error
+
+    ok_url = setcmd.run_repl_command(live_settings, "/set provider.base_url http://localhost:8050/v1")
+    assert ok_url.error is None

@@ -52,7 +52,7 @@ def test_parse_extra_arg_coerces_registered_values():
     assert settings.parse_extra_arg("compact.chars_per_token=4.5")[1] == 4.5
     assert settings.parse_extra_arg("runtime.trace=off")[1] is False
     assert settings.parse_extra_arg("runtime.debug=on")[1] is True
-    assert settings.parse_extra_arg("provider.id=null")[1] == "null"
+    assert settings.parse_extra_arg("compact.pre_hook=null")[1] == "null"
     assert settings.parse_extra_arg("model.id=some-model")[1] == "some-model"
 
 
@@ -61,8 +61,8 @@ def test_parse_extra_arg_coerces_registered_values():
     [
         ("model.id=123", "123"),
         # RULING A: magic strings die -- a str knob stores "off" verbatim now;
-        # `set -provider.id` / `set -compact.pre_hook` is the only clear path.
-        ("provider.id=off", "off"),
+        # `set -model.id` / `set -compact.pre_hook` is the only clear path.
+        ("model.id=off", "off"),
         ("compact.pre_hook=off", "off"),
     ],
 )
@@ -297,17 +297,17 @@ def test_collect_settings_extra_string_beats_env_for_same_key(tmp_path):
 
 def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\nset provider.id file-provider\n", encoding="utf-8")
+    cfg.write_text("set model.id file-model\nset provider.id anthropic\n", encoding="utf-8")
 
     out = settings.collect_settings(
         config_paths=[cfg],
-        env={"JS_MODEL": "env-model", "JS_PROVIDER": "env-provider"},
-        extras=["model.id=123", "provider.id=off"],
+        env={"JS_MODEL": "env-model", "JS_PROVIDER": "deepseek"},
+        extras=["model.id=123", "provider.id=openai"],
     )
 
     assert out["model"]["id"] == "123"
-    # RULING A: "off" is no longer a magic clear-token -- it's stored verbatim.
-    assert out["provider"]["id"] == "off"
+    # --extra wins over env, which wins over the config file.
+    assert out["provider"]["id"] == "openai"
 
 
 # ---------------------------------------------------------------------------
