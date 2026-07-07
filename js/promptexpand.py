@@ -47,6 +47,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import settings
+from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+
 __all__ = ["expand_prompt", "PromptExpansionError"]
 
 
@@ -87,6 +90,7 @@ def expand_prompt(
     allow_code: bool = False,
     env: dict | None = None,
     timeout_s: int = _DEFAULT_TIMEOUT_S,
+    max_output_bytes: int = settings.DEFAULT_MAX_BASH_OUTPUT_BYTES,
     on_error: str = "warn",
 ) -> str:
     """Return ``text`` with ``{{VAR}}`` / ``!{sub ...}`` / ```` ```!sub ```` directives expanded.
@@ -119,13 +123,27 @@ def expand_prompt(
             return m.group(0)[1:]
         try:
             if m.group("fsub") is not None:
-                return _run_subsystem(m.group("fsub"), m.group("fbody"), allow_code, environ, timeout_s)
+                return _run_subsystem(
+                    m.group("fsub"),
+                    m.group("fbody"),
+                    allow_code,
+                    environ,
+                    timeout_s,
+                    max_output_bytes,
+                )
             # A directive wrapped in a backtick code span is documentation, not a
             # request to run -- hand it back verbatim (backticks included).
             if m.group("itick") is not None or m.group("etick") is not None:
                 return m.group(0)
             if m.group("isub") is not None:
-                return _run_subsystem(m.group("isub"), (m.group("iargs") or "").strip(), allow_code, environ, timeout_s)
+                return _run_subsystem(
+                    m.group("isub"),
+                    (m.group("iargs") or "").strip(),
+                    allow_code,
+                    environ,
+                    timeout_s,
+                    max_output_bytes,
+                )
             # {{...}} env shorthand
             name = m.group("env").strip()
             if not _NAME.fullmatch(name):
@@ -145,7 +163,14 @@ def expand_prompt(
 # Subsystem registry
 # --------------------------------------------------------------------------- #
 
-def _run_subsystem(name: str, body: str, allow_code: bool, environ: dict, timeout_s: int) -> str:
+def _run_subsystem(
+    name: str,
+    body: str,
+    allow_code: bool,
+    environ: dict,
+    timeout_s: int,
+    max_output_bytes: int,
+) -> str:
     key = name.lower()
     spec = _SUBSYSTEMS.get(key)
     if spec is None:
@@ -160,7 +185,7 @@ def _run_subsystem(name: str, body: str, allow_code: bool, environ: dict, timeou
         )
     if is_code:
         # Code subsystems run against the real process environment, always.
-        return runner(body, timeout_s=timeout_s)
+        return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
     return runner(body, environ=environ, timeout_s=timeout_s)
 
 
@@ -185,25 +210,60 @@ def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
 
 # ---- code subsystems (gated) ----
 
-def _run_capture(argv, *, cwd=None, timeout_s: int, label: str) -> str:
+def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if truncated:
+        text = text.rstrip("\n") + f"\n{truncation_marker(max_output_bytes)}\n"
+    return text
+
+
+def _run_capture(argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int) -> str:
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+        proc = _run_capped(
+            argv,
+            cwd=cwd,
+            env=None,
+            timeout=timeout_s,
+            cap=max_output_bytes,
+        )
     except FileNotFoundError:
         raise PromptExpansionError(f"{label}: '{argv[0]}' not found on PATH") from None
     except subprocess.TimeoutExpired:
         raise PromptExpansionError(f"{label}: timed out after {timeout_s}s") from None
+    if not isinstance(proc, CappedProcessResult):
+        proc = CappedProcessResult(proc[0], proc[1], proc[2])
+    stdout = _decode_capped(
+        proc.stdout,
+        truncated=proc.stdout_truncated,
+        max_output_bytes=max_output_bytes,
+    )
+    stderr = _decode_capped(
+        proc.stderr,
+        truncated=proc.stderr_truncated,
+        max_output_bytes=max_output_bytes,
+    )
     if proc.returncode != 0:
-        err = (proc.stderr or "").strip()
+        err = stderr.strip()
         raise PromptExpansionError(f"{label}: exited {proc.returncode}: {err or '(no stderr)'}")
-    return proc.stdout.rstrip("\n")
+    return stdout.rstrip("\n")
 
 
-def _sub_sh(body: str, *, timeout_s: int) -> str:
-    return _run_capture(["sh", "-c", body], timeout_s=timeout_s, label="!{sh}")
+def _sub_sh(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
+    return _run_capture(
+        ["sh", "-c", body],
+        timeout_s=timeout_s,
+        label="!{sh}",
+        max_output_bytes=max_output_bytes,
+    )
 
 
-def _sub_bash(body: str, *, timeout_s: int) -> str:
-    return _run_capture(["bash", "-c", body], timeout_s=timeout_s, label="!{bash}")
+def _sub_bash(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
+    return _run_capture(
+        ["bash", "-c", body],
+        timeout_s=timeout_s,
+        label="!{bash}",
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _interpreted(label: str, interp_argv, ext: str):
@@ -214,11 +274,16 @@ def _interpreted(label: str, interp_argv, ext: str):
     probes the environment must see the directory js was launched from, not the
     throwaway compile dir. This matches the bare ``!{sh}``/``!{bash}`` runners.
     """
-    def runner(body: str, *, timeout_s: int) -> str:
+    def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
-            return _run_capture([*interp_argv, str(src)], timeout_s=timeout_s, label=label)
+            return _run_capture(
+                [*interp_argv, str(src)],
+                timeout_s=timeout_s,
+                label=label,
+                max_output_bytes=max_output_bytes,
+            )
     return runner
 
 
@@ -228,14 +293,25 @@ def _compiled(label: str, compiler: str, ext: str):
     Compilation stays in the temp dir; the built exe RUNS in the invocation cwd
     (``cwd=None``) so it observes the real working directory, like ``_interpreted``.
     """
-    def runner(body: str, *, timeout_s: int) -> str:
+    def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
         cc = shutil.which(compiler) or compiler
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"snippet{ext}"
             exe = Path(d) / "snippet.out"
             src.write_text(body, encoding="utf-8")
-            _run_capture([cc, str(src), "-o", str(exe)], cwd=d, timeout_s=timeout_s, label=f"{label} (compile)")
-            return _run_capture([str(exe)], timeout_s=timeout_s, label=label)
+            _run_capture(
+                [cc, str(src), "-o", str(exe)],
+                cwd=d,
+                timeout_s=timeout_s,
+                label=f"{label} (compile)",
+                max_output_bytes=max_output_bytes,
+            )
+            return _run_capture(
+                [str(exe)],
+                timeout_s=timeout_s,
+                label=label,
+                max_output_bytes=max_output_bytes,
+            )
     return runner
 
 

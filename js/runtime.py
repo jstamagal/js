@@ -8,8 +8,8 @@ import asyncio
 import functools
 import inspect
 import json
+import os
 import sys
-import subprocess
 import threading
 from pathlib import Path
 import random
@@ -26,6 +26,7 @@ from . import colors as C
 from . import model_metadata
 from . import tools as T
 from . import routing
+from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .toolkit.core import ToolContext, call_tool, compact_json
@@ -729,13 +730,34 @@ def _run_compact_pre_hook(cfg: Config) -> str:
     hook = _compact_pre_hook_setting(cfg)
     if not hook:
         return ""
+    shell_path = (
+        os.environ.get("COMSPEC", "cmd.exe")
+        if sys.platform == "win32"
+        else os.environ.get("SHELL", "/bin/sh")
+    )
+    shell_arg = "/C" if sys.platform == "win32" else "-c"
+    cap = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
     try:
-        result = subprocess.run(hook, shell=True, capture_output=True, text=True, timeout=30, cwd=str(getattr(cfg, "project_dir", Path.cwd())))
+        result = _run_capped(
+            [shell_path, shell_arg, hook],
+            timeout=30,
+            cwd=str(getattr(cfg, "project_dir", Path.cwd())),
+            env=None,
+            cap=cap,
+        )
     except Exception as exc:  # noqa: BLE001
         return f"WARNING: compact pre_hook failed: {type(exc).__name__}: {exc}"
+    if not isinstance(result, CappedProcessResult):
+        result = CappedProcessResult(result[0], result[1], result[2])
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if result.stdout_truncated:
+        stdout = stdout.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
+    if result.stderr_truncated:
+        stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
-        return f"WARNING: compact pre_hook exited {result.returncode}: {(result.stderr or result.stdout).strip()}"
-    return (result.stdout or "").strip()
+        return f"WARNING: compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}"
+    return stdout.strip()
 
 
 def _summary_prompt(messages: list[dict], focus: str, guidance: str) -> str:

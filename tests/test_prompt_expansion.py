@@ -112,6 +112,18 @@ def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
+@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
+def test_directive_output_is_capped_and_marked():
+    out = expand_prompt(
+        "!{python import sys; sys.stdout.write('x' * 10000000)}",
+        allow_code=True,
+        max_output_bytes=1024,
+    )
+    assert out.startswith("x" * 1024)
+    assert "[truncated: limits.max_bash_output_bytes (1024) reached]" in out
+    assert len(out) < 1200
+
+
 # ---- default degrade: a failed directive is left literal, never raised ----
 
 def test_unknown_subsystem_degrades_to_literal(capsys):
@@ -243,10 +255,11 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_expand(text, *, allow_code=False, env=None, timeout_s=None):
+    def fake_expand(text, *, allow_code=False, env=None, timeout_s=None, max_output_bytes=None):
         seen["text"] = text
         seen["allow_code"] = allow_code
         seen["timeout_s"] = timeout_s
+        seen["max_output_bytes"] = max_output_bytes
         return text + " expanded"
 
     d = tmp_path / "agent"
@@ -261,3 +274,4 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
     assert "expanded" in spec.system
     assert seen["allow_code"] is True
     assert seen["timeout_s"] == 17
+    assert seen["max_output_bytes"] == 256 * 1024
