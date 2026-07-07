@@ -105,10 +105,77 @@ Files: `js/routing.py`, `js/providers.py`, `js/model_client.py`, callers in
 
 ### 1. Compaction / truncated tool-call corruption (FIXME.md top section) — HARDEST
 
-Symptoms: after auto-compaction in a long session, `response incomplete (max
-output tokens)` followed by repeated auto-fixed "invalid tool args" pairs, and
-`multi_patch` failing with `Unterminated string ... char 1496/1745` — i.e. the
-model's tool-call JSON was cut mid-string and the partial args were kept.
+Symptoms — owner's fullest account (2026-07-07, he is the only witness).
+Provider was gpt-5.5 on the codex wire. Exact sequence:
+  (1) APE issued a `multi_patch` with a VERY LARGE but VALID payload — "shouldn't
+      have failed."
+  (2) js kept returning `response incomplete (max output tokens)` — js running
+      out of OUTPUT budget and truncating the assistant turn mid-tool-call.
+  (3) js NEVER auto-compacted, though it was plainly hitting the limit — so HE
+      ran `/compact` by hand to unblock.
+  (4) From then on, EVERY turn threw tool-call errors (the "invalid tool args"
+      pairs, `multi_patch` `Unterminated string ... char 1496/1745`) — BUT THE
+      TOOLS ACTUALLY EXECUTED FINE. The errors were persistent phantom noise.
+
+So there are THREE braided bugs, fix each:
+  A. Output-cap truncation of a legit large tool call. A valid large multi_patch
+     payload got scissored at the max-output boundary (the char-1496/1745
+     unterminated strings ARE the cut). The per-call output cap must accommodate
+     a large tool-arg turn, or the loop must detect a truncated tool call and
+     retry with a raised cap / ask the model to split — never persist the cut.
+  B. Auto-compact NEVER FIRED despite repeatedly hitting the output/context
+     limit. That is its own defect — the trigger never tripped (threshold wrong,
+     disabled on this path, or the incomplete-response state bypasses the
+     compaction check). He had to compact manually. Find why auto-compact
+     didn't run when `response incomplete` kept recurring.
+  C. Phantom persistent tool errors after compaction WHILE TOOLS SUCCEED. The
+     truncated tool-call JSON was PERSISTED into history, survived manual
+     `/compact` (marks append, tail kept verbatim), and the repair machinery
+     re-flags it every resend without healing the stored file — `7af9886`
+     canonicalizes repaired args in RESENT history but apparently not in the
+     persisted session. Key tell: tools EXECUTED, so the failure is purely in
+     the parse/validate/report layer re-erroring on already-repaired calls; the
+     fix is to heal the stored record once (or stop reporting an error on a
+     tool call that resolved and ran).
+
+Owner's through-line (2026-07-07): tool-call issues have been broad and
+persistent since the multi-agent slop window `4b091f3..8cffac3` — the run
+where one agent spawned 3 sets of subagents with NO worktrees, NO branches,
+all mutating one tree, then slopped it together. Before writing fixes A/B/C,
+`git log 4b091f3..8cffac3 -- js/runtime.py js/model_client.py` and read the
+tool-call dispatch / arg-repair / incomplete-response commits from that window
+with deep suspicion — the repair layer (`invalid tool args` auto-fix, arg
+canonicalization) was likely BORN in that window and may be the common cause,
+not just a compaction symptom. Treat the whole tool-call parse/validate/repair
+path as guilty-until-audited.
+
+Second suspect (from the original paste, preserved below): the two
+`multi_patch` failures in ONE turn were FRESH truncations cut at ~1497 and
+~1745 chars — suspiciously similar lengths. Post-`/compact` turns may run
+with a wrongly small effective max-output (compact accounting leaking into
+turn params on the codex wire?), scissoring every large tool call mid-JSON.
+Check what `compact.summary_max_tokens` / incomplete-response metadata do to
+subsequent turn output caps.
+
+REPRODUCER ON DISK: the corrupted session survives intact —
+`~/.local/share/js.bak/sessions/defaultagent/20260706T232635894357Z-7bb45aaf5e226eec.jsonl`
+(351 records). Timeline inside: compact marks 19:47/19:49; first INCOMPLETE
+assistant turns + the two multi_patch unterminated-string tool errors at
+20:09 (records ~#183-189); owner's manual /compact marks 20:10-20:11; owner
+reports "now ALL I get is Auto-fixed 2 message issues(): invalid tool args"
+at 20:14; marks continue to 20:35. A safety copy already exists at
+`~/inbox/corrupted-session-reproducer-20260706.jsonl` (1.2 MB). It contains
+the owner's PRIVATE work content — SANITIZE before any version of it enters
+this public repo as a fixture; better, derive a minimal synthetic fixture
+that reproduces the same poison shape. Replay it through the runtime, watch
+the repair loop fire on every turn, fix, watch it stop.
+
+Original paste (owner's evidence, verbatim):
+- Warning: `response incomplete (max output tokens)`
+- Many auto-fixed 2-message issues: `invalid tool args` ×N
+- `could not parse arguments for multi_patch: Unterminated string starting at: line 1 column 1497 (char 1496)`
+- `could not parse arguments for multi_patch: Unterminated string starting at: line 1 column 1746 (char 1745)`
+- Payload was a large exact-replacement patch containing prompt text/newlines.
 
 Owner's explicit directives (treat as requirements, from FIXME.md "Input:"):
 - Compaction must preserve tool-call boundaries / valid JSON strictly, or force
@@ -133,6 +200,15 @@ Entry points:
 Suspect origin: owner suspects the multi-agent slop window
 `4b091f3..8cffac3` (58 commits, Jul 3–4, agents sharing one worktree).
 `git log 4b091f3..8cffac3 -- js/runtime.py` and read with suspicion.
+
+Provider context (reconstructed 2026-07-07, owner's memory + receipts): the
+corrupted session ran **openai-codex/gpt-5.5** (his default that night per
+the FIXME /set dump), and the `response incomplete (max output tokens)`
+plumbing was built codex-first in that same window (`603570c`, `b4d8602`,
+`f3d39c8` — all "Codex incomplete response metadata"). Reproduce/regress
+against the codex wire (or a stub of its incomplete-response shape) first;
+then verify the keep-and-resend-truncated-args mechanism is fixed for ALL
+transports, since the repair loop lives in provider-agnostic runtime code.
 
 ### 2. `/set` must show EFFECTIVE values, not just the settings store
 
