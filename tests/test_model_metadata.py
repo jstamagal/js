@@ -93,7 +93,7 @@ def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypat
     assert limits.max_output_tokens == 384_000
 
 
-def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypatch, tmp_path: Path):
+def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypatch, tmp_path: Path, capsys):
     old_time = datetime.now(tz=UTC) - timedelta(days=5)
     new_time = datetime.now(tz=UTC)
     bundled = tmp_path / "bundled.sqlite"
@@ -125,9 +125,10 @@ def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypat
     assert payload["db_path"] == str(custom)
     assert payload["generated_at"] == new_time.isoformat()
     assert payload["refreshed_at"] is not None
+    assert "*** updating models.dev cache..." in capsys.readouterr().err
 
 
-def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch, tmp_path: Path):
+def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch, tmp_path: Path, capsys):
     recent = datetime.now(tz=UTC) - timedelta(hours=4)
     custom = tmp_path / "custom.sqlite"
     status_path = tmp_path / "status.json"
@@ -158,3 +159,42 @@ def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch
     assert status.db_path == custom
     assert status.generated_at == recent
     assert os.environ["MODELDOTDEV_DATABASE_PATH"] == str(custom)
+    assert capsys.readouterr().err == ""
+
+
+def test_ensure_fresh_catalog_warns_and_keeps_current_on_refresh_failure(monkeypatch, tmp_path: Path, capsys):
+    old_time = datetime.now(tz=UTC) - timedelta(days=5)
+    custom = tmp_path / "custom.sqlite"
+    status_path = tmp_path / "status.json"
+    _write_metadata_db(custom, generated_at=old_time.isoformat())
+    status_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "db_path": str(custom),
+                "generated_at": old_time.isoformat(),
+                "refreshed_at": old_time.isoformat(),
+                "source": "https://models.dev/api.json",
+                "provider_count": 140,
+                "model_count": 5142,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
+
+    def fail_refresh(**_kwargs):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "generate_database", fail_refresh)
+
+    status = model_metadata.ensure_fresh_catalog()
+
+    assert status is not None
+    assert status.db_path == custom
+    err = capsys.readouterr().err
+    assert "*** updating models.dev cache..." in err
+    assert "*** warning: models.dev cache refresh failed: RuntimeError: offline" in err

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -398,11 +399,21 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     if current is not None:
         _activate_database(current.db_path)
     if force:
-        return refresh_catalog(force=True)
-    if catalog_is_stale(current):
+        print("*** updating models.dev cache...", file=sys.stderr)
         try:
             return refresh_catalog(force=True)
-        except Exception:
+        except Exception as exc:
+            print(f"*** warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            if current is not None:
+                _activate_database(current.db_path)
+                return current
+            raise
+    if catalog_is_stale(current):
+        print("*** updating models.dev cache...", file=sys.stderr)
+        try:
+            return refresh_catalog(force=True)
+        except Exception as exc:
+            print(f"*** warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             if current is not None:
                 _activate_database(current.db_path)
                 return current
