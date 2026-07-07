@@ -789,7 +789,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
-    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider: 150_000)
+    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
 
     actual = cli.main(["--model", "flag-model", "-p", "hi"])
 
@@ -1456,7 +1456,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
         },
     ):
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
-        monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider: 131072)
+        monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
         monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
         cli._maybe_auto_compact(cfg, _auto_state())
 

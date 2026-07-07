@@ -494,6 +494,38 @@ def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits 
     )
 
 
+def _cached_server_metadata(model_id: str, provider_id: str | None):
+    model_id, provider_id = _normalize_request(model_id, provider_id)
+    if provider_id is None:
+        return None, model_id, None
+    provider_id = providers.normalize_provider_id(provider_id) or provider_id
+    try:
+        from . import logins
+
+        provider_metadata = logins.load_model_cache_metadata().get(provider_id, {})
+    except Exception:  # noqa: BLE001 - cache lookup must never break model resolution
+        return None, model_id, provider_id
+    return provider_metadata.get(model_id), model_id, provider_id
+
+
+def cached_server_limits(model_id: str, provider_id: str | None = None) -> ModelLimits | None:
+    metadata, normalized_model_id, normalized_provider_id = _cached_server_metadata(model_id, provider_id)
+    if metadata is None:
+        return None
+    return ModelLimits(
+        provider_id=normalized_provider_id,
+        model_id=normalized_model_id,
+        context_window=metadata.context_window,
+        max_output_tokens=metadata.max_output_tokens,
+        max_input_tokens=metadata.max_input_tokens,
+    )
+
+
+def cached_server_context_ceiling(model_id: str, provider_id: str | None = None) -> int | None:
+    metadata, _normalized_model_id, _normalized_provider_id = _cached_server_metadata(model_id, provider_id)
+    return None if metadata is None else metadata.training_context_window
+
+
 def context_window(model_id: str, provider_id: str | None = None) -> int | None:
     ensure_fresh_catalog()
     limits = lookup_limits(model_id, provider_id)

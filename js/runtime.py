@@ -135,7 +135,10 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
 
 
 def _resolve_max_output(model: str, provider_id: str | None) -> int | None:
-    """Per-model output cap from models.dev metadata, else unset."""
+    """Per-model output cap from server cache or models.dev metadata, else unset."""
+    cached = model_metadata.cached_server_limits(model, provider_id)
+    if cached is not None and cached.max_output_tokens is not None:
+        return cached.max_output_tokens
     return model_metadata.max_output_tokens(model, provider_id)
 
 
@@ -158,7 +161,14 @@ def _resolve_context_window(
     )
     if probed is not None:
         return probed
-    return model_metadata.context_window(model, provider_id)
+    cached = model_metadata.cached_server_limits(model, provider_id)
+    if cached is not None and cached.context_window is not None:
+        return cached.context_window
+    catalog = model_metadata.context_window(model, provider_id)
+    ceiling = model_metadata.cached_server_context_ceiling(model, provider_id)
+    if catalog is not None and ceiling is not None:
+        return min(catalog, ceiling)
+    return catalog
 
 
 # --------------------------------------------------------------------------

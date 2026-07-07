@@ -921,7 +921,11 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         return
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
     active_cfg = _cfg_for_active_model(cfg, state)
-    inferred_window = runtime._resolve_context_window(active_cfg.model, active_cfg.provider_id)
+    inferred_window = runtime._resolve_context_window(
+        active_cfg.model,
+        active_cfg.provider_id,
+        active_cfg.provider_base_url,
+    )
     context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
     if prompt_tokens <= 0 or context_window <= 0:
         return
