@@ -165,6 +165,15 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
+    SettingSpec("runtime.debug_autolog", "bool", True,
+                "Append the full request trace (unclipped system prompt, tool-schema "
+                "JSON, and the messages sent each call) to logs/<agent>/<session>.log "
+                "under the js data dir. On by default; this trace never prints to the "
+                "terminal, only to the file.",
+                env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
+    SettingSpec("runtime.debug_autolog_dir", "str", None,
+                "Directory for the debug autolog; unset = logs/<agent> under the js data dir.",
+                env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.allow_inline_code", "bool", True,
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
                 "prompt files and inject their stdout. On by default (runs arbitrary code "

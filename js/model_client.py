@@ -556,6 +556,7 @@ def _tool_to_debug(tool: ai.types.tools.Tool) -> dict:
 
 def _emit_request_trace(
     *,
+    sink: Any,
     model_id: str,
     provider_id: str | None,
     provider_base_url: str | None,
@@ -571,10 +572,15 @@ def _emit_request_trace(
     call. This is the instrument the tool-contract audit reads, so it must not
     clip or summarize. Never raises: a debug trace may not break a turn.
 
+    Written ONLY to ``sink`` (the autolog file / --debug-file), never to stdout —
+    this dump is far too large for the terminal. If ``sink`` is None it is a no-op.
+
     Note: for custom providers (codex) this shows the request js hands the SDK,
     including the resolved base_url — the provider's own in-SDK reshaping to its
     wire format happens downstream and is not captured here.
     """
+    if sink is None:
+        return
     try:
         header = {
             "model_id": model_id,
@@ -601,7 +607,7 @@ def _emit_request_trace(
         new_msgs = messages[dump_from:] if dump_from else messages
         blocks.append(f"── MESSAGES (+{len(new_msgs)}) ──")
         blocks.append(_debug_json([_message_to_debug(m) for m in new_msgs]))
-        print("\n".join(blocks), flush=True)
+        sink.write("\n".join(blocks) + "\n")
     except Exception:
         pass
 
@@ -622,6 +628,7 @@ async def stream_model_async(
     executor: ai.models.StreamExecutor | None = None,
     sampling: Sampling | None = None,
     trace_request: bool = False,
+    trace_sink: Any = None,
     trace_request_schemas: bool = True,
     trace_request_from: int = 0,
 ) -> ModelStreamResult:
@@ -731,8 +738,9 @@ async def stream_model_async(
     ):
         messages = _strip_reasoning_parts(messages)
 
-    if trace_request:
+    if trace_request and trace_sink is not None:
         _emit_request_trace(
+            sink=trace_sink,
             model_id=model_id,
             provider_id=provider_id,
             provider_base_url=provider_base_url,

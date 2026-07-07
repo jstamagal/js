@@ -5,6 +5,7 @@ marker). The stats aggregation rulings live in test_stats_aggregation.py."""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from types import SimpleNamespace
 
@@ -156,27 +157,34 @@ def test_request_trace_is_byte_honest(capsys):
         }
     ])
 
+    sink = io.StringIO()
     MC._emit_request_trace(
+        sink=sink,
         model_id="m", provider_id="deepseek", provider_base_url="https://x",
         params=None, messages=messages, tools=tools, dump_schemas=True, dump_from=0,
     )
-    out = capsys.readouterr().out
+    out = sink.getvalue()
     assert system in out                                    # system prompt unclipped
     assert "RUN A COMMAND IN BASH AND RETURN ITS OUTPUT" in out  # full description, not just name
     assert '"command"' in out                               # parameter schema present
     assert "hello-user" in out                              # messages dumped
+    # The oversized dump goes to the sink only — never to the terminal.
+    assert capsys.readouterr().out == ""
 
 
 def test_request_trace_skips_schemas_on_followup(capsys):
     messages = [ai.system_message("SYS"), ai.user_message("u"), ai.assistant_message("a")]
+    sink = io.StringIO()
     MC._emit_request_trace(
+        sink=sink,
         model_id="m", provider_id=None, provider_base_url=None,
         params=None, messages=messages, tools=[], dump_schemas=False, dump_from=2,
     )
-    out = capsys.readouterr().out
+    out = sink.getvalue()
     assert "TOOL SCHEMAS" not in out
     assert "SYSTEM PROMPT" not in out
     assert "MESSAGES (+1)" in out  # only the one new message beyond dump_from
+    assert capsys.readouterr().out == ""
 
 
 # --------------------------------------------------------------------------
