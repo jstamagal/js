@@ -252,7 +252,24 @@ multiselect, result "cached 0 models" — a trap. `_select_models_to_cache`
 (enter = keep everything); `n` still empties. Losing 5.4/5.4-mini in item 8
 may be this same trap wearing codex clothes — check both.
 
-### 12. Small ones
+### 12. Commit agent can DESTROY uncommitted work (observed 2026-07-07) — treat as P0
+
+During `js --commit` on the local 35B model, the commit agent reverted several
+files while splitting commits (js/settings.py, js/setcmd.py, three test files),
+produced a mislabeled bundle (the whole TUI inside "Cap shell tool output"),
+then ended with "I need to re-apply all the changes" and died — leaving the
+working tree MISSING those changes with no stash, no commit, no snapshot. The
+work was only recoverable because the driving session still held the edits.
+
+Commitbot must be crash-safe: before it manipulates the working tree it must
+snapshot the full diff (e.g. `git stash create` / a temp patch file) so ANY
+failure path can restore. Check its tool surface for `undo`-style reverts and
+how it stages per-commit; the restore step must be unconditional. Remember the
+prompt rule: fixes here are SUBTRACTION in prompts/commit/01-prompt.md, one
+knob at a time — but this specific guarantee may belong in the commit_helper
+CODE, not the prompt, so a weak model cannot skip it.
+
+### 13. Small ones
 
 - **TUI double error print** (`js/tui.py`): a turn error renders as `▸ error ...`
   then again as `error: ...` after `▸ turn error`. Decide one; kill the dupe.
