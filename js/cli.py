@@ -993,11 +993,17 @@ def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: 
     if saved is not None:
         return saved
     provider_def = providers.provider_for_login(canonical_id)
+    resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
+    if provider_def.requires_api_key and not resolved_api_key:
+        raise ValueError(
+            f"provider {canonical_id!r} needs an API key; run `js --login {canonical_id}` "
+            "or `set provider.api_key <value>`"
+        )
     return logins.Login(
         provider_id=canonical_id,
         sdk_provider_id=provider_def.effective_sdk_provider_id,
         provider_base_url=providers.provider_base_url(provider_def, base_url, os.environ),
-        provider_api_key=providers.provider_api_key(provider_def, api_key, os.environ),
+        provider_api_key=resolved_api_key,
     )
 
 
