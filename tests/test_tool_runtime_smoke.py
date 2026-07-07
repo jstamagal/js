@@ -4,7 +4,6 @@ import base64
 import re
 import shutil
 import sys
-import types
 
 import pytest
 
@@ -487,9 +486,9 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
 
     def run_stub(cmd, **kwargs):
         calls.append({"cmd": cmd, "timeout": kwargs["timeout"]})
-        return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        return 0, b"", b""
 
-    monkeypatch.setattr(process_net.subprocess, "run", run_stub)
+    monkeypatch.setattr(process_net, "_run_capped", run_stub)
     monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
     context = ToolContext(cwd=tmp_path)
 
@@ -837,3 +836,14 @@ def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     undo_result = fs.undo("lnk/f.txt", context=context)
     assert undo_result.startswith("restored")
     assert (real / "f.txt").read_text(encoding="utf-8") == "payload"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
+def test_shell_output_capped_while_streaming(tmp_path):
+    # Regression: subprocess.run(capture_output=True) buffered the WHOLE
+    # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
+    # The capped reader must hold memory at the cap while draining to EOF.
+    context = ToolContext(cwd=tmp_path)
+    out = process_net.shell("head -c 10000000 /dev/zero | tr '\\0' 'a'", context=context)
+    assert "exit=0" in out
+    assert len(out) <= context.max_bash_output_bytes + 200
