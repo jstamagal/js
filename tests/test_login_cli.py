@@ -238,44 +238,161 @@ def test_select_models_non_tty_keeps_all(monkeypatch):
     assert login_cli._select_models_to_cache("opencode-go", models) == models
 
 
-def test_select_models_interactive_starts_with_none_preselected(monkeypatch):
-    # Owner ruling (FIXME #56): adding a new provider starts with NOTHING
-    # selected, not "all" — plain enter with no toggles keeps zero models.
+def test_select_models_interactive_plain_enter_keeps_single_fetched_model(monkeypatch, tmp_path: Path):
     import curses
 
+    logins.set_config_dir(tmp_path)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
-    keys = [ord("\n")]  # confirm immediately, nothing toggled
+    keys = [ord("\n")]  # confirm immediately, default selection keeps the model
 
     def fake_wrapper(fn, *args, **kwargs):
         return fn(_FakeStdscr(keys), *args, **kwargs)
 
-    monkeypatch.setattr(curses, "wrapper", fake_wrapper)
-    monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
-    models = ["glm-5.2", "glm-5"]
-    assert login_cli._select_models_to_cache("opencode-go", models) == []
+    try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
+        assert login_cli._select_models_to_cache("localboy", ["owner-model"]) == ["owner-model"]
+    finally:
+        _reset_logins()
 
 
-def test_select_models_interactive_with_custom_add(monkeypatch):
+def test_relogin_plain_enter_drops_cached_models_not_refetched(monkeypatch, tmp_path: Path):
     import curses
 
+    logins.set_config_dir(tmp_path)
+    logins.cache_models("openai-codex", ["old-model"])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
-    # Nothing preselected: pick row0 (glm-5.2), skip row1 (glm-5), pick row2.
+    keys = [ord("\n")]
+    captured: dict[str, object] = {}
+
+    def fake_wrapper(fn, *args, **kwargs):
+        rows = args[0]
+        captured["rows"] = [row[0] for row in rows]
+        captured["preselected"] = set(kwargs["preselected"])
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    login = logins.Login(
+        provider_id="openai-codex",
+        sdk_provider_id="openai-codex",
+        provider_api_key="jwt",
+        codex_refresh_token="refresh",
+        codex_token_expires=1.0,
+        codex_account_id="acct",
+        codex_email="owner@example.com",
+    )
+
+    try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: login)
+        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["new-model"])
+        monkeypatch.setattr(login_cli, "_dialect_map", lambda _provider_id: {})
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
+
+        assert login_cli._run_codex_login("openai-codex") == 0
+        assert logins.load_model_cache()["openai-codex"] == ["new-model"]
+        assert captured == {"rows": ["new-model", "old-model"], "preselected": {0}}
+    finally:
+        _reset_logins()
+
+
+def test_select_models_interactive_with_custom_add(monkeypatch, tmp_path: Path):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    # All preselected: deselect row0 and row2.
     keys = [ord(" "), curses.KEY_DOWN, curses.KEY_DOWN, ord(" "), ord("\n")]
 
     def fake_wrapper(fn, *args, **kwargs):
         return fn(_FakeStdscr(keys), *args, **kwargs)
 
-    monkeypatch.setattr(curses, "wrapper", fake_wrapper)
-    monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "extra-model, glm-5.2")
-    models = ["glm-5.2", "glm-5", "kimi-k2.7-code"]
-    # row0 + row2 selected; "extra-model" appended; "glm-5.2" already known -> not duped
-    assert login_cli._select_models_to_cache("opencode-go", models) == [
-        "glm-5.2", "kimi-k2.7-code", "extra-model",
-    ]
+    try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "extra-model, glm-5.2")
+        models = ["glm-5.2", "glm-5", "kimi-k2.7-code"]
+        # row1 selected; typed ids are explicit additions, even if one appeared in the fetched list.
+        assert login_cli._select_models_to_cache("opencode-go", models) == [
+            "glm-5", "extra-model", "glm-5.2",
+        ]
+    finally:
+        _reset_logins()
+
+
+def test_select_models_typed_extras_dedupe_against_selected_fetched(monkeypatch, tmp_path: Path):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [ord("\n")]
+
+    def fake_wrapper(fn, *args, **kwargs):
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "gpt-5.5,gpt-5.4,gpt-5.4-mini")
+        assert login_cli._select_models_to_cache("openai-codex", ["gpt-5.5"]) == [
+            "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
+        ]
+    finally:
+        _reset_logins()
+
+
+def test_codex_login_typed_extras_survive_cache_and_list_models(
+    monkeypatch, tmp_path: Path, capsys,
+):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [ord("\n")]
+
+    def fake_wrapper(fn, *args, **kwargs):
+        return fn(_FakeStdscr(keys), *args, **kwargs)
+
+    login = logins.Login(
+        provider_id="openai-codex",
+        sdk_provider_id="openai-codex",
+        provider_api_key="jwt",
+        codex_refresh_token="refresh",
+        codex_token_expires=1.0,
+        codex_account_id="acct",
+        codex_email="owner@example.com",
+    )
+    typed = "gpt-5.4,gpt-5.3-codex-spark,gpt-5.4-mini"
+
+    try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: login)
+        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["gpt-5.5", "gpt-5.3-codex-spark"])
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: typed)
+
+        assert login_cli._run_codex_login("openai-codex") == 0
+        assert logins.load_model_cache()["openai-codex"] == [
+            "gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini",
+        ]
+
+        capsys.readouterr()
+        assert cli.main(["--list-models", "openai-codex"]) == 0
+        out = capsys.readouterr().out
+        assert out == (
+            "openai-codex/gpt-5.5\n"
+            "openai-codex/gpt-5.3-codex-spark\n"
+            "openai-codex/gpt-5.4\n"
+            "openai-codex/gpt-5.4-mini\n"
+        )
+    finally:
+        _reset_logins()
 
 
 def test_dialect_map_tags_anthropic_models():
