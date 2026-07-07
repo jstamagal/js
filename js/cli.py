@@ -209,17 +209,24 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
     model = state.get("model")
     if not (isinstance(model, str) and model):
         model = cfg.model
-    route = routing.resolve_model_route(
-        model,
-        configured_provider_id=state.get("provider_id", cfg.provider_id),
-        configured_base_url=state.get("provider_base_url", cfg.provider_base_url),
-        configured_api_key=state.get("provider_api_key", cfg.provider_api_key),
-        configured_headers=state.get("provider_headers", getattr(cfg, "provider_headers", {})),
-        env=os.environ,
-        explicit_model=True,
-        discover_env=False,
-        use_saved_login=False,
-    )
+    try:
+        route = routing.resolve_model_route(
+            model,
+            configured_provider_id=state.get("provider_id", cfg.provider_id),
+            configured_base_url=state.get("provider_base_url", cfg.provider_base_url),
+            configured_api_key=state.get("provider_api_key", cfg.provider_api_key),
+            configured_headers=state.get("provider_headers", getattr(cfg, "provider_headers", {})),
+            env=os.environ,
+            explicit_model=True,
+            use_saved_login=False,
+        )
+    except routing.ProviderNotLoggedInError:
+        # A live `/model vendor/x` naming an un-logged-in provider with nothing
+        # pinned can't resolve. This runs on every /set display and tool-registry
+        # sync, not just turns, so it must never crash: carry the raw request with
+        # no provider so the turn surfaces the friendly not-logged-in error at the
+        # model boundary instead.
+        route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
     route_vision = vision_enabled_for_model(route.model)
     if (
         route.model != cfg.model
@@ -685,7 +692,6 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
         env=os.environ,
         explicit_model=True,
         prefix_overrides_provider=parsed_provider_id is not None,
-        discover_env=False,
         use_saved_login=parsed_provider_id is not None,
     )
     state["model"] = route.model
@@ -1080,7 +1086,6 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         configured_headers=getattr(cfg, "provider_headers", {}),
         explicit_model=True,
         prefix_overrides_provider=True,
-        discover_env=False,
     )
     return replace(
         cfg,
@@ -1181,10 +1186,18 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-        cfg = _apply_agent_model(cfg, prompt_spec, model)
+        try:
+            cfg = _apply_agent_model(cfg, prompt_spec, model)
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
         cfg = _apply_agent_max_tokens(cfg, prompt_spec)
 
-    cfg = _resolve_cli_model_override(cfg, model)
+    try:
+        cfg = _resolve_cli_model_override(cfg, model)
+    except ValueError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
 
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model))
@@ -1359,8 +1372,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
 
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-    cfg = _apply_agent_model(cfg, prompt_spec, model)
-    cfg = _resolve_cli_model_override(cfg, model)
+    try:
+        cfg = _apply_agent_model(cfg, prompt_spec, model)
+        cfg = _resolve_cli_model_override(cfg, model)
+    except ValueError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
     agent_default_max = prompt_spec.max_output_tokens
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
 
@@ -1999,7 +2016,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
             try:
                 turn_cfg = _cfg_for_live_state(cfg, state)
                 user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-            except attach.AttachmentError as e:
+            except ValueError as e:
+                # AttachmentError (a ValueError) or a login-gate routing error from
+                # re-resolving the live model: degrade to one friendly line, keep the REPL.
                 print(f"{C.ORANGE}error: {e}{C.RESET}")
                 continue
             before_len = len(state["messages"])
@@ -2521,9 +2540,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-    cfg = _apply_agent_model(cfg, prompt_spec, args.model)
-    cfg = _apply_agent_max_tokens(cfg, prompt_spec)
-    cfg = _resolve_cli_model_override(cfg, args.model)
+    try:
+        cfg = _apply_agent_model(cfg, prompt_spec, args.model)
+        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
+        cfg = _resolve_cli_model_override(cfg, args.model)
+    except ValueError as e:
+        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        return 2
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
     completer = replcomplete.JsCompleter(
@@ -2643,7 +2666,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             turn_cfg = _cfg_for_live_state(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-        except attach.AttachmentError as e:
+        except ValueError as e:
+            # AttachmentError (a ValueError) or a login-gate routing error from
+            # re-resolving the live model: degrade to one friendly line, keep the REPL.
             print(f"{C.ORANGE}error: {e}{C.RESET}")
             continue
 

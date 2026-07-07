@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import ai
 
-from . import codex_auth, codex_provider, providers, reasoning
+from . import codex_auth, codex_provider, providers, reasoning, routing
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -90,7 +90,14 @@ def resolve_model(
     to the SDK/API shape while the model id is passed through verbatim.
     """
     if provider_id is None:
-        return ai.get_model(model_id)
+        # No js provider resolved. An explicit base URL is a deliberate endpoint
+        # choice, so honor it (the SDK-default gateway path). With neither a
+        # provider nor a base URL, riding the SDK's own env keys (AI_GATEWAY_API_KEY,
+        # OPENAI_API_KEY, ...) is exactly the env-farming the login gate forbids:
+        # fail with the same actionable not-logged-in message instead.
+        if provider_base_url:
+            return ai.get_model(model_id)
+        raise routing.ProviderNotLoggedInError(routing.unconfigured_model_message(model_id))
 
     provider_def = providers.get_provider(provider_id)
     # No client-side allowlist gate: ``allowed_models`` is a curated hint used to

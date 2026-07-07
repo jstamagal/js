@@ -157,6 +157,9 @@ def test_write_default_template_creates_jsrc_once(tmp_path):
 
 def test_from_env_uses_platform_dirs_and_writes_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
+    # Explicit pin (provider.id / JS_PROVIDER) authorizes reading the provider's
+    # native env key: an env key alone would create no route (ruling #1).
+    monkeypatch.setenv("JS_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     cfg = from_env(save_session=True)
@@ -250,6 +253,9 @@ def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
 
 def test_js_model_provider_prefix_is_parsed_once(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
+    # Pin the provider (an env prefix alone never authorizes a route); the prefix
+    # must still be split exactly once, not double-stripped.
+    monkeypatch.setenv("JS_PROVIDER", "ollama")
     monkeypatch.setenv("JS_MODEL", "ollama/hf.co/user/model:latest")
 
     cfg = from_env(save_session=False)

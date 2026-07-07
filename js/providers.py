@@ -499,13 +499,6 @@ def assert_endpoint_configured(provider: ProviderDef, base_url: str | None) -> N
     )
 
 
-def discover_env_provider(env: Mapping[str, str] | None = None) -> ProviderDef | None:
-    for provider in login_providers():
-        if first_env(provider.api_key_env + provider.base_url_env + provider.model_env, env):
-            return provider
-    return None
-
-
 def login_ids() -> list[str]:
     return [p.id for p in login_providers()]
 

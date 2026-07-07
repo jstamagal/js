@@ -761,7 +761,6 @@ def _summarize_for_compaction(cfg: Config, model: str, messages: list[dict], foc
         configured_api_key=cfg.provider_api_key,
         configured_headers=getattr(cfg, "provider_headers", None),
         explicit_model=True,
-        discover_env=False,
     )
     result = model_client.stream_model(
         model_id=route.model,

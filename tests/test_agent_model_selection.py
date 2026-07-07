@@ -35,6 +35,12 @@ def isolated_provider_state(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
 
 
+def _save_login(provider_id: str, **kw) -> None:
+    """Authorize routing to ``provider_id`` — a `provider/model` prefix routes only
+    when the operator has logged in (an env key alone never creates a route)."""
+    logins.save_login(logins.Login(provider_id=provider_id, **kw))
+
+
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
     return ModelStreamResult(
         text=text,
@@ -135,6 +141,7 @@ def test_apply_agent_model_uses_frontmatter_model_and_prefixed_provider_route(tm
     )
     cfg = _make_cfg(tmp_path, prompts)
     prompt_spec = persona.load_prompt_spec(prompts)
+    _save_login("deepseek")
 
     actual = cli._apply_agent_model(cfg, prompt_spec, None)
 
@@ -179,6 +186,7 @@ def test_subagent_prefixed_model_reroutes_and_bare_model_keeps_parent_provider(m
         manifest="model: deepseek/subagent-routed-model\ntools: []\n",
     )
     prefixed_cfg = _make_cfg(tmp_path, prefixed_prompts, provider_id=None)
+    _save_login("deepseek")
 
     prefixed = _capture_single_task_route(monkeypatch, tmp_path, prefixed_cfg)
 
@@ -214,6 +222,7 @@ def test_subagent_model_precedence_tool_arg_then_prefer_inherit(monkeypatch, tmp
         manifest="model: deepseek/frontmatter-model\ntools: []\n",
     )
     cfg = _make_cfg(tmp_path, prompts, provider_id=None)
+    _save_login("deepseek")
 
     tool_arg = _capture_single_task_route(
         monkeypatch,
@@ -263,6 +272,7 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
         body="WORKER BODY\n",
     )
     cfg = _make_cfg(tmp_path, prompts, agents_files=(agents_file,))
+    _save_login("deepseek")
 
     seen = _capture_single_task_route(monkeypatch, tmp_path, cfg)
     system = seen["messages"][0].parts[0].text
@@ -275,15 +285,15 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
 def test_prefixed_model_overrides_pinned_parent_provider():
     from js.routing import resolve_model_route
 
-    # An explicit agent/subagent prefixed model overrides a differently-pinned
-    # parent provider, and does NOT inherit the parent's base/key.
+    # An explicit agent/subagent prefixed model the operator LOGGED INTO overrides a
+    # differently-pinned parent provider, and does NOT inherit the parent's base/key.
+    _save_login("deepseek")
     route = resolve_model_route(
         "deepseek/deepseek-v4-flash",
         configured_provider_id="ollama",
         configured_base_url=OLLAMA_BASE_URL,
         configured_api_key="ollama-parent-key",
         explicit_model=True,
-        discover_env=False,
         use_saved_login=False,
         prefix_overrides_provider=True,
     )
@@ -292,17 +302,20 @@ def test_prefixed_model_overrides_pinned_parent_provider():
     assert route.base_url != OLLAMA_BASE_URL
     assert route.api_key != "ollama-parent-key"
 
-    # Without the override flag the pinned provider wins (gateway/omp protection).
+    # The override flag alone never authorizes an UN-logged-in prefix: it yields to
+    # the pinned provider (an env key never creates a route) rather than routing to
+    # the vendor. A pin exists, so this is not an error.
     kept = resolve_model_route(
-        "deepseek/deepseek-v4-flash",
+        "minimax/some-model",
         configured_provider_id="ollama",
         configured_base_url=OLLAMA_BASE_URL,
         configured_api_key="ollama-parent-key",
         explicit_model=True,
-        discover_env=False,
         use_saved_login=False,
+        prefix_overrides_provider=True,
     )
     assert kept.provider_id == "ollama"
+    assert kept.model == "minimax/some-model"
     assert kept.base_url == OLLAMA_BASE_URL
 
 
@@ -325,7 +338,6 @@ def test_saved_login_prefix_overrides_pinned_provider_without_flag():
         configured_base_url=DEEPSEEK_BASE_URL,
         configured_api_key="sk-deepseek",
         explicit_model=True,
-        discover_env=False,
         use_saved_login=False,
     )
     assert route.provider_id == "opencode-go"
@@ -345,9 +357,57 @@ def test_unlogged_vendor_prefix_does_not_hijack_pinned_gateway():
         configured_base_url="https://gateway.test/v1",
         configured_api_key="sk-omp",
         explicit_model=True,
-        discover_env=False,
         use_saved_login=False,
     )
     assert route.provider_id == "omp"
     assert route.model == "anthropic/claude-sonnet-4"
     assert route.base_url == "https://gateway.test/v1"
+
+
+def test_env_key_alone_creates_no_route_and_errors():
+    from js.routing import ProviderNotLoggedInError, resolve_model_route
+
+    # RULING #1: a provider-native env key never creates a route. The default
+    # model prefixes deepseek; with DEEPSEEK_API_KEY set but no login and nothing
+    # pinned, routing must fail loud rather than farm the key.
+    with pytest.raises(ProviderNotLoggedInError) as excinfo:
+        resolve_model_route(
+            "deepseek/deepseek-v4-flash",
+            env={"DEEPSEEK_API_KEY": "sk-decoy"},
+        )
+    assert "deepseek" in str(excinfo.value)
+    assert "not logged in" in str(excinfo.value)
+
+
+def test_catalog_prefix_with_env_token_but_no_login_errors():
+    from js.routing import ProviderNotLoggedInError, resolve_model_route
+
+    # A catalog provider (models.dev) is KNOWN, so its prefix splits — but an env
+    # token (HF_TOKEN) does not authorize it. No login, nothing pinned -> error.
+    with pytest.raises(ProviderNotLoggedInError) as excinfo:
+        resolve_model_route(
+            "huggingface/some-org/some-model",
+            env={"HF_TOKEN": "hf-decoy"},
+        )
+    assert "huggingface" in str(excinfo.value)
+    assert "js --login huggingface" in str(excinfo.value)
+
+
+def test_js_namespace_env_routes_without_any_login():
+    from js.routing import resolve_model_route
+
+    # RULING carve-out: JS_* vars are explicit js-directed instructions, not
+    # provider-native env farming. They arrive as configured provider.id/base/key
+    # and must route with no login at all.
+    route = resolve_model_route(
+        "custom-model",
+        configured_provider_id="openai",
+        configured_base_url="http://js-directed.test/v1",
+        configured_api_key="sk-js",
+        env={},
+        explicit_model=True,
+    )
+    assert route.provider_id == "openai"
+    assert route.model == "custom-model"
+    assert route.base_url == "http://js-directed.test/v1"
+    assert route.api_key == "sk-js"

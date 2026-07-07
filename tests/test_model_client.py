@@ -115,7 +115,9 @@ def _pview(p) -> dict:
     return out
 
 
-def test_resolve_model_uses_gateway_when_provider_unset(monkeypatch):
+def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
+    from js.routing import ProviderNotLoggedInError
+
     captured = {}
 
     def fake_get_model(model_id: str) -> ai.Model:
@@ -124,10 +126,21 @@ def test_resolve_model_uses_gateway_when_provider_unset(monkeypatch):
 
     monkeypatch.setattr(ai, "get_model", fake_get_model)
 
+    # No provider AND no base URL: refuse to ride the SDK's own env keys.
+    with pytest.raises(ProviderNotLoggedInError):
+        model_client.resolve_model(
+            "deepseek/deepseek-v4-flash",
+            provider_id=None,
+            provider_base_url=None,
+            provider_api_key=None,
+        )
+    assert "model_id" not in captured
+
+    # An explicit base URL is a deliberate endpoint choice: the gateway path stands.
     result = model_client.resolve_model(
         "deepseek/deepseek-v4-flash",
         provider_id=None,
-        provider_base_url=None,
+        provider_base_url="http://gateway.test/v1",
         provider_api_key=None,
     )
     assert captured["model_id"] == "deepseek/deepseek-v4-flash"
@@ -330,7 +343,10 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix():
     model_client.stream_model(
         model_id="minimax:text-01",
         provider_id=None,
-        provider_base_url=None,
+        # Explicit base URL is the deliberate-endpoint escape hatch: with no
+        # provider AND no base URL the model boundary now refuses to ride the SDK's
+        # own env keys.
+        provider_base_url="http://gateway.test/v1",
         provider_api_key=None,
         messages=[ai.user_message("hi")],
         tools=None,
