@@ -186,6 +186,7 @@ def _backoff(attempt: int) -> float:
 @dataclass
 class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
+    trace_sink: object = None  # a .write()-able sink for the full request trace, or None
 
     def event(self, kind: str, **fields: Any) -> None:
         if not self.debug_log:
@@ -930,8 +931,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             sys.stdout.flush()
             text_started["value"] = False
 
-    # --debug-file / -d request trace: dump system prompt + full tool schemas
-    # once (first model call), then only the newly-sent messages each call.
+    # Full request trace: dump system prompt + full tool schemas once (first
+    # model call), then only the newly-sent messages each call. This goes ONLY to
+    # the trace sink (autolog file / --debug-file), never to stdout — decoupled
+    # from the concise `trace` flag that drives the `▸` lines on the terminal.
+    _trace_sink = getattr(telemetry, "trace_sink", None)
     _trace_req = {"sent": 0, "schemas": True}
 
     try:
@@ -967,11 +971,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         provider_headers=getattr(cfg, "provider_headers", None),
                         provider_extra=_provider_extra_params(cfg),
                         sampling=sampling,
-                        trace_request=trace,
+                        trace_request=_trace_sink is not None,
+                        trace_sink=_trace_sink,
                         trace_request_schemas=_trace_req["schemas"],
                         trace_request_from=_trace_req["sent"],
                     )
-                    if trace:
+                    if _trace_sink is not None:
                         _trace_req["sent"] = len(ai_convo)
                         _trace_req["schemas"] = False
                     # Await the native async primitive; tolerate a sync override (a

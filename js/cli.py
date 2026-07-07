@@ -14,9 +14,11 @@ import os
 import shlex
 import shutil
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -350,6 +352,143 @@ def _sync_telemetry_from_live_settings(cfg: Config, state: dict, telemetry: runt
         except OSError:
             pass
     telemetry.debug_log = debug_log
+    _sync_trace_sink(cfg, state["settings"], telemetry)
+
+
+# ---------------------------------------------------------------------------
+# Debug trace autolog. The full request trace (unclipped system prompt + full
+# tool-schema JSON + the messages sent each call) is far too large for the
+# terminal, so it is written ONLY to a file: always-on by default under
+# logs/<agent>/<session>.log, plus any explicit --debug-file. Every IO error
+# degrades to no logging — the log must never crash a turn.
+# ---------------------------------------------------------------------------
+
+
+class _DebugTraceSink:
+    """Append-only tee that fans one text stream to N open files (the autolog and
+    any --debug-file). Thread-safe; swallows IO errors so logging never breaks a
+    turn. Stands in for a stdout-like stream (write/flush/isatty) so it can also
+    receive the redirected turn output."""
+
+    def __init__(self, files: list, paths: list[Path]) -> None:
+        self._files = files
+        self.paths = paths
+        self._lock = threading.Lock()
+
+    def write(self, text: str) -> None:
+        if not text:
+            return
+        with self._lock:
+            for f in self._files:
+                try:
+                    f.write(text)
+                    f.flush()
+                except Exception:
+                    pass
+
+    def flush(self) -> None:
+        with self._lock:
+            for f in self._files:
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        with self._lock:
+            for f in self._files:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+            self._files = []
+
+
+class _StdoutTee:
+    """Write to the real stdout AND a sink — used by `-d` so the concise trace
+    lines and the streamed answer show live on the terminal and also land in the
+    log. The oversized request trace bypasses this and goes to the sink only."""
+
+    def __init__(self, primary, sink: _DebugTraceSink) -> None:
+        self._primary = primary
+        self._sink = sink
+
+    def write(self, text: str) -> None:
+        try:
+            self._primary.write(text)
+        except Exception:
+            pass
+        self._sink.write(text)
+
+    def flush(self) -> None:
+        try:
+            self._primary.flush()
+        except Exception:
+            pass
+        self._sink.flush()
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._primary.isatty())
+        except Exception:
+            return False
+
+
+def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
+    """Resolve the per-session autolog path, or None when autolog is off. Mirrors
+    how sessions/<agent>/<session>.jsonl is built, one directory over in logs/."""
+    if not _live_bool_setting(
+        live_settings, ("runtime", "debug_autolog"), getattr(cfg, "debug_autolog", True)
+    ):
+        return None
+    session = cfg.session_file
+    if not session or session == Path(os.devnull):
+        stem = f"{cfg.agent_id}-{os.getpid()}"  # one-shot with no persisted session
+    else:
+        stem = session.stem
+    override = _live_optional_str_setting(
+        live_settings, ("runtime", "debug_autolog_dir"), getattr(cfg, "debug_autolog_dir", None)
+    )
+    root = Path(override).expanduser() if override else (_paths.logs_root() / cfg.agent_id)
+    return root / f"{stem}.log"
+
+
+def _open_debug_trace_sink(paths: list[Path]) -> _DebugTraceSink | None:
+    """Open each path for append and return a tee sink, or None if none opened."""
+    files: list = []
+    opened: list[Path] = []
+    for p in paths:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            files.append(open(p, "a", encoding="utf-8"))  # noqa: SIM115 — sink owns the lifetime
+            opened.append(p)
+        except OSError:
+            pass  # a bad log path degrades to no logging, never a crash
+    if not files:
+        return None
+    return _DebugTraceSink(files, opened)
+
+
+def _sync_trace_sink(
+    cfg: Config, live_settings: dict, telemetry: runtime.Telemetry, extra_paths: tuple[Path, ...] = ()
+) -> None:
+    """Attach/refresh ``telemetry.trace_sink`` for the always-on autolog. Reopens
+    only when the target path set changes, so a long REPL session keeps one open
+    handle; toggling ``runtime.debug_autolog`` off closes it."""
+    desired: list[Path] = []
+    autolog = _debug_autolog_path(cfg, live_settings)
+    if autolog is not None:
+        desired.append(autolog)
+    desired.extend(extra_paths)
+    old = telemetry.trace_sink
+    if isinstance(old, _DebugTraceSink) and old.paths == desired:
+        return  # already open on exactly these targets
+    telemetry.trace_sink = _open_debug_trace_sink(desired) if desired else None
+    if isinstance(old, _DebugTraceSink) and old is not telemetry.trace_sink:
+        old.close()
 
 
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
@@ -1233,20 +1372,41 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
     _t_wall = time.time()
+    autolog = _debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
+    sink_paths: list[Path] = [p for p in (autolog,) if p is not None]
+    if debug_file:
+        sink_paths.append(Path(debug_file))
+    trace_sink = _open_debug_trace_sink(sink_paths)
+    telemetry.trace_sink = trace_sink
+    _real_stdout = sys.stdout
     try:
-        if debug:
-            runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
-        elif debug_file:
-            # Rich trace (incl. the streamed answer) goes to the file; the clean
-            # final answer is reprinted to real stdout below once the redirect closes.
-            with open(debug_file, "a", encoding="utf-8") as _dbg, contextlib.redirect_stdout(_dbg):
-                runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
-        else:
-            with contextlib.redirect_stdout(io.StringIO()):
-                runtime.run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=tool_context, **turn_kwargs)
-    except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
-        return 1
+        try:
+            if debug:
+                # Concise trace + streamed answer live on the terminal; the giant
+                # request trace goes to the log only. Tee stdout so the log also
+                # keeps the concise lines and the answer.
+                stdout_ctx = (
+                    contextlib.redirect_stdout(_StdoutTee(_real_stdout, trace_sink))
+                    if trace_sink is not None
+                    else contextlib.nullcontext()
+                )
+                with stdout_ctx:
+                    runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
+            else:
+                # Plain and --debug-file: the terminal stays clean during the turn
+                # (only the final answer is reprinted below). The log captures the
+                # streamed answer plus, for --debug-file, the concise trace lines;
+                # the full request trace lands there via telemetry.trace_sink.
+                capture = trace_sink if trace_sink is not None else io.StringIO()
+                with contextlib.redirect_stdout(capture):
+                    runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
+        except Exception as e:  # noqa: BLE001
+            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+            return 1
+    finally:
+        if trace_sink is not None:
+            trace_sink.close()
+        telemetry.trace_sink = None
 
     if stats_json or stats_csv:
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
@@ -2272,8 +2432,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
-    parser.add_argument("-d", "--debug", action="store_true", help="show streamed text/tool debug output in prompt mode")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout")
+    parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
     parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
@@ -2607,6 +2767,9 @@ def main(argv: list[str] | None = None) -> int:
         "compact_paused": False,
     }
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+    # Attach the debug autolog sink before the first turn (all three REPL
+    # variants below share this telemetry object).
+    _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
     print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
 

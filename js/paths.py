@@ -52,6 +52,10 @@ def state_root() -> Path:
     return data_dir() / "state"
 
 
+def logs_root() -> Path:
+    return data_dir() / "logs"
+
+
 def login_store_dir() -> Path:
     return config_dir()
 

@@ -159,6 +159,8 @@ class Config:
     artifact_dir: str | None = None  # artifact library dir; None = ARTIFACT_DIR env or built-in default
     artifact_url: str | None = None  # artifact base URL; None = ARTIFACT_URL env or built-in default
     artifact_bin: str | None = None  # artifact CLI binary; None = ARTIFACT_BIN env or built-in default
+    debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
+    debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
 
 
 def _session_timestamp() -> str:
@@ -371,6 +373,8 @@ def from_env(
     wiki_vault_lock_timeout_s = _numeric_setting(js_root_settings, ("limits", "wiki_vault_lock_timeout_s"), _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S)
     runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
+    debug_autolog = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug_autolog"), True))
+    debug_autolog_dir = _settings.get_dotted(js_root_settings, ("runtime", "debug_autolog_dir"))
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
     artifact_dir = _settings.get_dotted(js_root_settings, ("artifact", "dir"))
@@ -437,5 +441,7 @@ def from_env(
         artifact_dir=artifact_dir,
         artifact_url=artifact_url,
         artifact_bin=artifact_bin,
+        debug_autolog=debug_autolog,
+        debug_autolog_dir=debug_autolog_dir,
         explicit_model=explicit_model,
     )
