@@ -66,15 +66,46 @@ def test_login_provider_rows_show_saved_env_and_registry(monkeypatch, tmp_path: 
         _reset_logins()
 
 
-def test_collect_api_login_uses_env_key_without_prompt(monkeypatch, tmp_path: Path):
+def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp_path: Path):
+    # Owner ruling: login never silently farms env keys. It OFFERS the env key;
+    # answering yes uses it, and only then.
     logins.set_config_dir(tmp_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-deepseek")
-    monkeypatch.setattr(login_cli, "_input", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prompted unexpectedly")))
+    prompts: list[str] = []
+
+    def scripted_input(prompt, *, default=None, secret=False):
+        prompts.append(prompt)
+        if "use it?" in prompt:
+            return "y"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(login_cli, "_input", scripted_input)
     try:
         login = login_cli._collect_api_login("deepseek", "deepseek", providers.provider_for_login("deepseek"))
         assert login is not None
         assert login.provider_api_key == "sk-env-deepseek"
         assert login.provider_base_url == "https://api.deepseek.com"
+        assert any("ENV:DEEPSEEK_API_KEY" in p for p in prompts)
+    finally:
+        _reset_logins()
+
+
+def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-decoy")
+
+    def scripted_input(prompt, *, default=None, secret=False):
+        if "use it?" in prompt:
+            return "n"
+        if prompt.startswith("Enter API Key"):
+            return "sk-typed-real"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(login_cli, "_input", scripted_input)
+    try:
+        login = login_cli._collect_api_login("deepseek", "deepseek", providers.provider_for_login("deepseek"))
+        assert login is not None
+        assert login.provider_api_key == "sk-typed-real"
     finally:
         _reset_logins()
 

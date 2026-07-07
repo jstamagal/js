@@ -47,13 +47,25 @@ def _curses_menu(stdscr: curses.window, items: list[str], title: str) -> int | N
             i = start + off
             line = f"> {item}" if i == idx else f"  {item}"
             stdscr.addstr(off + 3, 0, line[: w - 1])
-        stdscr.addstr(h - 1, 0, "↑↓/j/k move  enter select  q/esc cancel"[: w - 1])
+        stdscr.addstr(h - 1, 0, "↑↓/j/k move  pgup/pgdn page  enter select  q/esc cancel"[: w - 1])
         stdscr.refresh()
-        key = stdscr.getch()
+        try:
+            key = stdscr.getch()
+        except KeyboardInterrupt:
+            return None
+        page = max(1, h - 4)
         if key in (curses.KEY_UP, ord("k")):
             idx = max(0, idx - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
             idx = min(len(items) - 1, idx + 1)
+        elif key == curses.KEY_PPAGE:
+            idx = max(0, idx - page)
+        elif key == curses.KEY_NPAGE:
+            idx = min(len(items) - 1, idx + page)
+        elif key == curses.KEY_HOME:
+            idx = 0
+        elif key == curses.KEY_END:
+            idx = len(items) - 1
         elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
             return idx
         elif key in (ord("q"), 27, 3):
@@ -131,14 +143,26 @@ def _curses_multiselect(
         stdscr.addstr(h - 2, 0, f"{len(selected)}/{n} selected"[: w - 1])
         stdscr.addstr(
             h - 1, 0,
-            "↑↓/jk move  space toggle  a all  n none  enter confirm  q cancel"[: w - 1],
+            "↑↓/jk move  pgup/pgdn page  space toggle  a all  n none  enter confirm  q cancel"[: w - 1],
         )
         stdscr.refresh()
-        key = stdscr.getch()
+        try:
+            key = stdscr.getch()
+        except KeyboardInterrupt:
+            return None
+        page = max(1, h - 5)
         if key in (curses.KEY_UP, ord("k")):
             idx = max(0, idx - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
             idx = min(n - 1, idx + 1)
+        elif key == curses.KEY_PPAGE:
+            idx = max(0, idx - page)
+        elif key == curses.KEY_NPAGE:
+            idx = min(n - 1, idx + page)
+        elif key == curses.KEY_HOME:
+            idx = 0
+        elif key == curses.KEY_END:
+            idx = n - 1
         elif key == ord(" "):
             selected.discard(idx) if idx in selected else selected.add(idx)
         elif key in (ord("a"), ord("A")):
@@ -194,6 +218,10 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
     registry_rows: list[tuple[str, str, str]] = []
     for provider in providers.login_providers():
         if provider.id in seen:
+            continue
+        # openai-completions / openai-responses live under <add custom provider>;
+        # a top-level row is a duplicate path to the same shape.
+        if provider.id in ("openai-completions", "openai-responses"):
             continue
         env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
         target = env_rows if env_configured else registry_rows
@@ -270,14 +298,13 @@ def _collect_api_login(provider_id: str, sdk_provider_id: str | None, provider: 
     env_base_url = providers.first_env(provider.base_url_env, env)
     env_model = providers.first_env(provider.model_env, env)
 
-    if env_key_name and env_key:
-        print(f"*** {provider.display_name} API key found in {env_key_name}: {_mask(env_key)}")
-
     if env_model:
         print(f"*** Preferred model from env: {env_model}")
 
     base_url = env_base_url or (existing.provider_base_url if existing else None) or provider.default_base_url
-    api_key = env_key or (existing.provider_api_key if existing else None) or provider.default_api_key
+    # Never auto-take an env key: the operator may keep decoys there, or want a
+    # different one. Env keys are OFFERED below, never silently used.
+    api_key = (existing.provider_api_key if existing else None) or provider.default_api_key
     effective_sdk = (existing.sdk_provider_id if existing and existing.sdk_provider_id else None) or sdk_provider_id or provider.effective_sdk_provider_id
 
     if provider.login_base_url_field:
@@ -285,14 +312,28 @@ def _collect_api_login(provider_id: str, sdk_provider_id: str | None, provider: 
         if base_url is None:
             return None
 
-    if provider.requires_api_key and not api_key:
-        if provider.api_key_env:
-            print(f"*** Did not find existing ENV:{provider.api_key_env[0]}")
-        api_key = _input("Enter API Key", secret=True)
-        if not api_key:
+    if env_key_name and env_key:
+        answer = _input(f"Found ENV:{env_key_name} ({_mask(env_key)}); use it? [y/N]", default="n")
+        if answer is None:
             return None
-    elif existing is not None and existing.provider_api_key and not env_key:
-        print(f"*** Using saved login for {provider_id}")
+        if answer.strip().lower() in {"y", "yes"}:
+            api_key = env_key
+
+    keyless_ok = provider.local or not provider.established
+    if provider.requires_api_key and not api_key:
+        prompt = "Enter API Key (enter for none)" if keyless_ok else "Enter API Key"
+        api_key = _input(prompt, secret=True)
+        if not api_key:
+            if not keyless_ok:
+                print("login aborted: no API key given", file=sys.stderr)
+                return None
+            # Keyless local endpoint: the openai wire still demands SOME token.
+            api_key = "x"
+            print("*** No key given; storing placeholder 'x' (local endpoints ignore it)")
+    elif api_key and existing is not None and api_key == existing.provider_api_key:
+        entered = _input("Enter API Key [enter = keep saved]", secret=True)
+        if entered:
+            api_key = entered
 
     if provider.transport == "cliproxyapi":
         raw_headers = _input(
@@ -458,6 +499,13 @@ def _run_login(provider_id: str | None = None) -> int:
         models = test_login(login)
     except Exception as exc:  # noqa: BLE001
         print(f"{C.ORANGE}login failed: {type(exc).__name__}: {exc}{C.RESET}", file=sys.stderr)
+        base = login.provider_base_url or ""
+        if "404" in str(exc) and base and not base.rstrip("/").endswith("/v1"):
+            print(
+                f"{C.ORANGE}hint: {base} has no /v1 suffix — OpenAI-compatible servers "
+                f"usually serve at {base.rstrip('/')}/v1{C.RESET}",
+                file=sys.stderr,
+            )
         return 1
 
     confirmed = _post_fetch_confirmation(login, provider, models)
