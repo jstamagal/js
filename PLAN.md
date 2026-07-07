@@ -252,7 +252,39 @@ multiselect, result "cached 0 models" — a trap. `_select_models_to_cache`
 (enter = keep everything); `n` still empties. Losing 5.4/5.4-mini in item 8
 may be this same trap wearing codex clothes — check both.
 
-### 12. Commit agent can DESTROY uncommitted work (observed 2026-07-07) — treat as P0
+### 12a. ROOT CAUSE FOUND: commit messages are command-injected via bash backticks — P0
+
+Autopsy of the failed 2026-07-07 commitbot session (session
+`20260707T044659522465Z-63724d1bf5490191`, three bash OOM kills at
+00:52/00:55/00:57): the model composed `git commit -m "<multiline body>"`
+through the shell tool (`bash -c`), and the body contained
+`` one `yes` command took js to 92 GB RSS `` — inside double quotes,
+backticks are command substitution, so bash EXECUTED `yes`, buffered its
+infinite output in the substitution buffer, hit ~80 GB anon-rss, and the OOM
+killer sent SIGKILL (the transcript's `exit=-9`). Every long-message attempt
+died; every short/backtick-free message committed fine. Any commit message
+containing backticks or `$()` executes arbitrary commands — self-injection.
+
+Fix in CODE (commit_helper's stated philosophy — "both belong in code, not in
+the model", js/commit_helper.py:5): add a `commit` subcommand to
+`js.commit_helper` that takes the message via stdin or a temp file
+(`git commit -F <file>`), and point prompts/commit/01-prompt.md at it the same
+way staging already goes through `stage`. Prose must never transit bash
+quoting. Regression: a commit message containing backticks/`$()`/quotes/
+newlines commits verbatim with no side effects.
+
+### 12b. Agent frontmatter `model:` loses to the saved default — pin is inert
+
+`prompts/commit/00-tools.yaml` now pins `model: deepseek/deepseek-v4-flash`,
+but `_apply_agent_model` (js/cli.py:1069) skips the agent model whenever
+`cfg.explicit_model` is true — which a `/model`-saved default sets. Verified
+live: `js --agent commit -p ...` still routed `model=test provider=testes`.
+Owner intent: agent frontmatter should beat the SAVED default but lose to an
+invocation-explicit `-m`/`JS_MODEL`. Needs `explicit_model` split into
+"explicit on this invocation" vs "saved default from an earlier /model pick"
+(config.py knows the source layer). Test both precedences.
+
+### 12c. Commit agent can DESTROY uncommitted work (observed 2026-07-07) — treat as P0
 
 During `js --commit` on the local 35B model, the commit agent reverted several
 files while splitting commits (js/settings.py, js/setcmd.py, three test files),
