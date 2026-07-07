@@ -141,6 +141,36 @@ def _append_turn(cfg: Config, message: dict) -> None:
     M.append_message(cfg.session_file, message)
 
 
+def _replace_runtime_user_message(
+    messages: list[dict],
+    runtime_message: dict,
+    history_message: dict,
+    fallback_index: int,
+) -> None:
+    if 0 <= fallback_index < len(messages) and messages[fallback_index] == runtime_message:
+        messages[fallback_index] = history_message
+        return
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx] == runtime_message:
+            messages[idx] = history_message
+            return
+
+
+def _common_message_prefix_len(left: list[dict], right: list[dict]) -> int:
+    idx = 0
+    limit = min(len(left), len(right))
+    while idx < limit and left[idx] == right[idx]:
+        idx += 1
+    return idx
+
+
+def _persist_unrecorded_messages(cfg: Config, messages: list[dict]) -> None:
+    persisted = M.load_messages(cfg.session_file)
+    start = _common_message_prefix_len(persisted, messages)
+    for message in messages[start:]:
+        _append_turn(cfg, message)
+
+
 def _session_hint_arg(cfg: Config) -> str:
     try:
         return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
@@ -942,6 +972,8 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         state["compact_incomplete_consecutive"] = 0
     incomplete_forced = state.get("compact_incomplete_consecutive", 0) >= 2
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
+    if prompt_tokens <= 0 and not incomplete_forced:
+        return
     active_cfg = _cfg_for_active_model(cfg, state)
     inferred_window = runtime._resolve_context_window(
         active_cfg.model,
@@ -949,9 +981,7 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         active_cfg.provider_base_url,
     )
     context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
-    if prompt_tokens <= 0 or context_window <= 0:
-        if not incomplete_forced:
-            return
+    if context_window <= 0:
         fullness = 0.0
     else:
         fullness = prompt_tokens / context_window
@@ -982,6 +1012,12 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
     if state["compact_consecutive"] >= 2:
         state["compact_paused"] = True
         print(f"{C.ORANGE}(auto-compaction paused after two consecutive turns; resumes when context drops below trigger){C.RESET}")
+
+
+def _post_auto_compact_needs_executor() -> bool:
+    prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
+    incomplete_reason = getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
+    return prompt_tokens > 0 or _is_max_output_incomplete(incomplete_reason)
 
 
 
@@ -1718,7 +1754,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if stats_csv:
             stats.write_csv(stats_csv, [row])
 
-    messages[before_len] = user_bundle.history_message
+    _replace_runtime_user_message(messages, user_bundle.runtime_message, user_bundle.history_message, before_len)
     for message in reversed(messages):
         if message.get("role") == "assistant" and message.get("content"):
             # In debug, run_turn already streamed the answer live to stdout — a
@@ -1732,8 +1768,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     with _mute_transcript_tee(_transcript_sink(telemetry)):
                         print(content)
                 if save:
-                    for new_message in messages[before_len:]:
-                        _append_turn(cfg, new_message)
+                    _persist_unrecorded_messages(cfg, messages)
                     _maybe_auto_compact(cfg, {
                         "system": system,
                         "messages": messages,
@@ -2494,10 +2529,17 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         if after_turn_lock != before_turn_lock:
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        state["messages"][before_len] = user_bundle.history_message
-        for m in state["messages"][before_len + 1:]:
-            _append_turn(cfg, m)
-        await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
+        _replace_runtime_user_message(
+            state["messages"],
+            user_bundle.runtime_message,
+            user_bundle.history_message,
+            before_len,
+        )
+        _persist_unrecorded_messages(cfg, state["messages"])
+        if _post_auto_compact_needs_executor():
+            await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
+        else:
+            _maybe_auto_compact(turn_cfg, state)
     except asyncio.CancelledError:
         cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         if _event_results_changed_sampling(cancel_event.results):
@@ -2512,9 +2554,13 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         if len(state["messages"]) > before_len + 1:
             print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-            state["messages"][before_len] = user_bundle.history_message
-            for m in state["messages"][before_len + 1:]:
-                _append_turn(cfg, m)
+            _replace_runtime_user_message(
+                state["messages"],
+                user_bundle.runtime_message,
+                user_bundle.history_message,
+                before_len,
+            )
+            _persist_unrecorded_messages(cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
@@ -2654,7 +2700,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
         # Graceful quit (EOF / exit): let queued and in-flight turns finish
         # before teardown so submitted work isn't silently dropped. To abandon a
         # long turn, cancel it with ^C first, then quit.
-        if not consumer.done():
+        if not consumer.done() and (sup.turn_active() or not queue.empty()):
             with contextlib.suppress(Exception):
                 await queue.join()
         consumer.cancel()
@@ -3289,10 +3335,13 @@ def main(argv: list[str] | None = None) -> int:
             if after_turn_lock != before_turn_lock:
                 _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            state["messages"][before_len] = user_bundle.history_message
-            # Persist anything new the turn appended.
-            for m in state["messages"][before_len + 1:]:
-                _append_turn(cfg, m)
+            _replace_runtime_user_message(
+                state["messages"],
+                user_bundle.runtime_message,
+                user_bundle.history_message,
+                before_len,
+            )
+            _persist_unrecorded_messages(cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
@@ -3313,9 +3362,13 @@ def main(argv: list[str] | None = None) -> int:
                 # valid. The mark is informational ONLY — a `rollback_to:` mark
                 # would silently re-truncate this turn on the next session load.
                 print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-                state["messages"][before_len] = user_bundle.history_message
-                for m in state["messages"][before_len + 1:]:
-                    _append_turn(cfg, m)
+                _replace_runtime_user_message(
+                    state["messages"],
+                    user_bundle.runtime_message,
+                    user_bundle.history_message,
+                    before_len,
+                )
+                _persist_unrecorded_messages(cfg, state["messages"])
                 M.append_mark(cfg.session_file, "turn_interrupted")
                 state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
             else:

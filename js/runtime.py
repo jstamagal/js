@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import events as event_mod
@@ -22,6 +22,7 @@ from . import model_client
 import ai
 
 from . import colors as C
+from . import context_budget
 from . import model_metadata
 from . import tools as T
 from . import tool_args
@@ -182,6 +183,39 @@ def _is_retriable(exc: BaseException) -> bool:
     if isinstance(exc, ai.ProviderAPIError):
         return bool(exc.is_retryable)
     return False
+
+
+_CONTEXT_OVERFLOW_NEEDLES = (
+    "context_length_exceeded",
+    "context window",
+    "context limit",
+    "context length",
+    "maximum context",
+    "max context",
+    "prompt too long",
+    "prompt is too long",
+    "input is too long",
+    "input too long",
+    "too many tokens",
+    "token limit",
+    "tokens exceed",
+    "reduce the length",
+    "request too large",
+)
+
+
+def _is_context_overflow_error(exc: BaseException) -> bool:
+    if not isinstance(exc, ai.ProviderAPIError):
+        return False
+    fields: list[str] = [str(exc)]
+    for attr in ("code", "error_type", "status_code", "body"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            fields.append(str(value))
+    haystack = " ".join(fields).lower()
+    if "413" in haystack:
+        return True
+    return any(needle in haystack for needle in _CONTEXT_OVERFLOW_NEEDLES)
 
 
 def _backoff(attempt: int) -> float:
@@ -664,6 +698,21 @@ def _compact_int_setting(cfg: Config, key: str, default: int, *, max_value: int 
     return value
 
 
+def _compact_nonnegative_int_setting(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
+    raw = _compact_setting(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if value < 0:
+        return default
+    if max_value is not None:
+        return min(value, max_value)
+    return value
+
+
 def _compact_float_setting(cfg: Config, key: str, default: float) -> float:
     raw = _compact_setting(cfg, key, default)
     if isinstance(raw, bool):
@@ -695,6 +744,17 @@ def _compact_pre_hook_setting(cfg: Config) -> str:
 def estimate_messages_tokens(messages: list[dict], chars_per_token: float = 4.0) -> int:
     ratio = chars_per_token if chars_per_token and chars_per_token > 0 else 4.0
     return int(sum(len(_message_text_for_estimate(m)) for m in messages) / ratio)
+
+
+def _last_user_message_index(messages: list[dict]) -> int | None:
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx].get("role") == "user":
+            return idx
+    return None
+
+
+def _compaction_summary_message(summary: str) -> dict:
+    return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
 
 def _safe_tail_start(messages: list[dict], tail_tokens: int, chars_per_token: float = 4.0) -> int:
@@ -801,13 +861,62 @@ def _summarize_for_compaction(cfg: Config, model: str, messages: list[dict], foc
     return text
 
 
-def compact_messages(cfg: Config, system: str, messages: list[dict], *, focus: str = "", forced: bool = False) -> str:
+async def _summarize_for_compaction_async(
+    cfg: Config,
+    model: str,
+    messages: list[dict],
+    focus: str,
+    guidance: str,
+) -> str:
+    prompt = _summary_prompt(messages, focus, guidance)
+    route = routing.resolve_model_route(
+        model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", None),
+        explicit_model=True,
+    )
+    result = await model_client.stream_model_async(
+        model_id=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        messages=[ai.user_message(prompt)],
+        tools=None,
+        max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
+        reasoning_effort=None,
+        on_text=lambda _t: None,
+        provider_headers=route.headers,
+        provider_extra=_provider_extra_params(cfg),
+    )
+    text = result.text.strip()
+    if not text:
+        text = "\n".join(f"## {h}\n(Not captured.)" for h in _COMPACTION_HEADINGS)
+    return text
+
+
+def compact_messages(
+    cfg: Config,
+    system: str,
+    messages: list[dict],
+    *,
+    focus: str = "",
+    forced: bool = False,
+    preserve_from: int | None = None,
+) -> str:
     from . import memory as M
 
     chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
     tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
     min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
+    original_len = len(messages)
     keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
+    if preserve_from is not None:
+        try:
+            keep_from = min(keep_from, max(0, int(preserve_from)))
+        except (TypeError, ValueError):
+            pass
     original_est = estimate_messages_tokens(messages, chars_per_token)
     tail_est = estimate_messages_tokens(messages[keep_from:], chars_per_token)
     if not forced and original_est - tail_est < min_savings:
@@ -816,8 +925,47 @@ def compact_messages(cfg: Config, system: str, messages: list[dict], *, focus: s
     compact_model = _compact_model_setting(cfg)
     summary = _summarize_for_compaction(cfg, compact_model, messages[:keep_from], focus, guidance)
     M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
-    messages[:] = M.load_messages(cfg.session_file)
-    return f"compacted: kept tail from message {keep_from}/{len(messages)} using {compact_model}"
+    messages[:] = [_compaction_summary_message(summary), *messages[keep_from:]]
+    return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
+
+
+async def _compact_messages_async(
+    cfg: Config,
+    system: str,
+    messages: list[dict],
+    *,
+    focus: str = "",
+    forced: bool = False,
+    preserve_from: int | None = None,
+) -> str:
+    from . import memory as M
+
+    chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
+    min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
+    original_len = len(messages)
+    keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
+    if preserve_from is not None:
+        try:
+            keep_from = min(keep_from, max(0, int(preserve_from)))
+        except (TypeError, ValueError):
+            pass
+    original_est = estimate_messages_tokens(messages, chars_per_token)
+    tail_est = estimate_messages_tokens(messages[keep_from:], chars_per_token)
+    if not forced and original_est - tail_est < min_savings:
+        return f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
+    guidance = _run_compact_pre_hook(cfg)
+    compact_model = _compact_model_setting(cfg)
+    summary = await _summarize_for_compaction_async(
+        cfg,
+        compact_model,
+        messages[:keep_from],
+        focus,
+        guidance,
+    )
+    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
+    messages[:] = [_compaction_summary_message(summary), *messages[keep_from:]]
+    return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
 
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
@@ -874,6 +1022,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.last_incomplete_reason = None
     active_context.last_output_tokens = 0
     active_context.last_max_output_tokens = max_out
+    active_context.compacted_during_turn = False
+    active_context.context_tokens = 0
+    active_context.tokens_until_compaction = None
+    chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    token_state = getattr(active_context, "context_budget_state", None)
+    if not isinstance(token_state, context_budget.TokenState):
+        token_state = context_budget.TokenState(chars_per_token=chars_per_token)
+    else:
+        token_state.chars_per_token = chars_per_token
+    active_context.context_budget_state = token_state
     _wiki_cfg = (getattr(cfg, "settings", {}) or {}).get("wiki")
     _aliases = _wiki_cfg.get("aliases") if isinstance(_wiki_cfg, dict) else None
     active_context.vault_aliases = _aliases if isinstance(_aliases, dict) else {}
@@ -978,7 +1136,92 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     _trace_sink = getattr(telemetry, "trace_sink", None)
     _trace_req = {"sent": 0, "schemas": True}
 
+    active_compact_cfg = replace(
+        cfg,
+        model=model,
+        provider_id=provider_id,
+        provider_base_url=provider_base_url,
+        provider_api_key=provider_api_key,
+    )
+
+    def _budget_context_window() -> int:
+        inferred = _resolve_context_window(model, provider_id, provider_base_url)
+        return _compact_int_setting(active_compact_cfg, "context_window", inferred or 0)
+
+    def _budget_buffer_tokens() -> int:
+        return _compact_nonnegative_int_setting(active_compact_cfg, "buffer_tokens", 4096)
+
+    def _active_preserve_from() -> int | None:
+        return _last_user_message_index(messages)
+
+    async def _maybe_compact_request_for_budget(
+        *,
+        phase: str,
+        specs: list[dict],
+        force: bool = False,
+    ) -> bool:
+        nonlocal ai_convo
+        if not force and not bool(_compact_setting(active_compact_cfg, "auto", True)):
+            return False
+        context_window = _budget_context_window()
+        if context_window <= 0 and not force:
+            return False
+        preserve_from = _active_preserve_from()
+        ai_tools_for_budget = model_client.tool_specs_to_ai_tools(specs) if specs else None
+        status = token_state.budget_status(
+            system=system,
+            messages=messages,
+            tools=ai_tools_for_budget,
+            context_window=context_window if context_window > 0 else None,
+            output_reserve_tokens=max_out or 0,
+            buffer_tokens=_budget_buffer_tokens(),
+        )
+        active_context.context_tokens = status.current_context_tokens
+        active_context.tokens_until_compaction = status.tokens_until_compaction
+        telemetry.event(
+            "context_budget",
+            phase=phase,
+            context_tokens=status.current_context_tokens,
+            context_window=status.context_window,
+            effective_input_limit=status.effective_input_limit,
+            tokens_until_compaction=status.tokens_until_compaction,
+            used_provider_usage=status.used_provider_usage,
+        )
+        if not (force or status.should_compact):
+            return False
+        if preserve_from is None or preserve_from <= 0:
+            telemetry.event("context_compaction_skipped", phase=phase, reason="no_compactable_prefix")
+            return False
+        try:
+            result = await _compact_messages_async(
+                active_compact_cfg,
+                system,
+                messages,
+                focus=f"{phase} context budget",
+                forced=True,
+                preserve_from=preserve_from,
+            )
+        except Exception as exc:  # noqa: BLE001
+            telemetry.event(
+                "context_compaction_failed",
+                phase=phase,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        if not result.startswith("compacted:"):
+            telemetry.event("context_compaction_skipped", phase=phase, reason=result)
+            return False
+        token_state.reset()
+        ai_convo = model_client.history_to_ai_messages(system, messages)
+        _trace_req["sent"] = 0
+        _trace_req["schemas"] = True
+        active_context.compacted_during_turn = True
+        telemetry.event("context_compacted", phase=phase, result=result)
+        return True
+
     try:
+        durable_side_effects_started = False
+        overflow_recovered = False
         for _ in range(cfg.max_tool_iterations):
             # --- One model call with retry on retriable transport errors ---
             text = ""
@@ -986,10 +1229,20 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             finish: str | None = None
             reasoning = ""
             result: model_client.ModelStreamResult | None = None
+            usage = None
+            provider_metadata: dict[str, Any] | None = None
+            incomplete_reason: str | None = None
+            budget_checked = False
             for attempt in range(3):
                 t0 = time.time()
                 try:
                     specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
+                    if not budget_checked:
+                        await _maybe_compact_request_for_budget(
+                            phase="midturn" if durable_side_effects_started else "preflight",
+                            specs=specs,
+                        )
+                        budget_checked = True
                     ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
                     _emit_event(
                         "prompt",
@@ -1088,6 +1341,25 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     # we retry or abort, so the next attempt's output doesn't
                     # concatenate onto the truncated first attempt with color still open.
                     _close_text()
+                    if (
+                        _is_context_overflow_error(e)
+                        and not durable_side_effects_started
+                        and not overflow_recovered
+                    ):
+                        telemetry.event(
+                            "context_overflow_error",
+                            model=model,
+                            error=f"{type(e).__name__}: {e}",
+                            attempt=attempt,
+                        )
+                        compacted = await _maybe_compact_request_for_budget(
+                            phase="overflow_recovery",
+                            specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
+                            force=True,
+                        )
+                        overflow_recovered = True
+                        if compacted:
+                            continue
                     if e.is_retryable:
                         telemetry.event("retriable_error", model=model,
                                         error=f"{type(e).__name__}: {e}", attempt=attempt)
@@ -1162,6 +1434,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))
             messages.append(history_assistant_record)
+            durable_side_effects_started = True
+            token_state.record_provider_usage(
+                usage,
+                message_count=len(messages),
+                messages=messages,
+                system=system,
+                tools=ai_tools,
+            )
+            current_tokens, _estimate, used_provider = token_state.current_context_tokens(
+                system=system,
+                messages=messages,
+                tools=ai_tools,
+            )
+            active_context.context_tokens = current_tokens
+            active_context.context_tokens_used_provider_usage = used_provider
             if text:
                 payload = {"text": text, "finish_reason": finish}
                 if incomplete_reason:
