@@ -81,6 +81,7 @@ class ToolContext:
     snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)
     search_cache: dict[str, str] = field(default_factory=dict)
     todos: dict[str, Todo] = field(default_factory=dict)
+    terminal_sessions: dict[str, Any] = field(default_factory=dict)
     last_prompt_tokens: int = 0
     last_cached_tokens: int = 0
     last_output_tokens: int = 0

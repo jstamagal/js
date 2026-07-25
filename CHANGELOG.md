@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Persistent interactive terminal tools.** Added `terminal_session` for starting and driving isolated real PTYs across tool calls and `terminal_snapshot` for rendering their current screen as a PNG when layout, colour, wrapping, or clipping matters.
+- **Pixel-level browser probing.** Added `browser_probe` to serve local HTML or open HTTP(S) pages in Playwright Chromium, interact with visible controls, capture page or canvas frames, and report WebGL, visual-change, console, and page-error measurements.
+- **Interactive-tool regression coverage.** Added tests for canonical registry names and schemas, persistent and context-isolated PTY sessions, PNG terminal snapshots, and local browser interactions with screenshot and error reporting.
 - **Context-budget accounting for provider requests.** Added `js/context_budget.py` with deterministic token estimation, provider-usage anchoring, output/buffer reserve accounting, and regression tests so compaction decisions can reason about the full model-visible request instead of only the previous turn.
 - **Preflight, mid-turn, and overflow-recovery compaction.** Runtime turns now compact before an oversized request is sent, between tool-result follow-up calls when context grows during a turn, and once after provider context-overflow errors before durable side effects begin; `compact.buffer_tokens` configures extra reserved headroom.
 - **Compaction and modularity planning documents.** Added audits for compaction gaps, harness-wide gaps, and a lean-core extension roadmap so future work has explicit reference comparisons and priorities.
@@ -19,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Interactive and visual tooling is part of the default registry.** Registered the PTY and browser probes, added their model-facing contracts and public reference documentation, and promoted Pillow alongside the new pexpect, pyte, and Playwright packages to runtime dependencies.
 - **`_dispatch_batch` now uses explicit `ThreadPoolExecutor` with guaranteed cleanup.** Replaced `functools.partial` + `loop.run_in_executor` with direct `ThreadPoolExecutor` construction and a `finally` block that calls `executor.shutdown(wait=True)`, so leaf-tool threads are reliably joined before the coroutine returns even when fan-out tasks raise.
 - **`_login_for_provider` validates API key before constructing a `Login`.** The API key is resolved early via `providers.provider_api_key` and checked against `provider_def.requires_api_key`. A missing required key now raises a `ValueError` with a clear message suggesting `--login` or `set provider.api_key`, rather than passing `None` through to a confusing downstream failure.
 - **`_canonical_tool_args` and `_repair_jsonish` delegate to `tool_args` module.** Inline implementations in `runtime.py` now call through to the extracted module; behavior is unchanged.
