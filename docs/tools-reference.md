@@ -158,6 +158,74 @@ HTML is converted to text unless `raw=true`. Inline output is capped by
 `max_tool_result_bytes`; downloads are capped at 32 MiB and return
 `SAVED_RESPONSE path=... size=...`.
 
+## Search And Docs
+
+### `serper_search`
+
+Runs Google-style keyword search through Serper. Use it for current facts,
+exact phrases, names, error messages, and recent events.
+
+Parameters:
+
+- `query`: required search terms.
+- `num`: result count, default `8`.
+
+Returns an answer box when available, followed by numbered titles, URLs, and
+snippets. Requires `SERPER_API_KEY`.
+
+### `tavily_search`
+
+Searches through Tavily and returns extracted page content plus its synthesized
+answer when available. Use it for research questions and comparisons where
+snippets alone are not enough.
+
+Parameters:
+
+- `query`: required question or search terms.
+- `max_results`: result count, default `8`.
+
+Requires `TAVILY_API_KEY`.
+
+### `exa_search`
+
+Runs semantic search through Exa. Use natural-language descriptions when the
+right page or concept is known by meaning rather than exact keywords.
+
+Parameters:
+
+- `query`: required description of what to find.
+- `num`: result count, default `8`.
+- `text_chars`: extracted text per result, default `1500`.
+
+Returns numbered titles, URLs, and page text. Requires `EXA_API_KEY`.
+
+### `docs_search`
+
+Resolves a library through Context7 and fetches current documentation snippets.
+Use it before coding against libraries, frameworks, SDKs, or APIs.
+
+Parameters:
+
+- `library`: required library name.
+- `topic`: optional documentation area to narrow the result.
+- `tokens`: approximate output budget, default `4000`.
+
+Returns the matched Context7 library id and documentation text. An optional
+`CONTEXT7_API_KEY` raises rate limits; anonymous access still works.
+
+### `browse`
+
+Reads a JavaScript-rendered page through the `obscura` browser. Use it when a
+static HTTP fetch returns an empty shell or when a page is a single-page app.
+
+Parameters:
+
+- `url`: required page URL.
+- `dump`: `markdown`, `text`, `html`, or `links`; default `markdown`.
+
+Private and localhost URLs are allowed automatically. This tool cannot render
+WebGL or take screenshots. It requires the `obscura` binary on `PATH`.
+
 ## Meta Tools
 
 ### `todo_write`
