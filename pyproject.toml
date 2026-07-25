@@ -9,7 +9,11 @@ description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
     "ai[openai,anthropic]",
+    "pexpect>=4.9.0",
+    "Pillow>=10.0",
+    "playwright>=1.61.0",
     "prompt_toolkit>=3.0",
+    "pyte>=0.8.2",
     "PyYAML>=6.0",
     "textual>=0.85",
     "tomli_w>=1.0",
@@ -19,7 +23,6 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=9.0",
-    "Pillow>=10.0",
 ]
 
 [project.scripts]

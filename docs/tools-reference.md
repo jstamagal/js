@@ -226,6 +226,65 @@ Parameters:
 Private and localhost URLs are allowed automatically. This tool cannot render
 WebGL or take screenshots. It requires the `obscura` binary on `PATH`.
 
+## Interactive And Visual Tools
+
+### `terminal_session`
+
+Starts and drives commands inside persistent real PTYs. Use it for TUIs,
+editors, REPLs, pagers, installers, prompts, and terminal-dependent programs.
+
+Parameters:
+
+- `action`: required; `start`, `send`, `look`, `stop`, or `list`.
+- `session`: name, default `main`.
+- `command`: shell command required by `start`.
+- `keys`: comma-separated named keys or literal text for `send`.
+- `cwd`: working directory for `start`.
+- `wait_ms`: redraw collection delay, default `700`.
+- `cols`, `rows`: terminal dimensions, defaults `64` by `36`.
+
+Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
+and F1 through F12. Results include the rendered screen, cursor, changed-line
+count, and process status. Sessions are isolated per `ToolContext`.
+
+### `terminal_snapshot`
+
+Renders an existing `terminal_session` screen to a PNG. It is separate from
+terminal control so callers only pay for an image when layout, colour, borders,
+wrapping, clipping, or blank-screen diagnosis matters.
+
+Parameters:
+
+- `session`: existing session name, default `main`.
+- `output_path`: optional `.png` destination.
+- `wait_ms`: pending-redraw collection delay, default `100`.
+
+Default output lands under `terminal-snapshots/` in the session working
+directory. The result follows the standard js image contract: `IMAGE_RESULT`
+when vision is enabled, otherwise a visual-file metadata stub.
+
+### `browser_probe`
+
+Launches Playwright Chromium with SwiftShader/WebGL support, opens an HTTP(S)
+URL or serves a local HTML target, interacts with visible controls, and saves
+screenshots into a unique run directory.
+
+Parameters:
+
+- `target`: required URL, local HTML file, or local directory.
+- `click`: optional `>`-separated regex chain for visible buttons or links.
+- `press`: optional keyboard key to hold after clicks.
+- `output_dir`: optional parent directory for generated frames.
+- `settle_ms`: wait after load and clicks, default `1200`.
+- `hold_ms`: key-hold duration, default `1600`.
+- `viewport_width`, `viewport_height`: defaults `1280` by `800`.
+
+It captures the largest substantial visible canvas when present, otherwise the
+page. Reports frame paths and dimensions, dominant colour share, unique colour
+count, changed-pixel percentages, WebGL availability and renderer, console
+errors, and uncaught page errors. Use `read` on returned PNG paths for vision.
+Use `browse` instead when rendered text or links are sufficient.
+
 ## Meta Tools
 
 ### `todo_write`
