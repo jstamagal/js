@@ -74,6 +74,13 @@ class Login:
     codex_token_expires: float | None = None
     codex_account_id: str | None = None
     codex_email: str | None = None
+    # xAI OAuth metadata, same arrangement as the Codex fields above. The token
+    # endpoint is stored rather than pinned because it comes from xAI's own
+    # discovery document.
+    xai_refresh_token: str | None = None
+    xai_token_expires: float | None = None
+    xai_token_endpoint: str | None = None
+    xai_email: str | None = None
 
     @property
     def effective_provider_id(self) -> str:
@@ -209,6 +216,10 @@ def load_logins() -> dict[str, Login]:
             codex_token_expires=raw.get("codex_token_expires") or None,
             codex_account_id=raw.get("codex_account_id") or None,
             codex_email=raw.get("codex_email") or None,
+            xai_refresh_token=raw.get("xai_refresh_token") or None,
+            xai_token_expires=raw.get("xai_token_expires") or None,
+            xai_token_endpoint=raw.get("xai_token_endpoint") or None,
+            xai_email=raw.get("xai_email") or None,
         )
     return logins
 

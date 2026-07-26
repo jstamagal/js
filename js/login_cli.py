@@ -9,7 +9,7 @@ from getpass import getpass
 
 import ai
 
-from . import codex_auth, colors as C, model_client, providers
+from . import codex_auth, colors as C, model_client, providers, xai_auth
 from .logins import (
     Login,
     LoginsCorruptError,
@@ -497,6 +497,30 @@ def _run_codex_login(provider_id: str) -> int:
     return 0
 
 
+def _run_xai_login() -> int:
+    try:
+        login = xai_auth.login_browser()
+        print("*** Fetching models...")
+        models = test_login(login)
+    except Exception as exc:  # noqa: BLE001
+        print(f"{C.ORANGE}login failed: {type(exc).__name__}: {exc}{C.RESET}", file=sys.stderr)
+        return 1
+
+    to_cache = _select_models_to_cache(login.provider_id, models)
+    if to_cache is None:
+        return 0
+    try:
+        save_login(login)
+        cache_models(login.provider_id, to_cache)
+    except LoginsCorruptError as exc:
+        print(f"{C.ORANGE}login not saved: {exc}{C.RESET}", file=sys.stderr)
+        return 1
+    who = f" ({login.xai_email})" if login.xai_email else ""
+    print(f"{C.GREEN}*** Provider added: {login.provider_id}{who}{C.RESET}")
+    print(f"cached {len(to_cache)} models")
+    return 0
+
+
 def _run_login(provider_id: str | None = None) -> int:
     if provider_id is None:
         provider_id = _select_provider()
@@ -517,6 +541,8 @@ def _run_login(provider_id: str | None = None) -> int:
 
     if codex_auth.is_codex_provider(provider_id):
         return _run_codex_login(raw_provider_id)
+    if xai_auth.is_xai_oauth_provider(provider_id):
+        return _run_xai_login()
 
     login = _collect_api_login(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:
