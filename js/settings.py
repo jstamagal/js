@@ -115,6 +115,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("model.max_output_tokens", "int", None,
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
+    SettingSpec("model.context_window", "int", None,
+                "Override the active model's context window. Unset = server-reported "
+                "limits, then models.dev metadata. Beats every other source; for a "
+                "multi-model setup use compact.context_window_overrides instead.",
+                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str", None,
                 "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
                 "any other value is rejected. Clear with `set -model.reasoning_effort`.",

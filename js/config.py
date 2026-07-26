@@ -143,6 +143,7 @@ class Config:
     explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent frontmatter model
     explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
     vision_enabled: bool = False
+    model_context_window: int | None = None  # explicit window for this model; None = server/metadata resolved
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -369,6 +370,7 @@ def from_env(
         reasoning_effort = provider_def.reasoning_effort
 
     max_output_tokens = _numeric_setting(js_root_settings, ("model", "max_output_tokens"), None)
+    model_context_window = _numeric_setting(js_root_settings, ("model", "context_window"), None)
     max_tool_iterations = _numeric_setting(js_root_settings, ("limits", "max_tool_iterations"), _settings.DEFAULT_MAX_TOOL_ITERATIONS)
     max_bash_output_bytes = _numeric_setting(js_root_settings, ("limits", "max_bash_output_bytes"), _settings.DEFAULT_MAX_BASH_OUTPUT_BYTES)
     max_tool_result_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_BYTES)
@@ -426,6 +428,7 @@ def from_env(
         sampling_cli=sampling_cli,
         reasoning_effort=_norm_effort(reasoning_effort),
         max_output_tokens=max_output_tokens,
+        model_context_window=model_context_window,
         max_tool_iterations=max_tool_iterations,
         max_bash_output_bytes=max_bash_output_bytes,
         max_tool_result_bytes=max_tool_result_bytes,
