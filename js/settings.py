@@ -40,6 +40,8 @@ DEFAULT_MAX_READ_LINES = 2_000
 DEFAULT_MAX_LINE_CHARS = 2_000
 DEFAULT_JSONL_MAX_LINE_CHARS = 65536
 DEFAULT_MAX_FILE_BYTES = 2_000_000
+DEFAULT_MAX_READ_BYTES = 256 * 1024
+DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
 DEFAULT_TASK_MAX_DEPTH = 2
 DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S = 30
@@ -153,6 +155,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 env="JS_JSONL_MAX_LINE_CHARS"),
     SettingSpec("limits.max_file_bytes", "int", DEFAULT_MAX_FILE_BYTES,
                 "Maximum file bytes read by fs tools."),
+    SettingSpec("limits.max_read_bytes", "int", DEFAULT_MAX_READ_BYTES,
+                "Maximum file bytes for a whole-file read(); ignored when the call "
+                "passes start_line/end_line, so ranged reads work on any size file."),
+    SettingSpec("limits.max_tool_results_per_turn_bytes", "int", DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES,
+                "Aggregate cap on all tool results returned by one batch of parallel "
+                "calls; the largest results are clipped first. 0 = unlimited."),
     SettingSpec("limits.task_max_depth", "int", DEFAULT_TASK_MAX_DEPTH,
                 "Maximum recursive task/subagent depth."),
     SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,

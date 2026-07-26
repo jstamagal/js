@@ -63,6 +63,7 @@ class ToolContext:
     max_line_chars: int = 2_000
     jsonl_max_line_chars: int = 65536
     max_file_bytes: int = 2_000_000
+    max_read_bytes: int = 256 * 1024
     max_tool_result_bytes: int = 256 * 1024
     max_bash_output_bytes: int = 256 * 1024
     fetch_timeout_s: int = 15

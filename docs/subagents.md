@@ -189,14 +189,19 @@ Subagents choose a model in this order:
 Put agent defaults in the prompt directory's `00-tools.yaml`:
 
 ```yaml
-# Optional: pin this agent's default model.
+# Optional: pin this agent's default model and reasoning effort.
 # A provider-prefixed id re-routes the child provider/base/key/headers through
 # the model-route resolver; a bare id keeps the parent's provider route.
 model: anthropic/claude-sonnet-4
+reasoning_effort: high  # off|minimal|low|medium|high|xhigh|max
 tools:
   - read
   - fs_search
 ```
+
+`reasoning_effort:` sets the child default independently of the model. `off`
+explicitly disables reasoning; omitting it inherits the parent/provider setting.
+Invalid values fail agent loading rather than being silently ignored.
 
 Top-level `js --agent <id>` also applies that agent's manifest `model:` through
 the same route resolver. Operator pins win: `-m` / `--model`, `JS_MODEL`, or a

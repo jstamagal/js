@@ -419,6 +419,43 @@ def _cap_result(result: str, cap_bytes: int) -> str:
     return result
 
 
+def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
+    """Largest per-result allowance L where sum(min(size, L)) <= budget.
+
+    Water-filling: small results are paid in full and never clipped, the budget
+    left over is split evenly among whatever is still oversized. Returns -1 when
+    everything already fits.
+    """
+    remaining = budget
+    for i, size in enumerate(sorted(sizes)):
+        share = remaining // (len(sizes) - i)
+        if size > share:
+            return share
+        remaining -= size
+    return -1
+
+
+def _cap_batch_results(results: list[str], cap_bytes: int) -> list[str]:
+    """Clip one turn's batch of tool results down to an aggregate budget.
+
+    The per-result cap (max_tool_result_bytes) can't stop N parallel calls from
+    each returning a legal 256 KB and burying the turn under 2 MB, so the batch
+    gets its own ceiling. Biggest results lose bytes first — a turn of one fat
+    result and six small ones only clips the fat one. 0 or less = unlimited.
+    """
+    if cap_bytes <= 0:
+        return results
+    sizes = [len(r) for r in results]
+    if sum(sizes) <= cap_bytes:
+        return results
+    marker = f"\n[truncated: limits.max_tool_results_per_turn_bytes ({cap_bytes}) reached]"
+    allowance = _fair_share_ceiling(sizes, cap_bytes)
+    if allowance < 0:
+        return results
+    keep = max(0, allowance - len(marker))
+    return [r if len(r) <= allowance else r[:keep] + marker for r in results]
+
+
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
               error_tracker: ToolErrorTracker | None = None,
@@ -1010,6 +1047,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
+    active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
     active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
@@ -1489,6 +1527,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 active_context,
                 asyncio.get_running_loop(),
             )
+            capped = _cap_batch_results(
+                [r for _, _, r in dispatch_records],
+                getattr(cfg, "max_tool_results_per_turn_bytes", 0),
+            )
+            dispatch_records = [
+                (pc, args, new_result)
+                for (pc, args, _old), new_result in zip(dispatch_records, capped, strict=True)
+            ]
             followup = False
             for pc, _args, result_value in dispatch_records:
                 canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
