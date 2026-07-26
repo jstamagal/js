@@ -1022,6 +1022,8 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         active_cfg.provider_base_url,
     )
     context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
+    if context_window <= 0:
+        context_window = _compact_int(active_cfg, "context_window_fallback", 0)
     # Fullness is measured against the window we can actually put INPUT in, not
     # the raw window: the next reply needs max_output_tokens of room and the
     # summary call needs compact.buffer_tokens on top. Measuring against the raw

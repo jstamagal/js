@@ -47,6 +47,7 @@ DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
+DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
 DEFAULT_COMPACT_NOTIFY_THRESHOLD = 0.50
 DEFAULT_COMPACT_TRIGGER_THRESHOLD = 0.80
 DEFAULT_COMPACT_FORCE_THRESHOLD = 0.90
@@ -202,6 +203,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
     SettingSpec("compact.context_window", "int", DEFAULT_COMPACT_CONTEXT_WINDOW,
                 "Context window tokens for fullness math; unset = models.dev metadata.",
+                empty=EMPTY_NONE),
+    SettingSpec("compact.context_window_fallback", "int", DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK,
+                "Window to assume ONLY for models whose size cannot be resolved. Unlike "
+                "context_window this does not override models that are known, so covering "
+                "one unknown model no longer shrinks every known one.",
                 empty=EMPTY_NONE),
     SettingSpec("compact.notify_threshold", "float", DEFAULT_COMPACT_NOTIFY_THRESHOLD,
                 "Notify once when context reaches this fraction."),
