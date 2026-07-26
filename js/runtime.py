@@ -148,12 +148,54 @@ def _provider_extra_params(cfg: Config) -> dict[str, Any] | None:
     return dict(extra) if isinstance(extra, dict) else None
 
 
+_CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
+
+
+def set_context_window_overrides(raw: Any) -> None:
+    """Install compact.context_window_overrides, a map of model key -> window.
+
+    models.dev carries one row per model id, not per *surface*. A subscription
+    endpoint (openai-codex) and the public API can serve the same model id with
+    different usable windows, and the catalog has no row for the former — so
+    there is no upstream truth to fetch, only a local fact the operator knows.
+    Keys are matched most specific first: "provider/model", then "model".
+    """
+    _CONTEXT_WINDOW_OVERRIDES.clear()
+    if not isinstance(raw, dict):
+        return
+    for key, value in raw.items():
+        try:
+            window = int(value)
+        except (TypeError, ValueError):
+            continue
+        if window > 0 and isinstance(key, str) and key.strip():
+            _CONTEXT_WINDOW_OVERRIDES[key.strip().lower()] = window
+
+
+def _context_window_override(model: str, provider_id: str | None) -> int | None:
+    if not _CONTEXT_WINDOW_OVERRIDES:
+        return None
+    name = (model or "").strip().lower()
+    keys = []
+    if provider_id:
+        keys.append(f"{provider_id.strip().lower()}/{name}")
+    keys.append(name)
+    for key in keys:
+        hit = _CONTEXT_WINDOW_OVERRIDES.get(key)
+        if hit is not None:
+            return hit
+    return None
+
+
 def _resolve_context_window(
     model: str,
     provider_id: str | None,
     provider_base_url: str | None = None,
 ) -> int | None:
     """Prefer local server-reported context windows, else models.dev metadata."""
+    override = _context_window_override(model, provider_id)
+    if override is not None:
+        return override
     probed = model_metadata.probe_local_context_window(
         model,
         provider_id,
@@ -1048,6 +1090,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
     active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
+    set_context_window_overrides(_compact_setting(cfg, "context_window_overrides", None))
     active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)

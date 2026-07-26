@@ -1666,3 +1666,29 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: None)
     cli._maybe_auto_compact(cfg, _auto_state())
     assert len(calls) == 1
+
+
+def test_context_window_override_beats_catalog_for_a_specific_surface():
+    # models.dev has one row per model id, not per surface: openai/gpt-5.6-sol
+    # is 1.05M, but the codex subscription endpoint serving that same id is not
+    # in the catalog at all. provider/model must win over provider-agnostic.
+    try:
+        runtime.set_context_window_overrides({
+            "openai-codex/gpt-5.6-sol": 370_000,
+            "gpt-5.6-sol": 999_000,
+        })
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openrouter", None) == 999_000
+        # Untouched models still come from the catalog.
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) != 370_000
+    finally:
+        runtime.set_context_window_overrides(None)
+
+
+def test_context_window_overrides_ignore_junk_entries():
+    try:
+        runtime.set_context_window_overrides({"a/b": "nope", "c/d": 0, "e/f": -5, "g/h": "7000"})
+        assert runtime._resolve_context_window("b", "a", None) != 0
+        assert runtime._resolve_context_window("h", "g", None) == 7000
+    finally:
+        runtime.set_context_window_overrides(None)

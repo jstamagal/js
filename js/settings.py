@@ -204,6 +204,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("compact.context_window", "int", DEFAULT_COMPACT_CONTEXT_WINDOW,
                 "Context window tokens for fullness math; unset = models.dev metadata.",
                 empty=EMPTY_NONE),
+    SettingSpec("compact.context_window_overrides", "map", {},
+                "Per-model context windows, keyed 'provider/model' (most specific) or "
+                "'model'. For surfaces models.dev has no row for — a subscription "
+                "endpoint serving the same model id as the public API with a different "
+                "usable window.", empty=EMPTY_NONE),
     SettingSpec("compact.context_window_fallback", "int", DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK,
                 "Window to assume ONLY for models whose size cannot be resolved. Unlike "
                 "context_window this does not override models that are known, so covering "
