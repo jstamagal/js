@@ -30,6 +30,36 @@ class SkillMetadata:
 
 
 @dataclass(frozen=True)
+class ToolActivationResult:
+    """Outcome returned by a registry that can activate lazy tools."""
+
+    activated: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LoadedSkill:
+    """A skill's on-demand instructions and declared-tool activation outcome."""
+
+    metadata: SkillMetadata
+    instructions: str
+    activation: ToolActivationResult = ToolActivationResult()
+
+    def render(self) -> str:
+        problems = []
+        if self.activation.denied:
+            problems.append("policy-denied: " + ", ".join(self.activation.denied))
+        if self.activation.missing:
+            problems.append("unknown: " + ", ".join(self.activation.missing))
+        if not problems:
+            return self.instructions
+        report = "Skill tool requirements unavailable: " + "; ".join(problems)
+        separator = "" if self.instructions.endswith("\n") else "\n"
+        return f"{self.instructions}{separator}\n{report}"
+
+
+@dataclass(frozen=True)
 class _SkillRecord:
     metadata: SkillMetadata
 
@@ -85,12 +115,47 @@ class SkillCatalog:
         )
 
     def load(self, name: str) -> str | None:
-        record = self._records.get(name.casefold())
-        if record is None:
-            return None
-        text = record.metadata.path.read_text(encoding="utf-8", errors="replace")
-        _, body, _ = _split_frontmatter(record.metadata.path, text)
-        return body
+        """Load only the instruction body, preserving the original API."""
+        loaded = load_skill(self, name)
+        return loaded.instructions if loaded is not None else None
+
+    def load_exact(self, name: str, tool_registry: Any = None) -> LoadedSkill | None:
+        """Load an exact catalog match and request its declared tool surface."""
+        return load_skill(self, name, tool_registry=tool_registry)
+
+
+def load_skill(
+    catalog: SkillCatalog, name: str, tool_registry: Any = None
+) -> LoadedSkill | None:
+    """Load one exact skill and activate declared tools when supported.
+
+    Lazy registries advertise the capability with ``activate_tools(names)`` and
+    return ``ToolActivationResult``. Plain registries intentionally remain a
+    no-op compatibility path.
+    """
+    record = catalog._records.get(name.casefold())
+    if record is None:
+        return None
+    metadata = record.metadata
+    text = metadata.path.read_text(encoding="utf-8", errors="replace")
+    _, body, _ = _split_frontmatter(metadata.path, text)
+    activation = ToolActivationResult()
+    activate = getattr(tool_registry, "activate_tools", None)
+    if metadata.tools and callable(activate):
+        outcome = activate(metadata.tools)
+        if not isinstance(outcome, ToolActivationResult):
+            raise TypeError("activate_tools() must return ToolActivationResult")
+        activation = ToolActivationResult(
+            activated=_ordered_subset(metadata.tools, outcome.activated),
+            denied=_ordered_subset(metadata.tools, outcome.denied),
+            missing=_ordered_subset(metadata.tools, outcome.missing),
+        )
+    return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
+
+
+def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
+    names = set(reported)
+    return tuple(name for name in required if name in names)
 
 
 def discover_skills(
