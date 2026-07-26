@@ -16,8 +16,11 @@ no hide.
 
 ## WORKFLOW — read this, the order matter
 
-1. **`just` is the one entry point.** uv own the venv, so every command go
-   through `just`. `just` with no arg list every recipe.
+1. **`just` is the one entry point.** `just` with no arg list every recipe.
+   uv own what live IN the venv — `uv.lock` is the truth, so package change go
+   through uv and `pip install` into `.venv` get erased by the next `just sync`.
+   `.venv/bin/js` go stale whenever the pkg no reinstalled, so run js through
+   `just run` (or `uv run`). activating the venv to poke around is fine.
 2. **env feel broken? → `just sync`.** that rebuild the env from `uv.lock`. it
    the real fix.
 3. **make the change.**
