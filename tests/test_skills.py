@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from js.skills import SkillCatalog, discover_skills
+from js.skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 
 
 def _write(path: Path, text: str) -> Path:
@@ -36,6 +36,57 @@ def test_skill_catalog_indexes_metadata_without_instruction_body(tmp_path):
     assert sentinel not in repr(catalog.search("release"))
     assert catalog.search(sentinel) == ()
     assert catalog.load("deploy") == f"# ignored\n\n{sentinel}\n"
+
+
+def test_explicit_loader_activates_declared_tools_and_reports_failures_in_manifest_order(
+    tmp_path,
+):
+    package = tmp_path / "package"
+    sentinel = "FULL_INSTRUCTIONS_0d489a"
+    _write(
+        package / "deploy.md",
+        "---\nname: deploy\ndescription: Deploy safely\n"
+        "tools: [shell, browser, missing, denied]\n---\n"
+        f"# Deploy\n\n{sentinel}\n",
+    )
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    class Activator:
+        def __init__(self):
+            self.requested = None
+
+        def activate_tools(self, names):
+            self.requested = names
+            return ToolActivationResult(
+                activated=("browser", "shell"),
+                denied=("denied",),
+                missing=("missing",),
+            )
+
+    activator = Activator()
+    loaded = load_skill(catalog, "DEPLOY", tool_registry=activator)
+
+    assert loaded is not None
+    assert activator.requested == ("shell", "browser", "missing", "denied")
+    assert loaded.instructions == f"# Deploy\n\n{sentinel}\n"
+    assert loaded.activation.activated == ("shell", "browser")
+    assert loaded.render() == (
+        f"# Deploy\n\n{sentinel}\n\n"
+        "Skill tool requirements unavailable: policy-denied: denied; unknown: missing"
+    )
+
+
+def test_explicit_loader_keeps_legacy_body_byte_for_byte_with_plain_registry(tmp_path):
+    package = tmp_path / "package"
+    body = "legacy body without trailing newline"
+    _write(package / "legacy.md", body)
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    loaded = catalog.load_exact("legacy", tool_registry=object())
+
+    assert loaded is not None
+    assert loaded.instructions == body
+    assert loaded.render() == body
 
 
 def test_skill_catalog_supports_every_existing_layout(tmp_path):
