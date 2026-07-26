@@ -163,13 +163,26 @@ def set_context_window_overrides(raw: Any) -> None:
     _CONTEXT_WINDOW_OVERRIDES.clear()
     if not isinstance(raw, dict):
         return
-    for key, value in raw.items():
-        try:
-            window = int(value)
-        except (TypeError, ValueError):
-            continue
-        if window > 0 and isinstance(key, str) and key.strip():
-            _CONTEXT_WINDOW_OVERRIDES[key.strip().lower()] = window
+
+    def walk(node: Any, prefix: str) -> None:
+        # `set a.b.c 1` splits the key on every dot, so a model id like
+        # gpt-5.6-sol arrives as nested dicts ({"gpt-5": {"6-sol": ...}}).
+        # Rejoining with "." puts the id back together.
+        for key, value in node.items():
+            if not isinstance(key, str) or not key.strip():
+                continue
+            path = f"{prefix}.{key.strip()}" if prefix else key.strip()
+            if isinstance(value, dict):
+                walk(value, path)
+                continue
+            try:
+                window = int(value)
+            except (TypeError, ValueError):
+                continue
+            if window > 0:
+                _CONTEXT_WINDOW_OVERRIDES[path.lower()] = window
+
+    walk(raw, "")
 
 
 def _context_window_override(model: str, provider_id: str | None) -> int | None:
