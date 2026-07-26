@@ -109,6 +109,83 @@ class EmbeddedResourceDict(TypedDict):
 ContentBlock = (
     TextContentDict | ImageContentDict | AudioContentDict | ResourceLinkDict | EmbeddedResourceDict
 )
+ProgressToken = str | int
+
+
+@dataclass(frozen=True)
+class CallToolResult:
+    """A tool result without lossy conversion of its MCP content blocks."""
+
+    content: list[dict[str, Any]]
+    structured_content: Any = None
+    is_error: bool = False
+    meta: dict[str, Any] | None = None
+
+    @classmethod
+    def from_wire(cls, value: object) -> CallToolResult:
+        result = _object(value, "tools/call result")
+        content = _object_list(result.get("content"), "tools/call content")
+        is_error = result.get("isError", False)
+        if not isinstance(is_error, bool):
+            raise ValueError("tools/call isError must be a boolean")
+        meta = _optional_object(result.get("_meta"), "tools/call _meta")
+        return cls(
+            content=content,
+            structured_content=result.get("structuredContent"),
+            is_error=is_error,
+            meta=meta,
+        )
+
+
+@dataclass(frozen=True)
+class ReadResourceResult:
+    contents: list[dict[str, Any]]
+    meta: dict[str, Any] | None = None
+
+    @classmethod
+    def from_wire(cls, value: object) -> ReadResourceResult:
+        result = _object(value, "resources/read result")
+        return cls(
+            contents=_object_list(result.get("contents"), "resources/read contents"),
+            meta=_optional_object(result.get("_meta"), "resources/read _meta"),
+        )
+
+
+@dataclass(frozen=True)
+class GetPromptResult:
+    messages: list[dict[str, Any]]
+    description: str | None = None
+    meta: dict[str, Any] | None = None
+
+    @classmethod
+    def from_wire(cls, value: object) -> GetPromptResult:
+        result = _object(value, "prompts/get result")
+        description = result.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ValueError("prompts/get description must be a string")
+        return cls(
+            messages=_object_list(result.get("messages"), "prompts/get messages"),
+            description=description,
+            meta=_optional_object(result.get("_meta"), "prompts/get _meta"),
+        )
+
+
+def _object(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _optional_object(value: object, label: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return dict(_object(value, label))
+
+
+def _object_list(value: object, label: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"{label} must be a list of objects")
+    return [dict(item) for item in value]
 
 
 @dataclass(frozen=True)
