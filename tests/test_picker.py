@@ -78,12 +78,14 @@ def test_model_rows_require_cached_models(tmp_path: Path):
         _reset_logins()
 
 
-def test_codex_model_rows_append_gpt_5_5_when_cache_is_stale(tmp_path: Path):
+def test_codex_model_rows_are_exactly_the_cache(tmp_path: Path):
+    # the picker used to splice in a hardcoded model id to paper over a stale
+    # listing; the listing is fixed at the source now, so it shows the cache
     logins.set_config_dir(tmp_path)
-    logins.cache_models("openai-codex", ["codex-auto-review", "gpt-5.4", "gpt-5.4-mini"])
+    logins.cache_models("openai-codex", ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"])
     try:
         rows = picker._model_rows("openai-codex")
-        assert [row.id for row in rows] == ["codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"]
+        assert [row.id for row in rows] == ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"]
     finally:
         _reset_logins()
 
