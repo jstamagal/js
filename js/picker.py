@@ -61,17 +61,21 @@ def _model_rows(provider_id: str) -> list[ModelRow]:
 class ModelPicker(App[dict[str, Any] | None]):
     """Two-pane provider/model picker."""
 
+    # Colors are the terminal's, not ours: `ansi_*` resolves through whatever
+    # palette the terminal is running, and the panes leave the background
+    # unpainted so the picker sits in the same colors as the shell around it.
     CSS = """
     Screen {
-        background: #111318;
-        color: #d8dee9;
+        background: transparent;
+        color: ansi_default;
     }
     #body {
         height: 1fr;
         padding: 1 2;
     }
     .pane {
-        border: solid #5e81ac;
+        border: solid ansi_blue;
+        background: transparent;
         padding: 1 2;
         height: 1fr;
     }
@@ -83,26 +87,30 @@ class ModelPicker(App[dict[str, Any] | None]):
         width: 1fr;
     }
     .title {
-        color: #88c0d0;
+        color: ansi_cyan;
         text-style: bold;
         margin-bottom: 1;
     }
     #detail {
         height: 3;
-        color: #a3be8c;
+        color: ansi_green;
         margin-top: 1;
     }
     ListView {
         height: 1fr;
+        background: transparent;
+    }
+    ListItem {
+        background: transparent;
     }
     ListView:focus > ListItem.--highlight {
-        background: #a3be8c;
-        color: #111318;
+        background: ansi_green;
+        color: ansi_black;
         text-style: bold;
     }
     Footer {
-        background: #1b1f2a;
-        color: #a3be8c;
+        background: transparent;
+        color: ansi_green;
     }
     """
 
