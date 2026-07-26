@@ -153,6 +153,8 @@ class Config:
     jsonl_max_line_chars: int = _settings.DEFAULT_JSONL_MAX_LINE_CHARS
     max_file_bytes: int = _settings.DEFAULT_MAX_FILE_BYTES
     max_read_bytes: int = _settings.DEFAULT_MAX_READ_BYTES
+    max_bash_output_ceiling: int = _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING
+    max_tool_result_inline_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES
     max_tool_results_per_turn_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
     subagent_max_workers: int = _settings.DEFAULT_SUBAGENT_MAX_WORKERS
@@ -381,6 +383,8 @@ def from_env(
     jsonl_max_line_chars = _numeric_setting(js_root_settings, ("limits", "jsonl_max_line_chars"), _settings.DEFAULT_JSONL_MAX_LINE_CHARS)
     max_file_bytes = _numeric_setting(js_root_settings, ("limits", "max_file_bytes"), _settings.DEFAULT_MAX_FILE_BYTES)
     max_read_bytes = _numeric_setting(js_root_settings, ("limits", "max_read_bytes"), _settings.DEFAULT_MAX_READ_BYTES)
+    max_bash_output_ceiling = _numeric_setting(js_root_settings, ("limits", "max_bash_output_ceiling"), _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING)
+    max_tool_result_inline_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_inline_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES)
     max_tool_results_per_turn_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_results_per_turn_bytes"), _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES)
     task_max_depth = _numeric_setting(js_root_settings, ("limits", "task_max_depth"), _settings.DEFAULT_TASK_MAX_DEPTH)
     subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
@@ -450,6 +454,8 @@ def from_env(
         jsonl_max_line_chars=jsonl_max_line_chars,
         max_file_bytes=max_file_bytes,
         max_read_bytes=max_read_bytes,
+        max_bash_output_ceiling=max_bash_output_ceiling,
+        max_tool_result_inline_bytes=max_tool_result_inline_bytes,
         max_tool_results_per_turn_bytes=max_tool_results_per_turn_bytes,
         task_max_depth=task_max_depth,
         subagent_max_workers=subagent_max_workers,

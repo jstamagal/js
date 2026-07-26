@@ -250,6 +250,43 @@ def _compact_nonnegative_int(cfg: Config, key: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _estimated_prompt_tokens(cfg: Config, state: dict) -> int:
+    """Local estimate of what the next request will cost, in tokens.
+
+    Only used when the provider reported nothing — which is exactly the case
+    after a turn that failed for being too large. Without this the trigger
+    reads 0, does nothing, and the history that caused the failure survives
+    into the next attempt unchanged.
+    """
+    try:
+        from .context_budget import estimate_messages_tokens, estimate_system_tokens
+    except ImportError:
+        return 0
+    cpt = _compact_float_cfg(cfg, "chars_per_token", 4.0)
+    messages = state.get("messages") or []
+    system = state.get("system") or ""
+    try:
+        return (
+            estimate_messages_tokens(messages, chars_per_token=cpt)
+            + estimate_system_tokens(system, chars_per_token=cpt)
+        )
+    except Exception:  # noqa: BLE001 - an estimate must never break the turn
+        return 0
+
+
+def _compact_float_cfg(cfg: Config, key: str, default: float) -> float:
+    """chars_per_token is a ratio, not a fraction — _compact_float rejects
+    anything above 1.0, which would silently turn 4.0 into the default."""
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 def _effective_context_window(cfg: Config, context_window: int) -> int:
     """Window minus the room the next turn already owes: one full reply plus the
     compaction buffer. This mirrors runtime._maybe_compact_request_for_budget so
@@ -344,6 +381,8 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
     ("max_file_bytes", ("limits", "max_file_bytes")),
     ("max_read_bytes", ("limits", "max_read_bytes")),
+    ("max_bash_output_ceiling", ("limits", "max_bash_output_ceiling")),
+    ("max_tool_result_inline_bytes", ("limits", "max_tool_result_inline_bytes")),
     ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
@@ -1014,6 +1053,13 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         state["compact_incomplete_consecutive"] = 0
     incomplete_forced = state.get("compact_incomplete_consecutive", 0) >= 2
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
+    if prompt_tokens <= 0:
+        # No provider usage: the last turn errored, or the provider does not
+        # report it. Returning here disabled auto-compaction exactly when it
+        # was needed most — a turn that fails for size reports no usage, so the
+        # counter stays 0 and nothing ever shrinks the history that caused it.
+        # Fall back to the local estimate so the trigger still fires blind.
+        prompt_tokens = _estimated_prompt_tokens(cfg, state)
     if prompt_tokens <= 0 and not incomplete_forced:
         return
     active_cfg = _cfg_for_active_model(cfg, state)

@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import hashlib
 import os
 import sys
 import threading
@@ -292,6 +293,68 @@ _OVERFLOW_RECOVERY_ROUNDS = 3
 
 MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
 
+# After a summary compaction the model knows it edited a file but not what is
+# in it, so its next move is to re-read everything it was just working on —
+# one turn wasted, and the summary rarely carries enough detail to edit from.
+# Re-attach the files it touched most recently, newest first, under a budget.
+POST_COMPACT_MAX_FILES = 5
+POST_COMPACT_TOKEN_BUDGET = 50_000
+POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+
+
+def _post_compact_rehydration(
+    context: Any,
+    *,
+    chars_per_token: float = 4.0,
+    max_files: int = POST_COMPACT_MAX_FILES,
+    token_budget: int = POST_COMPACT_TOKEN_BUDGET,
+    per_file_tokens: int = POST_COMPACT_MAX_TOKENS_PER_FILE,
+) -> dict | None:
+    """Build one user message re-attaching recently read files, or None.
+
+    Reads from disk rather than replaying the pre-compaction text, so the
+    content is current — the model may have edited the file since. Files that
+    vanished or grew past the per-file budget are named but not inlined, which
+    is still useful: it tells the model the file exists and must be re-read.
+    """
+    paths = list(getattr(context, "read_paths", []) or [])
+    if not paths:
+        return None
+    # read_paths is a set; order by mtime so "recent" means recent.
+    def _mtime(p):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+    paths.sort(key=_mtime, reverse=True)
+
+    sections: list[str] = []
+    spent = 0
+    for path in paths[:max_files]:
+        try:
+            body = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        est = max(1, int(len(body) / max(1.0, chars_per_token)))
+        if est > per_file_tokens or spent + est > token_budget:
+            sections.append(f"### {path}\n(too large to re-attach; read it if you need it)")
+            continue
+        spent += est
+        sections.append(f"### {path}\n{body}")
+    if not sections:
+        return None
+    return {
+        "role": "user",
+        "content": (
+            "<post-compaction-files>\n"
+            "Current contents of the files that were open before the summary "
+            "above. These are read fresh from disk, so they already include "
+            "your edits. Do not re-read them unless you change them.\n\n"
+            + "\n\n".join(sections)
+            + "\n</post-compaction-files>"
+        ),
+    }
+
 # Tool results are the bulk of a long session and the cheapest thing to drop:
 # the assistant's own reasoning about them survives in its messages, and the
 # file can always be read again. Clearing them needs no model call, so unlike a
@@ -534,14 +597,52 @@ class ToolErrorTracker:
 # Tool dispatch
 # --------------------------------------------------------------------------
 
-def _cap_result(result: str, cap_bytes: int) -> str:
-    """Clip a tool result to the byte cap, leaving a visible marker when the slice
+def _cap_result(result: str, cap_bytes: int, inline_cap: int | None = None) -> str:
+    """Spill-then-clip a tool result.
+
+    inline_cap (limits.max_tool_result_inline_bytes) sends anything larger to a
+    file first, so what the model loses is only its position in the text, not
+    the text. cap_bytes is the hard backstop after that.
+
+    Original contract below: clip to the byte cap, leaving a visible marker when the slice
     actually shortens it — same wording the subagent layer uses (meta.py) so a
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
+    if inline_cap is None:
+        # Read from the active context rather than threading a fifth argument
+        # through four dispatch signatures; subagent contexts inherit it.
+        inline_cap = int(getattr(T.DEFAULT_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
+    if inline_cap > 0:
+        result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0 and len(result) > cap_bytes:
         return result[:cap_bytes] + f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
     return result
+
+
+def spill_oversized_result(result: str, inline_cap: int, *, spill_dir: Path | None = None) -> str:
+    """Write an oversized result to disk and return a preview plus the path.
+
+    Clipping throws the tail away — the model cannot get it back and often
+    does not know it existed. Spilling keeps every byte addressable: the model
+    reads the file with an offset if it needs the rest. 0 or less disables.
+    """
+    if inline_cap <= 0 or len(result) <= inline_cap:
+        return result
+    target_dir = spill_dir or (Path(os.path.expanduser("~")) / "oldinbox" / "js-tool-results")
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(result.encode("utf-8", "replace")).hexdigest()[:16]
+        path = target_dir / f"result-{digest}.txt"
+        if not path.exists():
+            path.write_text(result, encoding="utf-8")
+    except OSError:
+        return result  # cannot spill -> the byte cap downstream still applies
+    head = result[: max(0, inline_cap // 2)]
+    return (
+        f"{head}\n\n[result was {len(result)} bytes, over "
+        f"limits.max_tool_result_inline_bytes ({inline_cap}); the full text is at "
+        f"{path} — read it with start_line/end_line for the rest]"
+    )
 
 
 def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
@@ -956,6 +1057,9 @@ def _run_compact_pre_hook(cfg: Config) -> str:
     )
     shell_arg = "/C" if sys.platform == "win32" else "-c"
     cap = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
+    ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
+    if ceiling > 0:
+        cap = min(cap, ceiling)
     try:
         result = _run_capped(
             [shell_path, shell_arg, hook],
@@ -1078,6 +1182,26 @@ async def _summarize_for_compaction_async(
     return text
 
 
+def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict]) -> float:
+    """Configured chars_per_token, corrected against real provider counts.
+
+    tail_tokens and min_savings_tokens used the raw 4.0 estimate while the
+    trigger that called them used provider tokens. On a tool-heavy session the
+    estimator drifts far enough that "keep 16k of tail" kept something quite
+    different from 16k.
+    """
+    configured = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    try:
+        # The tracker lives on the tool context (set in run_turn_async), not in
+        # module scope — reading a global here would silently always miss.
+        tracker = getattr(T.DEFAULT_CONTEXT, "context_budget_state", None)
+        if not hasattr(tracker, "calibrated_chars_per_token"):
+            return configured
+        return tracker.calibrated_chars_per_token(messages=messages, system=system)
+    except Exception:  # noqa: BLE001 - calibration must never break compaction
+        return configured
+
+
 def compact_messages(
     cfg: Config,
     system: str,
@@ -1089,7 +1213,7 @@ def compact_messages(
 ) -> str:
     from . import memory as M
 
-    chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
     tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
     min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
     original_len = len(messages)
@@ -1107,7 +1231,12 @@ def compact_messages(
     compact_model = _compact_model_setting(cfg)
     summary = _summarize_for_compaction(cfg, compact_model, messages[:keep_from], focus, guidance)
     M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
-    messages[:] = [_compaction_summary_message(summary), *messages[keep_from:]]
+    rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
+    messages[:] = [
+        _compaction_summary_message(summary),
+        *([rehydrated] if rehydrated else []),
+        *messages[keep_from:],
+    ]
     return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
 
 
@@ -1122,7 +1251,7 @@ async def _compact_messages_async(
 ) -> str:
     from . import memory as M
 
-    chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
     tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
     min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
     original_len = len(messages)
@@ -1146,7 +1275,12 @@ async def _compact_messages_async(
         guidance,
     )
     M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
-    messages[:] = [_compaction_summary_message(summary), *messages[keep_from:]]
+    rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
+    messages[:] = [
+        _compaction_summary_message(summary),
+        *([rehydrated] if rehydrated else []),
+        *messages[keep_from:],
+    ]
     return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
 
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
@@ -1193,6 +1327,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
     active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
+    active_context.max_tool_result_inline_bytes = getattr(cfg, "max_tool_result_inline_bytes", active_context.max_tool_result_inline_bytes)
+    active_context.max_bash_output_ceiling = getattr(cfg, "max_bash_output_ceiling", active_context.max_bash_output_ceiling)
     install_context_window_overrides(cfg)
     active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)

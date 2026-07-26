@@ -32,6 +32,8 @@ from typing import Any
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_MAX_TOOL_ITERATIONS = 50
 DEFAULT_MAX_BASH_OUTPUT_BYTES = 256 * 1024
+DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000
+DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES = 51_200
 DEFAULT_MAX_TOOL_RESULT_BYTES = 256 * 1024
 DEFAULT_FETCH_TIMEOUT_S = 15
 DEFAULT_INLINE_CODE_TIMEOUT_S = 300
@@ -144,6 +146,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("limits.max_bash_output_bytes", "int", DEFAULT_MAX_BASH_OUTPUT_BYTES,
                 "Hard cap on shell stdout per call.",
                 env="JS_MAX_BASH_OUTPUT_BYTES"),
+    SettingSpec("limits.max_bash_output_ceiling", "int", DEFAULT_MAX_BASH_OUTPUT_CEILING,
+                "Upper bound a caller may raise max_bash_output_bytes to; the effective "
+                "shell cap is min(max_bash_output_bytes, this)."),
+    SettingSpec("limits.max_tool_result_inline_bytes", "int", DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES,
+                "Results larger than this are written to a file and replaced with a "
+                "preview plus the path, instead of being clipped and lost. 0 = off."),
     SettingSpec("limits.max_tool_result_bytes", "int", DEFAULT_MAX_TOOL_RESULT_BYTES,
                 "Hard cap on any tool result string.",
                 env="JS_MAX_TOOL_RESULT_BYTES"),

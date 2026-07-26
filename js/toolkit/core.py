@@ -66,6 +66,8 @@ class ToolContext:
     max_read_bytes: int = 256 * 1024
     max_tool_result_bytes: int = 256 * 1024
     max_bash_output_bytes: int = 256 * 1024
+    max_bash_output_ceiling: int = 150_000
+    max_tool_result_inline_bytes: int = 51_200
     fetch_timeout_s: int = 15
     task_max_depth: int = 2
     subagent_max_workers: int = 8
