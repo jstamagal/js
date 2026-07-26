@@ -52,3 +52,55 @@ def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
 def test_microcompact_keep_recent_larger_than_history_clears_nothing():
     msgs = _history(3)
     assert runtime.microcompact(msgs, keep_recent=20) == (0, 0)
+
+
+def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
+    big = "y" * 200_000
+    out = runtime.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
+
+    assert len(out) < len(big)
+    assert "limits.max_tool_result_inline_bytes" in out
+    written = list(tmp_path.glob("result-*.txt"))
+    assert len(written) == 1
+    assert written[0].read_text(encoding="utf-8") == big
+    assert str(written[0]) in out
+
+
+def test_spill_leaves_small_results_alone_and_can_be_disabled(tmp_path):
+    small = "z" * 100
+    assert runtime.spill_oversized_result(small, 50_000, spill_dir=tmp_path) == small
+    big = "z" * 200_000
+    assert runtime.spill_oversized_result(big, 0, spill_dir=tmp_path) == big
+    assert list(tmp_path.glob("result-*.txt")) == []
+
+
+def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
+    a = tmp_path / "a.py"; a.write_text("print('a')\n", encoding="utf-8")
+    b = tmp_path / "b.py"; b.write_text("print('b')\n", encoding="utf-8")
+
+    class Ctx:
+        read_paths = {a, b}
+
+    msg = runtime._post_compact_rehydration(Ctx())
+    assert msg["role"] == "user"
+    assert "print('a')" in msg["content"]
+    assert "print('b')" in msg["content"]
+    assert "post-compaction-files" in msg["content"]
+
+
+def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
+    big = tmp_path / "big.log"; big.write_text("q" * 500_000, encoding="utf-8")
+
+    class Ctx:
+        read_paths = {big}
+
+    msg = runtime._post_compact_rehydration(Ctx(), per_file_tokens=1_000)
+    assert "too large to re-attach" in msg["content"]
+    assert "qqqq" not in msg["content"]
+
+
+def test_post_compact_rehydration_is_none_without_reads():
+    class Ctx:
+        read_paths = set()
+
+    assert runtime._post_compact_rehydration(Ctx()) is None

@@ -286,6 +286,39 @@ class TokenState:
     def last_usage(self) -> TokenUsage | None:
         return self._anchor.usage if self._anchor is not None else None
 
+    def calibrated_chars_per_token(
+        self,
+        *,
+        messages: list[Any] | tuple[Any, ...],
+        system: str = "",
+        tools: Any = None,
+    ) -> float:
+        """chars_per_token corrected against the provider's real count.
+
+        Fullness is measured in provider tokens while tail_tokens and
+        min_savings_tokens were measured with the raw 4.0 estimate — two
+        currencies for one decision. When an anchor exists we know how far the
+        estimator drifts for THIS conversation (mostly a function of how much
+        of it is JSON tool traffic) and can correct the ratio so both sides
+        agree. Clamped so a bad anchor cannot produce an absurd tail.
+        """
+        anchor = self._anchor
+        if anchor is None or anchor.usage.prompt_tokens <= 0:
+            return self.chars_per_token
+        estimated = estimate_request_tokens(
+            system=system,
+            messages=messages[: anchor.message_count],
+            tools=tools,
+            chars_per_token=self.chars_per_token,
+        ).total_tokens
+        if estimated <= 0:
+            return self.chars_per_token
+        # estimator overshot -> factor > 1 -> more chars per token -> smaller
+        # estimates next time, and the reverse when it undershot.
+        factor = estimated / anchor.usage.prompt_tokens
+        corrected = self.chars_per_token * factor
+        return max(1.0, min(20.0, corrected))
+
     def reset(self) -> None:
         self._anchor = None
 
