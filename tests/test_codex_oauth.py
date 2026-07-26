@@ -302,10 +302,12 @@ def test_codex_provider_lists_models_and_streams_responses_shape():
     )
 
     models = asyncio.run(provider.list_models())
-    assert "gpt-5-codex" in models
-    assert "gpt-5.5" in models
+    assert models == ["gpt-5-codex"]
     list_call = client.get_calls[0]
     assert list_call["url"].endswith("/codex/models")
+    # the backend drops any model whose minimal_client_version outranks this,
+    # so a stale value here silently hides newly released models
+    assert list_call["params"]["client_version"] == codex_provider._client_version()
     assert list_call["headers"]["Authorization"].startswith("Bearer ")
     assert list_call["headers"]["chatgpt-account-id"] == "acct_123"
 

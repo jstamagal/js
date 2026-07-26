@@ -8,8 +8,13 @@ Codex model listing, Responses-style streaming, and function tool calls.
 from __future__ import annotations
 
 import base64
+import functools
 import json
+import os
 import platform
+import re
+import shutil
+import subprocess
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -25,7 +30,31 @@ if TYPE_CHECKING:
     from .logins import Login
 
 _MODEL_PATHS = ("/codex/models", "/models")
-_CLIENT_VERSION = "0.99.0"
+# The backend gates /codex/models on the client_version query param: each model
+# carries a minimal_client_version and anything below it is dropped from the
+# response entirely. gpt-5.6-sol/terra/luna need 0.144.0, gpt-5.5 needs 0.124.0.
+# Pinning a literal here means every upstream model release silently goes
+# missing, so read the installed codex CLI's own version first.
+_FALLBACK_CLIENT_VERSION = "0.145.0"
+
+
+@functools.cache
+def _client_version() -> str:
+    override = os.environ.get("JS_CODEX_CLIENT_VERSION", "").strip()
+    if override:
+        return override
+    exe = shutil.which("codex")
+    if exe:
+        try:
+            proc = subprocess.run(
+                [exe, "--version"], capture_output=True, text=True, timeout=5, check=False
+            )
+            found = re.search(r"(\d+\.\d+\.\d+)", f"{proc.stdout} {proc.stderr}")
+            if found:
+                return found.group(1)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _FALLBACK_CLIENT_VERSION
 _ORIGINATOR = "pi"
 _USER_AGENT = f"js/0.1.0 ({platform.system().lower()} {platform.release()}; {platform.machine()})"
 _PROVIDER = codex_auth.CODEX_PROVIDER_ID
@@ -502,7 +531,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         for path in _MODEL_PATHS:
             response = await self.client.get(
                 f"{base}{path}",
-                params={"client_version": _CLIENT_VERSION},
+                params={"client_version": _client_version()},
                 headers=headers,
             )
             if response.status_code >= 400:
@@ -527,7 +556,6 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                 if isinstance(mid, str) and mid:
                     models.append(mid)
             if models:
-                models.append(codex_auth.CODEX_PHANTOM_MODEL_ID)
                 return sorted(set(models))
             errors.append(f"{path}: no usable model ids in response")
         detail = f" ({'; '.join(errors)})" if errors else ""

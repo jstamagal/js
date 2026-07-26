@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from . import codex_auth, logins, providers
+from . import logins, providers
 
 
 @dataclass(frozen=True)
@@ -55,10 +55,7 @@ def _model_rows(provider_id: str) -> list[ModelRow]:
     cached = logins.load_model_cache().get(provider_id)
     if not cached:
         return []
-    model_ids = list(cached)
-    if provider_id == codex_auth.CODEX_PROVIDER_ID and codex_auth.CODEX_PHANTOM_MODEL_ID not in model_ids:
-        model_ids.append(codex_auth.CODEX_PHANTOM_MODEL_ID)
-    return [ModelRow(id=model_id, provider=provider_id) for model_id in model_ids]
+    return [ModelRow(id=model_id, provider=provider_id) for model_id in cached]
 
 
 class ModelPicker(App[dict[str, Any] | None]):
