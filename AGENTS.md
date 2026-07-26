@@ -39,6 +39,7 @@ no hide.
 7. **backup in place of push.** owner server is down, so after a batch of work
    copy the tree to a different physical drive: `cp -a js /opt/tempbackup/js<N>`,
    incrementing N. how it got done in the 90s. easy peasy lemon squeezy.
+   skip `.venv` (`rsync -a --exclude .venv`) — `just sync` rebuild it.
 
 burn it in: **commit = reversible, do it.**
 
@@ -52,9 +53,15 @@ just test            # offline suite: -m "not ai_provider and not vision" -p no:
 just test-file tests/test_picker.py        # one file or node
 just test-mark "not ai_provider"           # by pytest marker
 just lint            # ruff check . (errors + pyflakes + pyupgrade) — the quality gate
+just check           # the quality gate, stops at first failure
 just fix             # ruff safe auto-fixes only; leaves unused imports and formatting alone
+just shell           # shell with the project env active
 just build           # uv build -> sdist + wheel
 ```
+
+focused suites exist too — `just test-tools`, `test-wiki`, `test-runtime`,
+`test-subagents`, `test-memory`, `test-cli`, `test-vision`. `just` alone list
+the rest (`format`, `install`, `lock`, `upgrade`, `clean`, `drain`).
 
 run one test directly when 🦍 need a single node:
 `uv run --extra test pytest -q tests/test_foo.py::test_bar`
@@ -73,10 +80,12 @@ implicit optionals). this repo run with no type gate; re-add it when owner say.
 streaming tool-use loop, sync runtime, async SDK underneath. the parts that
 need reading many files to see:
 
-- **`js/model_client.py` — the ONE provider boundary.** the only production
-  module that import `ai`. it adapt the SDK async/part-based API down to the
-  sync/dict-based runtime. all model I/O cross here, and `import ai` live here
-  alone — new provider plumbing land in this file.
+- **`js/model_client.py` — the model I/O boundary.** it adapt the SDK
+  async/part-based API down to the sync/dict-based runtime, and every model call
+  cross it. `import ai` also live in `runtime.py`, `providers.py`,
+  `codex_provider.py`, `logins.py`, `login_cli.py`, `attach.py` — provider
+  registration and login are their own thing. request/response shaping land in
+  `model_client.py`; a new provider land next to `codex_provider.py`.
 - **`js/runtime.py` — the loop.** stream output, dispatch tool call, typed error
   handling, telemetry, subagent fan-out (ThreadPoolExecutor). calls
   `model_client` for I/O, `toolkit.registry` for tools.
@@ -112,7 +121,8 @@ need reading many files to see:
   one isolated state per agent. **compaction APPENDS marks and leave history
   intact** (`/compact [focus]`, `/compact up to here`, `js --compact <session>`).
 - **`js/cli.py` — arg parse + mode dispatch** (REPL / `-p` / `--commit` /
-  `--wiki` / `--artifact` / `--compact`). `js/drain.py` is the `js-drain` entry.
+  `--wiki` / `--artifact` / `--compact` / `--tui` / `--nonblocking` /
+  `--login`/`--logout` / `--bench`). `js/drain.py` is the `js-drain` entry.
 
 ## prefer computed context over manual probing
 
@@ -129,18 +139,20 @@ let code do the rote.
 
 ## standing facts — 🦍 keep these true
 
-- **canonical tool names only.** the live names are in
-  `docs/tools-reference.md`. old names (`fs_read`, `fs_write`, `cat`, `grep`,
-  `semantic_search`) are dead and stay dead.
-- **session history store canonical lowercase tool names.** any
-  provider-facing name mangling stay inside `model_client.py` and reach the
-  wire only — what land in the JSONL is the canonical form.
+- **canonical tool names only.** the names the MODEL see are the ones in
+  `docs/tools-reference.md`. the old model-facing names (`fs_read`, `fs_write`,
+  `cat`, `grep`, `semantic_search`) are dead and stay dead — the python symbol
+  `fs.fs_read` still exist as the implementation, that fine, it the registry
+  name that matter.
 - **owner deliberate edits are relics** — rage-text, quips, hand-tuned comment
   alignment. leave them exactly as they sit. `just format` collapse intentional
   alignment across ~110 files — run it when owner say, and review the diff.
 
 ## docs
 
-deep dives live in `docs/` — `technical-guide.md` (internals),
-`tool-system.md`, `subagents.md`, `inline-directives.md`,
-`configuration-and-sessions.md`. `CHANGELOG.md` track what moved.
+deep dives live in `docs/` — `technical-guide.md` (internals), `tool-system.md`,
+`tools-reference.md` (the canonical tool names), `subagents.md`,
+`inline-directives.md`, `configuration-and-sessions.md`,
+`models-and-providers.md`, `testing-and-development.md`, `user-guide.md`,
+`wiki.md`, `artifact.md`, `drain.md`, `nonblocking-windows.md`, `ircii/`.
+`CHANGELOG.md` track what moved.
