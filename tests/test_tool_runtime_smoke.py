@@ -865,3 +865,62 @@ def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
     assert "[truncated: limits.max_bash_output_bytes" in out
+
+
+def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
+    # max_read_bytes gates the unbounded read only; naming a range is the
+    # caller saying "I know this file is big", so it stays addressable.
+    target = tmp_path / "big.txt"
+    target.write_text("".join(f"line {i}\n" for i in range(20_000)), encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
+
+    whole = fs.read("big.txt", context=context)
+    assert whole.startswith("ERROR")
+    assert "limits.max_read_bytes" in whole
+    assert "start_line" in whole
+
+    ranged = fs.read("big.txt", start_line=5, end_line=7, context=context)
+    assert not ranged.startswith("ERROR")
+    assert "|line 4" in ranged and "|line 6" in ranged
+
+    # A bogus range must not smuggle the whole file past the cap.
+    bogus = fs.read("big.txt", start_line=True, end_line=True, context=context)
+    assert bogus.startswith("ERROR")
+    assert "limits.max_read_bytes" in bogus
+
+
+def test_whole_file_read_under_cap_is_untouched(tmp_path):
+    target = tmp_path / "small.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
+
+    actual = fs.read("small.txt", context=context)
+    assert not actual.startswith("ERROR")
+    assert "|alpha" in actual
+
+
+def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
+    # One runaway result in a turn of seven must not cost the other six their
+    # content — the aggregate cap takes bytes off the biggest first.
+    results = ["x" * 400_000] + ["small"] * 6
+    capped = runtime._cap_batch_results(results, 200_000)
+
+    assert capped[1:] == ["small"] * 6
+    assert capped[0] != results[0]
+    assert "[truncated: limits.max_tool_results_per_turn_bytes (200000) reached]" in capped[0]
+    assert sum(len(r) for r in capped) <= 200_000
+
+
+def test_batch_result_cap_splits_evenly_when_all_are_oversized():
+    results = ["a" * 150_000, "b" * 150_000]
+    capped = runtime._cap_batch_results(results, 200_000)
+
+    assert sum(len(r) for r in capped) <= 200_000
+    assert all("[truncated: limits.max_tool_results_per_turn_bytes" in r for r in capped)
+    assert abs(len(capped[0]) - len(capped[1])) <= 1
+
+
+def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():
+    results = ["small", "also small"]
+    assert runtime._cap_batch_results(results, 200_000) == results
+    assert runtime._cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]

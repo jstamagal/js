@@ -119,6 +119,7 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         max_read_lines=parent.max_read_lines,
         max_line_chars=parent.max_line_chars,
         max_file_bytes=parent.max_file_bytes,
+        max_read_bytes=getattr(parent, "max_read_bytes", 256 * 1024),
         max_tool_result_bytes=parent.max_tool_result_bytes,
         max_bash_output_bytes=parent.max_bash_output_bytes,
         fetch_timeout_s=parent.fetch_timeout_s,
@@ -249,6 +250,8 @@ async def _run_one_task_async(
                     sampling=prompt_spec.sampling,
                     model=prompt_spec.model,
                     secondary_model=prompt_spec.secondary_model,
+                    reasoning_effort=prompt_spec.reasoning_effort,
+                    max_output_tokens=prompt_spec.max_output_tokens,
                 )
     except FileNotFoundError:
         prompt_spec = P.PromptSpec(system="", tool_selectors=())
@@ -292,6 +295,8 @@ async def _run_one_task_async(
             provider_api_key=route.api_key,
             provider_headers=route.headers,
         )
+    if prompt_spec.reasoning_effort is not None:
+        cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
 
     registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
     system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)

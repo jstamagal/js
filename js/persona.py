@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from .promptexpand import expand_prompt
+from . import settings
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class PromptSpec:
     sampling: dict[str, Any] = field(default_factory=dict)
     model: str = ""              # preferred/primary model for this agent and the subagents it spawns
     secondary_model: str = ""    # backup model — reserved for a future (non-config) selection flag
+    reasoning_effort: str | None = None  # child thinking default; None inherits parent/provider default
     max_output_tokens: int | None = None  # agent-default per-call cap from 00-tools.yaml; None = provider/metadata default
 
 
@@ -133,6 +135,22 @@ _SAMPLING_KEYS = (
 )
 
 
+def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
+    if raw is None:
+        return None
+    # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
+    if raw is False:
+        return "none"
+    if not isinstance(raw, str):
+        raise ValueError(f"reasoning_effort in {path} must be a string")
+    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
+    value, error = settings.coerce_value(spec, raw)
+    if error:
+        raise ValueError(f"reasoning_effort in {path}: {error}")
+    return value
+
+
+
 def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
     """Per-call output cap from a manifest/frontmatter. <= 0 (e.g. -1) means
     uncapped — fall back to the provider/metadata default (None)."""
@@ -228,13 +246,14 @@ def load_agent_prompt_spec(
                 sampling=manifest_spec.sampling,
                 model=manifest_spec.model,
                 secondary_model=manifest_spec.secondary_model,
+                reasoning_effort=manifest_spec.reasoning_effort,
                 max_output_tokens=manifest_spec.max_output_tokens,
             )
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
     system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, max_output_tokens=spec.max_output_tokens)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, reasoning_effort=spec.reasoning_effort, max_output_tokens=spec.max_output_tokens)
 
 def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
@@ -255,6 +274,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     sampling: dict[str, Any] = {}
     model: str = ""
     secondary_model: str = ""
+    reasoning_effort: str | None = None
     max_output_tokens: int | None = None
     parts: list[str] = []
 
@@ -264,6 +284,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         sampling = _coerce_sampling(yaml_zero_file, manifest.get("sampling"))
         model = str(manifest.get("model") or "").strip()
         secondary_model = str(manifest.get("secondary_model") or "").strip()
+        reasoning_effort = _coerce_reasoning_effort(yaml_zero_file, manifest.get("reasoning_effort"))
         max_output_tokens = _coerce_max_tokens(yaml_zero_file, manifest.get("max_tokens"))
 
     for path in md_files:
@@ -281,6 +302,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
                 sampling = _coerce_sampling(path, frontmatter.get("sampling"))
                 model = str(frontmatter.get("model") or "").strip()
                 secondary_model = str(frontmatter.get("secondary_model") or "").strip()
+                reasoning_effort = _coerce_reasoning_effort(path, frontmatter.get("reasoning_effort"))
                 max_output_tokens = _coerce_max_tokens(path, frontmatter.get("max_tokens"))
         if body:
             parts.append(body)
@@ -291,6 +313,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         sampling=sampling,
         model=model,
         secondary_model=secondary_model,
+        reasoning_effort=reasoning_effort,
         max_output_tokens=max_output_tokens,
     )
 
@@ -316,6 +339,7 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
                 sampling=spec.sampling,
                 model=spec.model,
                 secondary_model=spec.secondary_model,
+                reasoning_effort=spec.reasoning_effort,
                 max_output_tokens=spec.max_output_tokens,
             )
     spec = _expand_spec(spec, cfg)
@@ -366,7 +390,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     )
     if system == spec.system:
         return spec
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, max_output_tokens=spec.max_output_tokens)
+    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, reasoning_effort=spec.reasoning_effort, max_output_tokens=spec.max_output_tokens)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system

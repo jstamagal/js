@@ -258,6 +258,17 @@ def fs_read(
     if isinstance(range, dict):
         start_line = start_line if start_line is not None else range.get("start_line")
         end_line = end_line if end_line is not None else range.get("end_line")
+    # A whole-file read (no range asked for) is the only one gated by
+    # max_read_bytes. Once the caller names a range it is reading deliberately,
+    # so a 40 MB log stays addressable line-by-line — max_file_bytes is still
+    # the outer ceiling for both.
+    # Matches the acceptance rule the line math below uses: bools, junk and
+    # out-of-range values are not a range, so they can't smuggle a whole-file
+    # read past the cap.
+    ranged = (
+        int_or_default(start_line, -1, minimum=1) != -1
+        or int_or_default(end_line, -1, minimum=1) != -1
+    )
     target = context.resolve_path(raw_path)
     if not target.exists():
         return f"ERROR: no such file: {target}"
@@ -292,6 +303,14 @@ def fs_read(
         content_hash = _hash_bytes(data)
         context.remember_read(target, content_hash)
         return text
+
+    read_cap = int(getattr(context, "max_read_bytes", 0) or 0)
+    if not ranged and read_cap > 0 and size > read_cap:
+        return (
+            f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}) "
+            f"for a whole-file read. Pass start_line/end_line to read a range instead — "
+            f"ranged reads are not subject to this cap."
+        )
 
     try:
         text, data = _read_text(target, context)

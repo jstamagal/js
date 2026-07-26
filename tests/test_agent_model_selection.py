@@ -180,6 +180,32 @@ def test_apply_agent_model_noops_without_frontmatter_model(tmp_path):
     assert actual is cfg
 
 
+@pytest.mark.parametrize(
+    ("manifest_value", "expected"),
+    [("high", "high"), ("off", "none")],
+)
+def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_value, expected):
+    prompts = _write_agent_dir(
+        tmp_path / "reasoning" / "prompts",
+        manifest=f"reasoning_effort: {manifest_value}\ntools: []\n",
+    )
+    cfg = replace(_make_cfg(tmp_path, prompts), reasoning_effort="low")
+
+    seen = _capture_single_task_route(monkeypatch, tmp_path, cfg)
+
+    assert seen["reasoning_effort"] == expected
+
+
+def test_subagent_rejects_invalid_frontmatter_reasoning_effort(tmp_path):
+    prompts = _write_agent_dir(
+        tmp_path / "invalid-reasoning" / "prompts",
+        manifest="reasoning_effort: enormous\ntools: []\n",
+    )
+
+    with pytest.raises(ValueError, match=r"reasoning_effort .* expected off\|minimal\|low\|medium\|high\|xhigh\|max"):
+        persona.load_prompt_spec(prompts)
+
+
 def test_subagent_prefixed_model_reroutes_and_bare_model_keeps_parent_provider(monkeypatch, tmp_path):
     prefixed_prompts = _write_agent_dir(
         tmp_path / "prefixed" / "prompts",
@@ -268,7 +294,7 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
     agents_file.write_text("PARENT AGENTS INSTRUCTIONS\n", encoding="utf-8")
     prompts = _write_agent_dir(
         tmp_path / "prompts",
-        manifest="model: deepseek/agents-file-model\ntools: []\n",
+        manifest="model: deepseek/agents-file-model\nreasoning_effort: high\ntools: []\n",
         body="WORKER BODY\n",
     )
     cfg = _make_cfg(tmp_path, prompts, agents_files=(agents_file,))
@@ -279,6 +305,7 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
 
     assert seen["model_id"] == "agents-file-model"
     assert seen["provider_id"] == "deepseek"
+    assert seen["reasoning_effort"] == "high"
     assert "PARENT AGENTS INSTRUCTIONS" in system
     assert "WORKER BODY" in system
 
