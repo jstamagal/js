@@ -1692,3 +1692,16 @@ def test_context_window_overrides_ignore_junk_entries():
         assert runtime._resolve_context_window("h", "g", None) == 7000
     finally:
         runtime.set_context_window_overrides(None)
+
+
+def test_context_window_overrides_rebuild_dotted_model_ids():
+    # `set compact.context_window_overrides.openai-codex/gpt-5.6-sol 370000`
+    # splits on every dot, so the loader must rejoin the id.
+    try:
+        runtime.set_context_window_overrides(
+            {"openai-codex/gpt-5": {"6-sol": 370_000, "6-terra": 370_000}}
+        )
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) == 370_000
+    finally:
+        runtime.set_context_window_overrides(None)
