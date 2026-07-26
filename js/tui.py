@@ -93,28 +93,22 @@ class TuiInput(Input):
 class JsTuiApp(App[int]):
     """Nonblocking Textual REPL: input stays hot while turns/tools run."""
 
-    # Colors come from the terminal: `ansi_*` resolves through its palette and
-    # the panes stay unpainted, so the cockpit sits in the same colors as the
-    # shell it was launched from instead of on a slab of its own.
     CSS = """
     Screen {
-        background: transparent;
-        color: ansi_default;
+        background: #111318;
+        color: #d8dee9;
     }
     #body {
         height: 1fr;
-        border: solid ansi_blue;
-        background: transparent;
+        border: solid #5e81ac;
         padding: 0 1;
     }
     #transcript {
         height: 1fr;
-        background: transparent;
     }
     Input {
         dock: bottom;
-        background: transparent;
-        border: solid ansi_yellow;
+        border: solid #ebcb8b;
     }
     """
 
@@ -200,7 +194,7 @@ class JsTuiApp(App[int]):
             self.deps.sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
             self._refresh_status()
             return
-        self._write_transcript(Text(f"KING 👑 {line}", style="bold yellow"), speaker="KING", log_text=line)
+        self._write_transcript(Text(f"KING 👑 {line}", style="bold #ebcb8b"), speaker="KING", log_text=line)
         self.queue.put_nowait(line)
         if self.sup.turn_active() or self.queue.qsize() > 1:
             self._write_transcript(f"[dim](queued — {self.queue.qsize()} ahead)[/]")
