@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import pytest
 
@@ -1319,7 +1320,10 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
         sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "auto",
         session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "auto" / "auto.jsonl",
         prompts_dir=tmp_path / "prompts",
-        settings={"compact": {"context_window": 100, **(compact or {})}},
+        # buffer_tokens 0 keeps these threshold tests on raw-window math, so the
+        # synthetic 100-token window still means "80 tokens == 80% full"; the
+        # reserve/buffer subtraction itself is covered separately below.
+        settings={"compact": {"context_window": 100, "buffer_tokens": 0, **(compact or {})}},
     )
 
 
@@ -1560,3 +1564,44 @@ def test_dash_C_rejects_missing_dir(tmp_path, capsys):
     actual = cli.main(["-C", str(missing), "-p", "hi"])
     assert actual == 2
     assert "not a directory" in capsys.readouterr().err
+
+
+def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, tmp_path, capsys):
+    # 100k window, 8k reserved for the reply, 4k compaction buffer -> 88k of
+    # addressable input. 79k is 79% of the raw window (under the 0.80 trigger)
+    # but ~90% of what can actually be filled, so compaction must fire. Before
+    # this, the between-turn trigger measured against the raw window and
+    # disagreed with the in-turn budget check.
+    calls: list[dict] = []
+    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    cfg = _auto_compact_cfg(
+        tmp_path,
+        compact={"context_window": 100_000, "buffer_tokens": 4_000},
+    )
+    cfg = replace(cfg, max_output_tokens=8_000)
+
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 79_000, raising=False)
+    cli._maybe_auto_compact(cfg, _auto_state())
+
+    assert len(calls) == 1
+    assert calls[0]["forced"] is False
+    assert "90% full" in capsys.readouterr().out
+
+
+def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, tmp_path, capsys):
+    # A model declaring a 64k output cap against a 32k window would leave a
+    # negative budget; the floor keeps half the window addressable instead of
+    # compacting on every single turn.
+    calls: list[dict] = []
+    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    cfg = _auto_compact_cfg(
+        tmp_path,
+        compact={"context_window": 32_000, "buffer_tokens": 4_000},
+    )
+    cfg = replace(cfg, max_output_tokens=64_000)
+
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 8_000, raising=False)
+    cli._maybe_auto_compact(cfg, _auto_state())
+
+    assert calls == []
+    assert "50% full" in capsys.readouterr().out
