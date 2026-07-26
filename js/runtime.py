@@ -280,6 +280,55 @@ _CONTEXT_OVERFLOW_NEEDLES = (
 )
 
 
+# How many times the summarizer may drop its oldest half and retry when the
+# summarize call itself overflows.
+_SUMMARY_PEEL_RETRIES = 3
+
+# How many rounds of recovery a single turn may attempt after the provider
+# rejects the request for size. One was never enough: the first compaction
+# targets whatever window we *believe* we have, and if that belief is wrong
+# the retry lands on the wall again.
+_OVERFLOW_RECOVERY_ROUNDS = 3
+
+MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
+
+# Tool results are the bulk of a long session and the cheapest thing to drop:
+# the assistant's own reasoning about them survives in its messages, and the
+# file can always be read again. Clearing them needs no model call, so unlike a
+# summary it cannot fail at the exact moment the context is too big to send.
+def microcompact(
+    messages: list[dict],
+    *,
+    keep_recent: int = 20,
+    min_chars: int = 400,
+) -> tuple[int, int]:
+    """Blank the bodies of old tool results in place.
+
+    Leaves the newest ``keep_recent`` tool results untouched (the model is
+    usually still working with those) and ignores results already small enough
+    that clearing them buys nothing. Returns (results_cleared, chars_reclaimed).
+    """
+    indexes = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, dict)
+        and m.get("role") == "tool"
+        and isinstance(m.get("content"), str)
+        and m["content"] != MICROCOMPACT_CLEARED_MESSAGE
+    ]
+    if keep_recent > 0:
+        indexes = indexes[:-keep_recent] if keep_recent < len(indexes) else []
+    cleared = 0
+    reclaimed = 0
+    for i in indexes:
+        body = messages[i]["content"]
+        if len(body) < min_chars:
+            continue
+        messages[i] = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
+        cleared += 1
+        reclaimed += len(body) - len(MICROCOMPACT_CLEARED_MESSAGE)
+    return cleared, reclaimed
+
+
 def _is_context_overflow_error(exc: BaseException) -> bool:
     if not isinstance(exc, ai.ProviderAPIError):
         return False
@@ -981,7 +1030,6 @@ async def _summarize_for_compaction_async(
     focus: str,
     guidance: str,
 ) -> str:
-    prompt = _summary_prompt(messages, focus, guidance)
     route = routing.resolve_model_route(
         model,
         configured_provider_id=cfg.provider_id,
@@ -990,19 +1038,40 @@ async def _summarize_for_compaction_async(
         configured_headers=getattr(cfg, "provider_headers", None),
         explicit_model=True,
     )
-    result = await model_client.stream_model_async(
-        model_id=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        messages=[ai.user_message(prompt)],
-        tools=None,
-        max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
-        reasoning_effort=None,
-        on_text=lambda _t: None,
-        provider_headers=route.headers,
-        provider_extra=_provider_extra_params(cfg),
-    )
+    # The thing being summarized is, by construction, the part of the history
+    # that would not fit — so the summarize call can overflow too. Peel the
+    # oldest half and retry rather than failing at the exact moment the only
+    # way out of the wall is a summary. Matches the PTL retry loop in Claude
+    # Code (compact.ts, MAX_PTL_RETRIES).
+    head = list(messages)
+    result = None
+    for peel in range(_SUMMARY_PEEL_RETRIES + 1):
+        try:
+            result = await model_client.stream_model_async(
+                model_id=route.model,
+                provider_id=route.provider_id,
+                provider_base_url=route.base_url,
+                provider_api_key=route.api_key,
+                messages=[ai.user_message(_summary_prompt(head, focus, guidance))],
+                tools=None,
+                max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
+                reasoning_effort=None,
+                on_text=lambda _t: None,
+                provider_headers=route.headers,
+                provider_extra=_provider_extra_params(cfg),
+            )
+            break
+        except ai.ProviderAPIError as exc:
+            if not _is_context_overflow_error(exc) or peel >= _SUMMARY_PEEL_RETRIES or len(head) <= 2:
+                raise
+            dropped = len(head) // 2
+            head = head[dropped:]
+            print(
+                f"  {C.ORANGE}(summary too large; dropped the oldest {dropped} messages "
+                f"and retrying, {peel + 1}/{_SUMMARY_PEEL_RETRIES}){C.RESET}",
+                flush=True,
+            )
+    assert result is not None
     text = result.text.strip()
     if not text:
         text = "\n".join(f"## {h}\n(Not captured.)" for h in _COMPACTION_HEADINGS)
@@ -1348,7 +1417,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     try:
         durable_side_effects_started = False
-        overflow_recovered = False
+        overflow_recovered = 0
         for _ in range(cfg.max_tool_iterations):
             # --- One model call with retry on retriable transport errors ---
             text = ""
@@ -1471,20 +1540,37 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     if (
                         _is_context_overflow_error(e)
                         and not durable_side_effects_started
-                        and not overflow_recovered
+                        and overflow_recovered < _OVERFLOW_RECOVERY_ROUNDS
                     ):
+                        overflow_recovered += 1
                         telemetry.event(
                             "context_overflow_error",
                             model=model,
                             error=f"{type(e).__name__}: {e}",
                             attempt=attempt,
+                            round=overflow_recovered,
                         )
+                        # Round 1 clears old tool bodies — no model call, so it
+                        # cannot fail the way a summary can. Only if that is not
+                        # enough do we pay for a summary, and each later round
+                        # keeps fewer recent results.
+                        cleared, reclaimed = microcompact(
+                            messages, keep_recent=max(0, 20 // overflow_recovered)
+                        )
+                        if cleared:
+                            print(f"  {C.ORANGE}(context overflow; cleared {cleared} old tool "
+                                  f"results, ~{reclaimed // 1000}k chars){C.RESET}", flush=True)
+                            token_state.reset()
+                            ai_convo = model_client.history_to_ai_messages(system, messages)
+                            _trace_req["sent"] = 0
+                            _trace_req["schemas"] = True
+                            active_context.compacted_during_turn = True
+                            continue
                         compacted = await _maybe_compact_request_for_budget(
                             phase="overflow_recovery",
                             specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
                             force=True,
                         )
-                        overflow_recovered = True
                         if compacted:
                             continue
                     if e.is_retryable:
