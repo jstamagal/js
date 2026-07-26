@@ -118,6 +118,56 @@ human should be able to deny it. Rejection is error code `-1`.
 `roots` tells a server which directories it may work in. `elicitation` lets a
 server ask the user a question mid-call.
 
+## The Draft Revision Changes The Shape
+
+`2025-11-25` is the current revision, but a **draft** is in review and it is not
+an incremental one. It deletes several things this plan would otherwise build.
+No date has been assigned to it yet, and no SDK implements it. Checked
+2026-07-26.
+
+What the draft removes:
+
+- **The `initialize` / `notifications/initialized` handshake.** MCP becomes
+  stateless. Every request carries its own protocol version and client
+  capabilities in `_meta`, under `io.modelcontextprotocol/protocolVersion` and
+  `io.modelcontextprotocol/clientCapabilities`. A new `server/discover` RPC,
+  which servers MUST implement, replaces the handshake for up-front version
+  selection.
+- **`Mcp-Session-Id` and protocol-level sessions.** Servers that need
+  cross-call state mint their own handles and pass them as ordinary tool
+  arguments.
+- **SSE resumability.** `Last-Event-ID` and SSE event ids are gone; a broken
+  stream loses the in-flight request and the client re-issues it under a new id.
+- **The HTTP GET endpoint and `resources/subscribe`**, replaced by a single
+  long-lived `subscriptions/listen` POST stream that clients opt into per
+  notification type.
+- **`ping`, `logging/setLevel`, `notifications/roots/list_changed`.**
+- **Server-initiated requests.** `roots/list`, `sampling/createMessage`, and
+  `elicitation/create` are replaced by the Multi Round-Trip Request pattern: the
+  server returns an `InputRequiredResult` carrying `inputRequests`, and the
+  client retries the original request with `inputResponses` attached. Every
+  result now carries a required `resultType` of `"complete"` or
+  `"input_required"`.
+
+What it deprecates outright: **Roots, Sampling, and Logging**. The stated
+migrations are to pass directories through tool parameters or server config, to
+call the LLM provider API directly instead of borrowing the client's model, and
+to log to stderr or OpenTelemetry. Deprecated features keep working for at least
+twelve months under the new feature-lifecycle policy.
+
+What it adds that matters here: `inputSchema` and `outputSchema` loosen to allow
+any 2020-12 keyword (which is more argument for `raw_schema`), list results gain
+required `ttlMs` and `cacheScope` fields for client-side caching, `tools/list`
+should return a deterministic order to help prompt caching, `Mcp-Method` and
+`Mcp-Name` headers become required on Streamable HTTP POSTs, and `tasks` moves
+out of core into an extension under a new opt-in extensions framework.
+
+**What this means for the build.** Target `2025-11-25` — it is what every SDK
+speaks today. But do not sink effort into the parts the draft deletes: HTTP
+session-id plumbing, SSE resumption, and anything built on server-initiated
+requests. The stdio path, `tools/list`, `tools/call`, and the result-translation
+work are all unaffected and survive both revisions.
+
 ## Scope
 
 Two directions exist and only one of them is worth building first.
@@ -310,16 +360,22 @@ bridge tool construction) plus config keys, `raw_schema` on `Tool`, and
 registry integration in `build_default_registry`. Tests against a fake server
 shipped in `tests/`.
 
-**Phase 2 — Streamable HTTP.** The `MCP-Session-Id` echo, the
-`MCP-Protocol-Version` header, `404`-means-reinitialize, and `Last-Event-ID`
-resumption. Add the deprecated-transport probe only if a server needs it.
+**Phase 2 — Streamable HTTP.** Only when a remote server is actually wanted;
+stdio covers every locally-run server. Implement the `MCP-Protocol-Version`
+header and the `MCP-Session-Id` echo because today's servers require them, but
+keep both behind one thin seam — the draft deletes them. Skip `Last-Event-ID`
+resumption and the deprecated-transport probe unless something concrete needs
+them; the first is being removed and the second predates two revisions.
 
-**Phase 3 — client features `js` offers back.** `roots` is nearly free and
-should be first: publish the project dir. `sampling` is the interesting one —
-`js` already owns `model_client.py`, so a server can borrow the owner's model.
-Gate it behind an explicit config flag and a confirmation prompt, per the spec's
-human-in-the-loop requirement, and return `-1` on refusal. `elicitation` maps
-onto prompt_toolkit.
+**Phase 3 — client features `js` offers back.** Read the draft before starting
+this phase. `roots` and `sampling` are both deprecated there, and the migration
+the spec suggests for sampling is exactly what `js` already does: call the
+provider directly. Building sampling now means building a feature with a
+twelve-month clock on it, and handing a third-party server the owner's model
+budget. `elicitation` survives but its shape changes completely under Multi
+Round-Trip Requests, so anything written against the current server-initiated
+form is throwaway. The honest recommendation is to skip this phase entirely
+unless a specific server refuses to work without it.
 
 **Phase 4 — resources and prompts.** Expose `resources/read` as a `js` tool and
 map server prompts onto the existing inline-directive machinery.
@@ -366,6 +422,11 @@ requests; pagination runs to exhaustion; `isError` reaches the model as text.
 2. Namespace imported tools as `<server>.<tool>`, or something shorter?
 3. Image and audio content blocks: drop, or route through the vision path?
 4. `list_changed`: rebuild the registry between turns, or require a restart?
-5. Is sampling wanted at all — should a third-party server ever be able to
-   spend the owner's tokens?
-6. Does Phase B (`js` as a server) matter, or is this client-only?
+5. Does Phase B (`js` as a server) matter, or is this client-only?
+6. Is Streamable HTTP wanted at all in the first pass, or is stdio enough until
+   a remote server actually shows up?
+
+Decision 5 from the first draft of this plan — whether a third-party server
+should be able to spend the owner's tokens through sampling — is answered by the
+spec itself. Sampling is deprecated in the draft revision and the suggested
+migration is to call the provider API directly. Don't build it.
