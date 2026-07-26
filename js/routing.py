@@ -74,9 +74,23 @@ def _saved_login(provider_id: str | None):
     try:
         from . import logins as _logins
 
-        return _logins.load_logins().get(normalized)
+        login = _logins.load_logins().get(normalized)
     except Exception:  # noqa: BLE001
         return None
+    if login is None:
+        return None
+    # An OAuth login carries a short-lived bearer in provider_api_key. Codex
+    # refreshes inside its own provider; the xAI login rides the plain openai
+    # transport, so the only place the token can be renewed before it is spent
+    # is here, where the credential is read.
+    try:
+        from . import xai_auth as _xai_auth
+
+        if _xai_auth.is_xai_oauth_provider(normalized):
+            return _xai_auth.ensure_fresh_login(login)
+    except Exception:  # noqa: BLE001 - a stale token still beats no route at all
+        return login
+    return login
 
 
 def resolve_model_route(
