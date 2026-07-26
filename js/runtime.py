@@ -1184,7 +1184,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     def _budget_context_window() -> int:
         inferred = _resolve_context_window(model, provider_id, provider_base_url)
-        return _compact_int_setting(active_compact_cfg, "context_window", inferred or 0)
+        window = _compact_int_setting(active_compact_cfg, "context_window", inferred or 0)
+        if window > 0:
+            return window
+        # Nothing known about this model. context_window is an override that
+        # applies to every model at once, so pinning it to cover one unknown
+        # model throws away the real window of every model that IS known;
+        # context_window_fallback only lands here, where there is no metadata.
+        return _compact_int_setting(active_compact_cfg, "context_window_fallback", 0)
 
     def _budget_buffer_tokens() -> int:
         return _compact_nonnegative_int_setting(active_compact_cfg, "buffer_tokens", 4096)

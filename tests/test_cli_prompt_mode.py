@@ -1323,7 +1323,7 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
         # buffer_tokens 0 keeps these threshold tests on raw-window math, so the
         # synthetic 100-token window still means "80 tokens == 80% full"; the
         # reserve/buffer subtraction itself is covered separately below.
-        settings={"compact": {"context_window": 100, "buffer_tokens": 0, **(compact or {})}},
+        settings={"compact": {"buffer_tokens": 0, **({"context_window": 100} if not (compact or {}).get("context_window_fallback") else {}), **(compact or {})}},
     )
 
 
@@ -1644,4 +1644,25 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     cli._maybe_auto_compact(cfg, _auto_state())
 
     # Same 260k now measured against 237,904 -> over 100%, compaction fires.
+    assert len(calls) == 1
+
+
+def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypatch, tmp_path, capsys):
+    # Known model: metadata wins, the fallback is ignored entirely.
+    calls: list[dict] = []
+    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: 1_050_000)
+    cfg = _auto_compact_cfg(
+        tmp_path,
+        compact={"context_window_fallback": 370_000, "buffer_tokens": 4_096},
+    )
+    cfg = replace(cfg, max_output_tokens=128_000)
+    # 300k is 81% of a 370k pin but 29% of the real 1.05M window.
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 300_000, raising=False)
+    cli._maybe_auto_compact(cfg, _auto_state())
+    assert calls == []
+
+    # Unknown model: nothing to resolve, so the fallback is what we measure by.
+    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: None)
+    cli._maybe_auto_compact(cfg, _auto_state())
     assert len(calls) == 1
