@@ -47,7 +47,7 @@ DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 # advertises it. Both codex_provider.list_models() and picker._model_rows()
 # splice this in so it's selectable even when the listing is stale — one
 # constant so the two call sites can't drift apart.
-CODEX_PHANTOM_MODEL_ID = "gpt-5.5"
+CODEX_PHANTOM_MODEL_ID = "gpt-5.6-sol"
 _TOKEN_TIMEOUT = 15.0
 _DEVICE_POLL_SAFETY_MARGIN = 3.0
 _DEVICE_MAX_POLLS = 120
@@ -144,13 +144,17 @@ def _token_from_login(login: Login) -> CodexToken | None:
     return CodexToken(
         access=login.provider_api_key or "",
         refresh=login.codex_refresh_token,
-        expires_at=float(login.codex_token_expires) if login.codex_token_expires is not None else 0.0,
+        expires_at=float(login.codex_token_expires)
+        if login.codex_token_expires is not None
+        else 0.0,
         account_id=login.codex_account_id,
         email=login.codex_email,
     )
 
 
-def _post_token_form(data: dict[str, str], *, client: httpx.Client | None = None, previous: CodexToken | None = None) -> CodexToken:
+def _post_token_form(
+    data: dict[str, str], *, client: httpx.Client | None = None, previous: CodexToken | None = None
+) -> CodexToken:
     owns_client = client is None
     if client is None:
         client = httpx.Client(timeout=_TOKEN_TIMEOUT)
@@ -172,7 +176,12 @@ def _post_token_form(data: dict[str, str], *, client: httpx.Client | None = None
             client.close()
 
 
-async def _apost_token_form(data: dict[str, str], *, client: httpx.AsyncClient | None = None, previous: CodexToken | None = None) -> CodexToken:
+async def _apost_token_form(
+    data: dict[str, str],
+    *,
+    client: httpx.AsyncClient | None = None,
+    previous: CodexToken | None = None,
+) -> CodexToken:
     owns_client = client is None
     if client is None:
         client = httpx.AsyncClient(timeout=_TOKEN_TIMEOUT)
@@ -235,7 +244,9 @@ def refresh_token(refresh: str, *, previous: CodexToken | None = None) -> CodexT
     )
 
 
-async def refresh_token_async(refresh: str, *, client: httpx.AsyncClient | None = None, previous: CodexToken | None = None) -> CodexToken:
+async def refresh_token_async(
+    refresh: str, *, client: httpx.AsyncClient | None = None, previous: CodexToken | None = None
+) -> CodexToken:
     return await _apost_token_form(
         {
             "grant_type": "refresh_token",
@@ -365,12 +376,13 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
         raise RuntimeError(f"OpenAI Codex OAuth failed: {winner.received_error}")
     if winner.received_state != state:
         raise RuntimeError("OpenAI Codex OAuth state mismatch")
-    return login_from_token(exchange_code_for_token(winner.received_code, verifier, CALLBACK_REDIRECT_URI))
+    return login_from_token(
+        exchange_code_for_token(winner.received_code, verifier, CALLBACK_REDIRECT_URI)
+    )
 
 
 def login_device(*, open_browser: bool = True) -> Login:
     """Run the headless Codex device-code OAuth flow and return a saved Login."""
-
 
     with httpx.Client(timeout=_TOKEN_TIMEOUT) as client:
         response = client.post(
@@ -379,14 +391,18 @@ def login_device(*, open_browser: bool = True) -> Login:
             headers={"Content-Type": "application/json"},
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"OpenAI Codex device authorization failed: {_error_detail(response)}")
+            raise RuntimeError(
+                f"OpenAI Codex device authorization failed: {_error_detail(response)}"
+            )
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError("OpenAI Codex device authorization response was not a JSON object")
         device_auth_id = payload.get("device_auth_id")
         user_code = payload.get("user_code")
         if not isinstance(device_auth_id, str) or not isinstance(user_code, str):
-            raise RuntimeError("OpenAI Codex device authorization response missing device_auth_id or user_code")
+            raise RuntimeError(
+                "OpenAI Codex device authorization response missing device_auth_id or user_code"
+            )
         raw_interval = payload.get("interval", 5)
         try:
             poll_interval = max(float(raw_interval), 1.0) + _DEVICE_POLL_SAFETY_MARGIN
@@ -410,14 +426,18 @@ def login_device(*, open_browser: bool = True) -> Login:
             if poll_response.status_code in {403, 404}:
                 continue
             if poll_response.status_code >= 400:
-                raise RuntimeError(f"OpenAI Codex device token polling failed: {_error_detail(poll_response)}")
+                raise RuntimeError(
+                    f"OpenAI Codex device token polling failed: {_error_detail(poll_response)}"
+                )
             poll_payload = poll_response.json()
             if not isinstance(poll_payload, dict):
                 raise RuntimeError("OpenAI Codex device token response was not a JSON object")
             code = poll_payload.get("authorization_code")
             verifier = poll_payload.get("code_verifier")
             if not isinstance(code, str) or not isinstance(verifier, str):
-                raise RuntimeError("OpenAI Codex device token response missing authorization_code or code_verifier")
+                raise RuntimeError(
+                    "OpenAI Codex device token response missing authorization_code or code_verifier"
+                )
             return login_from_token(exchange_code_for_token(code, verifier, DEVICE_REDIRECT_URI))
     raise RuntimeError("OpenAI Codex device authorization timed out")
 
@@ -469,15 +489,21 @@ def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
 
 def refreshed_login(login: Login) -> Login:
     if not login.codex_refresh_token:
-        raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
+        raise RuntimeError(
+            "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+        )
     token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
     return apply_refreshed_token(login, token)
 
 
 async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
-        raise RuntimeError("OpenAI Codex login has no refresh token; run js --login openai-codex again")
-    token = await refresh_token_async(login.codex_refresh_token, client=client, previous=_token_from_login(login))
+        raise RuntimeError(
+            "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+        )
+    token = await refresh_token_async(
+        login.codex_refresh_token, client=client, previous=_token_from_login(login)
+    )
     return apply_refreshed_token(login, token)
 
 
@@ -503,7 +529,9 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     return refreshed
 
 
-async def ensure_fresh_login_async(login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None) -> Login:
+async def ensure_fresh_login_async(
+    login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None
+) -> Login:
     if not login_needs_refresh(login):
         return login
     refreshed = await refreshed_login_async(login, client=client)
