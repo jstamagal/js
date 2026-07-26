@@ -353,6 +353,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 
 _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_output_tokens", ("model", "max_output_tokens")),
+    ("model_context_window", ("model", "context_window")),
 )
 
 

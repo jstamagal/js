@@ -185,6 +185,21 @@ def set_context_window_overrides(raw: Any) -> None:
     walk(raw, "")
 
 
+def install_context_window_overrides(cfg: Config) -> None:
+    """Install both override forms for this turn.
+
+    model.context_window is the single-model form, symmetric with
+    model.max_output_tokens, and wins — it names the model actually running.
+    compact.context_window_overrides is the multi-model map.
+    """
+    overrides = dict(_compact_setting(cfg, "context_window_overrides", None) or {})
+    explicit = getattr(cfg, "model_context_window", None)
+    if explicit:
+        key = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model
+        overrides[key] = explicit
+    set_context_window_overrides(overrides)
+
+
 def _context_window_override(model: str, provider_id: str | None) -> int | None:
     if not _CONTEXT_WINDOW_OVERRIDES:
         return None
@@ -1103,7 +1118,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
     active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
-    set_context_window_overrides(_compact_setting(cfg, "context_window_overrides", None))
+    install_context_window_overrides(cfg)
     active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
@@ -1166,9 +1181,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 _base = model.split(":")[0]
             else:
                 _base = "ai-gateway"
+        # ctx is the number that decides when compaction fires and how much room
+        # is left to work in; max_out only bounds one reply. Showing the second
+        # without the first invites reading 128000 as the window.
+        _ctx_for_banner = _resolve_context_window(model, provider_id, provider_base_url)
         _bits = [f"model={model}",
                  f"provider={_provider_label}",
                  f"base={_base}",
+                 f"ctx={_ctx_for_banner if _ctx_for_banner else 'unknown'}",
                  f"max_out={max_out if max_out is not None else 'provider-default'}"]
         if effort:
             _bits.append(f"effort={effort}")

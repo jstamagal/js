@@ -1705,3 +1705,27 @@ def test_context_window_overrides_rebuild_dotted_model_ids():
         assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) == 370_000
     finally:
         runtime.set_context_window_overrides(None)
+
+
+def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_path):
+    # The single-model form, symmetric with model.max_output_tokens.
+    cfg = _auto_compact_cfg(tmp_path)
+    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
+    try:
+        runtime.install_context_window_overrides(cfg)
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        # Scoped to the model it names; a sibling still comes from the catalog.
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) != 370_000
+    finally:
+        runtime.set_context_window_overrides(None)
+
+
+def test_model_context_window_beats_the_multi_model_map(tmp_path):
+    cfg = _auto_compact_cfg(tmp_path)
+    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
+    cfg.settings["compact"]["context_window_overrides"] = {"openai-codex/gpt-5": {"6-sol": 900_000}}
+    try:
+        runtime.install_context_window_overrides(cfg)
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+    finally:
+        runtime.set_context_window_overrides(None)
