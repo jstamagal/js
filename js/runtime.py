@@ -224,6 +224,12 @@ def _resolve_context_window(
     override = _context_window_override(model, provider_id)
     if override is not None:
         return override
+    if (provider_id or "").strip().lower() == "openai-codex":
+        from . import codex_models
+
+        codex_window = codex_models.context_window(model)
+        if codex_window is not None:
+            return codex_window
     probed = model_metadata.probe_local_context_window(
         model,
         provider_id,
