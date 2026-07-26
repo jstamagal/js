@@ -1605,3 +1605,43 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
 
     assert calls == []
     assert "50% full" in capsys.readouterr().out
+
+
+def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(monkeypatch, tmp_path, capsys):
+    # gpt-5.6-sol declares max_output 128000. Reserving all of it against a
+    # 370k window would leave 238k addressable and compact at ~190k; the
+    # reserve is capped at compact.summary_reserve_tokens (20k default), so
+    # 345,904 is addressable and 260k reads as 75%, under the trigger.
+    calls: list[dict] = []
+    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    cfg = _auto_compact_cfg(
+        tmp_path,
+        compact={"context_window": 370_000, "buffer_tokens": 4_096},
+    )
+    cfg = replace(cfg, max_output_tokens=128_000)
+
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
+    cli._maybe_auto_compact(cfg, _auto_state())
+
+    assert calls == []
+    assert "75% full" in capsys.readouterr().out
+
+
+def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
+    calls: list[dict] = []
+    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    cfg = _auto_compact_cfg(
+        tmp_path,
+        compact={
+            "context_window": 370_000,
+            "buffer_tokens": 4_096,
+            "summary_reserve_tokens": 128_000,
+        },
+    )
+    cfg = replace(cfg, max_output_tokens=128_000)
+
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
+    cli._maybe_auto_compact(cfg, _auto_state())
+
+    # Same 260k now measured against 237,904 -> over 100%, compaction fires.
+    assert len(calls) == 1

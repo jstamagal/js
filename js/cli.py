@@ -262,7 +262,14 @@ def _effective_context_window(cfg: Config, context_window: int) -> int:
     max_out = cfg.max_output_tokens
     if max_out is None:
         max_out = runtime._resolve_max_output(cfg.model, cfg.provider_id)
-    reserve = max(0, int(max_out or 0))
+    # Reserve what a reply plausibly costs, NOT what the model is willing to
+    # emit. gpt-5.6-sol declares max_output 128000; holding all of that back
+    # would hand a third of a 370k window to an outcome that essentially never
+    # happens. Cap it the way Claude Code does (min(max_output, 20k)).
+    reserve = min(
+        max(0, int(max_out or 0)),
+        _compact_nonnegative_int(cfg, "summary_reserve_tokens", 20_000),
+    )
     buffer_tokens = _compact_nonnegative_int(cfg, "buffer_tokens", 4096)
     # Never let the reserve eat the whole window on a model with a huge declared
     # output cap; keep at least half the window addressable for input.
