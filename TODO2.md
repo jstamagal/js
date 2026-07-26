@@ -155,5 +155,12 @@
   - Handle messy git states without crashing: not-a-repo, empty repo, detached HEAD, mid-merge/rebase, mixed staged+unstaged, untracked.
   - Not a repo: auto `git init`, local, no remote. Personal remote = a later `~/.config/js/agents/commit` override.
 
+- Model picker paints its own colors instead of inheriting the terminal's.
+  - `js/picker.py:66` hardcodes `background: #111318` and `:100` hardcodes it as a
+    foreground, so the picker is a black rectangle sitting inside whatever theme
+    the terminal is actually running.
+  - Drop the literals and let the widgets inherit; the terminal already knows
+    what the background is. Low priority, purely cosmetic.
+
 ## DONE
 - Tool-args double-encoding: `_canonical_tool_args` short-circuits only when `json.loads(raw)` is a dict; otherwise repairs via `_repair_jsonish`. `js/runtime.py`; test `test_canonical_tool_args_unwraps_double_encoded_object`.
