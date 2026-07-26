@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import curses
 import os
 import sys
@@ -43,7 +44,21 @@ def _mask(value: str) -> str:
     return f"{value[:8]}*******{value[-4:]}"
 
 
+def _use_terminal_colors() -> None:
+    """Keep the terminal's own background instead of painting curses black.
+
+    ``curses.wrapper`` calls ``start_color()``, and that binds color pair 0 to
+    white-on-black — so every cleared line gets filled with black no matter what
+    theme the terminal is running. ``use_default_colors()`` remaps the default
+    fg/bg back to "whatever the terminal already had", which is what makes the
+    menu sit in the surrounding colors rather than on a black rectangle.
+    """
+    with contextlib.suppress(curses.error):
+        curses.use_default_colors()
+
+
 def _curses_menu(stdscr: curses.window, items: list[str], title: str) -> int | None:
+    _use_terminal_colors()
     curses.curs_set(0)
     stdscr.keypad(True)
     idx = 0
@@ -131,6 +146,7 @@ def _curses_multiselect(
 
     ``rows`` are ``(label, annotation)``; annotation is shown dimmed in parens.
     """
+    _use_terminal_colors()
     curses.curs_set(0)
     stdscr.keypad(True)
     n = len(rows)
