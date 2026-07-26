@@ -237,6 +237,38 @@ def _compact_float(cfg: Config, key: str, default: float) -> float:
     return value if 0.0 < value <= 1.0 else default
 
 
+def _compact_nonnegative_int(cfg: Config, key: str, default: int) -> int:
+    """Like _compact_int but 0 is a legal value, not a request for the default —
+    a buffer of 0 is a real choice."""
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
+def _effective_context_window(cfg: Config, context_window: int) -> int:
+    """Window minus the room the next turn already owes: one full reply plus the
+    compaction buffer. This mirrors runtime._maybe_compact_request_for_budget so
+    both triggers agree on what 'full' means. A fraction of the raw window does
+    not survive a small model — 0.8 of 32k leaves 6.4k, less than a single
+    max-length reply, so compaction would arm only after the turn it needed to
+    prevent."""
+    if context_window <= 0:
+        return 0
+    max_out = cfg.max_output_tokens
+    if max_out is None:
+        max_out = runtime._resolve_max_output(cfg.model, cfg.provider_id)
+    reserve = max(0, int(max_out or 0))
+    buffer_tokens = _compact_nonnegative_int(cfg, "buffer_tokens", 4096)
+    # Never let the reserve eat the whole window on a model with a huge declared
+    # output cap; keep at least half the window addressable for input.
+    return max(context_window // 2, context_window - reserve - buffer_tokens)
+
+
 def _compact_thresholds(cfg: Config) -> tuple[float, float, float]:
     notify_at = _compact_float(cfg, "notify_threshold", 0.50)
     trigger_at = _compact_float(cfg, "trigger_threshold", 0.80)
@@ -983,10 +1015,18 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         active_cfg.provider_base_url,
     )
     context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
-    if context_window <= 0:
+    # Fullness is measured against the window we can actually put INPUT in, not
+    # the raw window: the next reply needs max_output_tokens of room and the
+    # summary call needs compact.buffer_tokens on top. Measuring against the raw
+    # window made these thresholds mean something different from the in-turn
+    # budget check in runtime._maybe_compact_request_for_budget, which has always
+    # subtracted both — so the cruder trigger fired first and the exact one
+    # rarely ran. Same denominator now, both places.
+    effective_window = _effective_context_window(active_cfg, context_window)
+    if effective_window <= 0:
         fullness = 0.0
     else:
-        fullness = prompt_tokens / context_window
+        fullness = prompt_tokens / effective_window
     notify_at, trigger_at, force_at = _compact_thresholds(cfg)
     if fullness < trigger_at and not incomplete_forced:
         state["compact_consecutive"] = 0
