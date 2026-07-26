@@ -169,6 +169,7 @@ class Config:
     debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
     transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
     transcript_log_dir: str | None = None  # override dir for transcript logs; None = transcript/<agent> under data dir
+    mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
 
 
 def _session_timestamp() -> str:
@@ -402,6 +403,9 @@ def from_env(
     artifact_bin = _settings.get_dotted(js_root_settings, ("artifact", "bin"))
 
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
+    from . import mcp_config
+
+    mcp = mcp_config.resolve(js_root_settings, agent_id)
 
     sessions_dir = _paths.sessions_root() / agent_id
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -470,6 +474,7 @@ def from_env(
         debug_autolog_dir=debug_autolog_dir,
         transcript_log=transcript_log,
         transcript_log_dir=transcript_log_dir,
+        mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
     )
