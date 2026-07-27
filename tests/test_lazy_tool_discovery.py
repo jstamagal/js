@@ -89,6 +89,34 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
     assert rejected.startswith("ERROR: no tool named browser_probe")
 
 
+def test_discovery_name_is_reserved_from_generated_agents(tmp_path):
+    blocked = tmp_path / "tool_discovery"
+    blocked.mkdir()
+    (blocked / "10-system.md").write_text("You must not shadow discovery.\n", encoding="utf-8")
+    allowed = tmp_path / "helper_agent"
+    allowed.mkdir()
+    (allowed / "10-system.md").write_text("Help with the request.\n", encoding="utf-8")
+
+    registry = build_default_registry(prompts_root=tmp_path)
+
+    assert registry.resolve("tool_discovery") is None
+    assert registry.resolve("helper_agent") is not None
+    surface = registry.select(["helper_agent"]).lazy_surface(tmp_path)
+    assert _spec_names(surface.openai_specs()).count("tool_discovery") == 1
+    assert [item["id"] for item in json.loads(surface.discover(kind="native"))["results"]] == [
+        "native:helper_agent"
+    ]
+
+
+def test_discovery_name_cannot_be_taken_by_an_alias(tmp_path):
+    allowed = build_default_registry().select(["read", "browser_probe"])
+    surface = allowed.aliased({"read": "tool_discovery"}).lazy_surface(tmp_path)
+
+    assert _spec_names(surface.openai_specs()) == ["read", "tool_discovery"]
+    assert surface.resolve("tool_discovery").name == "tool_discovery"
+    assert surface.dispatch_registry().resolve("tool_discovery").name == "tool_discovery"
+
+
 def test_loading_native_tool_changes_only_current_surface(tmp_path):
     allowed = build_default_registry().select(["browser_probe", "read"])
     first = allowed.lazy_surface(tmp_path)
@@ -174,6 +202,39 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
     assert tool_results[1].startswith("ERROR: no tool named browser_probe")
     assert "browser_probe" not in [tool.name for tool in calls[0]]
     assert "browser_probe" in [tool.name for tool in calls[1]]
+
+
+def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, tmp_path):
+    calls: list[list[dict]] = []
+    results = iter(
+        [
+            _result(("discover", "tool_discovery", '{"kind":"native"}')),
+            _result(text="done"),
+        ]
+    )
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs["tools"] or [])
+        return next(results)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = _cfg(
+        tmp_path,
+        {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]}},
+    )
+    messages = [{"role": "user", "content": "find tools"}]
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        tool_registry=build_default_registry().select(["read", "browser_probe"]),
+        tool_context=ToolContext(cwd=tmp_path),
+    )
+
+    assert [tool.name for tool in calls[0]] == ["read", "tool_discovery"]
+    result = next(message["content"] for message in messages if message.get("role") == "tool")
+    assert json.loads(result)["results"][0]["id"] == "native:browser_probe"
 
 
 def test_runtime_regenerates_schemas_preserves_alias_history_and_resets_next_turn(monkeypatch, tmp_path):

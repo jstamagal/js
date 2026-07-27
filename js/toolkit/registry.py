@@ -92,7 +92,11 @@ class TurnToolSurface:
 
     def __init__(self, allowed: ToolRegistry, cwd: Path) -> None:
         self.allowed = allowed
-        self.aliases = dict(allowed.aliases)
+        self.aliases = {
+            alias: canonical
+            for alias, canonical in allowed.aliases.items()
+            if alias != discovery.DISCOVERY_TOOL_NAME
+        }
         self._skills = (
             {skill.id: skill for skill in discovery.discover_skills(cwd)}
             if allowed.resolve("skill") is not None
@@ -134,6 +138,8 @@ class TurnToolSurface:
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
+        if trimmed in self.by_name:
+            return self.by_name[trimmed]
         canonical = self.aliases.get(trimmed.lower(), trimmed)
         return self.by_name.get(canonical)
 
@@ -289,6 +295,7 @@ def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, fl
         + artifact.tools()
     )
     reserved = {tool.name for tool in base_tools}
+    reserved.add(discovery.DISCOVERY_TOOL_NAME)
     all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
     return _registry_from_tools(all_tools)
 

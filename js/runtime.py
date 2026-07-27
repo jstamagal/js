@@ -40,10 +40,13 @@ _UNSET = object()
 
 def _usable_tool_aliases(alias_map: dict[str, str], tool_names: set[str]) -> dict[str, str]:
     original_name_owners = {name.lower(): name for name in tool_names}
+    reserved_names = {"tool_discovery"}
     return {
         canon: alias
         for canon, alias in alias_map.items()
-        if canon in tool_names and (original_name_owners.get(alias.lower()) in (None, canon))
+        if canon in tool_names
+        and alias.lower() not in reserved_names
+        and (original_name_owners.get(alias.lower()) in (None, canon))
     }
 
 
