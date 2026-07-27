@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 import pytest
@@ -1575,3 +1578,132 @@ def test_model_context_window_beats_the_multi_model_map(tmp_path):
         assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
     finally:
         runtime.set_context_window_overrides(None)
+
+
+def test_named_nested_and_derived_sessions_append_stably(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
+
+    assert cli.main(["-s", "caller/nested", "-p", "first"]) == 0
+    assert cli.main(["-s", "caller/nested", "-p", "second"]) == 0
+    nested = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "caller" / "nested.jsonl"
+    assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
+
+    project = tmp_path / "project"
+    project.mkdir()
+    assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "third"]) == 0
+    assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "fourth"]) == 0
+    derived = list((tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "derived").glob("*.jsonl"))
+    assert len(derived) == 1
+    assert [message["content"] for message in load_messages(derived[0])] == ["third", "OK", "fourth", "OK"]
+    capsys.readouterr()
+
+
+def test_session_key_isolated_by_agent_cwd_and_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+    other_agent = tmp_path / ".config" / "js" / "agents" / "other"
+    other_agent.mkdir(parents=True)
+    (other_agent / "01.md").write_text("SYSTEM\n", encoding="utf-8")
+
+    runs = [
+        ["-C", str(one), "--session-key", "same", "-p", "one"],
+        ["-C", str(two), "--session-key", "same", "-p", "two"],
+        ["-C", str(one), "--session-key", "different", "-p", "three"],
+        ["-C", str(one), "-a", "other", "--session-key", "same", "-p", "four"],
+    ]
+    for argv in runs:
+        assert cli.main(argv) == 0
+
+    root = tmp_path / ".local" / "share" / "js" / "sessions"
+    assert len(list(root.rglob("derived/*.jsonl"))) == 4
+
+
+def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("ANSWER"))
+
+    assert cli.main(["-q", "-p", "hello"]) == 0
+
+    captured = capsys.readouterr()
+    machine_lines = [json.loads(line) for line in captured.err.splitlines() if line.startswith("{")]
+    assert captured.out == "ANSWER\n"
+    assert len(machine_lines) == 1
+    metadata = machine_lines[0]["js_session"]
+    assert metadata["agent"] == "defaultagent"
+    assert Path(metadata["path"]).is_absolute()
+    assert Path(metadata["path"]).stem == metadata["session_id"]
+
+
+def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".local" / "share" / "js" / "sessions"
+    old = root / "old" / "legacy.jsonl"
+    nested = root / "agent" / "caller" / "nested.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_text('{"role":"user","content":"old"}\n', encoding="utf-8")
+    cli.M.append_message(nested, {"role": "user", "content": "new"})
+    from js.session_catalog import record_session_start
+    record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9)
+    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
+
+    assert cli.main(["--list"]) == 0
+    table = capsys.readouterr().out
+    assert "AGENT" in table and "IN-FLIGHT" in table
+    assert "legacy" in table and "caller/nested" in table
+    assert "job-key/9" in table and str(tmp_path) in table
+
+    assert cli.main(["--list", "--json"]) == 0
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {(item["agent"], item["name"]) for item in records} == {
+        ("old", "legacy"),
+        ("agent", "caller/nested"),
+    }
+    assert next(item for item in records if item["agent"] == "old")["user_turns"] == 1
+    expected_fields = {"agent", "name", "path", "mtime", "size", "user_turns", "in_flight", "cwd", "caller_key", "job_id"}
+    assert all(set(item) == expected_fields for item in records)
+
+
+def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    session = tmp_path / ".local" / "share" / "js" / "sessions" / "agent" / "open.jsonl"
+    session.parent.mkdir(parents=True)
+    session.touch()
+    ready = tmp_path / "ready"
+    code = (
+        "import sys,time\n"
+        "from pathlib import Path\n"
+        "from js.session_catalog import acquire_session\n"
+        "acquire_session(Path(sys.argv[1]))\n"
+        "Path(sys.argv[2]).touch()\n"
+        "time.sleep(30)\n"
+    )
+    process = subprocess.Popen([sys.executable, "-c", code, str(session), str(ready)])
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+        assert cli.main(["--list", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["in_flight"] is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+    assert cli.main(["--list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["in_flight"] is False
+
+
+def test_json_is_scoped_to_list(capsys):
+    assert cli.main(["--json"]) == 2
+    assert "--json only works with --list" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["-s", "named", "--session-key", "key", "-p", "nope"])
