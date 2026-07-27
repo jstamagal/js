@@ -69,13 +69,16 @@ js --login mimo            # Xiaomi MiMo API endpoint
 js --login mimo-token-plan # Xiaomi MiMo Token Plan endpoint (SGP default)
 js --login openai-codex        # browser OAuth on localhost:1455
 js --login openai-codex-device # device-code OAuth; prints URL + code
+js --models-edit deepseek      # curate only DeepSeek's already-cached model list
 js --logout deepseek           # remove saved DeepSeek login and cached models
 ```
 
 Successful logins are saved in `~/.config/js/logins.toml`, and the fetched
 model ids are cached in `~/.config/js/models-cache.json`. Multiple providers
-can be logged in at the same time; `--logout <provider>` removes that provider
-and its cache.
+can be logged in at the same time. `--models-edit <provider>` opens the cached
+model checklist with every current entry selected and allows adding model ids
+without logging in, fetching, or making a model call. `--logout <provider>`
+removes that provider and its cache.
 
 `<add custom provider>` in the login picker lets you save arbitrary provider
 names backed by an API shape (`openai-completions`, `openai-responses`, or

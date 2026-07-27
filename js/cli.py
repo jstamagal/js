@@ -2576,6 +2576,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("--logout", "logout"):
         from . import login_cli
         return login_cli.main(["logout"] + (argv[1:] if len(argv) > 1 else []))
+    if argv and argv[0] in ("--models-edit", "models-edit"):
+        from . import login_cli
+        return login_cli.main(["models-edit"] + (argv[1:] if len(argv) > 1 else []))
 
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")

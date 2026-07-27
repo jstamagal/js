@@ -599,6 +599,36 @@ def _run_login(provider_id: str | None = None) -> int:
     return 0
 
 
+def _normalize_cached_provider_id(provider_id: str, cache: dict[str, list[str]]) -> str:
+    requested = provider_id.strip()
+    lowered = requested.lower()
+    for provider in providers.all_providers():
+        if lowered == provider.id.lower() or lowered in {alias.lower() for alias in provider.aliases}:
+            return provider.id
+    for cached_id in cache:
+        if lowered == cached_id.lower():
+            return cached_id
+    return requested
+
+
+def _run_models_edit(provider_id: str) -> int:
+    cache = load_model_cache()
+    target = _normalize_cached_provider_id(provider_id, cache)
+    cached = cache.get(target)
+    if not cached:
+        print(f"{C.ORANGE}no cached models for {target}{C.RESET}", file=sys.stderr)
+        return 1
+
+    curated = _select_models_to_cache(target, cached)
+    if curated is None:
+        print(f"{C.GREY}model cache edit cancelled; {target} unchanged{C.RESET}")
+        return 0
+
+    cache_models(target, curated)
+    print(f"cached {len(curated)} models for {target}")
+    return 0
+
+
 def _run_logout(provider_id: str) -> int:
     target = providers.normalize_provider_id(provider_id) or provider_id
     try:
@@ -625,9 +655,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{C.ORANGE}usage: js --logout <provider-id>{C.RESET}", file=sys.stderr)
             return 2
         return _run_logout(args[1])
+    if args[0] in ("--models-edit", "models-edit"):
+        if len(args) < 2:
+            print(f"{C.ORANGE}usage: js --models-edit <provider-id>{C.RESET}", file=sys.stderr)
+            return 2
+        return _run_models_edit(args[1])
     if len(args) == 1:
         return _run_login(args[0])
-    print(f"{C.ORANGE}usage: js --login [<provider-id>] | js --logout <provider-id>{C.RESET}", file=sys.stderr)
+    print(
+        f"{C.ORANGE}usage: js --login [<provider-id>] | js --logout <provider-id> | "
+        f"js --models-edit <provider-id>{C.RESET}",
+        file=sys.stderr,
+    )
     return 2
 
 

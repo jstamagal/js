@@ -334,6 +334,76 @@ def test_select_models_non_tty_keeps_all(monkeypatch):
     assert login_cli._select_models_to_cache("opencode-go", models) == models
 
 
+def test_models_edit_removes_and_adds_models_without_login_or_fetch(monkeypatch, tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    metadata = {
+        "keep": logins.ModelCacheMetadata(context_window=32768),
+        "remove": logins.ModelCacheMetadata(context_window=65536),
+    }
+    logins.cache_models("openai-codex", ["keep", "remove"], metadata=metadata)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("network/login call")
+
+    try:
+        monkeypatch.setattr(login_cli, "_collect_api_login", forbidden)
+        monkeypatch.setattr(login_cli, "test_login", forbidden)
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", forbidden)
+        monkeypatch.setattr(login_cli.model_client, "stream_model", forbidden)
+
+        def curate(provider_id, models):
+            assert provider_id == "openai-codex"
+            assert models == ["keep", "remove"]
+            return ["keep", "added"]
+
+        monkeypatch.setattr(login_cli, "_select_models_to_cache", curate)
+
+        assert login_cli.main(["models-edit", "codex"]) == 0
+        assert logins.load_model_cache()["openai-codex"] == ["keep", "added"]
+        assert logins.load_model_cache_metadata()["openai-codex"] == {"keep": metadata["keep"]}
+    finally:
+        _reset_logins()
+
+
+def test_models_edit_missing_or_empty_cache_leaves_file_unchanged(monkeypatch, tmp_path: Path, capsys):
+    logins.set_config_dir(tmp_path)
+    cache_path = tmp_path / "models-cache.json"
+    cache_path.write_text('{"deepseek": []}\n', encoding="utf-8")
+    before = cache_path.read_bytes()
+
+    try:
+        monkeypatch.setattr(
+            login_cli,
+            "_select_models_to_cache",
+            lambda *_args: (_ for _ in ()).throw(AssertionError("picker should not open")),
+        )
+        assert login_cli.main(["models-edit", "deepseek"]) == 1
+        assert cache_path.read_bytes() == before
+        assert "no cached models for deepseek" in capsys.readouterr().err
+
+        cache_path.unlink()
+        assert login_cli.main(["models-edit", "not-saved"]) == 1
+        assert not cache_path.exists()
+    finally:
+        _reset_logins()
+
+
+def test_models_edit_picker_cancel_leaves_cache_unchanged(monkeypatch, tmp_path: Path, capsys):
+    logins.set_config_dir(tmp_path)
+    metadata = {"keep": logins.ModelCacheMetadata(max_output_tokens=4096)}
+    logins.cache_models("deepseek", ["keep"], metadata=metadata)
+    cache_path = tmp_path / "models-cache.json"
+    before = cache_path.read_bytes()
+
+    try:
+        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda provider_id, models: None)
+        assert login_cli.main(["models-edit", "deepseek"]) == 0
+        assert cache_path.read_bytes() == before
+        assert "unchanged" in capsys.readouterr().out
+    finally:
+        _reset_logins()
+
+
 def test_select_models_interactive_plain_enter_keeps_single_fetched_model(monkeypatch, tmp_path: Path):
     import curses
 
@@ -617,3 +687,16 @@ def test_top_level_cli_dispatches_login(monkeypatch):
     monkeypatch.setattr(cli, "login_cli", login_cli, raising=False)
     assert cli.main(["--login", "deepseek"]) == 0
     assert captured == {"args": ["deepseek"]}
+
+
+def test_top_level_cli_dispatches_models_edit(monkeypatch):
+    captured = {}
+
+    def fake_login_main(args):
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(login_cli, "main", fake_login_main)
+    monkeypatch.setattr(cli, "login_cli", login_cli, raising=False)
+    assert cli.main(["--models-edit", "deepseek"]) == 0
+    assert captured == {"args": ["models-edit", "deepseek"]}
