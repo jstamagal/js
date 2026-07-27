@@ -275,7 +275,19 @@ class JSONRPCPeer:
             name=f"mcp-jsonrpc-request-{request_id}",
         )
         self._incoming[request_id] = task
-        task.add_done_callback(lambda _task, key=request_id: self._incoming.pop(key, None))
+        task.add_done_callback(lambda done, key=request_id: self._finish_incoming(key, done))
+
+    def _finish_incoming(self, key: JSONRPCId, task: asyncio.Task[Any]) -> None:
+        self._incoming.pop(key, None)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            # Retrieve so asyncio never emits the raw exception via its
+            # unretrieved-task diagnostic; transport failures below the
+            # client redaction layer can carry credential-bearing text,
+            # so log only the exception type.
+            logger.warning("MCP incoming request task failed: %s", type(exc).__name__)
 
     async def _handle_request(
         self, request_id: JSONRPCId, method: str, params: dict[str, Any]
