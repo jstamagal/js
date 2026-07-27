@@ -637,3 +637,35 @@ def test_inline_flag_credentials_in_stdio_args_are_redacted():
     scrubbed = _redact_value("echo ARG_SENTINEL_999 and --verbose", secrets)
     assert "ARG_SENTINEL_999" not in scrubbed
     assert "--verbose" in scrubbed
+
+
+def test_short_inline_credentials_redact_and_schema_context_reaches_server():
+    from js.mcp.host import _redact_value, _secret_values
+    from js.mcp_config import MCPServer
+    from js.toolkit.core import Tool, ToolContext, call_tool
+
+    server = MCPServer(
+        name="s2", normalized_name="s2", transport="stdio",
+        command="server", args=("--token=abc",),
+    )
+    assert "abc" not in _redact_value("say abc", _secret_values(server))
+
+    received = {}
+
+    def remote_handler(**kwargs):
+        received.update(kwargs)
+        return "ok"
+
+    remote = Tool("remote", "d", remote_handler, {"context": {"type": "string"}}, required=("context",))
+    call_tool(remote, {"context": "schema-value"}, ToolContext(cwd=None))
+    assert received == {"context": "schema-value"}
+
+    injected = {}
+
+    def native_handler(context=None):
+        injected["context"] = context
+        return "ok"
+
+    native = Tool("native", "d", native_handler, {})
+    call_tool(native, {"context": "model-noise"}, ToolContext(cwd=None))
+    assert isinstance(injected["context"], ToolContext)

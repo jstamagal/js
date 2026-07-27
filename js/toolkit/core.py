@@ -200,15 +200,19 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     sig = inspect.signature(tool.handler)
     known = set(sig.parameters)
     has_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
+    # "context" is the ToolContext injection slot only when the tool does not
+    # declare it in its model-facing schema (remote MCP schemas may require a
+    # real property with that name; its value must reach the server).
+    declares_context = "context" in tool.params
     filtered: dict[str, Any] = {}
     for key, value in args.items():
         if key not in known and not has_var_kwargs:
             continue
-        if key == "context":
+        if key == "context" and not declares_context:
             continue
         schema_type = tool.params.get(key, {}).get("type")
         filtered[key] = coerce_value(value, schema_type)
-    if "context" in known:
+    if "context" in known and not declares_context:
         filtered["context"] = context
     return tool.handler(**filtered)
 

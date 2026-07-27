@@ -46,9 +46,10 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
         if not arg:
             continue
         if arg.startswith("-"):
-            # Inline credential form: --token=SECRET.
+            # Inline credential form: --token=SECRET. The value side is an
+            # explicitly configured credential position; no length floor.
             _flag, separator, inline = arg.partition("=")
-            if separator and len(inline) >= 6:
+            if separator and inline:
                 values.append(inline)
         elif len(arg) >= 6:
             values.append(arg)
