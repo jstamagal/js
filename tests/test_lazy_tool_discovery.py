@@ -328,3 +328,16 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
 
     assert estimates[1] > estimates[0]
     assert context.context_budget_state._anchor.tool_tokens == estimates[1]
+
+
+def test_persisted_call_names_canonicalize_even_for_unloaded_lazy_tools(tmp_path):
+    from js.runtime import _canonical_tool_call_name
+
+    allowed = build_default_registry().select(["read", "browser_probe"])
+    surface = allowed.aliased({"browser_probe": "Probe"}).lazy_surface(tmp_path)
+    batch = surface.dispatch_registry()
+    # browser_probe is lazy and unloaded: no Tool object in this batch,
+    # but history must still record the canonical name for its alias.
+    assert batch.resolve("Probe") is None
+    assert _canonical_tool_call_name("Probe", batch) == "browser_probe"
+    assert _canonical_tool_call_name("unknown_thing", batch) == "unknown_thing"
