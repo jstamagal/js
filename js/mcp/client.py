@@ -74,7 +74,7 @@ class MCPClient:
         self.initialize_result: InitializeResult | None = None
         self._negotiated_capabilities = None
         self._initialize_lock = asyncio.Lock()
-        self._close_lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._closed = False
         self._secrets = tuple(secret for secret in secrets if secret)
         self._custom_redactor = redactor
@@ -110,8 +110,16 @@ class MCPClient:
             await self._discard_peer()
             try:
                 peer = await JSONRPCPeer.connect(self.transport_factory)
-                self.peer = peer
                 self._configure_peer(peer)
+                async with self._lifecycle_lock:
+                    if self._closed:
+                        closed = True
+                    else:
+                        self.peer = peer
+                        closed = False
+                if closed:
+                    await peer.close()
+                    raise MCPClientError("MCP client is closed")
                 raw_result = await peer.request(
                     "initialize",
                     {
@@ -128,6 +136,16 @@ class MCPClient:
                         f"{result.protocol_version!r}"
                     )
                 await peer.notify("notifications/initialized")
+                async with self._lifecycle_lock:
+                    if self._closed or self.peer is not peer or peer.closed:
+                        closed = True
+                    else:
+                        self.initialize_result = result
+                        self._negotiated_capabilities = result.capabilities
+                        closed = False
+                if closed:
+                    await peer.close()
+                    raise MCPClientError("MCP client is closed")
             except asyncio.CancelledError:
                 await self._discard_peer()
                 raise
@@ -136,8 +154,6 @@ class MCPClient:
                 if self._is_transport_failure(exc):
                     raise TransportError(self._redact_exception_message(exc)) from None
                 self._raise_redacted(exc)
-            self.initialize_result = result
-            self._negotiated_capabilities = result.capabilities
             return result
 
     async def request(
@@ -261,12 +277,15 @@ class MCPClient:
         self.request_handlers[method] = handler
 
     async def close(self) -> None:
-        async with self._close_lock:
+        async with self._lifecycle_lock:
             if self._closed:
                 return
             self._closed = True
-            await self._discard_peer()
+            peer, self.peer = self.peer, None
+            self.initialize_result = None
             self._negotiated_capabilities = None
+        if peer is not None:
+            await self._close_peer(peer)
 
     async def __aenter__(self) -> MCPClient:
         await self.initialize()
@@ -406,15 +425,19 @@ class MCPClient:
         return handle
 
     async def _discard_peer(self) -> None:
-        peer, self.peer = self.peer, None
-        self.initialize_result = None
+        async with self._lifecycle_lock:
+            peer, self.peer = self.peer, None
+            self.initialize_result = None
         if peer is not None:
-            try:
-                await peer.close()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._raise_redacted(exc)
+            await self._close_peer(peer)
+
+    async def _close_peer(self, peer: JSONRPCPeer) -> None:
+        try:
+            await peer.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     def _require_peer(self) -> JSONRPCPeer:
         if not self.initialized or self.peer is None:
