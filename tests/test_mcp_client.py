@@ -241,7 +241,9 @@ def test_notifications_callbacks_and_sinks_are_recursively_redacted():
         await transport.notify(
             "notifications/progress", {"progressToken": "p", "message": secret}
         )
-        await asyncio.sleep(0)
+        async with asyncio.timeout(1):
+            while not seen["progress"]:
+                await asyncio.sleep(0)
 
         assert seen["tools"] == [{"why": "[REDACTED]"}]
         assert seen["resources"] == [{"why": "[REDACTED]"}]
@@ -249,6 +251,28 @@ def test_notifications_callbacks_and_sinks_are_recursively_redacted():
         assert seen["prompts"] == [{"why": "[REDACTED]"}]
         assert seen["logs"] == [{"data": {"token": "[REDACTED]"}}]
         assert seen["progress"] == [{"progressToken": "p", "message": "[REDACTED]"}]
+        await client.close()
+
+    asyncio.run(drive())
+
+
+def test_list_changed_callback_can_refresh_tools():
+    async def drive():
+        refreshed = asyncio.Event()
+        listed = []
+        client = None
+
+        async def refresh(_params):
+            listed.extend(await client.list_tools())
+            refreshed.set()
+
+        server = SpecServer()
+        client = await initialized_client(server, on_tools_changed=refresh)
+        await server.connections[0].notify("notifications/tools/list_changed", {})
+
+        await asyncio.wait_for(refreshed.wait(), 1)
+        assert [tool["name"] for tool in listed] == ["alpha", "beta"]
+        assert not client.peer.closed
         await client.close()
 
     asyncio.run(drive())

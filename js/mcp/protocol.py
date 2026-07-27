@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import itertools
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
@@ -17,6 +18,8 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 REQUEST_CANCELLED = -32800
+
+logger = logging.getLogger(__name__)
 
 
 class Transport(Protocol):
@@ -69,6 +72,8 @@ class JSONRPCPeer:
         self._incoming: dict[JSONRPCId, asyncio.Task[Any]] = {}
         self._request_handlers: dict[str, RequestHandler] = {}
         self._notification_handlers: dict[str, list[NotificationHandler]] = {}
+        self._notification_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        self._notification_task: asyncio.Task[None] | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
         self._closed = False
@@ -120,7 +125,8 @@ class JSONRPCPeer:
             return await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError):
             if not future.done() and not self._closed:
-                await self._send_cancelled(request_id)
+                with contextlib.suppress(Exception):
+                    await self._send_cancelled(request_id)
             raise
         finally:
             self._pending.pop(request_id, None)
@@ -140,11 +146,15 @@ class JSONRPCPeer:
                 return
             self._closed = True
             self._fail_pending(PeerClosedError("JSON-RPC peer closed"))
-            incoming = list(self._incoming.values())
-            for task in incoming:
+            current = asyncio.current_task()
+            background = [task for task in self._incoming.values() if task is not current]
+            notification = self._notification_task
+            if notification is not None and notification is not current:
+                background.append(notification)
+            for task in background:
                 task.cancel()
-            if incoming:
-                await asyncio.gather(*incoming, return_exceptions=True)
+            if background:
+                await asyncio.gather(*background, return_exceptions=True)
             self._incoming.clear()
             reader = self._reader_task
             if reader is not None and reader is not asyncio.current_task():
@@ -172,6 +182,8 @@ class JSONRPCPeer:
         if self._closed:
             raise PeerClosedError("JSON-RPC peer is closed")
         async with self._write_lock:
+            if self._closed:
+                raise PeerClosedError("JSON-RPC peer is closed")
             await self.transport.send(message)
 
     async def _send_cancelled(self, request_id: JSONRPCId) -> None:
@@ -196,8 +208,13 @@ class JSONRPCPeer:
         if not self._closed:
             self._closed = True
             self._fail_pending(failure)
-            for task in self._incoming.values():
+            background = list(self._incoming.values())
+            if self._notification_task is not None:
+                background.append(self._notification_task)
+            for task in background:
                 task.cancel()
+            if background:
+                await asyncio.gather(*background, return_exceptions=True)
             self._incoming.clear()
             with contextlib.suppress(Exception):
                 await self.transport.close()
@@ -219,7 +236,7 @@ class JSONRPCPeer:
                 if isinstance(request_id, (int, str)) and not isinstance(request_id, bool):
                     self._start_incoming_request(request_id, method, params)
             else:
-                await self._dispatch_notification(method, params)
+                self._dispatch_notification(method, params)
             return
         if "id" in message:
             self._dispatch_response(message)
@@ -253,7 +270,10 @@ class JSONRPCPeer:
     def _start_incoming_request(
         self, request_id: JSONRPCId, method: str, params: dict[str, Any]
     ) -> None:
-        task = asyncio.create_task(self._handle_request(request_id, method, params))
+        task = asyncio.create_task(
+            self._handle_request(request_id, method, params),
+            name=f"mcp-jsonrpc-request-{request_id}",
+        )
         self._incoming[request_id] = task
         task.add_done_callback(lambda _task, key=request_id: self._incoming.pop(key, None))
 
@@ -271,21 +291,49 @@ class JSONRPCPeer:
                 await self._send_error(request_id, REQUEST_CANCELLED, "Request cancelled")
             return
         except JSONRPCError as exc:
-            await self._send({"jsonrpc": "2.0", "id": request_id, "error": exc.to_wire()})
+            if not self._closed:
+                await self._send({"jsonrpc": "2.0", "id": request_id, "error": exc.to_wire()})
             return
         except Exception as exc:  # noqa: BLE001 - handler failures become JSON-RPC errors
-            await self._send_error(request_id, INTERNAL_ERROR, str(exc) or "Internal error")
+            if not self._closed:
+                await self._send_error(request_id, INTERNAL_ERROR, str(exc) or "Internal error")
             return
-        await self._send({"jsonrpc": "2.0", "id": request_id, "result": result})
+        if not self._closed:
+            await self._send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-    async def _dispatch_notification(self, method: str, params: dict[str, Any]) -> None:
+    def _dispatch_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "notifications/cancelled":
             request_id = params.get("requestId")
             task = self._incoming.get(request_id)
             if task is not None:
                 task.cancel()
-        for handler in self._notification_handlers.get(method, ()):
-            await _resolve(handler(params))
+        self._notification_queue.put_nowait((method, params))
+        if self._notification_task is None:
+            self._notification_task = asyncio.create_task(
+                self._notification_loop(), name="mcp-jsonrpc-notifications"
+            )
+
+    async def _notification_loop(self) -> None:
+        current = asyncio.current_task()
+        try:
+            while not self._closed:
+                method, params = await self._notification_queue.get()
+                try:
+                    for handler in self._notification_handlers.get(method, ()):
+                        try:
+                            await _resolve(handler(params))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001 - callbacks cannot kill the peer
+                            logger.exception("MCP notification handler failed for %s", method)
+                finally:
+                    self._notification_queue.task_done()
+        finally:
+            while not self._notification_queue.empty():
+                self._notification_queue.get_nowait()
+                self._notification_queue.task_done()
+            if self._notification_task is current:
+                self._notification_task = None
 
     async def _send_error(self, request_id: Any, code: int, message: str) -> None:
         await self._send(

@@ -210,11 +210,17 @@ def test_notifications_and_remote_errors_preserve_wire_data():
     async def drive():
         peer, transport = await make_peer()
         seen = []
-        peer.on_notification("notifications/message", lambda params: seen.append(params))
+        delivered = asyncio.Event()
+
+        def record(params):
+            seen.append(params)
+            delivered.set()
+
+        peer.on_notification("notifications/message", record)
         await transport.server_send(
             {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info"}}
         )
-        await asyncio.sleep(0)
+        await asyncio.wait_for(delivered.wait(), 1)
         assert seen == [{"level": "info"}]
 
         task = asyncio.create_task(peer.request("tools/call"))
@@ -234,6 +240,68 @@ def test_notifications_and_remote_errors_preserve_wire_data():
         assert caught.value.has_data
         assert caught.value.to_wire() == {"code": -32099, "message": "broken", "data": None}
         await peer.close()
+
+    asyncio.run(drive())
+
+
+def test_notification_handlers_can_request_without_blocking_reader_and_stay_ordered(caplog):
+    async def drive():
+        peer, transport = await make_peer()
+        seen = []
+        completed = asyncio.Event()
+
+        async def refresh(params):
+            seen.append(("start", params["sequence"]))
+            request_task = asyncio.create_task(peer.request("tools/list"))
+            request = await transport.next_sent()
+            await transport.server_send(
+                {"jsonrpc": "2.0", "id": request["id"], "result": {"tools": [params]}}
+            )
+            seen.append(("result", (await request_task)["tools"][0]["sequence"]))
+            if params["sequence"] == 1:
+                raise RuntimeError("callback broke")
+            completed.set()
+
+        peer.on_notification("notifications/tools/list_changed", refresh)
+        for sequence in (1, 2):
+            await transport.server_send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/list_changed",
+                    "params": {"sequence": sequence},
+                }
+            )
+
+        await asyncio.wait_for(completed.wait(), 1)
+        assert seen == [("start", 1), ("result", 1), ("start", 2), ("result", 2)]
+        assert not peer.closed
+        assert "MCP notification handler failed" in caplog.text
+        await peer.close()
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("kind", ["notification", "request"])
+def test_close_from_incoming_handler_does_not_await_itself(kind):
+    async def drive():
+        peer, transport = await make_peer()
+        closed = asyncio.Event()
+
+        async def close_peer(_params):
+            await peer.close()
+            closed.set()
+
+        if kind == "notification":
+            peer.on_notification("notifications/close", close_peer)
+            message = {"jsonrpc": "2.0", "method": "notifications/close"}
+        else:
+            peer.on_request("close", close_peer)
+            message = {"jsonrpc": "2.0", "id": "close-1", "method": "close"}
+        await transport.server_send(message)
+
+        await asyncio.wait_for(closed.wait(), 1)
+        assert peer.closed
+        assert transport.close_calls == 1
 
     asyncio.run(drive())
 
