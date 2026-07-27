@@ -46,14 +46,20 @@ def _sidecar_paths(session_file: Path) -> tuple[Path, Path]:
     return session_file.parent / f"{stem}.json", session_file.parent / f"{stem}.lock"
 
 
-def _process_start(pid: int) -> str | None:
-    """Return Linux's process start tick, when available, to defeat PID reuse."""
+def _process_status(pid: int) -> tuple[str, str] | None:
+    """Return Linux's process state and start tick when procfs is available."""
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         fields = raw[raw.rfind(")") + 2 :].split()
-        return fields[19]
+        return fields[0], fields[19]
     except (OSError, IndexError):
         return None
+
+
+def _process_start(pid: int) -> str | None:
+    """Return Linux's process start tick, when available, to defeat PID reuse."""
+    status = _process_status(pid)
+    return status[1] if status is not None else None
 
 
 def _pid_alive(pid: int, process_start: str | None) -> bool:
@@ -67,9 +73,12 @@ def _pid_alive(pid: int, process_start: str | None) -> bool:
         pass
     except OSError:
         return False
-    if process_start is not None:
-        current_start = _process_start(pid)
-        if current_start is not None and current_start != process_start:
+    status = _process_status(pid)
+    if status is not None:
+        state, current_start = status
+        if state in {"Z", "X", "x"}:
+            return False
+        if process_start is not None and current_start != process_start:
             return False
     return True
 

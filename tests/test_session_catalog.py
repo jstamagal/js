@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 from js import memory
@@ -132,6 +135,41 @@ def test_stale_pid_is_pruned_and_mtime_never_implies_liveness(tmp_path):
     assert session_in_flight(session) is False
     assert not state_path.exists()
     assert catalog_sessions(tmp_path / "sessions")[0]["in_flight"] is False
+
+
+def test_exited_unreaped_opener_is_not_in_flight(tmp_path):
+    session = tmp_path / "sessions" / "agent" / "crashed.jsonl"
+    session.parent.mkdir(parents=True)
+    session.touch()
+    acquired = tmp_path / "acquired"
+    code = """
+import os
+from pathlib import Path
+from js.session_catalog import acquire_session
+
+acquire_session(Path(os.environ["SESSION_FILE"]))
+Path(os.environ["ACQUIRED_FILE"]).touch()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code],
+        env={**os.environ, "SESSION_FILE": str(session), "ACQUIRED_FILE": str(acquired)},
+    )
+    try:
+        stat_path = Path(f"/proc/{process.pid}/stat")
+        deadline = time.monotonic() + 5
+        state = None
+        while time.monotonic() < deadline:
+            if acquired.exists():
+                raw = stat_path.read_text(encoding="utf-8")
+                state = raw[raw.rfind(")") + 2 :].split()[0]
+                if state == "Z":
+                    break
+            time.sleep(0.01)
+        assert acquired.exists()
+        assert state == "Z"
+        assert session_in_flight(session) is False
+    finally:
+        process.wait(timeout=5)
 
 
 def test_context_manager_releases_liveness(tmp_path):
