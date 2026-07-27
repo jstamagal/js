@@ -1754,6 +1754,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 pending_calls = []
                 assistant_message_override = ai.assistant_message(text)
 
+            # Freeze dispatch authorization to the schemas this model call saw.
+            # Discovery may mutate the turn surface while this batch runs, but a
+            # newly loaded tool is callable only after its schema is emitted on
+            # the next model iteration.
+            dispatch_registry = active_registry.dispatch_registry()
+
             # --- Record the assistant turn ---
             assistant_record: dict = {"role": "assistant", "content": text}
             history_assistant_record: dict = {"role": "assistant", "content": text}
@@ -1836,7 +1842,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 cfg.max_tool_result_bytes,
                 trace,
                 error_tracker,
-                active_registry,
+                dispatch_registry,
                 active_context,
                 asyncio.get_running_loop(),
             )

@@ -125,6 +125,57 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert "requires disallowed tool 'browser_probe'" in forbidden.discover(load="skill:inspect")
 
 
+def test_skill_load_does_not_duplicate_eager_or_repeated_requirements(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "inspect.md").write_text(
+        "---\ndescription: Inspect files and pages\ntools:\n  - read\n  - read\n  - browser_probe\n---\n"
+        "Inspect the requested target.\n",
+        encoding="utf-8",
+    )
+    surface = build_default_registry().select(["skill", "read", "browser_probe"]).lazy_surface(tmp_path)
+
+    loaded = json.loads(surface.discover(load="skill:inspect"))
+
+    assert loaded["loaded"] == ["read", "browser_probe"]
+    assert _spec_names(surface.openai_specs()).count("read") == 1
+    assert _spec_names(surface.openai_specs()).count("browser_probe") == 1
+
+
+def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch, tmp_path):
+    calls: list[list[dict]] = []
+    results = iter(
+        [
+            _result(
+                ("discover", "tool_discovery", '{"load":"native:browser_probe"}'),
+                ("probe", "browser_probe", "{}"),
+            ),
+            _result(text="done"),
+        ]
+    )
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs["tools"] or [])
+        return next(results)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    messages = [{"role": "user", "content": "inspect"}]
+    runtime.run_turn(
+        _cfg(tmp_path),
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        tool_registry=build_default_registry().select(["browser_probe", "read"]),
+        tool_context=ToolContext(cwd=tmp_path),
+    )
+
+    tool_results = [message["content"] for message in messages if message.get("role") == "tool"]
+    assert json.loads(tool_results[0])["loaded"] == ["browser_probe"]
+    assert tool_results[1].startswith("ERROR: no tool named browser_probe")
+    assert "browser_probe" not in [tool.name for tool in calls[0]]
+    assert "browser_probe" in [tool.name for tool in calls[1]]
+
+
 def test_runtime_regenerates_schemas_preserves_alias_history_and_resets_next_turn(monkeypatch, tmp_path):
     calls: list[list[dict]] = []
     results = iter(

@@ -116,12 +116,17 @@ class TurnToolSurface:
 
     @property
     def tools(self) -> tuple[Tool, ...]:
+        eager_names = {tool.name for tool in self._eager}
         loaded = tuple(
             tool for tool in self.allowed.tools
-            if tool.name in self._loaded
+            if tool.name in self._loaded and tool.name not in eager_names
         )
         include_discovery = bool(self._lazy or self._skills)
         return self._eager + loaded + ((self._discovery,) if include_discovery else ())
+
+    def dispatch_registry(self) -> ToolRegistry:
+        """Freeze the tools available for one model response's dispatch batch."""
+        return ToolRegistry(tools=self.tools, aliases=self.aliases)
 
     @property
     def by_name(self) -> dict[str, Tool]:
@@ -192,11 +197,14 @@ class TurnToolSurface:
         if skill is None:
             return f"ERROR: no allowed catalog entry with id {item_id!r}"
         required: list[str] = []
+        seen: set[str] = set()
         for requested in skill.tools:
             tool = self.allowed.resolve(requested)
             if tool is None:
                 return f"ERROR: skill {skill.name!r} requires disallowed tool {requested!r}"
-            required.append(tool.name)
+            if tool.name not in seen:
+                required.append(tool.name)
+                seen.add(tool.name)
         self._loaded.update(required)
         return discovery.compact_result({
             "id": item_id,
