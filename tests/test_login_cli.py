@@ -334,29 +334,38 @@ def test_select_models_non_tty_keeps_all(monkeypatch):
     assert login_cli._select_models_to_cache("opencode-go", models) == models
 
 
-def test_models_edit_removes_and_adds_models_without_login_or_fetch(monkeypatch, tmp_path: Path):
+def test_models_edit_removes_and_adds_models_without_login_fetch_or_catalog_refresh(
+    monkeypatch, tmp_path: Path,
+):
+    import curses
+
     logins.set_config_dir(tmp_path)
     metadata = {
         "keep": logins.ModelCacheMetadata(context_window=32768),
         "remove": logins.ModelCacheMetadata(context_window=65536),
     }
     logins.cache_models("openai-codex", ["keep", "remove"], metadata=metadata)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+    keys = [curses.KEY_DOWN, ord(" "), ord("\n")]
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("network/login call")
+        raise AssertionError("network/login/catalog call")
+
+    def fake_wrapper(fn, *args, **kwargs):
+        assert [row[0] for row in args[0]] == ["keep", "remove"]
+        assert kwargs["preselected"] == {0, 1}
+        return fn(_FakeStdscr(keys), *args, **kwargs)
 
     try:
+        monkeypatch.setattr(curses, "wrapper", fake_wrapper)
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "added")
         monkeypatch.setattr(login_cli, "_collect_api_login", forbidden)
         monkeypatch.setattr(login_cli, "test_login", forbidden)
         monkeypatch.setattr(login_cli, "test_login_with_metadata", forbidden)
         monkeypatch.setattr(login_cli.model_client, "stream_model", forbidden)
-
-        def curate(provider_id, models):
-            assert provider_id == "openai-codex"
-            assert models == ["keep", "remove"]
-            return ["keep", "added"]
-
-        monkeypatch.setattr(login_cli, "_select_models_to_cache", curate)
+        monkeypatch.setattr(login_cli, "_dialect_map", forbidden)
 
         assert login_cli.main(["models-edit", "codex"]) == 0
         assert logins.load_model_cache()["openai-codex"] == ["keep", "added"]
@@ -396,7 +405,7 @@ def test_models_edit_picker_cancel_leaves_cache_unchanged(monkeypatch, tmp_path:
     before = cache_path.read_bytes()
 
     try:
-        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda provider_id, models: None)
+        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda provider_id, models, **kwargs: None)
         assert login_cli.main(["models-edit", "deepseek"]) == 0
         assert cache_path.read_bytes() == before
         assert "unchanged" in capsys.readouterr().out
@@ -699,4 +708,19 @@ def test_top_level_cli_dispatches_models_edit(monkeypatch):
     monkeypatch.setattr(login_cli, "main", fake_login_main)
     monkeypatch.setattr(cli, "login_cli", login_cli, raising=False)
     assert cli.main(["--models-edit", "deepseek"]) == 0
+    assert captured == {"args": ["models-edit", "deepseek"]}
+
+
+def test_top_level_cli_dispatches_models_edit_from_console_argv(monkeypatch):
+    captured = {}
+
+    def fake_login_main(args):
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(login_cli, "main", fake_login_main)
+    monkeypatch.setattr(cli, "login_cli", login_cli, raising=False)
+    monkeypatch.setattr(sys, "argv", ["js", "--models-edit", "deepseek"])
+
+    assert cli.main() == 0
     assert captured == {"args": ["models-edit", "deepseek"]}
