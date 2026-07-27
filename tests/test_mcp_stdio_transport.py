@@ -192,6 +192,35 @@ def test_close_terminates_stubborn_child_with_bounded_fallback():
     run(scenario())
 
 
+def test_close_is_bounded_when_stubborn_child_leaves_stdin_buffered():
+    async def scenario():
+        transport = StdioTransport(
+            sys.executable,
+            (str(FIXTURE), "--mode", "stubborn"),
+            close_timeout=0.02,
+            terminate_timeout=0.2,
+        )
+        await transport.start()
+        process = transport.process
+        assert process is not None and process.returncode is None
+
+        message = {
+            "jsonrpc": "2.0",
+            "method": "test/fill",
+            "params": {"data": "x" * 1_000_000},
+        }
+        send_task = asyncio.create_task(transport.send(message))
+        await asyncio.sleep(0.05)
+        assert not send_task.done()
+
+        await asyncio.wait_for(transport.close(), 1)
+        assert process.returncode is not None
+        await asyncio.gather(send_task, return_exceptions=True)
+        await transport.close()
+
+    run(scenario())
+
+
 def test_spawn_failure_does_not_expose_arguments_or_environment():
     async def scenario():
         transport = StdioTransport(

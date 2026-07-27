@@ -145,16 +145,15 @@ class StdioTransport:
         # Wait for an in-flight spawn before deciding that there is no child to reap.
         async with self._start_lock:
             async with self._close_lock:
-                if self._closed:
-                    return
                 self._closed = True
                 process = self._process
                 if process is None:
                     return
                 if process.stdin is not None:
+                    # Do not await wait_closed() before reaping the process. It waits for
+                    # buffered writes to drain and can hang forever when the child does
+                    # not read stdin. Process exit closes the pipe for us.
                     process.stdin.close()
-                    with contextlib.suppress(BrokenPipeError, ConnectionError, OSError):
-                        await process.stdin.wait_closed()
                 if process.returncode is None and not await self._wait(process, self._close_timeout):
                     with contextlib.suppress(ProcessLookupError):
                         process.terminate()
