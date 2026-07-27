@@ -333,7 +333,7 @@ def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, t
     assert list(sessions_dir.glob("foo-*.jsonl")) == [existing]
 
 
-def test_config_missing_session_id_errors_and_creates_no_matching_file(monkeypatch, tmp_path):
+def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.setenv("JS_SESSION", "foo")
@@ -342,10 +342,10 @@ def test_config_missing_session_id_errors_and_creates_no_matching_file(monkeypat
 
     sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
 
-    with pytest.raises(ValueError, match="existing"):
-        from_env()
+    actual = from_env()
 
-    assert not list(sessions_dir.glob("foo*.jsonl"))
+    assert actual.session_file == sessions_dir / "foo.jsonl"
+    assert actual.session_file.is_file()
 
 
 def test_config_existing_absolute_session_path_loads_exact_file(monkeypatch, tmp_path):
