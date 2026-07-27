@@ -28,6 +28,7 @@ class State:
         self.stop = threading.Event()
         self.notification: dict | None = None
         self.reconnect = False
+        self.timeout_reconnect = False
         self.gets = 0
         self.deleted = threading.Event()
 
@@ -61,9 +62,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         reply = {"jsonrpc": "2.0", "id": body.get("id"), "result": {"ok": method}}
         encoded = json.dumps(reply).encode()
-        if method == "test/sse":
+        if method in {"test/sse", "test/sse-long", "test/sse-invalid"}:
             payload = b"id: post-one\nretry: 5\ndata: " + encoded + b"\n\n"
-            self._body(200, "text/event-stream; charset=utf-8", payload, session=True)
+            if method == "test/sse-invalid":
+                payload = b"data: {not-json}\n\n"
+            if method == "test/sse-long":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Mcp-Session-Id", SESSION)
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(payload)
+                self.wfile.flush()
+                self.state.stop.wait(3)
+            else:
+                self._body(200, "text/event-stream; charset=utf-8", payload, session=True)
         elif "id" in body:
             self._body(200, "application/json", encoded, session=True)
         else:
@@ -80,6 +93,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.state.reconnect and self.state.gets == 1:
             self.wfile.write(b"id: event-one\nretry: 1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"first\"}\n\n")
             self.wfile.flush()
+            return
+        if self.state.timeout_reconnect and self.state.gets == 1:
+            self.state.stop.wait(0.2)
             return
         notification = self.state.notification
         if notification is not None:
@@ -154,6 +170,17 @@ def test_json_and_sse_post_replies_track_session_and_event_fields():
         assert second_headers["Mcp-Session-Id"] == SESSION
 
 
+def test_long_lived_sse_post_returns_without_waiting_for_stream_eof():
+    async def scenario(url):
+        transport = StreamableHTTPTransport(url)
+        await asyncio.wait_for(transport.send(request("test/sse-long")), 0.5)
+        assert (await asyncio.wait_for(transport.receive(), 0.5))["id"] == 1
+        await asyncio.wait_for(transport.close(), 1)
+
+    with server() as (_state, url):
+        run(scenario(url))
+
+
 def test_get_delivers_notification_and_delete_shuts_down_issued_session():
     async def scenario(url):
         transport = StreamableHTTPTransport(url)
@@ -193,6 +220,41 @@ def test_notification_stream_reconnects_with_last_event_id():
         gets = [entry for entry in state.requests if entry[0] == "GET"]
         assert len(gets) >= 2
         assert gets[1][1]["Last-Event-Id"] == "event-one"
+
+
+def test_idle_notification_stream_timeout_reconnects():
+    async def scenario(url):
+        transport = StreamableHTTPTransport(
+            url, timeout=0.05, reconnect_backoff=0, reconnect_attempts=2
+        )
+        await transport.send(request())
+        await transport.receive()
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "after-timeout"
+        await transport.close()
+
+    with server() as (state, url):
+        state.timeout_reconnect = True
+        state.notification = {"jsonrpc": "2.0", "method": "after-timeout"}
+        run(scenario(url))
+        assert state.gets >= 2
+
+
+def test_invalid_sse_post_event_reports_safe_protocol_failure():
+    async def scenario(url):
+        transport = StreamableHTTPTransport(
+            url,
+            headers={"Authorization": f"Bearer {SECRET}", "X-Private": HEADER_SECRET},
+            name=f"configured {SECRET} {HEADER_SECRET}",
+        )
+        await transport.send(request("test/sse-invalid"))
+        with pytest.raises(StreamableHTTPTransportError, match="invalid protocol JSON") as caught:
+            await asyncio.wait_for(transport.receive(), 1)
+        assert SECRET not in str(caught.value)
+        assert HEADER_SECRET not in str(caught.value)
+        await transport.close()
+
+    with server() as (_state, url):
+        run(scenario(url))
 
 
 @pytest.mark.parametrize(
