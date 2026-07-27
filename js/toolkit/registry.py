@@ -111,9 +111,10 @@ class TurnToolSurface:
             if source is not None:
                 self._lazy[f"native:{tool.name}"] = tool
                 self._sources[tool.name] = source
+        # Core meta tools stay eager: "skill" is the dispatch tool itself;
+        # only the skill catalog and specialist suites load lazily.
         self._eager = tuple(
-            tool for tool in allowed.tools
-            if tool.name not in self._sources and tool.name != "skill"
+            tool for tool in allowed.tools if tool.name not in self._sources
         )
         self._loaded: set[str] = set()
         self._discovery = discovery.discovery_tool(self)
