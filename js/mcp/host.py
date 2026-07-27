@@ -35,28 +35,20 @@ def transport_factory(server: MCPServer):
 
 
 def _query_secret_values(url: str) -> set[str]:
-    """Return wire, decoded, and canonical encodings of URL query values."""
+    """Return wire and recursively decoded URL query values."""
     values: set[str] = set()
     query = urllib.parse.urlsplit(url).query
     for field in query.split("&"):
         _key, separator, raw = field.partition("=")
         if not separator or not raw:
             continue
-        decoded = {raw}
         pending = [raw]
         while pending:
             value = pending.pop()
-            for candidate in (urllib.parse.unquote(value), urllib.parse.unquote_plus(value)):
-                if candidate and candidate not in decoded:
-                    decoded.add(candidate)
-                    pending.append(candidate)
-        values.update(decoded)
-        for value in decoded - {raw}:
-            values.add(urllib.parse.quote(value, safe=""))
-            values.add(urllib.parse.quote_plus(value, safe=""))
-    # Percent escape hex digits are case-insensitive on the wire.
-    values.update(re.sub(r"%[0-9a-fA-F]{2}", lambda match: match.group().upper(), value) for value in tuple(values))
-    values.update(re.sub(r"%[0-9a-fA-F]{2}", lambda match: match.group().lower(), value) for value in tuple(values))
+            if not value or value in values:
+                continue
+            values.add(value)
+            pending.extend((urllib.parse.unquote(value), urllib.parse.unquote_plus(value)))
     return values
 
 
@@ -103,12 +95,81 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
     return tuple(sorted(secrets, key=len, reverse=True))
 
 
+def _decode_percent_layer(value: str, spans: list[tuple[int, int]], *, plus: bool) -> tuple[str, list[tuple[int, int]]]:
+    """Decode one URL-escape layer while retaining each character's source span."""
+    output: list[str] = []
+    mapped: list[tuple[int, int]] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "%" and index + 2 < len(value) and all(
+            char in "0123456789abcdefABCDEF" for char in value[index + 1:index + 3]
+        ):
+            start = index
+            encoded = bytearray()
+            while index + 2 < len(value) and value[index] == "%" and all(
+                char in "0123456789abcdefABCDEF" for char in value[index + 1:index + 3]
+            ):
+                # int(..., 16) deliberately case-folds wire escape hex.
+                encoded.append(int(value[index + 1:index + 3], 16))
+                index += 3
+            decoded = encoded.decode("utf-8", errors="replace")
+            source = (spans[start][0], spans[index - 1][1])
+            output.extend(decoded)
+            mapped.extend(source for _ in decoded)
+            continue
+        output.append(" " if plus and value[index] == "+" else value[index])
+        mapped.append(spans[index])
+        index += 1
+    return "".join(output), mapped
+
+
+def _normalized_candidates(value: str) -> tuple[tuple[str, list[tuple[int, int]]], ...]:
+    """Return percent-decoded candidates mapped back to spans in ``value``."""
+    initial = (value, [(index, index + 1) for index in range(len(value))])
+    pending = [initial]
+    candidates: dict[str, list[tuple[int, int]]] = {}
+    while pending:
+        candidate, spans = pending.pop()
+        if candidate in candidates:
+            continue
+        candidates[candidate] = spans
+        for plus in (False, True):
+            decoded = _decode_percent_layer(candidate, spans, plus=plus)
+            if decoded[0] not in candidates:
+                pending.append(decoded)
+    return tuple(candidates.items())
+
+
+def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
+    normalized_secrets = {
+        candidate
+        for secret in secrets
+        for candidate, _spans in _normalized_candidates(secret)
+        if candidate
+    }
+    redactions: list[tuple[int, int]] = []
+    for candidate, spans in _normalized_candidates(value):
+        for secret in normalized_secrets:
+            start = 0
+            while (match := candidate.find(secret, start)) >= 0:
+                covered = spans[match:match + len(secret)]
+                redactions.append((min(span[0] for span in covered), max(span[1] for span in covered)))
+                start = match + len(secret)
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(set(redactions)):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
+        value = value[:start] + "[REDACTED]" + value[end:]
+    return value
+
+
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
     """Recursively scrub configured credentials from server-controlled data."""
     if isinstance(value, str):
-        for secret in secrets:
-            value = value.replace(secret, "[REDACTED]")
-        return value
+        return _redact_text(value, secrets)
     if isinstance(value, dict):
         return {
             _redact_value(key, secrets) if isinstance(key, str) else key: _redact_value(item, secrets)
@@ -127,7 +188,13 @@ def _safe_media_data(data: Any, secrets: tuple[str, ...]) -> bool:
         decoded = base64.b64decode(str(data), validate=True)
     except (ValueError, TypeError):
         return False
-    return not any(secret.encode() in decoded for secret in secrets)
+    if any(secret.encode() in decoded for secret in secrets):
+        return False
+    try:
+        text = decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return _redact_text(text, secrets) == text
 
 
 def _safe_content_block(raw: Any, secrets: tuple[str, ...]) -> dict[str, Any]:
@@ -226,13 +293,31 @@ class MCPHost:
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
         self._dirty: dict[str, set[str]] = {}
+        self._reserved_public_names: set[str] = set()
+        self._reported_public_collisions: set[str] = set()
         self._closed = False
+
+    def reserve_public_names(self, names: set[str]) -> None:
+        """Withhold MCP names already claimed by the turn's native surface."""
+        self._reserved_public_names.update(str(name).casefold() for name in names)
+        for public in tuple(self.remote_tools):
+            if self._public_name_reserved(public):
+                self.remote_tools.pop(public, None)
+
+    def _public_name_reserved(self, public: str) -> bool:
+        if public.casefold() not in self._reserved_public_names:
+            return False
+        if public not in self._reported_public_collisions:
+            self._reported_public_collisions.add(public)
+            self._event("mcp_catalog_collision", tool=public)
+        return True
 
     def initial_catalog(self) -> tuple[CatalogEntry, ...]:
         """Only generic controls are visible before an MCP-scoped discovery."""
         return tuple(
             CatalogEntry(f"mcp:{name}", name, description, "mcp", "mcp")
             for name, description in self.CONTROL_TOOLS
+            if not self._public_name_reserved(name)
         )
 
     def is_server_source(self, source: str) -> bool:
@@ -371,7 +456,12 @@ class MCPHost:
                 safe_raw = _redact_value(dict(raw), secrets)
                 component = normalize_tool_name(safe_raw["name"])
                 public = f"{server.normalized_name}__{component}"
-                if not component or not self.config.allows_tool(public) or public in collisions:
+                if (
+                    not component
+                    or not self.config.allows_tool(public)
+                    or public in collisions
+                    or self._public_name_reserved(public)
+                ):
                     continue
                 if public in replacement:
                     replacement.pop(public, None)
@@ -399,12 +489,17 @@ class MCPHost:
     def load(self, item_id: str) -> list[str] | None:
         """Validate one catalog id; the caller owns the turn-scoped loaded set."""
         name = item_id.removeprefix("mcp:")
+        if self._public_name_reserved(name):
+            return None
         if name in dict(self.CONTROL_TOOLS) or name in self.remote_tools:
             return [name]
         return None
 
     def tools(self, loaded: set[str] | tuple[str, ...] = ()) -> tuple[Tool, ...]:
-        available = set(dict(self.CONTROL_TOOLS)) | set(self.remote_tools)
+        available = {
+            name for name in set(dict(self.CONTROL_TOOLS)) | set(self.remote_tools)
+            if not self._public_name_reserved(name)
+        }
         return tuple(self._make_tool(name) for name in sorted(set(loaded) & available))
 
     def _make_tool(self, name: str) -> Tool:
