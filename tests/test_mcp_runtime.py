@@ -604,3 +604,22 @@ def test_short_authorization_credentials_are_redacted_from_results_events_and_er
     assert "abc123" not in exposed
     assert "Bearer" in exposed
     assert exposed.count("[REDACTED]") == 3
+
+
+def test_url_query_and_stdio_arg_credentials_are_redacted():
+    from js.mcp.host import _redact_value, _secret_values
+    from js.mcp_config import MCPServer
+
+    http_server = MCPServer(
+        name="q", normalized_name="q", transport="http",
+        url="http://127.0.0.1:1/mcp?api_key=QUERY_TOKEN_9876&plain=ok",
+    )
+    stdio_server = MCPServer(
+        name="a", normalized_name="a", transport="stdio",
+        command="server", args=("--token", "ARG_TOKEN_5432", "-v"),
+    )
+    scrubbed = _redact_value("saw QUERY_TOKEN_9876 here", _secret_values(http_server))
+    assert "QUERY_TOKEN_9876" not in scrubbed
+    scrubbed = _redact_value("saw ARG_TOKEN_5432 and -v here", _secret_values(stdio_server))
+    assert "ARG_TOKEN_5432" not in scrubbed
+    assert "-v" in scrubbed
