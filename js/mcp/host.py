@@ -34,7 +34,19 @@ def transport_factory(server: MCPServer):
 
 def _secret_values(server: MCPServer) -> tuple[str, ...]:
     values = [*server.env.values(), *server.headers.values()]
-    return tuple(value for value in values if value)
+    secrets: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        secrets.add(value)
+        # "Authorization: Bearer TOKEN" must also redact the bare token: a
+        # server can echo it without the scheme prefix. Short fragments and
+        # auth scheme words stay unredacted to avoid mangling ordinary text.
+        for part in value.split():
+            if len(part) >= 8 and part.lower() not in {"negotiate", "signature"}:
+                secrets.add(part)
+    # Longest first so full values redact before their own fragments.
+    return tuple(sorted(secrets, key=len, reverse=True))
 
 
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
