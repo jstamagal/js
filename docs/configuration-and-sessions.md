@@ -307,16 +307,32 @@ optional `max_tokens:` override.
 
 ## Session Resolution
 
-Without `--session`, saved runs reserve a new unique JSONL file under the
-selected agent's `sessions/` directory. `--no-save` uses `os.devnull`.
+Prompt and pipe runs save by default. Without `--session`, a saved run reserves
+a new unique JSONL file under the selected agent's `sessions/` directory and
+prints a resume command after the answer. This is the normal choice for an agent
+driver: use the same session for review and correction rounds so the model does
+not have to re-read all prior context.
 
-With `--session`, the session must already exist and resolve inside the selected
-agent's session directory:
+`--session NAME` resumes an existing named session or creates that safe relative
+name when absent. Names may use `/` to group work under the selected agent:
 
 ```bash
-js --session 20260611T120000Z-abcd -p "continue"
-js --session 20260611T120000Z-abcd.jsonl -p "continue"
+js --session reviews/parser-fix -p "implement the first pass"
+js --session reviews/parser-fix -p "apply the review corrections"
+js --session 20260611T120000Z-abcd -p "resume a generated session"
 ```
+
+Generated session ids can be resumed from the `Continue:` hint. Driver
+integrations that have a stable caller key can instead derive an opaque name
+from agent + resolved working directory + caller key; repeated runs get the same
+`derived/<sha256>` session while different agents, directories, or keys remain
+isolated.
+
+`--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints exactly
+`session not saved; resume unavailable` once on stderr after the run while
+keeping stdout answer-only. It does not warn in the interactive REPL. This is an
+expensive throwaway choice because the next run cannot resume and must re-read
+context.
 
 Absolute session paths are accepted only when they are existing `.jsonl` files
 inside that agent's sessions directory. Relative traversal is rejected after
@@ -327,9 +343,16 @@ resolution.
 The memory file is append-only JSONL. Records have:
 
 ```json
+{"kind":"session_metadata","version":1,"ts":1781189999.0,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01"}
 {"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
 {"kind":"mark","ts":1781190001.0,"version":1,"marker":"session_reset"}
 ```
+
+Generated/driver-managed sessions may append the `session_metadata` control
+record at start. It carries machine-facing working-directory, caller-key, and
+job-id fields for catalogs and integrations; it is not conversation context and
+the message loader ignores it. Adjacent hidden liveness sidecars track open
+processes without rewriting the append-only conversation file.
 
 `load_messages()` ignores:
 

@@ -56,6 +56,44 @@ from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
 
+_SHORT_HELP = """js — one agent, one terminal.
+
+RUN
+  js                          interactive REPL in this directory
+  js -p "task"                one prompt, print the answer
+  echo task | js -p           same, from stdin
+  js -C DIR ...               run as if launched from DIR
+
+PICK
+  -a NAME     agent profile (~/.config/js/agents/NAME)
+  -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
+  -r EFFORT   off|minimal|low|medium|high|xhigh|max
+
+STATE (sessions are saved by default — this is what a driven agent normally wants)
+  -s ID       resume a named or generated session
+  -n, --no-save
+              expensive throwaway choice: resume is unavailable, so the next
+              run must re-read context. Use only for throwaway one-liners.
+  --debug-file PATH   full request trace, for debugging js
+
+SCRIPTING
+  -q          no resume hint after the answer (the session is still saved)
+  -f PATH     attach a file or image (repeatable)
+  --max-out N max output tokens
+  --extra K=V one-off config, e.g. --extra limits.task_max_depth=3
+
+MORE
+  js --login [PROVIDER]   sign in      js --list-models
+  js --commit             commit agent js --help-full
+"""
+
+
+class _ShortHelpAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser._print_message(_SHORT_HELP, sys.stdout)
+        parser.exit()
+
+
 def _error_text(e: BaseException) -> str:
     if isinstance(e, routing.ProviderNotLoggedInError):
         return str(e)
@@ -2581,7 +2619,9 @@ def main(argv: list[str] | None = None) -> int:
         from . import login_cli
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = argparse.ArgumentParser(add_help=True)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help="show the short usage guide and exit")
+    parser.add_argument("--help-full", action="help", help="show the complete option reference and exit")
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
     parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
     parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
@@ -2592,7 +2632,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
-    parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
+    parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
     parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
@@ -2802,17 +2842,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             stdin_text = _read_stdin_if_piped()
             prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        return _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                           agent=args.agent, session=args.session, save=not args.no_save,
-                           reasoning=args.reasoning, maxout=args.max_out,
-                           show_continue=not args.quiet,
-                           extras=args.extras,
-                           ignore_local_config=args.ignore_local,
-                           ignore_global_config=args.ignore_global,
-                           files=args.files,
-                           stdin_attachment=stdin_attachment,
-                           presets=presets,
-                           stats_json=args.stats_json, stats_csv=args.stats_csv)
+        result = _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                             agent=args.agent, session=args.session, save=not args.no_save,
+                             reasoning=args.reasoning, maxout=args.max_out,
+                             show_continue=not args.quiet,
+                             extras=args.extras,
+                             ignore_local_config=args.ignore_local,
+                             ignore_global_config=args.ignore_global,
+                             files=args.files,
+                             stdin_attachment=stdin_attachment,
+                             presets=presets,
+                             stats_json=args.stats_json, stats_csv=args.stats_csv)
+        if args.no_save:
+            print("session not saved; resume unavailable", file=sys.stderr)
+        return result
 
     os.environ["JS_MODE"] = "repl"
     try:
