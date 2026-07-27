@@ -8,10 +8,10 @@ import functools
 import http.client
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
-import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -24,27 +24,29 @@ class StreamableHTTPTransportError(ConnectionError):
     """A safe-to-display streamable HTTP transport failure."""
 
 
-class _TrackedHTTPConnection(http.client.HTTPConnection):
-    """Registers its socket the moment it connects, so close() can reach
-    operations still waiting for response headers."""
+class _TrackedConnectionMixin:
+    """Registers the raw TCP socket the instant it is created — before any
+    proxy tunnel, TLS handshake, or header wait — so close() can always
+    reach a stalled operation."""
 
     def __init__(self, *args: Any, track: Callable[[Any], None], **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._track = track
+        original = self._create_connection
 
-    def connect(self) -> None:
-        super().connect()
-        self._track(self.sock)
+        def create_and_track(*create_args: Any, **create_kwargs: Any) -> Any:
+            sock = original(*create_args, **create_kwargs)
+            track(sock)
+            return sock
+
+        self._create_connection = create_and_track
 
 
-class _TrackedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, *args: Any, track: Callable[[Any], None], **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._track = track
+class _TrackedHTTPConnection(_TrackedConnectionMixin, http.client.HTTPConnection):
+    pass
 
-    def connect(self) -> None:
-        super().connect()
-        self._track(self.sock)
+
+class _TrackedHTTPSConnection(_TrackedConnectionMixin, http.client.HTTPSConnection):
+    pass
 
 
 class _SocketTrackingHTTPHandler(urllib.request.HTTPHandler):
@@ -358,7 +360,7 @@ class StreamableHTTPTransport:
         self._active_lock = threading.Lock()
         self._closing = threading.Event()
         self._closed = False
-        self._pending_sockets: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._pending_socks: dict[int, list[socket.socket]] = {}
         self._opener = urllib.request.build_opener(
             _SocketTrackingHTTPHandler(self._track_socket),
             _SocketTrackingHTTPSHandler(self._track_socket),
@@ -464,7 +466,11 @@ class StreamableHTTPTransport:
         headers = self._headers()
         headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self._url, data=payload, headers=headers, method="POST")
-        response = self._open(request)
+        try:
+            response = self._open(request)
+        except BaseException:
+            self._drop_thread_sockets()
+            raise
         keep_stream = False
         try:
             self._capture_session(response)
@@ -495,6 +501,7 @@ class StreamableHTTPTransport:
         except Exception:  # noqa: BLE001 - wire failures must be credential-safe
             raise StreamableHTTPTransportError(self._diagnostic("POST request failed")) from None
         finally:
+            self._drop_thread_sockets()
             if not keep_stream:
                 self._release(response)
 
@@ -516,7 +523,11 @@ class StreamableHTTPTransport:
         if self._last_event_id is not None:
             headers["Last-Event-ID"] = self._last_event_id
         request = urllib.request.Request(self._url, headers=headers, method="GET")
-        response = self._open(request, allowed_errors={405})
+        try:
+            response = self._open(request, allowed_errors={405})
+        except BaseException:
+            self._drop_thread_sockets()
+            raise
         try:
             if response.status == 405:
                 self._get_supported = False
@@ -534,6 +545,7 @@ class StreamableHTTPTransport:
                 self._diagnostic("notification stream failed")
             ) from None
         finally:
+            self._drop_thread_sockets()
             self._release(response)
 
     async def _consume_post_stream(self, response: Any) -> None:
@@ -698,22 +710,33 @@ class StreamableHTTPTransport:
             response.close()
 
     def _track_socket(self, sock: Any) -> None:
+        # A dup'd handle stays valid after ssl wraps and detaches the
+        # original socket object, so it can interrupt any later phase.
+        handle = socket.socket(fileno=os.dup(sock.fileno()))
         with self._active_lock:
-            self._pending_sockets.add(sock)
+            self._pending_socks.setdefault(threading.get_ident(), []).append(handle)
             closing = self._closing.is_set()
         if closing:
             with contextlib.suppress(Exception):
-                sock.shutdown(2)
+                handle.shutdown(2)
+
+    def _drop_thread_sockets(self) -> None:
+        with self._active_lock:
+            handles = self._pending_socks.pop(threading.get_ident(), [])
+        for handle in handles:
+            with contextlib.suppress(Exception):
+                handle.close()
 
     def _close_active_responses(self) -> None:
         with self._active_lock:
             responses = tuple(self._active)
-            sockets = list(self._pending_sockets)
-        # Shut down connections still waiting for response headers; they are
-        # not yet registered as active responses but hold a live socket.
-        for sock in sockets:
+            handles = [h for items in self._pending_socks.values() for h in items]
+        # Interrupt connections still connecting, tunneling, in a TLS
+        # handshake, or waiting for headers; only their owning thread
+        # closes the handles.
+        for handle in handles:
             with contextlib.suppress(Exception):
-                sock.shutdown(2)
+                handle.shutdown(2)
         for response in responses:
             # Closing HTTPResponse alone does not reliably wake a thread blocked in
             # socket readline().  Shut down the underlying connection first.
