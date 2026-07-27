@@ -8,6 +8,8 @@ This is the canonical provider boundary for the migration.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -423,6 +425,49 @@ def build_tool_result_message(
     return ai.tool_message(part)
 
 
+def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
+    from .toolkit.core import ToolResult
+
+    if not isinstance(result, ToolResult):
+        return str(result), [], False
+    text: list[str] = []
+    media: list[Any] = []
+    for block in result.blocks:
+        kind = block.get("type")
+        if kind == "text":
+            text.append(str(block.get("text", "")))
+        elif kind in {"image", "audio"}:
+            try:
+                data = base64.b64decode(str(block.get("data", "")), validate=True)
+            except (ValueError, TypeError):
+                text.append(f"ERROR: invalid {kind} content")
+                continue
+            mime = str(block.get("mimeType", "application/octet-stream"))
+            text.append(f"[{kind} {mime} attached]")
+            media.append(ai.types.messages.FilePart(data=data, media_type=mime))
+        elif kind == "resource":
+            resource = block.get("resource")
+            if not isinstance(resource, dict):
+                continue
+            uri = resource.get("uri", "")
+            if isinstance(resource.get("text"), str):
+                text.append(f"[embedded resource {uri}]\n{resource['text']}")
+            elif resource.get("blob") is not None:
+                try:
+                    data = base64.b64decode(str(resource["blob"]), validate=True)
+                except (ValueError, TypeError):
+                    text.append(f"ERROR: invalid embedded resource {uri}")
+                    continue
+                mime = str(resource.get("mimeType", "application/octet-stream"))
+                text.append(f"[embedded resource {uri} {mime} attached]")
+                media.append(ai.types.messages.FilePart(data=data, media_type=mime))
+        elif kind == "resource_link":
+            text.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+        elif kind == "structured":
+            text.append(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+    return "\n".join(text), media, result.is_error
+
+
 def build_tool_result_messages(
     tool_call_id: str, tool_name: str, result: Any
 ) -> list[ai.messages.Message]:
@@ -433,7 +478,15 @@ def build_tool_result_messages(
     Persisted history still receives only the dehydrated text stub.
     """
     if not isinstance(result, str):
-        return [build_tool_result_message(tool_call_id, tool_name, result)]
+        text, media, is_error = _mixed_result_parts(result)
+        if not media and not hasattr(result, "blocks"):
+            return [build_tool_result_message(tool_call_id, tool_name, result)]
+        messages = [ai.tool_message(ai.tool_result_part(
+            tool_call_id, result=text, tool_name=tool_name, is_error=is_error
+        ))]
+        if media:
+            messages.append(ai.user_message(ai.types.messages.TextPart(text=text), *media))
+        return messages
     payload = _image_result_payload(result)
     if payload is None:
         return [build_tool_result_message(tool_call_id, tool_name, result)]

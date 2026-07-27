@@ -53,9 +53,10 @@ def test_registered_tools_and_description_files_match():
     registered = {tool.name for tool in registry.tools}
     files = {path.stem for path in descriptions._DESCRIPTION_DIR.glob("*.md")}
     generated_agent_tools = _prompt_agent_names() - files
+    turn_scoped_tools = {"tool_discovery"}
 
     assert CORE_TOOL_NAMES.issubset(registered)
-    assert files == registered - generated_agent_tools
+    assert files - turn_scoped_tools == registered - generated_agent_tools
     for tool in registry.tools:
         assert tool.description.strip()
         if tool.name in files:

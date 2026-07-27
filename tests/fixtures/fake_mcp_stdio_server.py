@@ -29,8 +29,14 @@ def main() -> None:
     parser.add_argument("--mode", default="normal")
     parser.add_argument("--state-file")
     parser.add_argument("--secret-arg", default="")
+    parser.add_argument("--schema-bytes", type=int, default=0)
+    parser.add_argument("--start-log")
+    parser.add_argument("--call-log")
     args = parser.parse_args()
     secret = os.environ.get("MCP_SENTINEL", "") or args.secret_arg
+    if args.start_log:
+        with Path(args.start_log).open("a", encoding="utf-8") as log:
+            log.write("started\n")
 
     if args.mode == "noise":
         print("not json " + secret, flush=True)
@@ -44,6 +50,7 @@ def main() -> None:
         threading.Thread(target=stderr_flood, args=(secret,), daemon=True).start()
 
     slow_requests: set[int | str] = set()
+    tool_lists = 0
     for raw in sys.stdin:
         message = json.loads(raw)
         method = message.get("method")
@@ -72,26 +79,72 @@ def main() -> None:
         if method == "initialize":
             result = {
                 "protocolVersion": "2025-06-18",
-                "capabilities": {"tools": {"listChanged": True}, "logging": {}},
+                "capabilities": {
+                    "tools": {"listChanged": True},
+                    "resources": {},
+                    "prompts": {},
+                    "logging": {},
+                },
                 "serverInfo": {"name": "fake-stdio", "version": "1"},
             }
         elif method == "tools/list":
+            tool_lists += 1
             if args.mode == "die-once" and args.state_file:
                 marker = Path(args.state_file)
                 if not marker.exists():
                     marker.write_text("died", encoding="utf-8")
                     os._exit(23)
+            schema = {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": ("refreshed " if tool_lists > 2 else "")
+                        + "x" * args.schema_bytes,
+                    }
+                },
+            }
             if params.get("cursor") == "page-2":
-                result = {"tools": [{"name": "beta", "inputSchema": {"type": "object"}}]}
+                result = {"tools": [{"name": "beta", "inputSchema": schema}]}
             else:
                 result = {
-                    "tools": [{"name": "alpha", "inputSchema": {"type": "object"}}],
+                    "tools": [{"name": "alpha", "description": "Echo text", "inputSchema": schema}],
                     "nextCursor": "page-2",
                 }
         elif method == "tools/call":
+            if args.call_log:
+                with Path(args.call_log).open("a", encoding="utf-8") as log:
+                    log.write(json.dumps(params, separators=(",", ":")) + "\n")
+            if args.mode == "die-call-once" and args.state_file:
+                marker = Path(args.state_file)
+                if not marker.exists():
+                    marker.write_text("died", encoding="utf-8")
+                    os._exit(24)
             result = {
                 "content": [{"type": "text", "text": str(params.get("arguments", {}).get("text"))}],
                 "structuredContent": {"called": params.get("name")},
+            }
+            send({
+                "jsonrpc": "2.0",
+                "method": "notifications/tools/list_changed",
+                "params": {},
+            })
+        elif method == "resources/list":
+            result = {"resources": [{"uri": "test://fixture", "name": "fixture"}]}
+        elif method == "resources/read":
+            result = {"contents": [{"uri": params.get("uri"), "text": "resource body " + secret}]}
+        elif method == "prompts/list":
+            result = {"prompts": [{"name": "review", "description": "Review a file"}]}
+        elif method == "prompts/get":
+            result = {
+                "description": "fixture prompt",
+                "messages": [{
+                    "role": "user",
+                    "content": {
+                        "type": "text",
+                        "text": f"review:{params.get('arguments', {}).get('file', '')} {secret}",
+                    },
+                }],
             }
         elif method == "test/slow":
             slow_requests.add(request_id)
