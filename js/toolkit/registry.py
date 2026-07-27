@@ -8,6 +8,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 import sys
 
+from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import artifact, browser, discovery, fs, meta, process_net, search, terminal, wiki
@@ -103,11 +104,12 @@ class TurnToolSurface:
             reserved.update(self.aliases)
             reserved.add(discovery.DISCOVERY_TOOL_NAME)
             self.mcp_host.reserve_public_names(reserved)
-        self._skills = (
-            {skill.id: skill for skill in discovery.discover_skills(cwd)}
-            if allowed.resolve("skill") is not None
-            else {}
+        self._skill_catalog = (
+            discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
         )
+        self._skills = {
+            f"skill:{skill.name}": skill for skill in self._skill_catalog.skills
+        }
         self._lazy: dict[str, Tool] = {}
         self._sources: dict[str, str] = {}
         for tool in allowed.tools:
@@ -158,6 +160,24 @@ class TurnToolSurface:
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
 
+    def activate_tools(self, names: Iterable[str]) -> ToolActivationResult:
+        """Activate declared native tools without widening selected policy."""
+        activated: list[str] = []
+        denied: list[str] = []
+        seen: set[str] = set()
+        for requested in names:
+            tool = self.allowed.resolve(requested)
+            if tool is None:
+                if requested not in denied:
+                    denied.append(requested)
+                continue
+            if tool.name not in seen:
+                activated.append(tool.name)
+                seen.add(tool.name)
+                if tool.name in self._sources:
+                    self._loaded.add(tool.name)
+        return ToolActivationResult(activated=tuple(activated), denied=tuple(denied))
+
     def catalog(self) -> tuple[CatalogEntry, ...]:
         native = (
             CatalogEntry(
@@ -170,8 +190,8 @@ class TurnToolSurface:
             for item_id, tool in self._lazy.items()
         )
         skills = (
-            CatalogEntry(skill.id, skill.name, skill.description, "skill", skill.source)
-            for skill in self._skills.values()
+            CatalogEntry(item_id, skill.name, skill.description, "skill", skill.source)
+            for item_id, skill in self._skills.items()
         )
         mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
         return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
@@ -242,27 +262,21 @@ class TurnToolSurface:
         skill = self._skills.get(item_id)
         if skill is None:
             return f"ERROR: no allowed catalog entry with id {item_id!r}"
-        activated: list[str] = []
-        denied: list[str] = []
-        seen: set[str] = set()
-        for requested in skill.tools:
-            tool = self.allowed.resolve(requested)
-            if tool is None:
-                # Policy denies activation of this tool, not the skill's
-                # instructions; the model still gets the text plus the list
-                # of requirements that were withheld.
-                if requested not in denied:
-                    denied.append(requested)
-            elif tool.name not in seen:
-                activated.append(tool.name)
-                seen.add(tool.name)
-        instructions = skill.load_instructions()
-        if not instructions:
+        try:
+            loaded = load_skill(self._skill_catalog, skill.name, tool_registry=self)
+        except OSError:
             return f"ERROR: skill {skill.name!r} instructions could not be read"
-        self._loaded.update(activated)
-        result: dict[str, object] = {"id": item_id, "instructions": instructions, "loaded": activated}
-        if denied:
-            result["denied_tools"] = denied
+        if loaded is None:
+            return f"ERROR: skill {skill.name!r} instructions could not be read"
+        result: dict[str, object] = {
+            "id": item_id,
+            "instructions": loaded.instructions,
+            "loaded": list(loaded.activation.activated),
+        }
+        if loaded.activation.denied:
+            result["denied_tools"] = list(loaded.activation.denied)
+        if loaded.activation.missing:
+            result["missing_tools"] = list(loaded.activation.missing)
         return discovery.compact_result(result)
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import ai
 import ai.types.messages
 import ai.types.usage
+import pytest
 
 from js import context_budget, runtime
 from js.config import Config
@@ -145,13 +146,13 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     skills_found = json.loads(surface.discover(kind="skill"))["results"]
     assert [item["id"] for item in skills_found] == ["skill:inspect"]
     loaded = json.loads(surface.discover(load="skill:inspect"))
-    assert loaded["instructions"] == "Open the page and report visual defects."
+    assert loaded["instructions"] == "Open the page and report visual defects.\n"
     assert loaded["loaded"] == ["browser_probe"]
     assert surface.resolve("browser_probe") is not None
 
     forbidden = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
     denied = json.loads(forbidden.discover(load="skill:inspect"))
-    assert denied["instructions"] == "Open the page and report visual defects."
+    assert denied["instructions"] == "Open the page and report visual defects.\n"
     assert denied["loaded"] == []
     assert denied["denied_tools"] == ["browser_probe"]
     assert forbidden.resolve("browser_probe") is None
@@ -167,10 +168,10 @@ def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path
     assert not hasattr(definition, "instructions"), "catalog must not retain bodies"
     path.write_text("---\ndescription: Take notes\n---\nUpdated body.\n", encoding="utf-8")
     loaded = json.loads(surface.discover(load="skill:notes"))
-    assert loaded["instructions"] == "Updated body.", "instructions must load from disk on demand"
+    assert loaded["instructions"] == "Updated body.\n", "instructions must load from disk on demand"
 
 
-def test_skill_load_does_not_duplicate_eager_or_repeated_requirements(tmp_path):
+def test_skill_catalog_rejects_repeated_requirements(tmp_path):
     skills = tmp_path / "skills"
     skills.mkdir()
     (skills / "inspect.md").write_text(
@@ -178,13 +179,9 @@ def test_skill_load_does_not_duplicate_eager_or_repeated_requirements(tmp_path):
         "Inspect the requested target.\n",
         encoding="utf-8",
     )
-    surface = build_default_registry().select(["skill", "read", "browser_probe"]).lazy_surface(tmp_path)
 
-    loaded = json.loads(surface.discover(load="skill:inspect"))
-
-    assert loaded["loaded"] == ["read", "browser_probe"]
-    assert _spec_names(surface.openai_specs()).count("read") == 1
-    assert _spec_names(surface.openai_specs()).count("browser_probe") == 1
+    with pytest.raises(ValueError, match="contains duplicate 'read'"):
+        build_default_registry().select(["skill", "read", "browser_probe"]).lazy_surface(tmp_path)
 
 
 def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch, tmp_path):
