@@ -42,7 +42,16 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
             values.extend(parameter for parameter in parameters if parameter)
     # stdio arguments commonly carry tokens; flags themselves are not
     # secrets and very short args would over-redact ordinary output.
-    values.extend(arg for arg in server.args if arg and not arg.startswith("-") and len(arg) >= 6)
+    for arg in server.args:
+        if not arg:
+            continue
+        if arg.startswith("-"):
+            # Inline credential form: --token=SECRET.
+            _flag, separator, inline = arg.partition("=")
+            if separator and len(inline) >= 6:
+                values.append(inline)
+        elif len(arg) >= 6:
+            values.append(arg)
     secrets = set(values)
     authorization_schemes = {
         "apikey", "basic", "bearer", "digest", "hoba", "mutual", "negotiate", "scram", "vapid",
