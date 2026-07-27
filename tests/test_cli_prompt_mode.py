@@ -1581,6 +1581,7 @@ def test_model_context_window_beats_the_multi_model_map(tmp_path):
 
 
 def test_named_nested_and_derived_sessions_append_stably(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -1602,6 +1603,7 @@ def test_named_nested_and_derived_sessions_append_stably(monkeypatch, tmp_path, 
 
 
 def test_session_key_isolated_by_agent_cwd_and_key(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
