@@ -955,16 +955,24 @@ async def _dispatch_batch(
     bench, tests) the whole batch takes the executor path unchanged."""
     from . import supervisor
 
+    from .toolkit import meta
+
+    current_supervisor = supervisor.get_current()
     async_idx: list[int] = []
+    fan_out_now: set[int] = set()
     for i, pc in enumerate(tool_calls):
         tool = registry.resolve(pc.name)
-        if tool is not None and inspect.iscoroutinefunction(tool.handler):
+        if tool is None:
+            continue
+        if current_supervisor is not None and meta.is_fan_out_handler(tool.handler):
+            fan_out_now.add(i)
+        elif inspect.iscoroutinefunction(tool.handler):
             async_idx.append(i)
     if async_idx:
-        # Mixed batches must keep the model's order: run each call in position,
-        # awaiting async handlers and shipping runs of sync calls to a thread.
-        # Executing all async calls first would silently reorder side effects
-        # that the sequential dispatch contract guarantees.
+        # Mixed batches keep the model's order. Fan-out calls stay on the loop
+        # (sending them to a thread restores the pool-inversion deadlock),
+        # async leaves are awaited in place, and runs of sync leaves go to a
+        # thread together.
         async_set = set(async_idx)
         records: list[tuple[_PendingToolCall, dict, Any]] = []
         pending_sync: list[_PendingToolCall] = []
@@ -980,7 +988,12 @@ async def _dispatch_batch(
             ))
 
         for i, pc in enumerate(tool_calls):
-            if i in async_set:
+            if i in fan_out_now:
+                await flush_sync()
+                records.append(await _dispatch_fan_out_async(
+                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
+                ))
+            elif i in async_set:
                 await flush_sync()
                 records.append(await _dispatch_async_tool(
                     pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
@@ -991,10 +1004,7 @@ async def _dispatch_batch(
         return records  # type: ignore[return-value]
 
     fan_out_idx: list[int] = []
-    current_supervisor = supervisor.get_current()
     if current_supervisor is not None:
-        from .toolkit import meta
-
         for i, pc in enumerate(tool_calls):
             tool = registry.resolve(pc.name)
             if tool is not None and meta.is_fan_out_handler(tool.handler):
