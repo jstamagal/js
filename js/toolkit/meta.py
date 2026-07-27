@@ -192,8 +192,12 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
     return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
+    from ..mcp_config import resolve as resolve_mcp
+
     # The per-agent data dir is the sessions dir; it stores that agent's jsonl,
-    # .history, and latest.json.
+    # .history, and latest.json. MCP policy is an agent authorization boundary,
+    # so resolve it for the child from the merged settings instead of copying the
+    # parent's already-resolved policy.
     agents_root = parent_cfg.agent_dir.parent
     prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     agent_dir = agents_root / agent
@@ -207,6 +211,7 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         sessions_dir=sessions_dir,
         session_file=session_file,
         prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
+        mcp=resolve_mcp(parent_cfg.settings, agent),
     )
 
 
