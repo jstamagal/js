@@ -43,6 +43,8 @@ class SpecServerTransport:
 
     async def close(self):
         self.closed = True
+        if self.server.close_error is not None:
+            raise self.server.close_error
 
     async def notify(self, method, params):
         await self.incoming.put({"jsonrpc": "2.0", "method": method, "params": params})
@@ -59,6 +61,7 @@ class SpecServer:
         self.connections = []
         self.messages = []
         self.die_on = None
+        self.close_error = None
         self.calls = 0
         self.subscriptions = set()
 
@@ -369,6 +372,24 @@ def test_reconnect_retries_factory_failures_with_bounded_backoff():
         assert attempts == 3
         assert delays == [0.25, 0.4]
         await client.close()
+
+    asyncio.run(drive())
+
+
+def test_transport_cleanup_exceptions_are_redacted():
+    async def drive():
+        secret = "cleanup-secret-3311"
+        server = SpecServer()
+        client = await initialized_client(server, secrets=[secret])
+        server.close_error = OSError(f"close failed with {secret}")
+
+        with pytest.raises(MCPClientError) as caught:
+            await client.close()
+
+        assert secret not in str(caught.value)
+        assert str(caught.value) == "close failed with [REDACTED]"
+        assert client.peer is None
+        assert not client.initialized
 
     asyncio.run(drive())
 

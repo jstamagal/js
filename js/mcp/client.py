@@ -409,7 +409,12 @@ class MCPClient:
         peer, self.peer = self.peer, None
         self.initialize_result = None
         if peer is not None:
-            await peer.close()
+            try:
+                await peer.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._raise_redacted(exc)
 
     def _require_peer(self) -> JSONRPCPeer:
         if not self.initialized or self.peer is None:
