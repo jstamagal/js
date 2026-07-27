@@ -684,30 +684,55 @@ class StreamableHTTPTransport:
             elif field == b"retry" and value.isdigit():
                 self._retry_seconds = int(value) / 1000
 
-        while not self._closing.is_set():
-            chunk = response.readline(self._max_response_bytes + 1)
+        buffer = b""
+        eof = False
+        swallow_lf = False
+        while not self._closing.is_set() and not eof:
+            # read1 returns as soon as bytes arrive; readline would sit on a
+            # live lone-CR stream forever waiting for an LF.
+            chunk = response.read1(65536)
             if not chunk:
-                break
-            event_size += len(chunk)
-            if event_size > self._max_response_bytes:
-                raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
-            if first_chunk:
-                first_chunk = False
-                chunk = chunk.removeprefix(b"\xef\xbb\xbf")
-            # readline splits on LF only; the event-stream grammar also
-            # allows CRLF and lone-CR terminators. Chop exactly one
-            # terminator, then lone CRs inside the chunk are boundaries.
-            if chunk.endswith(b"\r\n"):
-                body = chunk[:-2]
-            elif chunk.endswith((b"\n", b"\r")):
-                body = chunk[:-1]
+                eof = True
             else:
-                # Unterminated final line at EOF: the grammar discards it.
-                continue
-            for line in body.split(b"\r"):
+                if swallow_lf:
+                    # The previous chunk ended in CR whose line was already
+                    # processed; a leading LF here completes that CRLF.
+                    chunk = chunk.removeprefix(b"\n")
+                    swallow_lf = False
+                buffer += chunk
+                if len(buffer) > self._max_response_bytes:
+                    raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
+            while buffer:
+                if first_chunk:
+                    if len(buffer) < 3 and not eof and b"\xef\xbb\xbf".startswith(buffer):
+                        break  # cannot decide a split BOM yet
+                    first_chunk = False
+                    buffer = buffer.removeprefix(b"\xef\xbb\xbf")
+                    if not buffer:
+                        break
+                index_n = buffer.find(b"\n")
+                index_r = buffer.find(b"\r")
+                if index_r != -1 and (index_n == -1 or index_r < index_n):
+                    if index_r == len(buffer) - 1:
+                        # A lone CR terminates its line by itself; only the
+                        # optional following LF belongs to this terminator.
+                        index, skip = index_r, 1
+                        swallow_lf = not eof
+                    else:
+                        skip = 2 if buffer[index_r + 1 : index_r + 2] == b"\n" else 1
+                        index = index_r
+                elif index_n != -1:
+                    index, skip = index_n, 1
+                else:
+                    break
+                line = buffer[:index]
+                buffer = buffer[index + skip :]
+                event_size += index + skip
+                if event_size > self._max_response_bytes:
+                    raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
                 handle_line(line)
-        # EOF without a final boundary: the incomplete event is discarded
-        # and its id never commits.
+        # Unterminated trailing bytes at EOF are discarded per the grammar,
+        # and an incomplete event's id never commits.
 
     def _decode_message(self, payload: bytes) -> dict[str, Any]:
         try:

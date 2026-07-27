@@ -443,7 +443,7 @@ def test_sse_id_commits_only_at_event_boundary_and_eof_discards_partial():
         def __init__(self, payload: bytes):
             self._lines = payload.splitlines(keepends=True)
 
-        def readline(self, _limit):
+        def read1(self, _limit):
             return self._lines.pop(0) if self._lines else b""
 
     transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
@@ -458,13 +458,13 @@ def test_sse_id_commits_only_at_event_boundary_and_eof_discards_partial():
 
 
 class ReadlineStream:
-    """readline() that splits on LF only, like a binary HTTP response."""
+    """read1() delivering LF-split chunks, like a buffered HTTP response."""
 
     def __init__(self, payload: bytes):
         self._payload = payload
         self._pos = 0
 
-    def readline(self, _limit):
+    def read1(self, _limit):
         if self._pos >= len(self._payload):
             return b""
         index = self._payload.find(b"\n", self._pos)
@@ -496,3 +496,50 @@ def test_sse_grammar_cr_terminators_bom_and_empty_id_reset():
     before = transport._retry_seconds
     transport._consume_sse(ReadlineStream(b"retry: -5\nretry: x\n\n"), received.append)
     assert transport._retry_seconds == before
+
+
+def test_lone_cr_events_deliver_promptly_on_a_live_stream():
+    class Read1Stream:
+        """Each read1 call is one network arrival; EOF only at the end."""
+
+        def __init__(self, chunks, probe):
+            self._chunks = list(chunks)
+            self._probe = probe
+
+        def read1(self, _limit):
+            self._probe()
+            return self._chunks.pop(0) if self._chunks else b""
+
+    received = []
+    deliveries_before_read = []
+    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
+    chunks = [
+        b'id: live\rdata: {"jsonrpc":"2.0","method":"a"}\r\r',
+        b'data: {"jsonrpc":"2.0","method":"b"}\r\r',
+    ]
+    stream = Read1Stream(chunks, lambda: deliveries_before_read.append(len(received)))
+    transport._consume_sse(stream, received.append)
+    assert [m["method"] for m in received] == ["a", "b"]
+    # The first event was delivered before the second network read, and the
+    # second before the EOF read: no waiting for LF or EOF.
+    assert deliveries_before_read == [0, 1, 2]
+    assert transport.last_event_id == "live"
+
+
+def test_crlf_and_bom_split_across_network_reads():
+    class Read1Stream:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def read1(self, _limit):
+            return self._chunks.pop(0) if self._chunks else b""
+
+    received = []
+    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
+    chunks = [
+        b"\xef",
+        b"\xbb\xbfdata: {\"jsonrpc\":\"2.0\",\"method\":\"x\"}\r",
+        b"\n\r\n",
+    ]
+    transport._consume_sse(Read1Stream(chunks), received.append)
+    assert [m["method"] for m in received] == ["x"]
