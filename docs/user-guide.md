@@ -143,15 +143,18 @@ and writes a rollback mark. Runtime exceptions do the same.
 js -p "write a short repo summary"
 ```
 
-One-shot mode appends the user prompt to the session, runs one turn, prints the
-final assistant message, persists new messages, and prints a `Continue:`
-command when saving is enabled.
+One-shot mode appends the user prompt to a new unique session by default, runs
+one turn, prints the final assistant message, persists new messages, and prints
+a `Continue:` command. A driven agent should keep that default across correction
+rounds so it can resume instead of paying to re-read the repository and prior
+context on every invocation.
 
 Useful flags:
 
 ```bash
-js -p "prompt" --no-save
-js -p "prompt" --session 20260611T120000Z-abcd
+js -p "prompt" --session reviews/parser-fix
+js -p "apply the review corrections" --session reviews/parser-fix
+js -p "throwaway question" --no-save
 js -p "prompt" --debug
 js -p "prompt" --debug-file /tmp/js-debug.log
 js -p "prompt" --reasoning off
@@ -165,7 +168,11 @@ file and keeps stdout clean. They are mutually exclusive.
 
 `-q` / `--quiet` suppresses the `Continue: ...` resume hint that one-shot mode
 prints after a saved turn. The session is still written; only the hint is
-silenced.
+silenced. `-n` / `--no-save` is different: it makes the run disposable, leaves
+stdout answer-only, and prints exactly `session not saved; resume unavailable`
+to stderr after a headless prompt or pipe run. Agent drivers should treat that
+warning as a signal that the next correction round cannot resume and must
+re-read context.
 
 ## Working Directory And Config Scoping
 
@@ -203,7 +210,8 @@ git diff | js -p "review this patch"
 cat notes.md | js
 ```
 
-When `-p` is also supplied, the final prompt is:
+Pipe runs use the same saved-by-default session behavior as `-p`. When `-p` is
+also supplied, the final prompt is:
 
 ```text
 <the -p instruction>

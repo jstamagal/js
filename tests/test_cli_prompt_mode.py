@@ -110,12 +110,32 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path, capsys):
     assert not (tmp_path / ".js").exists()
 
 
-def test_cli_help_describes_effective_model_precedence(capsys):
+def test_cli_short_help_is_skill_shaped_and_warns_against_no_save(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
 
     captured = capsys.readouterr()
     assert exc.value.code == 0
+    assert captured.err == ""
+    assert len(captured.out.splitlines()) <= 40
+    assert all(section in captured.out for section in ("RUN", "PICK", "STATE", "SCRIPTING", "MORE"))
+    assert "sessions are saved by default" in captured.out
+    assert "this is what a driven agent normally wants" in captured.out
+    assert "-n, --no-save" in captured.out
+    assert "expensive throwaway choice" in captured.out
+    assert "resume is unavailable" in captured.out
+    assert "run must re-read context" in captured.out
+    assert "js --help-full" in captured.out
+    assert "--providers-json" not in captured.out
+
+
+def test_cli_full_help_retains_detailed_option_reference(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help-full"])
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 0
+    assert "--help-full" in captured.out
     assert "override configured/env model" in captured.out
     assert "Wins over" in captured.out
     assert "all config files" in captured.out
@@ -127,6 +147,11 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     assert "platform data" in captured.out
     assert "sessions/<agent>" in captured.out
     assert "state/<agent>" in captured.out
+    assert "~/.js" not in captured.out
+    assert "--providers-json" in captured.out
+    assert "--printonly" in captured.out
+
+
 def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -169,13 +194,14 @@ def test_interactive_cli_model_flag_overrides_banner_model(monkeypatch, tmp_path
 
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
 
-    actual = cli.main(["--model", "flag-model"])
+    actual = cli.main(["-n", "--model", "flag-model"])
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
 
     assert actual == 0
-    assert "flag-model" in output
-    assert "deepseek/deepseek-v4-flash" not in output
+    assert "flag-model" in captured.out
+    assert "deepseek/deepseek-v4-flash" not in captured.out
+    assert "session not saved; resume unavailable" not in captured.err
 
 
 def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
@@ -653,14 +679,15 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
 
     actual = cli.main(["-p", "Reply with GENERATED_OK"])
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
     # New layout: sessions live directly under the per-agent dir.
     agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
     session_files = list(agent_dir.glob("*.jsonl"))
     assert actual == 0
     assert len(session_files) == 1
     session_file = session_files[0]
-    assert output == f"GENERATED_OK\nContinue: js --session {session_file.stem}\n"
+    assert captured.out == f"GENERATED_OK\nContinue: js --session {session_file.stem}\n"
+    assert "session not saved; resume unavailable" not in captured.err
     assert load_messages(session_file) == [
         {"role": "user", "content": "Reply with GENERATED_OK"},
         {"role": "assistant", "content": "GENERATED_OK"},
@@ -681,10 +708,12 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
 
     actual = cli.main(["--no-save", "-p", "Reply with NO_SAVE_OK"])
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
     agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
     assert actual == 0
-    assert output == "NO_SAVE_OK\n"
+    assert captured.out == "NO_SAVE_OK\n"
+    assert captured.err.splitlines().count("session not saved; resume unavailable") == 1
+    assert captured.err.endswith("session not saved; resume unavailable\n")
     assert not (agent_dir / "latest.json").exists()
     assert not list(agent_dir.glob("*.jsonl"))
 
@@ -711,19 +740,49 @@ def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path,
 
     monkeypatch.setattr(cli.sys, "stdin", StdinStub("Reply with PIPE_NO_SAVE_OK"))
     actual_pipe = cli.main(["--no-save"])
-    output_pipe = capsys.readouterr().out
+    captured_pipe = capsys.readouterr()
 
     monkeypatch.setattr(cli.sys, "stdin", StdinStub("Reply with PIPE_NO_SAVE_OK"))
     actual_prompt_pipe = cli.main(["--no-save", "-p"])
-    output_prompt_pipe = capsys.readouterr().out
+    captured_prompt_pipe = capsys.readouterr()
 
     agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
     assert actual_pipe == 0
     assert actual_prompt_pipe == 0
-    assert output_pipe == "PIPE_NO_SAVE_OK\n"
-    assert output_prompt_pipe == "PIPE_NO_SAVE_OK\n"
+    assert captured_pipe.out == "PIPE_NO_SAVE_OK\n"
+    assert captured_prompt_pipe.out == "PIPE_NO_SAVE_OK\n"
+    warning = "session not saved; resume unavailable"
+    assert captured_pipe.err.splitlines().count(warning) == 1
+    assert captured_prompt_pipe.err.splitlines().count(warning) == 1
+    assert captured_pipe.err.endswith(f"{warning}\n")
+    assert captured_prompt_pipe.err.endswith(f"{warning}\n")
     assert not (agent_dir / "latest.json").exists()
     assert not list(agent_dir.glob("*.jsonl"))
+    assert not (agent_dir / ".no-save.jsonl").exists()
+
+
+def test_short_no_save_prompt_alias_suppresses_persistence(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+
+    def completion_stub(**kwargs):
+        return _fake_stream_result("SHORT_NO_SAVE_OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+
+    actual = cli.main(["-n", "-p", "Reply with SHORT_NO_SAVE_OK"])
+
+    captured = capsys.readouterr()
+    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    assert actual == 0
+    assert captured.out == "SHORT_NO_SAVE_OK\n"
+    assert captured.err.splitlines().count("session not saved; resume unavailable") == 1
+    assert captured.err.endswith("session not saved; resume unavailable\n")
+    assert not (agent_dir / "latest.json").exists()
+    assert not list(agent_dir.glob("*.jsonl"))
+    assert not (agent_dir / ".no-save.jsonl").exists()
+
 
 def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
     calls: list[dict] = []
