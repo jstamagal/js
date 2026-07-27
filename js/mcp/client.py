@@ -40,6 +40,10 @@ class CapabilityError(MCPClientError):
     pass
 
 
+class TransportError(MCPClientError):
+    """A redacted transport failure that remains eligible for reconnect."""
+
+
 class MCPClient:
     def __init__(
         self,
@@ -129,6 +133,8 @@ class MCPClient:
                 raise
             except Exception as exc:
                 await self._discard_peer()
+                if self._is_transport_failure(exc):
+                    raise TransportError(self._redact_exception_message(exc)) from None
                 self._raise_redacted(exc)
             self.initialize_result = result
             self._negotiated_capabilities = result.capabilities
@@ -137,16 +143,25 @@ class MCPClient:
     async def request(
         self, method: str, params: Mapping[str, Any] | None = None, *, timeout: float | None = None
     ) -> Any:
-        return await self._require_peer().request(method, params, timeout=timeout)
+        try:
+            return await self._require_peer().request(method, params, timeout=timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     async def notify(self, method: str, params: Mapping[str, Any] | None = None) -> None:
-        await self._require_peer().notify(method, params)
+        try:
+            await self._require_peer().notify(method, params)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     async def list_tools(
         self, *, progress_token: ProgressToken | None = None, timeout: float | None = None
     ) -> list[dict[str, Any]]:
-        self._require_capability("tools")
-        return await self._paginate("tools/list", "tools", progress_token, timeout)
+        return await self._paginate("tools/list", "tools", "tools", progress_token, timeout)
 
     async def call_tool(
         self,
@@ -156,26 +171,34 @@ class MCPClient:
         progress_token: ProgressToken | None = None,
         timeout: float | None = None,
     ) -> CallToolResult:
-        self._require_capability("tools")
         params: dict[str, Any] = {"name": name}
         if arguments is not None:
             params["arguments"] = dict(arguments)
         self._add_progress_token(params, progress_token)
-        raw = await self._non_replayable_request("tools/call", params, timeout)
-        return CallToolResult.from_wire(raw)
+        raw = await self._non_replayable_request(
+            "tools/call", params, timeout, lambda: self._require_capability("tools")
+        )
+        try:
+            return CallToolResult.from_wire(raw)
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     async def list_resources(
         self, *, progress_token: ProgressToken | None = None, timeout: float | None = None
     ) -> list[dict[str, Any]]:
-        self._require_capability("resources")
-        return await self._paginate("resources/list", "resources", progress_token, timeout)
+        return await self._paginate(
+            "resources/list", "resources", "resources", progress_token, timeout
+        )
 
     async def list_resource_templates(
         self, *, progress_token: ProgressToken | None = None, timeout: float | None = None
     ) -> list[dict[str, Any]]:
-        self._require_capability("resources")
         return await self._paginate(
-            "resources/templates/list", "resourceTemplates", progress_token, timeout
+            "resources/templates/list",
+            "resourceTemplates",
+            "resources",
+            progress_token,
+            timeout,
         )
 
     async def read_resource(
@@ -185,25 +208,32 @@ class MCPClient:
         progress_token: ProgressToken | None = None,
         timeout: float | None = None,
     ) -> ReadResourceResult:
-        self._require_capability("resources")
         params: dict[str, Any] = {"uri": uri}
         self._add_progress_token(params, progress_token)
-        raw = await self._safe_request("resources/read", params, timeout)
-        return ReadResourceResult.from_wire(raw)
+        raw = await self._safe_request(
+            "resources/read", params, timeout, lambda: self._require_capability("resources")
+        )
+        try:
+            return ReadResourceResult.from_wire(raw)
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     async def subscribe_resource(self, uri: str, *, timeout: float | None = None) -> None:
-        self._require_resource_subscription()
-        await self._non_replayable_request("resources/subscribe", {"uri": uri}, timeout)
+        await self._non_replayable_request(
+            "resources/subscribe", {"uri": uri}, timeout, self._require_resource_subscription
+        )
 
     async def unsubscribe_resource(self, uri: str, *, timeout: float | None = None) -> None:
-        self._require_resource_subscription()
-        await self._non_replayable_request("resources/unsubscribe", {"uri": uri}, timeout)
+        await self._non_replayable_request(
+            "resources/unsubscribe", {"uri": uri}, timeout, self._require_resource_subscription
+        )
 
     async def list_prompts(
         self, *, progress_token: ProgressToken | None = None, timeout: float | None = None
     ) -> list[dict[str, Any]]:
-        self._require_capability("prompts")
-        return await self._paginate("prompts/list", "prompts", progress_token, timeout)
+        return await self._paginate(
+            "prompts/list", "prompts", "prompts", progress_token, timeout
+        )
 
     async def get_prompt(
         self,
@@ -213,17 +243,21 @@ class MCPClient:
         progress_token: ProgressToken | None = None,
         timeout: float | None = None,
     ) -> GetPromptResult:
-        self._require_capability("prompts")
         params: dict[str, Any] = {"name": name}
         if arguments is not None:
             params["arguments"] = dict(arguments)
         self._add_progress_token(params, progress_token)
-        raw = await self._safe_request("prompts/get", params, timeout)
-        return GetPromptResult.from_wire(raw)
+        raw = await self._safe_request(
+            "prompts/get", params, timeout, lambda: self._require_capability("prompts")
+        )
+        try:
+            return GetPromptResult.from_wire(raw)
+        except Exception as exc:
+            self._raise_redacted(exc)
 
     def add_request_handler(self, method: str, handler: RequestHandler) -> None:
         if self.peer is not None:
-            self.peer.add_request_handler(method, handler)
+            self.peer.add_request_handler(method, self._redacting_request_handler(handler))
         self.request_handlers[method] = handler
 
     async def close(self) -> None:
@@ -245,6 +279,7 @@ class MCPClient:
         self,
         method: str,
         item_key: str,
+        capability: str,
         progress_token: ProgressToken | None,
         timeout: float | None,
     ) -> list[dict[str, Any]]:
@@ -256,25 +291,35 @@ class MCPClient:
             if cursor is not None:
                 params["cursor"] = cursor
             self._add_progress_token(params, progress_token)
-            raw = await self._safe_request(method, params or None, timeout)
-            if not isinstance(raw, dict):
-                raise ValueError(f"{method} result must be an object")
-            page = raw.get(item_key)
-            if not isinstance(page, list) or not all(isinstance(item, dict) for item in page):
-                raise ValueError(f"{method} {item_key} must be a list of objects")
-            items.extend(dict(item) for item in page)
-            next_cursor = raw.get("nextCursor")
-            if next_cursor is None:
-                return items
-            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen:
-                raise ValueError(f"{method} returned an invalid nextCursor")
-            seen.add(next_cursor)
-            cursor = next_cursor
+            raw = await self._safe_request(
+                method, params or None, timeout, lambda: self._require_capability(capability)
+            )
+            try:
+                if not isinstance(raw, dict):
+                    raise ValueError(f"{method} result must be an object")
+                page = raw.get(item_key)
+                if not isinstance(page, list) or not all(isinstance(item, dict) for item in page):
+                    raise ValueError(f"{method} {item_key} must be a list of objects")
+                items.extend(dict(item) for item in page)
+                next_cursor = raw.get("nextCursor")
+                if next_cursor is None:
+                    return items
+                if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen:
+                    raise ValueError(f"{method} returned an invalid nextCursor: {next_cursor!r}")
+                seen.add(next_cursor)
+                cursor = next_cursor
+            except Exception as exc:
+                self._raise_redacted(exc)
 
     async def _non_replayable_request(
-        self, method: str, params: Mapping[str, Any] | None, timeout: float | None
+        self,
+        method: str,
+        params: Mapping[str, Any] | None,
+        timeout: float | None,
+        require_capability: Callable[[], None],
     ) -> Any:
         try:
+            await self._ensure_ready(require_capability, timeout)
             return await self._require_peer().request(method, params, timeout=timeout)
         except asyncio.CancelledError:
             raise
@@ -284,45 +329,81 @@ class MCPClient:
             self._raise_redacted(exc)
 
     async def _safe_request(
-        self, method: str, params: Mapping[str, Any] | None, timeout: float | None
+        self,
+        method: str,
+        params: Mapping[str, Any] | None,
+        timeout: float | None,
+        require_capability: Callable[[], None],
     ) -> Any:
+        self._require_previously_initialized()
         for attempt in range(self._reconnect_attempts + 1):
             try:
                 if not self.initialized:
                     await self.initialize(timeout=timeout)
+                require_capability()
                 return await self._require_peer().request(method, params, timeout=timeout)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                recoverable = self._is_transport_failure(exc) or (
-                    not self.initialized
-                    and self._negotiated_capabilities is not None
-                    and isinstance(exc, MCPClientError)
-                )
-                if not recoverable or attempt >= self._reconnect_attempts:
+                if not self._is_transport_failure(exc) or attempt >= self._reconnect_attempts:
                     self._raise_redacted(exc)
                 await self._discard_peer()
-                delay = min(
-                    self._reconnect_backoff * (2**attempt), self._reconnect_backoff_max
-                )
-                if delay:
-                    await asyncio.sleep(delay)
+                await self._sleep_before_retry(attempt)
         raise AssertionError("unreachable")
+
+    async def _ensure_ready(
+        self, require_capability: Callable[[], None], timeout: float | None
+    ) -> None:
+        self._require_previously_initialized()
+        if self.initialized:
+            require_capability()
+            return
+        for attempt in range(self._reconnect_attempts + 1):
+            try:
+                await self.initialize(timeout=timeout)
+                require_capability()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not self._is_transport_failure(exc) or attempt >= self._reconnect_attempts:
+                    self._raise_redacted(exc)
+                await self._discard_peer()
+                await self._sleep_before_retry(attempt)
 
     def _configure_peer(self, peer: JSONRPCPeer) -> None:
         for method, handler in self.request_handlers.items():
-            peer.add_request_handler(method, handler)
+            peer.add_request_handler(method, self._redacting_request_handler(handler))
         for method, sink in self._notification_sinks.items():
             if sink is not None:
                 peer.add_notification_handler(method, self._redacting_sink(sink))
 
     def _redacting_sink(self, sink: NotificationSink) -> NotificationSink:
         async def deliver(params: dict[str, Any]) -> None:
-            result = sink(self._redact_value(params))
-            if inspect.isawaitable(result):
-                await result
+            try:
+                result = sink(self._redact_value(params))
+                if inspect.isawaitable(result):
+                    await result
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._raise_redacted(exc)
 
         return deliver
+
+    def _redacting_request_handler(self, handler: RequestHandler) -> RequestHandler:
+        async def handle(params: dict[str, Any]) -> Any:
+            try:
+                result = handler(params)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._raise_redacted(exc)
+
+        return handle
 
     async def _discard_peer(self) -> None:
         peer, self.peer = self.peer, None
@@ -334,6 +415,10 @@ class MCPClient:
         if not self.initialized or self.peer is None:
             raise NotInitializedError("MCP client has not completed initialization")
         return self.peer
+
+    def _require_previously_initialized(self) -> None:
+        if self._negotiated_capabilities is None:
+            raise NotInitializedError("MCP client has not completed initialization")
 
     def _require_capability(self, name: str) -> None:
         capabilities = self.server_capabilities
@@ -355,7 +440,12 @@ class MCPClient:
 
     @staticmethod
     def _is_transport_failure(exc: BaseException) -> bool:
-        return isinstance(exc, (PeerClosedError, ConnectionError, OSError))
+        return isinstance(exc, (TransportError, PeerClosedError, ConnectionError, OSError))
+
+    async def _sleep_before_retry(self, attempt: int) -> None:
+        delay = min(self._reconnect_backoff * (2**attempt), self._reconnect_backoff_max)
+        if delay:
+            await asyncio.sleep(delay)
 
     def _redact_text(self, value: str) -> str:
         redacted = value
@@ -369,18 +459,32 @@ class MCPClient:
         if isinstance(value, str):
             return self._redact_text(value)
         if isinstance(value, dict):
-            return {key: self._redact_value(item) for key, item in value.items()}
+            return {
+                self._redact_text(key) if isinstance(key, str) else key: self._redact_value(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [self._redact_value(item) for item in value]
         if isinstance(value, tuple):
             return tuple(self._redact_value(item) for item in value)
         return value
 
+    def _redact_exception_message(self, exc: BaseException) -> str:
+        return self._redact_text(str(exc)) or type(exc).__name__
+
     def _raise_redacted(self, exc: Exception) -> None:
-        if isinstance(exc, (CapabilityError, NotInitializedError, ProtocolVersionError, ValueError)):
-            message = self._redact_text(str(exc))
-            raise type(exc)(message) from None
-        raise MCPClientError(self._redact_text(str(exc)) or type(exc).__name__) from None
+        message = self._redact_exception_message(exc)
+        if isinstance(exc, CapabilityError):
+            raise CapabilityError(message) from None
+        if isinstance(exc, NotInitializedError):
+            raise NotInitializedError(message) from None
+        if isinstance(exc, ProtocolVersionError):
+            raise ProtocolVersionError(message) from None
+        if isinstance(exc, TransportError):
+            raise TransportError(message) from None
+        if isinstance(exc, ValueError):
+            raise ValueError(message) from None
+        raise MCPClientError(message) from None
 
 
 Client = MCPClient

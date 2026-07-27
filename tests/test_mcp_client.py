@@ -320,7 +320,60 @@ def test_interrupted_tool_call_is_never_replayed_and_next_operation_recovers():
     asyncio.run(drive())
 
 
-def test_secrets_are_redacted_from_transport_and_remote_errors():
+def test_reconnect_uses_new_capabilities_before_sending_operation():
+    async def drive():
+        server = SpecServer()
+        client = await initialized_client(server)
+        await server.connections[0].incoming.put(None)
+        await asyncio.sleep(0)
+        server.capabilities = {"resources": {}}
+
+        with pytest.raises(CapabilityError, match="tools"):
+            await client.list_tools()
+        assert len(requests(server, "initialize")) == 2
+        assert not requests(server, "tools/list")
+        await client.close()
+
+    asyncio.run(drive())
+
+
+def test_reconnect_retries_factory_failures_with_bounded_backoff():
+    async def drive():
+        server = SpecServer()
+        delays = []
+        attempts = 0
+        client = await initialized_client(server, reconnect_attempts=2)
+        await server.connections[0].incoming.put(None)
+        await asyncio.sleep(0)
+        original_factory = server.factory
+
+        def flaky_factory():
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise OSError("temporary connect failure")
+            return original_factory()
+
+        async def record_sleep(delay):
+            delays.append(delay)
+
+        client.transport_factory = flaky_factory
+        client._reconnect_backoff = 0.25
+        client._reconnect_backoff_max = 0.4
+        original_sleep = asyncio.sleep
+        asyncio.sleep = record_sleep
+        try:
+            assert (await client.read_resource("file:///a")).contents[0]["text"] == "text"
+        finally:
+            asyncio.sleep = original_sleep
+        assert attempts == 3
+        assert delays == [0.25, 0.4]
+        await client.close()
+
+    asyncio.run(drive())
+
+
+def test_secrets_are_redacted_from_all_client_exception_paths():
     async def drive():
         secret = "environment-secret-9988"
         server = SpecServer()
@@ -328,16 +381,41 @@ def test_secrets_are_redacted_from_transport_and_remote_errors():
         server.die_on = (0, "resources/read")
         original_factory = server.factory
 
+        attempts = 0
+
         def failing_factory():
+            nonlocal attempts
+            attempts += 1
             raise OSError(f"cannot connect with {secret}")
 
         client.transport_factory = failing_factory
         with pytest.raises(MCPClientError) as caught:
             await client.read_resource("file:///secret")
+        assert attempts == client._reconnect_attempts
         assert secret not in str(caught.value)
         assert "[REDACTED]" in str(caught.value)
 
         client.transport_factory = original_factory
+        await client.initialize()
+        server.handle = lambda method, params: (
+            {
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "capabilities": server.capabilities,
+                "serverInfo": {"name": "spec-server", "version": "1"},
+            }
+            if method == "initialize"
+            else {"tools": [], "nextCursor": secret}
+        )
+        with pytest.raises(ValueError) as malformed:
+            await client.list_tools()
+        assert secret not in str(malformed.value)
+        assert "[REDACTED]" in str(malformed.value)
+
+        server.handle = lambda method, params: (_ for _ in ()).throw(RuntimeError(secret))
+        with pytest.raises(MCPClientError) as remote:
+            await client.request("custom/secret")
+        assert secret not in str(remote.value)
+        assert "[REDACTED]" in str(remote.value)
         await client.close()
 
     asyncio.run(drive())
