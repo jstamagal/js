@@ -2,7 +2,12 @@
 
 from .client import MCPClient
 from .protocol import JSONRPCError, JSONRPCPeer, PeerClosedError
-from .transports import StdioTransport, StdioTransportError
+from .transports import (
+    StdioTransport,
+    StdioTransportError,
+    StreamableHTTPTransport,
+    StreamableHTTPTransportError,
+)
 from .types import LATEST_PROTOCOL_VERSION
 
 __all__ = [
@@ -13,4 +18,6 @@ __all__ = [
     "PeerClosedError",
     "StdioTransport",
     "StdioTransportError",
+    "StreamableHTTPTransport",
+    "StreamableHTTPTransportError",
 ]
