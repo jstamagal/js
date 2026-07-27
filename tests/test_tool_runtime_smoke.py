@@ -11,6 +11,7 @@ from js import model_client, runtime, setcmd, settings, tools as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
+from js.toolkit.core import ToolResult
 import ai
 
 
@@ -897,6 +898,50 @@ def test_whole_file_read_under_cap_is_untouched(tmp_path):
     actual = fs.read("small.txt", context=context)
     assert not actual.startswith("ERROR")
     assert "|alpha" in actual
+
+
+@pytest.mark.parametrize(
+    ("block", "payload"),
+    [
+        ({"type": "text", "text": "x" * 16}, "x" * 16),
+        ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
+        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+    ],
+)
+def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(block, payload):
+    cap = len(payload)
+    result = ToolResult([block])
+
+    assert runtime._cap_result(result, cap) is result
+    capped = runtime._cap_result(result, cap - 1)
+
+    assert isinstance(capped, ToolResult)
+    assert len(capped.blocks) == 1
+    assert capped.blocks[0]["type"] == "text"
+    assert f"limits.max_tool_result_bytes ({cap - 1}) reached" in capped.dehydrated()
+    assert all(item.get("type") not in {"image", "audio", "resource", "structured"} for item in capped.blocks)
+
+
+@pytest.mark.parametrize(
+    ("block", "payload"),
+    [
+        ({"type": "text", "text": "x" * 16}, "x" * 16),
+        ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
+        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+    ],
+)
+def test_batch_cap_preserves_tool_result_at_boundary_and_dehydrates_when_over(block, payload):
+    result = ToolResult([block])
+    size = len(payload)
+
+    assert runtime._cap_batch_results([result], size) == [result]
+    capped = runtime._cap_batch_results([result], size - 1)
+
+    assert isinstance(capped[0], ToolResult)
+    assert capped[0].blocks[0]["type"] == "text"
+    assert f"limits.max_tool_results_per_turn_bytes ({size - 1}) reached" in capped[0].dehydrated()
 
 
 def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():

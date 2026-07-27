@@ -17,8 +17,54 @@ from typing import Any
 from collections.abc import Callable
 
 
-Handler = Callable[..., str]
+Handler = Callable[..., Any]
 Snapshot = bytes | None | dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """A provider-facing mixed tool result plus a safe persistence descriptor."""
+
+    blocks: list[dict[str, Any]]
+    is_error: bool = False
+
+    @classmethod
+    def text(cls, text: str, *, is_error: bool = False) -> ToolResult:
+        return cls([{"type": "text", "text": text}], is_error=is_error)
+
+    def dehydrated(self) -> str:
+        lines: list[str] = []
+        for block in self.blocks:
+            kind = str(block.get("type", "unknown"))
+            if kind == "text":
+                lines.append(str(block.get("text", "")))
+            elif kind in {"image", "audio"}:
+                lines.append(f"[{kind} {block.get('mimeType', 'application/octet-stream')} omitted from history]")
+            elif kind == "resource_link":
+                lines.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+            elif kind == "resource":
+                resource = block.get("resource")
+                if isinstance(resource, dict):
+                    uri = resource.get("uri", "")
+                    text = resource.get("text")
+                    lines.append(f"[embedded resource {uri}]" + (f"\n{text}" if isinstance(text, str) else " [binary omitted]"))
+            elif kind == "structured":
+                lines.append(compact_json(block.get("value")))
+            else:
+                lines.append(f"[{kind} content omitted from history]")
+        value = "\n".join(lines)
+        return f"ERROR: {value}" if self.is_error and not value.startswith("ERROR") else value
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """Compact metadata for one discoverable turn-scoped capability."""
+
+    id: str
+    name: str
+    description: str
+    kind: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -31,19 +77,21 @@ class Tool:
     params: dict[str, dict]
     required: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    input_schema: dict[str, Any] | None = None
 
     def openai_spec(self) -> dict:
+        parameters = self.input_schema if self.input_schema is not None else {
+            "type": "object",
+            "properties": self.params,
+            "required": list(self.required),
+            "additionalProperties": False,
+        }
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": self.params,
-                    "required": list(self.required),
-                    "additionalProperties": False,
-                },
+                "parameters": parameters,
             },
         }
 
@@ -146,23 +194,33 @@ def coerce_value(value: Any, schema_type: str | None) -> Any:
     return value
 
 
-def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> str:
+def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Filter/coerce model args and invoke a tool handler."""
 
     sig = inspect.signature(tool.handler)
     known = set(sig.parameters)
     has_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
+    # "context" is the ToolContext injection slot only when the tool does not
+    # declare it in its model-facing schema (remote MCP schemas may require a
+    # real property with that name; its value must reach the server).
+    declares_context = "context" in tool.params
     filtered: dict[str, Any] = {}
     for key, value in args.items():
         if key not in known and not has_var_kwargs:
             continue
-        if key == "context":
+        if key == "context" and not declares_context:
             continue
         schema_type = tool.params.get(key, {}).get("type")
         filtered[key] = coerce_value(value, schema_type)
-    if "context" in known:
+    if "context" in known and not declares_context:
         filtered["context"] = context
     return tool.handler(**filtered)
+
+
+async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
+    """Invoke either a native sync handler or a cancelable async handler."""
+    result = call_tool(tool, args, context)
+    return await result if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:

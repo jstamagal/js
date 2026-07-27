@@ -11,6 +11,7 @@ import secrets
 import time
 from typing import Any
 
+from ..skills import discover_skills, load_skill
 from .core import Todo, Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default
@@ -84,17 +85,10 @@ def plan(plan_name: str, version: str, content: str, context: ToolContext | None
 
 def skill(name: str, context: ToolContext | None = None) -> str:
     assert context is not None
-    pkg_root = Path(__file__).resolve().parents[1]
-    candidates = [
-        pkg_root / "skills" / f"{name}.md",
-        pkg_root / "skills" / name / "SKILL.md",
-        context.resolve_path(Path("skills") / f"{name}.md"),
-        context.resolve_path(Path("skills") / name / "README.md"),
-        context.resolve_path(Path(".skills") / f"{name}.md"),
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.read_text(errors="replace")
+    catalog = discover_skills(context.cwd)
+    loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
+    if loaded is not None:
+        return loaded.render()
     return f"ERROR: skill {name!r} not found in js/skills or local skills directories"
 
 
@@ -192,8 +186,12 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
     return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
+    from ..mcp_config import resolve as resolve_mcp
+
     # The per-agent data dir is the sessions dir; it stores that agent's jsonl,
-    # .history, and latest.json.
+    # .history, and latest.json. MCP policy is an agent authorization boundary,
+    # so resolve it for the child from the merged settings instead of copying the
+    # parent's already-resolved policy.
     agents_root = parent_cfg.agent_dir.parent
     prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     agent_dir = agents_root / agent
@@ -207,6 +205,7 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         sessions_dir=sessions_dir,
         session_file=session_file,
         prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
+        mcp=resolve_mcp(parent_cfg.settings, agent),
     )
 
 

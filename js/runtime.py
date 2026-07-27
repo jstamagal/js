@@ -31,7 +31,7 @@ from . import routing
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
-from .toolkit.core import ToolContext, call_tool
+from .toolkit.core import ToolContext, ToolResult, call_tool, call_tool_async
 from .toolkit.registry import ToolRegistry
 
 
@@ -40,10 +40,13 @@ _UNSET = object()
 
 def _usable_tool_aliases(alias_map: dict[str, str], tool_names: set[str]) -> dict[str, str]:
     original_name_owners = {name.lower(): name for name in tool_names}
+    reserved_names = {"tool_discovery"}
     return {
         canon: alias
         for canon, alias in alias_map.items()
-        if canon in tool_names and (original_name_owners.get(alias.lower()) in (None, canon))
+        if canon in tool_names
+        and alias.lower() not in reserved_names
+        and (original_name_owners.get(alias.lower()) in (None, canon))
     }
 
 
@@ -128,7 +131,12 @@ def _aliased_tool_specs(specs: list[dict], alias_map: dict[str, str]) -> list[di
 
 def _canonical_tool_call_name(name: str, registry: ToolRegistry) -> str:
     tool = registry.resolve(name)
-    return tool.name if tool is not None else name
+    if tool is not None:
+        return tool.name
+    # An unloaded lazy tool has no Tool object in this dispatch batch, but
+    # its alias still maps to a canonical name; persisted history must
+    # record the canonical, never a configured alias.
+    return registry.aliases.get(str(name).strip().lower(), name)
 
 
 def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
@@ -460,9 +468,11 @@ def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCal
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
-def _history_tool_result_message(pc: _PendingToolCall, result: str) -> list[dict]:
+def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict]:
     """Persistence form of a tool result. Image markers collapse to their text stub so the
     base64 payload is sent once (the turn it is read) and never re-billed on history replay."""
+    if isinstance(result, ToolResult):
+        return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": result.dehydrated()}]
     if not result.startswith(_IMAGE_RESULT_PREFIX):
         return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": result}]
     parts = result.split("\t", 3)
@@ -597,7 +607,41 @@ class ToolErrorTracker:
 # Tool dispatch
 # --------------------------------------------------------------------------
 
-def _cap_result(result: str, cap_bytes: int, inline_cap: int | None = None) -> str:
+def _tool_result_content_size(result: ToolResult) -> int:
+    """Measure model-facing payload content without charging block metadata."""
+    size = 0
+    for block in result.blocks:
+        kind = str(block.get("type", "unknown"))
+        if kind == "text":
+            size += len(str(block.get("text", "")))
+        elif kind == "structured":
+            size += len(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), default=str))
+        elif kind in {"image", "audio"}:
+            size += len(str(block.get("data", "")))
+        elif kind == "resource":
+            resource = block.get("resource")
+            if isinstance(resource, dict):
+                payload = resource.get("text", resource.get("blob", ""))
+                size += len(str(payload))
+        elif kind == "resource_link":
+            size += len(str(block.get("name", ""))) + len(str(block.get("uri", "")))
+        else:
+            size += len(json.dumps(block, ensure_ascii=False, separators=(",", ":"), default=str))
+    return size
+
+
+def _result_size(result: Any) -> int:
+    return _tool_result_content_size(result) if isinstance(result, ToolResult) else len(result)
+
+
+def _dehydrate_capped_result(result: ToolResult, keep: int, marker: str) -> ToolResult:
+    text = result.dehydrated()
+    if len(text) > keep:
+        text = text[:keep]
+    return ToolResult.text(text + marker)
+
+
+def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
     """Spill-then-clip a tool result.
 
     inline_cap (limits.max_tool_result_inline_bytes) sends anything larger to a
@@ -608,6 +652,13 @@ def _cap_result(result: str, cap_bytes: int, inline_cap: int | None = None) -> s
     actually shortens it — same wording the subagent layer uses (meta.py) so a
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
+    if isinstance(result, ToolResult):
+        if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
+            marker = f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
+            return _dehydrate_capped_result(result, cap_bytes, marker)
+        return result
+    if not isinstance(result, str):
+        return result
     if inline_cap is None:
         # Read from the active context rather than threading a fifth argument
         # through four dispatch signatures; subagent contexts inherit it.
@@ -661,7 +712,7 @@ def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
     return -1
 
 
-def _cap_batch_results(results: list[str], cap_bytes: int) -> list[str]:
+def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     """Clip one turn's batch of tool results down to an aggregate budget.
 
     The per-result cap (max_tool_result_bytes) can't stop N parallel calls from
@@ -671,7 +722,7 @@ def _cap_batch_results(results: list[str], cap_bytes: int) -> list[str]:
     """
     if cap_bytes <= 0:
         return results
-    sizes = [len(r) for r in results]
+    sizes = [_result_size(r) for r in results]
     if sum(sizes) <= cap_bytes:
         return results
     marker = f"\n[truncated: limits.max_tool_results_per_turn_bytes ({cap_bytes}) reached]"
@@ -679,7 +730,15 @@ def _cap_batch_results(results: list[str], cap_bytes: int) -> list[str]:
     if allowance < 0:
         return results
     keep = max(0, allowance - len(marker))
-    return [r if len(r) <= allowance else r[:keep] + marker for r in results]
+    capped: list[Any] = []
+    for result, size in zip(results, sizes, strict=True):
+        if size <= allowance:
+            capped.append(result)
+        elif isinstance(result, ToolResult):
+            capped.append(_dehydrate_capped_result(result, keep, marker))
+        else:
+            capped.append(result[:keep] + marker)
+    return capped
 
 
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
@@ -725,7 +784,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
-    if error_tracker is not None:
+    if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     return args, _cap_result(result, cap_bytes)
 
@@ -843,6 +902,37 @@ async def _dispatch_fan_out_async(
     return pc, args, error_tracker.record(tool.name, _cap_result(result, cap_bytes))
 
 
+async def _dispatch_async_tool(
+    pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
+    error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
+) -> tuple[_PendingToolCall, dict, Any]:
+    try:
+        args = _repair_jsonish(pc.arguments())
+    except ValueError as exc:
+        result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
+        return pc, {}, result
+    tool = registry.resolve(pc.name)
+    if tool is None:
+        result = error_tracker.record(pc.name, f"ERROR: no tool named {pc.name}; use {registry.names()}")
+        return pc, args, result
+    if trace:
+        pretty = _pretty_args(tool.name, args)
+        print(f"  {C.MAGENTA}▸ {tool.name}{C.RESET}" + (f" {pretty}{C.RESET}" if pretty else ""), flush=True)
+    started = time.time()
+    try:
+        result = await call_tool_async(tool, args, tool_context)
+        telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
+        result = f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"
+    result = _cap_result(result, cap_bytes)
+    if isinstance(result, str):
+        result = error_tracker.record(tool.name, result)
+    return pc, args, result
+
+
 async def _dispatch_batch(
     tool_calls: list[_PendingToolCall],
     telemetry: Telemetry,
@@ -865,11 +955,56 @@ async def _dispatch_batch(
     bench, tests) the whole batch takes the executor path unchanged."""
     from . import supervisor
 
-    fan_out_idx: list[int] = []
-    current_supervisor = supervisor.get_current()
-    if current_supervisor is not None:
-        from .toolkit import meta
+    from .toolkit import meta
 
+    current_supervisor = supervisor.get_current()
+    async_idx: list[int] = []
+    fan_out_now: set[int] = set()
+    for i, pc in enumerate(tool_calls):
+        tool = registry.resolve(pc.name)
+        if tool is None:
+            continue
+        if current_supervisor is not None and meta.is_fan_out_handler(tool.handler):
+            fan_out_now.add(i)
+        elif inspect.iscoroutinefunction(tool.handler):
+            async_idx.append(i)
+    if async_idx:
+        # Mixed batches keep the model's order. Fan-out calls stay on the loop
+        # (sending them to a thread restores the pool-inversion deadlock),
+        # async leaves are awaited in place, and runs of sync leaves go to a
+        # thread together.
+        async_set = set(async_idx)
+        records: list[tuple[_PendingToolCall, dict, Any]] = []
+        pending_sync: list[_PendingToolCall] = []
+
+        async def flush_sync() -> None:
+            if not pending_sync:
+                return
+            batch = list(pending_sync)
+            pending_sync.clear()
+            records.extend(await asyncio.to_thread(
+                _dispatch_tool_calls, batch, telemetry, cap_bytes, trace,
+                error_tracker, registry, tool_context
+            ))
+
+        for i, pc in enumerate(tool_calls):
+            if i in fan_out_now:
+                await flush_sync()
+                records.append(await _dispatch_fan_out_async(
+                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
+                ))
+            elif i in async_set:
+                await flush_sync()
+                records.append(await _dispatch_async_tool(
+                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
+                ))
+            else:
+                pending_sync.append(pc)
+        await flush_sync()
+        return records  # type: ignore[return-value]
+
+    fan_out_idx: list[int] = []
+    if current_supervisor is not None:
         for i, pc in enumerate(tool_calls):
             tool = registry.resolve(pc.name)
             if tool is not None and meta.is_fan_out_handler(tool.handler):
@@ -1296,7 +1431,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              provider_api_key_override: str | None = None,
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
-             event_hooks: event_mod.EventHooks | None = None) -> None:
+             event_hooks: event_mod.EventHooks | None = None,
+             mcp_host: Any = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -1318,8 +1454,15 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T._REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
-    active_registry = base_registry.aliased(alias_map)
     active_context = tool_context or T.DEFAULT_CONTEXT
+    owns_mcp_host = mcp_host is None
+    if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
+        from .mcp.host import MCPHost
+
+        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry)
+    # Lazy state belongs to this invocation only. The selected registry remains
+    # the authorization boundary; discovery can reveal/load only entries in it.
+    active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
@@ -1370,6 +1513,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     error=result.error,
                 )
         return emission.hooks
+
+    if mcp_host is not None:
+        mcp_host.telemetry = telemetry
+        mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
 
     def _end_turn(reason: str, **extra: Any) -> None:
         _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
@@ -1568,6 +1715,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             for attempt in range(3):
                 t0 = time.time()
                 try:
+                    if mcp_host is not None:
+                        await mcp_host.before_model_call()
                     specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
                     if not budget_checked:
                         await _maybe_compact_request_for_budget(
@@ -1752,6 +1901,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 pending_calls = []
                 assistant_message_override = ai.assistant_message(text)
 
+            # Freeze dispatch authorization to the schemas this model call saw.
+            # Discovery may mutate the turn surface while this batch runs, but a
+            # newly loaded tool is callable only after its schema is emitted on
+            # the next model iteration.
+            dispatch_registry = active_registry.dispatch_registry()
+
             # --- Record the assistant turn ---
             assistant_record: dict = {"role": "assistant", "content": text}
             history_assistant_record: dict = {"role": "assistant", "content": text}
@@ -1834,7 +1989,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 cfg.max_tool_result_bytes,
                 trace,
                 error_tracker,
-                active_registry,
+                dispatch_registry,
                 active_context,
                 asyncio.get_running_loop(),
             )
@@ -1858,7 +2013,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
                 ai_convo.extend(tool_msgs)
                 messages.extend(_history_tool_result_message(canonical_pc, result_value))
-                followup = followup or result_value.startswith("FOLLOWUP_REQUIRED")
+                followup = followup or (
+                    isinstance(result_value, str) and result_value.startswith("FOLLOWUP_REQUIRED")
+                )
             if followup:
                 _end_turn("followup_required")
                 return
@@ -1866,7 +2023,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 name, last_error = next(
                     ((_canonical_tool_call_name(pc.name, active_registry), result_value)
                      for pc, _, result_value in reversed(dispatch_records)
-                     if result_value.startswith("ERROR")),
+                     if isinstance(result_value, str) and result_value.startswith("ERROR")),
                     (dispatch_records[-1][0].name, dispatch_records[-1][2]),
                 )
                 failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
@@ -1888,9 +2045,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _close_text()
             _end_turn("cancelled")
         raise
+    finally:
+        if owns_mcp_host and mcp_host is not None:
+            await mcp_host.close()
 
 
-def run_turn(*args, **kwargs) -> None:
+def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None:
     """Sync wrapper over :func:`run_turn_async` — spins a throwaway loop for this
     turn. The OLD blocking path; the non-blocking runtime awaits
     ``run_turn_async`` directly on its shared loop. Kept so the current sync
@@ -1898,4 +2058,6 @@ def run_turn(*args, **kwargs) -> None:
     transition. `messages` is still mutated in place, so ^C mid-turn preserves
     partial work exactly as before.
     """
+    if loop_runner is not None:
+        return loop_runner.run(run_turn_async(*args, **kwargs))
     return asyncio.run(run_turn_async(*args, **kwargs))
