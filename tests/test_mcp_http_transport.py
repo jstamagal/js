@@ -31,6 +31,10 @@ class State:
         self.timeout_reconnect = False
         self.gets = 0
         self.deleted = threading.Event()
+        self.delay_post_headers = False
+        self.post_started = threading.Event()
+        self.release_post = threading.Event()
+        self.post_finished = threading.Event()
 
     def record(self, method, headers, body=None):
         with self.lock:
@@ -52,6 +56,9 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length))
         self.state.record("POST", self.headers, body)
         method = body.get("method")
+        if self.state.delay_post_headers:
+            self.state.post_started.set()
+            self.state.release_post.wait(3)
         if method == "test/http-error":
             self.send_response(503)
             self.send_header("Content-Length", "0")
@@ -59,6 +66,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if method == "test/protocol-error":
             self._body(200, "application/json", b'{"not":"jsonrpc"}')
+            return
+        if method == "test/request-202":
+            self._body(202, "application/json", b"")
+            return
+        if method == "test/notification-200" or body.get("id") == "response-200":
+            self._body(200, "application/json", b'{"jsonrpc":"2.0","id":null,"result":{}}')
             return
         reply = {"jsonrpc": "2.0", "id": body.get("id"), "result": {"ok": method}}
         encoded = json.dumps(reply).encode()
@@ -81,6 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             self._body(200, "application/json", encoded, session=True)
         else:
             self._body(202, "application/json", b"", session=True)
+        if self.state.delay_post_headers:
+            self.state.post_finished.set()
 
     def do_GET(self):
         self.state.gets += 1
@@ -239,6 +254,25 @@ def test_idle_notification_stream_timeout_reconnects():
         assert state.gets >= 2
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        request("test/request-202"),
+        {"jsonrpc": "2.0", "method": "test/notification-200"},
+        {"jsonrpc": "2.0", "id": "response-200", "result": {}},
+    ],
+)
+def test_post_rejects_status_semantics_mismatches(message):
+    async def scenario(url):
+        transport = StreamableHTTPTransport(url)
+        with pytest.raises(StreamableHTTPTransportError, match="invalid response"):
+            await transport.send(message)
+        await transport.close()
+
+    with server() as (_state, url):
+        run(scenario(url))
+
+
 def test_invalid_sse_post_event_reports_safe_protocol_failure():
     async def scenario(url):
         transport = StreamableHTTPTransport(
@@ -278,6 +312,28 @@ def test_http_and_protocol_failures_are_safe(method, match, caplog):
         run(scenario(url))
     assert SECRET not in caplog.text
     assert HEADER_SECRET not in caplog.text
+
+
+def test_cancelled_post_before_headers_remains_owned_through_close():
+    async def scenario(state, url):
+        transport = StreamableHTTPTransport(url, timeout=1)
+        sending = asyncio.create_task(transport.send(request()))
+        assert await asyncio.to_thread(state.post_started.wait, 1)
+        sending.cancel()
+        closing = asyncio.create_task(transport.close())
+        await asyncio.sleep(0.05)
+        assert not closing.done()
+        state.release_post.set()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        await asyncio.wait_for(closing, 1)
+        assert state.post_finished.wait(1)
+        assert not transport._request_tasks
+        assert not transport._active
+
+    with server() as (state, url):
+        state.delay_post_headers = True
+        run(scenario(state, url))
 
 
 def test_cancellation_and_close_unblock_long_lived_get():

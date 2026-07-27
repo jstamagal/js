@@ -305,6 +305,7 @@ class StreamableHTTPTransport:
         self._close_lock = asyncio.Lock()
         self._get_task: asyncio.Task[None] | None = None
         self._post_tasks: set[asyncio.Task[None]] = set()
+        self._request_tasks: set[asyncio.Task[tuple[list[dict[str, Any]], Any | None]]] = set()
         self._get_supported = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._active: set[Any] = set()
@@ -336,12 +337,27 @@ class StreamableHTTPTransport:
             raise StreamableHTTPTransportError(
                 self._diagnostic("was given an invalid JSON message")
             ) from None
+        is_request = "method" in message and "id" in message
         async with self._send_lock:
+            request_task = asyncio.create_task(
+                asyncio.to_thread(self._post, payload, is_request), name="mcp-http-post"
+            )
+            self._request_tasks.add(request_task)
             try:
-                messages, stream = await asyncio.to_thread(self._post, payload)
+                messages, stream = await asyncio.shield(request_task)
             except asyncio.CancelledError:
                 self._close_active_responses()
+                with contextlib.suppress(StreamableHTTPTransportError):
+                    _messages, stream = await asyncio.shield(request_task)
+                    if stream is not None:
+                        self._release(stream)
                 raise
+            finally:
+                self._request_tasks.discard(request_task)
+            if self._closed:
+                if stream is not None:
+                    self._release(stream)
+                raise StreamableHTTPTransportError(self._diagnostic("is closed"))
             for incoming in messages:
                 self._queue.put_nowait(incoming)
             if stream is not None:
@@ -375,6 +391,10 @@ class StreamableHTTPTransport:
                 task.cancel()
             if background:
                 await asyncio.gather(*background, return_exceptions=True)
+            requests = list(self._request_tasks)
+            if requests:
+                await asyncio.gather(*requests, return_exceptions=True)
+                self._close_active_responses()
             session_id = self._session_id
             if session_id is not None:
                 with contextlib.suppress(StreamableHTTPTransportError):
@@ -387,7 +407,9 @@ class StreamableHTTPTransport:
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.close()
 
-    def _post(self, payload: bytes) -> tuple[list[dict[str, Any]], Any | None]:
+    def _post(
+        self, payload: bytes, is_request: bool
+    ) -> tuple[list[dict[str, Any]], Any | None]:
         headers = self._headers()
         headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self._url, data=payload, headers=headers, method="POST")
@@ -396,8 +418,16 @@ class StreamableHTTPTransport:
         try:
             self._capture_session(response)
             status = response.status
-            if status == 202:
+            if not is_request:
+                if status != 202 or self._bounded_read(response):
+                    raise StreamableHTTPTransportError(
+                        self._diagnostic("returned an invalid response to a JSON-RPC message")
+                    )
                 return [], None
+            if status != 200:
+                raise StreamableHTTPTransportError(
+                    self._diagnostic("returned an invalid response to a JSON-RPC request")
+                )
             content_type = self._content_type(response)
             if content_type == "application/json":
                 return [self._decode_message(self._bounded_read(response))], None
@@ -518,8 +548,16 @@ class StreamableHTTPTransport:
                 ) from None
         except Exception:  # noqa: BLE001 - urllib errors may contain request headers
             raise StreamableHTTPTransportError(self._diagnostic("request failed")) from None
+        reject_response = False
         with self._active_lock:
-            self._active.add(response)
+            if self._closing.is_set() and not allow_closing:
+                reject_response = True
+            else:
+                self._active.add(response)
+        if reject_response:
+            with contextlib.suppress(Exception):
+                response.close()
+            raise StreamableHTTPTransportError(self._diagnostic("is closed"))
         return response
 
     def _headers(self, *, session_id: str | None = None) -> dict[str, str]:
