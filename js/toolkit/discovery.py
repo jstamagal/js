@@ -19,14 +19,22 @@ DISCOVERY_TOOL_NAME = "tool_discovery"
 
 @dataclass(frozen=True)
 class SkillDefinition:
-    """Compact skill metadata plus the instructions returned when loaded."""
+    """Compact skill metadata; the instruction body loads on demand."""
 
     id: str
     name: str
     description: str
     source: str
-    instructions: str
+    path: str
     tools: tuple[str, ...] = ()
+
+    def load_instructions(self) -> str:
+        try:
+            raw = Path(self.path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        _metadata, instructions = _frontmatter(raw)
+        return instructions.strip()
 
 
 def _frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -62,12 +70,14 @@ def _skill_from_file(path: Path, *, source: str, name: str) -> SkillDefinition |
     if not isinstance(declared, (list, tuple)):
         declared = ()
     tools = tuple(str(item).strip() for item in declared if str(item).strip())
+    # The body was read once to derive metadata; only compact fields are
+    # retained. Instructions re-load from path when the skill is loaded.
     return SkillDefinition(
         id=f"skill:{name}",
         name=name,
         description=description,
         source=source,
-        instructions=instructions.strip(),
+        path=str(path),
         tools=tools,
     )
 
