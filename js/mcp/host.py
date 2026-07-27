@@ -34,12 +34,38 @@ def transport_factory(server: MCPServer):
     )
 
 
+def _query_secret_values(url: str) -> set[str]:
+    """Return wire, decoded, and canonical encodings of URL query values."""
+    values: set[str] = set()
+    query = urllib.parse.urlsplit(url).query
+    for field in query.split("&"):
+        _key, separator, raw = field.partition("=")
+        if not separator or not raw:
+            continue
+        decoded = {raw}
+        pending = [raw]
+        while pending:
+            value = pending.pop()
+            for candidate in (urllib.parse.unquote(value), urllib.parse.unquote_plus(value)):
+                if candidate and candidate not in decoded:
+                    decoded.add(candidate)
+                    pending.append(candidate)
+        values.update(decoded)
+        for value in decoded - {raw}:
+            values.add(urllib.parse.quote(value, safe=""))
+            values.add(urllib.parse.quote_plus(value, safe=""))
+    # Percent escape hex digits are case-insensitive on the wire.
+    values.update(re.sub(r"%[0-9a-fA-F]{2}", lambda match: match.group().upper(), value) for value in tuple(values))
+    values.update(re.sub(r"%[0-9a-fA-F]{2}", lambda match: match.group().lower(), value) for value in tuple(values))
+    return values
+
+
 def _secret_values(server: MCPServer) -> tuple[str, ...]:
     values = [value for value in (*server.env.values(), *server.headers.values()) if value]
     if server.url:
-        # URL query values are a supported credential location (?key=TOKEN).
-        for parameters in urllib.parse.parse_qs(urllib.parse.urlsplit(server.url).query).values():
-            values.extend(parameter for parameter in parameters if parameter)
+        # Query credentials may be echoed in their configured wire form, decoded
+        # by a server framework, or re-encoded by server-controlled output.
+        values.extend(_query_secret_values(server.url))
     # stdio arguments commonly carry tokens; flags themselves are not
     # secrets and very short args would over-redact ordinary output.
     following_flag = False
@@ -207,6 +233,14 @@ class MCPHost:
         return tuple(
             CatalogEntry(f"mcp:{name}", name, description, "mcp", "mcp")
             for name, description in self.CONTROL_TOOLS
+        )
+
+    def is_server_source(self, source: str) -> bool:
+        """Return whether source exactly names one configured MCP server."""
+        scope = str(source).strip().casefold()
+        return any(
+            scope in {server.name.casefold(), server.normalized_name.casefold()}
+            for server in self.config.servers
         )
 
     async def discover(self, query: str = "", source: str = "") -> tuple[CatalogEntry, ...]:
