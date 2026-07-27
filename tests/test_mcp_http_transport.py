@@ -436,3 +436,22 @@ def test_close_unblocks_https_operation_stalled_in_tls_handshake():
         listener.close()
 
     run(drive())
+
+
+def test_sse_id_commits_only_at_event_boundary_and_eof_discards_partial():
+    class FakeStream:
+        def __init__(self, payload: bytes):
+            self._lines = payload.splitlines(keepends=True)
+
+        def readline(self, _limit):
+            return self._lines.pop(0) if self._lines else b""
+
+    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
+    received = []
+
+    complete = b'id: one\ndata: {"jsonrpc":"2.0","method":"a"}\n\n'
+    partial = b'id: lost\ndata: {"jsonrpc":"2.0","method":"b"}\n'  # no boundary
+    transport._consume_sse(FakeStream(complete + partial), received.append)
+
+    assert [m["method"] for m in received] == ["a"]
+    assert transport.last_event_id == "one"
