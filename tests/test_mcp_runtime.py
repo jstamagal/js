@@ -623,3 +623,17 @@ def test_url_query_and_stdio_arg_credentials_are_redacted():
     scrubbed = _redact_value("saw ARG_TOKEN_5432 and -v here", _secret_values(stdio_server))
     assert "ARG_TOKEN_5432" not in scrubbed
     assert "-v" in scrubbed
+
+
+def test_inline_flag_credentials_in_stdio_args_are_redacted():
+    from js.mcp.host import _redact_value, _secret_values
+    from js.mcp_config import MCPServer
+
+    server = MCPServer(
+        name="i", normalized_name="i", transport="stdio",
+        command="server", args=("--token=ARG_SENTINEL_999", "--verbose"),
+    )
+    secrets = _secret_values(server)
+    scrubbed = _redact_value("echo ARG_SENTINEL_999 and --verbose", secrets)
+    assert "ARG_SENTINEL_999" not in scrubbed
+    assert "--verbose" in scrubbed
