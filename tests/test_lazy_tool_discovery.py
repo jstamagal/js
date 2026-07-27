@@ -150,7 +150,24 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert surface.resolve("browser_probe") is not None
 
     forbidden = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
-    assert "requires disallowed tool 'browser_probe'" in forbidden.discover(load="skill:inspect")
+    denied = json.loads(forbidden.discover(load="skill:inspect"))
+    assert denied["instructions"] == "Open the page and report visual defects."
+    assert denied["loaded"] == []
+    assert denied["denied_tools"] == ["browser_probe"]
+    assert forbidden.resolve("browser_probe") is None
+
+
+def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    path = skills / "notes.md"
+    path.write_text("---\ndescription: Take notes\n---\nOriginal body.\n", encoding="utf-8")
+    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+    definition = surface._skills["skill:notes"]
+    assert not hasattr(definition, "instructions"), "catalog must not retain bodies"
+    path.write_text("---\ndescription: Take notes\n---\nUpdated body.\n", encoding="utf-8")
+    loaded = json.loads(surface.discover(load="skill:notes"))
+    assert loaded["instructions"] == "Updated body.", "instructions must load from disk on demand"
 
 
 def test_skill_load_does_not_duplicate_eager_or_repeated_requirements(tmp_path):

@@ -203,21 +203,28 @@ class TurnToolSurface:
         skill = self._skills.get(item_id)
         if skill is None:
             return f"ERROR: no allowed catalog entry with id {item_id!r}"
-        required: list[str] = []
+        activated: list[str] = []
+        denied: list[str] = []
         seen: set[str] = set()
         for requested in skill.tools:
             tool = self.allowed.resolve(requested)
             if tool is None:
-                return f"ERROR: skill {skill.name!r} requires disallowed tool {requested!r}"
-            if tool.name not in seen:
-                required.append(tool.name)
+                # Policy denies activation of this tool, not the skill's
+                # instructions; the model still gets the text plus the list
+                # of requirements that were withheld.
+                if requested not in denied:
+                    denied.append(requested)
+            elif tool.name not in seen:
+                activated.append(tool.name)
                 seen.add(tool.name)
-        self._loaded.update(required)
-        return discovery.compact_result({
-            "id": item_id,
-            "instructions": skill.instructions,
-            "loaded": required,
-        })
+        instructions = skill.load_instructions()
+        if not instructions:
+            return f"ERROR: skill {skill.name!r} instructions could not be read"
+        self._loaded.update(activated)
+        result: dict[str, object] = {"id": item_id, "instructions": instructions, "loaded": activated}
+        if denied:
+            result["denied_tools"] = denied
+        return discovery.compact_result(result)
 
 
 def _registry_from_tools(tools: tuple[Tool, ...]) -> ToolRegistry:
