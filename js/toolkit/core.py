@@ -22,6 +22,17 @@ Snapshot = bytes | None | dict[str, Any]
 
 
 @dataclass(frozen=True)
+class CatalogEntry:
+    """Compact metadata for one discoverable turn-scoped capability."""
+
+    id: str
+    name: str
+    description: str
+    kind: str
+    source: str
+
+
+@dataclass(frozen=True)
 class Tool:
     """OpenAI-compatible tool declaration plus Python handler."""
 
