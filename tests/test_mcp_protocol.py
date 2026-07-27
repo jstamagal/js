@@ -389,3 +389,52 @@ def test_eof_fails_pending_requests_and_shutdown_is_idempotent():
         assert transport.close_calls == 1
 
     asyncio.run(drive())
+
+
+def test_failed_result_send_is_retrieved_and_logged_without_exception_text(caplog):
+    async def drive():
+        transport = FakeTransport()
+        sentinel = "Bearer sk-super-secret-token"
+
+        original_send = transport.send
+
+        async def send(message):
+            if message.get("id") == "srv-1" and ("result" in message or "error" in message):
+                raise ConnectionError(f"send failed: {sentinel}")
+            await original_send(message)
+
+        transport.send = send
+        peer = await JSONRPCPeer.connect(lambda: transport)
+
+        async def handler(params):
+            return {"ok": True}
+
+        peer.add_request_handler("sampling/createMessage", handler)
+
+        unretrieved = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
+
+        await transport.server_send(
+            {"jsonrpc": "2.0", "id": "srv-1", "method": "sampling/createMessage", "params": {}}
+        )
+        for _ in range(100):
+            if peer._incoming:
+                break
+            await asyncio.sleep(0)
+        assert peer._incoming, "request task never started"
+        while peer._incoming:
+            await asyncio.sleep(0)
+        await peer.close()
+        # Force any pending unretrieved-task diagnostics to surface now.
+        import gc
+
+        gc.collect()
+        await asyncio.sleep(0)
+        return unretrieved, sentinel
+
+    with caplog.at_level("WARNING", logger="js.mcp.protocol"):
+        unretrieved, sentinel = asyncio.run(drive())
+    assert unretrieved == []
+    assert any("ConnectionError" in record.getMessage() for record in caplog.records)
+    assert all(sentinel not in record.getMessage() for record in caplog.records)
