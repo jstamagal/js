@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from js.skills import ToolActivationResult
 from js.toolkit import ToolContext
 from js.toolkit import meta
+from js.toolkit.registry import select
 
 
 def test_followup_returns_followup_required_stop_marker_with_bare_question():
@@ -133,6 +135,47 @@ def test_skill_loads_from_dotskills_dir(tmp_path):
     (dot / "lint.md").write_text("lint skill")
 
     assert meta.skill("lint", context=context) == "lint skill"
+
+
+def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    context.tool_registry = select(["shell"])
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "legacy.md").write_text(
+        "---\ntools: [shell, missing]\n---\nlegacy instructions"
+    )
+
+    assert meta.skill("legacy", context=context) == "legacy instructions"
+
+
+def test_skill_invocation_activates_declared_tools_and_still_returns_instructions(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "deploy.md").write_text(
+        "---\ntools: [shell, browser, absent]\n---\n# Deploy\n\nrun it\n"
+    )
+
+    class Activator:
+        def __init__(self):
+            self.requested = None
+
+        def activate_tools(self, names):
+            self.requested = names
+            return ToolActivationResult(
+                activated=("shell",), denied=("browser",), missing=("absent",)
+            )
+
+    context.tool_registry = Activator()
+
+    result = meta.skill("deploy", context=context)
+
+    assert context.tool_registry.requested == ("shell", "browser", "absent")
+    assert result == (
+        "# Deploy\n\nrun it\n\n"
+        "Skill tool requirements unavailable: policy-denied: browser; unknown: absent"
+    )
 
 
 def test_skill_errors_when_not_found_anywhere(tmp_path):
