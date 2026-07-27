@@ -1,6 +1,7 @@
 """Transport-independent Model Context Protocol primitives."""
 
 from .client import MCPClient
+from .host import MCPHost
 from .protocol import JSONRPCError, JSONRPCPeer, PeerClosedError
 from .transports import (
     StdioTransport,
@@ -15,6 +16,7 @@ __all__ = [
     "JSONRPCPeer",
     "LATEST_PROTOCOL_VERSION",
     "MCPClient",
+    "MCPHost",
     "PeerClosedError",
     "StdioTransport",
     "StdioTransportError",

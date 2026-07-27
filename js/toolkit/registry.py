@@ -74,9 +74,9 @@ class ToolRegistry:
                 merged[key] = canonical
         return ToolRegistry(tools=self.tools, aliases=merged)
 
-    def lazy_surface(self, cwd: Path) -> TurnToolSurface:
+    def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
         """Create fresh lazy state for one model turn without changing selection."""
-        return TurnToolSurface(self, cwd)
+        return TurnToolSurface(self, cwd, mcp_host=mcp_host)
 
 
 _LAZY_SUITES = {
@@ -90,8 +90,9 @@ _LAZY_SUITES = {
 class TurnToolSurface:
     """A selected registry split into deterministic eager and loaded subsets."""
 
-    def __init__(self, allowed: ToolRegistry, cwd: Path) -> None:
+    def __init__(self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None) -> None:
         self.allowed = allowed
+        self.mcp_host = mcp_host
         self.aliases = {
             alias: canonical
             for alias, canonical in allowed.aliases.items()
@@ -126,8 +127,9 @@ class TurnToolSurface:
             tool for tool in self.allowed.tools
             if tool.name in self._loaded and tool.name not in eager_names
         )
-        include_discovery = bool(self._lazy or self._skills)
-        return self._eager + loaded + ((self._discovery,) if include_discovery else ())
+        mcp_tools = self.mcp_host.tools() if self.mcp_host is not None else ()
+        include_discovery = bool(self._lazy or self._skills or self.mcp_host is not None)
+        return self._eager + loaded + tuple(mcp_tools) + ((self._discovery,) if include_discovery else ())
 
     def dispatch_registry(self) -> ToolRegistry:
         """Freeze the tools available for one model response's dispatch batch."""
@@ -165,7 +167,23 @@ class TurnToolSurface:
             CatalogEntry(skill.id, skill.name, skill.description, "skill", skill.source)
             for skill in self._skills.values()
         )
-        return tuple(sorted((*native, *skills), key=lambda item: item.id))
+        mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
+        return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
+
+    async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+        if self.mcp_host is not None and not load and (
+            str(kind).strip().lower() == "mcp"
+            or str(source).strip().lower() == "mcp"
+            or "mcp" in str(query).casefold().split()
+        ):
+            entries = await self.mcp_host.discover(query=query, source="" if source == "mcp" else source)
+            return discovery.compact_result({"results": [
+                {"id": item.id, "kind": item.kind, "name": item.name,
+                 "description": item.description, "source": item.source,
+                 "loaded": item.name in self.mcp_host.loaded}
+                for item in entries
+            ]})
+        return self.discover(query=query, kind=kind, source=source, load=load)
 
     def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
         load_id = str(load).strip()
@@ -173,8 +191,8 @@ class TurnToolSurface:
             return self._load(load_id)
         folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().lower()
-        if folded_kind and folded_kind not in {"native", "skill"}:
-            return "ERROR: kind must be native or skill"
+        if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
+            return "ERROR: kind must be native, skill, or mcp"
         terms = str(query).casefold().split()
         matches = []
         for item in self.catalog():
@@ -196,6 +214,10 @@ class TurnToolSurface:
         return discovery.compact_result({"results": matches})
 
     def _load(self, item_id: str) -> str:
+        if self.mcp_host is not None:
+            loaded = self.mcp_host.load(item_id)
+            if loaded is not None:
+                return discovery.compact_result({"loaded": loaded, "id": item_id})
         tool = self._lazy.get(item_id)
         if tool is not None:
             self._loaded.add(tool.name)

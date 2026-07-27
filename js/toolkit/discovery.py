@@ -108,14 +108,14 @@ def discover_skills(cwd: Path) -> tuple[SkillDefinition, ...]:
 def discovery_tool(surface: Any) -> Tool:
     """Build the eager discovery tool bound to one turn's lazy surface."""
 
-    def discover(
+    async def discover(
         query: str = "",
         kind: str = "",
         source: str = "",
         load: str = "",
         context: ToolContext | None = None,
     ) -> str:
-        return surface.discover(query=query, kind=kind, source=source, load=load)
+        return await surface.discover_async(query=query, kind=kind, source=source, load=load)
 
     return Tool(
         DISCOVERY_TOOL_NAME,

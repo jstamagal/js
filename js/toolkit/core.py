@@ -17,8 +17,43 @@ from typing import Any
 from collections.abc import Callable
 
 
-Handler = Callable[..., str]
+Handler = Callable[..., Any]
 Snapshot = bytes | None | dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """A provider-facing mixed tool result plus a safe persistence descriptor."""
+
+    blocks: list[dict[str, Any]]
+    is_error: bool = False
+
+    @classmethod
+    def text(cls, text: str, *, is_error: bool = False) -> ToolResult:
+        return cls([{"type": "text", "text": text}], is_error=is_error)
+
+    def dehydrated(self) -> str:
+        lines: list[str] = []
+        for block in self.blocks:
+            kind = str(block.get("type", "unknown"))
+            if kind == "text":
+                lines.append(str(block.get("text", "")))
+            elif kind in {"image", "audio"}:
+                lines.append(f"[{kind} {block.get('mimeType', 'application/octet-stream')} omitted from history]")
+            elif kind == "resource_link":
+                lines.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+            elif kind == "resource":
+                resource = block.get("resource")
+                if isinstance(resource, dict):
+                    uri = resource.get("uri", "")
+                    text = resource.get("text")
+                    lines.append(f"[embedded resource {uri}]" + (f"\n{text}" if isinstance(text, str) else " [binary omitted]"))
+            elif kind == "structured":
+                lines.append(compact_json(block.get("value")))
+            else:
+                lines.append(f"[{kind} content omitted from history]")
+        value = "\n".join(lines)
+        return f"ERROR: {value}" if self.is_error and not value.startswith("ERROR") else value
 
 
 @dataclass(frozen=True)
@@ -157,7 +192,7 @@ def coerce_value(value: Any, schema_type: str | None) -> Any:
     return value
 
 
-def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> str:
+def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Filter/coerce model args and invoke a tool handler."""
 
     sig = inspect.signature(tool.handler)
@@ -174,6 +209,12 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> str:
     if "context" in known:
         filtered["context"] = context
     return tool.handler(**filtered)
+
+
+async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
+    """Invoke either a native sync handler or a cancelable async handler."""
+    result = call_tool(tool, args, context)
+    return await result if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:
