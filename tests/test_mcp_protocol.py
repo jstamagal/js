@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from js.mcp.client import MCPClient, NotInitializedError, ProtocolVersionError
+from js.mcp.client import MCPClient, MCPClientError, NotInitializedError, ProtocolVersionError
 from js.mcp.protocol import JSONRPCError, JSONRPCPeer, PeerClosedError, REQUEST_CANCELLED
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -83,6 +83,80 @@ def test_initialize_orders_handshake_and_advertises_only_implemented_capabilitie
         await client.close()
         await client.close()
         assert transport.close_calls == 1
+
+    asyncio.run(drive())
+
+
+def test_close_racing_initialize_closes_late_transport_without_publishing_result():
+    async def drive():
+        transport = FakeTransport()
+        release_factory = asyncio.Event()
+        factory_started = asyncio.Event()
+
+        async def delayed_factory():
+            factory_started.set()
+            await release_factory.wait()
+            return transport
+
+        client = MCPClient(delayed_factory)
+        initialize_task = asyncio.create_task(client.initialize())
+        await factory_started.wait()
+
+        await client.close()
+        release_factory.set()
+
+        with pytest.raises(MCPClientError, match="closed"):
+            await initialize_task
+        assert transport.close_calls == 1
+        assert client.peer is None
+        assert client.initialize_result is None
+        assert not client.initialized
+
+        await client.close()
+        assert transport.close_calls == 1
+
+    asyncio.run(drive())
+
+
+def test_close_during_handshake_prevents_initialize_result_publication():
+    async def drive():
+        class PausedInitializedTransport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.initialized_started = asyncio.Event()
+                self.release_initialized = asyncio.Event()
+
+            async def send(self, message):
+                if message.get("method") == "notifications/initialized":
+                    self.initialized_started.set()
+                    await self.release_initialized.wait()
+                await super().send(message)
+
+        transport = PausedInitializedTransport()
+        client = MCPClient(lambda: transport)
+        initialize_task = asyncio.create_task(client.initialize())
+        request = await transport.next_sent()
+        await transport.server_send(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "serverInfo": {"name": "fake", "version": "1"},
+                },
+            }
+        )
+        await transport.initialized_started.wait()
+
+        await client.close()
+        transport.release_initialized.set()
+
+        with pytest.raises(MCPClientError, match="closed"):
+            await initialize_task
+        assert transport.close_calls == 1
+        assert client.initialize_result is None
+        assert not client.initialized
 
     asyncio.run(drive())
 
