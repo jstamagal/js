@@ -14,6 +14,9 @@ from .core import Tool, ToolContext
 from .descriptions import load_description
 
 
+DISCOVERY_TOOL_NAME = "tool_discovery"
+
+
 @dataclass(frozen=True)
 class SkillDefinition:
     """Compact skill metadata plus the instructions returned when loaded."""
@@ -105,8 +108,8 @@ def discovery_tool(surface: Any) -> Tool:
         return surface.discover(query=query, kind=kind, source=source, load=load)
 
     return Tool(
-        "tool_discovery",
-        load_description("tool_discovery"),
+        DISCOVERY_TOOL_NAME,
+        load_description(DISCOVERY_TOOL_NAME),
         discover,
         {
             "query": {"type": "string", "description": "Words to find in catalog names and descriptions."},
