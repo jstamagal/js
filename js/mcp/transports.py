@@ -304,6 +304,7 @@ class StreamableHTTPTransport:
         self._send_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._get_task: asyncio.Task[None] | None = None
+        self._post_tasks: set[asyncio.Task[None]] = set()
         self._get_supported = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._active: set[Any] = set()
@@ -337,12 +338,18 @@ class StreamableHTTPTransport:
             ) from None
         async with self._send_lock:
             try:
-                messages = await asyncio.to_thread(self._post, payload)
+                messages, stream = await asyncio.to_thread(self._post, payload)
             except asyncio.CancelledError:
                 self._close_active_responses()
                 raise
             for incoming in messages:
                 self._queue.put_nowait(incoming)
+            if stream is not None:
+                task = asyncio.create_task(
+                    self._consume_post_stream(stream), name="mcp-http-post-response"
+                )
+                self._post_tasks.add(task)
+                task.add_done_callback(self._post_tasks.discard)
             self._ensure_get_stream()
 
     async def receive(self) -> dict[str, Any] | None:
@@ -360,10 +367,14 @@ class StreamableHTTPTransport:
             self._closing.set()
             self._close_active_responses()
             get_task, self._get_task = self._get_task, None
+            background = list(self._post_tasks)
+            self._post_tasks.clear()
             if get_task is not None:
-                get_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await get_task
+                background.append(get_task)
+            for task in background:
+                task.cancel()
+            if background:
+                await asyncio.gather(*background, return_exceptions=True)
             session_id = self._session_id
             if session_id is not None:
                 with contextlib.suppress(StreamableHTTPTransportError):
@@ -376,28 +387,35 @@ class StreamableHTTPTransport:
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.close()
 
-    def _post(self, payload: bytes) -> list[dict[str, Any]]:
+    def _post(self, payload: bytes) -> tuple[list[dict[str, Any]], Any | None]:
         headers = self._headers()
         headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self._url, data=payload, headers=headers, method="POST")
         response = self._open(request)
+        keep_stream = False
         try:
             self._capture_session(response)
             status = response.status
             if status == 202:
-                return []
+                return [], None
             content_type = self._content_type(response)
             if content_type == "application/json":
-                return [self._decode_message(self._bounded_read(response))]
+                return [self._decode_message(self._bounded_read(response))], None
             if content_type == "text/event-stream":
-                messages: list[dict[str, Any]] = []
-                self._consume_sse(response, messages.append)
-                return messages
+                # A POST response stream may remain open indefinitely.  Hand it to a
+                # background reader so send() returns after the response headers arrive.
+                keep_stream = True
+                return [], response
             raise StreamableHTTPTransportError(
                 self._diagnostic("returned an unsupported Content-Type")
             )
+        except StreamableHTTPTransportError:
+            raise
+        except Exception:  # noqa: BLE001 - wire failures must be credential-safe
+            raise StreamableHTTPTransportError(self._diagnostic("POST request failed")) from None
         finally:
-            self._release(response)
+            if not keep_stream:
+                self._release(response)
 
     def _delete(self, session_id: str) -> None:
         headers = self._headers(session_id=session_id)
@@ -428,6 +446,29 @@ class StreamableHTTPTransport:
                     self._diagnostic("notification stream returned an unsupported Content-Type")
                 )
             self._consume_sse(response, self._emit_from_thread)
+        except StreamableHTTPTransportError:
+            raise
+        except Exception:  # noqa: BLE001 - wire failures must be credential-safe
+            raise StreamableHTTPTransportError(
+                self._diagnostic("notification stream failed")
+            ) from None
+        finally:
+            self._release(response)
+
+    async def _consume_post_stream(self, response: Any) -> None:
+        try:
+            await asyncio.to_thread(self._consume_sse, response, self._emit_from_thread)
+        except asyncio.CancelledError:
+            self._release(response)
+            raise
+        except StreamableHTTPTransportError as exc:
+            if not self._closed:
+                self._queue.put_nowait(exc)
+        except Exception:  # noqa: BLE001 - wire failures must be credential-safe
+            if not self._closed:
+                self._queue.put_nowait(
+                    StreamableHTTPTransportError(self._diagnostic("POST response stream failed"))
+                )
         finally:
             self._release(response)
 
@@ -475,7 +516,7 @@ class StreamableHTTPTransport:
                 raise StreamableHTTPTransportError(
                     self._diagnostic(f"request failed with HTTP {exc.code}")
                 ) from None
-        except (OSError, ValueError):
+        except Exception:  # noqa: BLE001 - urllib errors may contain request headers
             raise StreamableHTTPTransportError(self._diagnostic("request failed")) from None
         with self._active_lock:
             self._active.add(response)
