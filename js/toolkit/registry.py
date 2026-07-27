@@ -118,6 +118,7 @@ class TurnToolSurface:
             tool for tool in allowed.tools if tool.name not in self._sources
         )
         self._loaded: set[str] = set()
+        self._mcp_loaded: set[str] = set()
         self._discovery = discovery.discovery_tool(self)
 
     @property
@@ -127,7 +128,7 @@ class TurnToolSurface:
             tool for tool in self.allowed.tools
             if tool.name in self._loaded and tool.name not in eager_names
         )
-        mcp_tools = self.mcp_host.tools() if self.mcp_host is not None else ()
+        mcp_tools = self.mcp_host.tools(self._mcp_loaded) if self.mcp_host is not None else ()
         include_discovery = bool(self._lazy or self._skills or self.mcp_host is not None)
         return self._eager + loaded + tuple(mcp_tools) + ((self._discovery,) if include_discovery else ())
 
@@ -180,7 +181,7 @@ class TurnToolSurface:
             return discovery.compact_result({"results": [
                 {"id": item.id, "kind": item.kind, "name": item.name,
                  "description": item.description, "source": item.source,
-                 "loaded": item.name in self.mcp_host.loaded}
+                 "loaded": item.name in self._mcp_loaded}
                 for item in entries
             ]})
         return self.discover(query=query, kind=kind, source=source, load=load)
@@ -217,6 +218,7 @@ class TurnToolSurface:
         if self.mcp_host is not None:
             loaded = self.mcp_host.load(item_id)
             if loaded is not None:
+                self._mcp_loaded.update(loaded)
                 return discovery.compact_result({"loaded": loaded, "id": item_id})
         tool = self._lazy.get(item_id)
         if tool is not None:
