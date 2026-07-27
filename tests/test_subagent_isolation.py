@@ -9,6 +9,7 @@ import time
 from js import runtime
 from js.config import Config
 from js.memory import load_messages
+from js.mcp_config import resolve as resolve_mcp
 from js.toolkit import ToolContext, call_tool
 from js.toolkit import fs
 from js.toolkit.meta import task, todo_read, todo_write
@@ -382,6 +383,50 @@ def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_pat
     assert "1. OK" in actual
     assert "2. ERROR RuntimeError: boom" in actual
     assert "3. ALSO" in actual
+
+
+def test_subagent_reresolves_mcp_policy_and_cannot_see_parent_server(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools: []\n")
+    settings = {
+        "mcp": {
+            "servers": {"parent-only": {"command": "never-started"}},
+            "agents": {
+                "parent": {"servers": {"allow": ["parent-only"]}},
+                "worker": {"servers": {"deny": ["parent-only"]}},
+            },
+        },
+    }
+
+    def from_env_stub(*, save_session: bool = True):
+        cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+        cfg = replace(cfg, settings=settings, mcp=resolve_mcp(settings, "parent"))
+        cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+        if save_session and not cfg.session_file.exists():
+            cfg.session_file.write_text("", encoding="utf-8")
+        return cfg
+
+    import js.config as config
+
+    monkeypatch.setattr(config, "from_env", from_env_stub)
+    seen: dict[str, object] = {}
+    real_run_turn_async = runtime.run_turn_async
+
+    async def run_turn_stub(cfg, *args, **kwargs):
+        seen["mcp"] = cfg.mcp
+        return await real_run_turn_async(cfg, *args, **kwargs)
+
+    def completion_stub(**kwargs):
+        seen["tools"] = [spec.name for spec in (kwargs.get("tools") or [])]
+        return _fake_stream_result("MCP_POLICY_OK")
+
+    monkeypatch.setattr(runtime, "run_turn_async", run_turn_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    actual = task(["check MCP"], agent_id="worker", context=ToolContext(cwd=tmp_path))
+
+    assert "MCP_POLICY_OK" in actual
+    assert seen["tools"] == []
+    assert seen["mcp"].servers == ()
+    assert seen["mcp"].policy.server_deny == ("parent-only",)
 
 
 def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp_path):

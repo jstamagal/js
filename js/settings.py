@@ -263,6 +263,13 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("tools.alias_profiles", "json", None,
                 "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
                 empty=EMPTY_NONE),
+    # --- mcp ---
+    SettingSpec("mcp.servers", "json", {},
+                "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
+                empty=EMPTY_NONE, secret=True),
+    SettingSpec("mcp.agents", "json", {},
+                "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
+                empty=EMPTY_NONE),
     # --- sampling ---
     SettingSpec("sampling.temperature", "float", None,
                 "Provider-default sampling temperature; unset = do not send.",
@@ -299,6 +306,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "compact",
     "subagents",
     "tools",
+    "mcp",
     "sampling",
     "wiki",
     "artifact",
@@ -374,16 +382,38 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         except ValueError:
             return None, "expected a number"
     if kind in ("json", "map"):
-        try:
-            value = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            return None, "expected a JSON value"
+        if spec.key in {"mcp.servers", "mcp.agents"}:
+            from . import mcp_config
+
+            try:
+                value = (
+                    mcp_config.parse_servers_json(raw)
+                    if spec.key == "mcp.servers"
+                    else mcp_config.parse_agents_json(raw)
+                )
+            except mcp_config.MCPConfigError as exc:
+                return None, str(exc)
+        else:
+            try:
+                value = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                return None, "expected a JSON value"
         if kind == "map" and not isinstance(value, dict):
             return None, "expected a JSON object"
         if spec.key == "tools.alias_profiles":
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
+        if spec.key in {"mcp.servers", "mcp.agents"}:
+            from . import mcp_config
+
+            try:
+                if spec.key == "mcp.servers":
+                    mcp_config.parse_servers(value)
+                else:
+                    mcp_config.parse_agents(value)
+            except mcp_config.MCPConfigError as exc:
+                return None, str(exc)
         return value, None
     return text, None  # str
 
@@ -618,6 +648,10 @@ _SECTION_INTRO: dict[str, list[str]] = {
     "compact": ["# Cache-first context compaction knobs."],
     "subagents": ["# Subagent model-selection policy."],
     "tools": ["# Model-facing tool aliasing."],
+    "mcp": [
+        "# MCP server connection definitions and per-agent allow/deny policy.",
+        "# Server values may contain credentials; /set and /show mask mcp.servers.",
+    ],
     "sampling": ["# Per-turn sampling overrides. Default display is <unset>; provider/model defaults win."],
     "wiki": ["# Wiki vault aliases, e.g. `set wiki.aliases.creative /path/to/wiki`."],
     "artifact": ["# Artifact system defaults."],

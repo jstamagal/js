@@ -75,8 +75,10 @@ def test_spill_leaves_small_results_alone_and_can_be_disabled(tmp_path):
 
 
 def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
-    a = tmp_path / "a.py"; a.write_text("print('a')\n", encoding="utf-8")
-    b = tmp_path / "b.py"; b.write_text("print('b')\n", encoding="utf-8")
+    a = tmp_path / "a.py"
+    a.write_text("print('a')\n", encoding="utf-8")
+    b = tmp_path / "b.py"
+    b.write_text("print('b')\n", encoding="utf-8")
 
     class Ctx:
         read_paths = {a, b}
@@ -89,7 +91,8 @@ def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
 
 
 def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
-    big = tmp_path / "big.log"; big.write_text("q" * 500_000, encoding="utf-8")
+    big = tmp_path / "big.log"
+    big.write_text("q" * 500_000, encoding="utf-8")
 
     class Ctx:
         read_paths = {big}

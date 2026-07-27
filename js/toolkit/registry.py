@@ -8,15 +8,17 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 import sys
 
-from .core import Tool
+from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
+from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import artifact, browser, fs, meta, process_net, search, terminal, wiki
+from . import artifact, browser, discovery, fs, meta, process_net, search, terminal, wiki
 
 
 @dataclass(frozen=True)
 class ToolRegistry:
     tools: tuple[Tool, ...]
     aliases: dict[str, str]
+    known_names: frozenset[str] | None = None
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -51,7 +53,8 @@ class ToolRegistry:
     def select(self, selectors: Iterable[str] | None, agent_id: str | None = None) -> ToolRegistry:
         wanted = _selected_names(self, selectors or (), agent_id)
         selected = tuple(tool for tool in self.tools if tool.name in wanted)
-        return _registry_from_tools(selected)
+        known_names = self.known_names or frozenset(self.by_name)
+        return _registry_from_tools(selected, known_names=known_names)
 
     def aliased(self, profile: dict[str, str] | None) -> ToolRegistry:
         """Return a registry that also resolves model-facing aliases back to
@@ -72,16 +75,232 @@ class ToolRegistry:
             existing = merged.get(key)
             if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
-        return ToolRegistry(tools=self.tools, aliases=merged)
+        return ToolRegistry(tools=self.tools, aliases=merged, known_names=self.known_names)
+
+    def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
+        """Create fresh lazy state for one model turn without changing selection."""
+        return TurnToolSurface(self, cwd, mcp_host=mcp_host)
 
 
-def _registry_from_tools(tools: tuple[Tool, ...]) -> ToolRegistry:
+_LAZY_SUITES = {
+    **{tool.name: "browser" for tool in browser.tools()},
+    **{tool.name: "terminal" for tool in terminal.tools()},
+    **{tool.name: "wiki" for tool in wiki.tools()},
+    **{tool.name: "artifact" for tool in artifact.tools()},
+}
+
+
+class TurnToolSurface:
+    """A selected registry split into deterministic eager and loaded subsets."""
+
+    def __init__(self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None) -> None:
+        self.allowed = allowed
+        self.mcp_host = mcp_host
+        self.aliases = {
+            alias: canonical
+            for alias, canonical in allowed.aliases.items()
+            if alias != discovery.DISCOVERY_TOOL_NAME
+        }
+        if self.mcp_host is not None:
+            reserved = {tool.name for tool in allowed.tools}
+            reserved.update(self.aliases)
+            reserved.add(discovery.DISCOVERY_TOOL_NAME)
+            self.mcp_host.reserve_public_names(reserved)
+        self._skill_catalog = (
+            discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
+        )
+        self._skills = {
+            f"skill:{skill.name}": skill for skill in self._skill_catalog.skills
+        }
+        self._lazy: dict[str, Tool] = {}
+        self._sources: dict[str, str] = {}
+        for tool in allowed.tools:
+            source = _LAZY_SUITES.get(tool.name)
+            if source is None and getattr(tool.handler, "_js_agent_id", None) is not None:
+                source = "agent"
+            if source is not None:
+                self._lazy[f"native:{tool.name}"] = tool
+                self._sources[tool.name] = source
+        # Core meta tools stay eager: "skill" is the dispatch tool itself;
+        # only the skill catalog and specialist suites load lazily.
+        self._eager = tuple(
+            tool for tool in allowed.tools if tool.name not in self._sources
+        )
+        self._loaded: set[str] = set()
+        self._mcp_loaded: set[str] = set()
+        self._discovery = discovery.discovery_tool(self)
+
+    @property
+    def tools(self) -> tuple[Tool, ...]:
+        eager_names = {tool.name for tool in self._eager}
+        loaded = tuple(
+            tool for tool in self.allowed.tools
+            if tool.name in self._loaded and tool.name not in eager_names
+        )
+        mcp_tools = self.mcp_host.tools(self._mcp_loaded) if self.mcp_host is not None else ()
+        include_discovery = bool(self._lazy or self._skills or self.mcp_host is not None)
+        return self._eager + loaded + tuple(mcp_tools) + ((self._discovery,) if include_discovery else ())
+
+    def dispatch_registry(self) -> ToolRegistry:
+        """Freeze the tools available for one model response's dispatch batch."""
+        return ToolRegistry(
+            tools=self.tools,
+            aliases=self.aliases,
+            known_names=self.allowed.known_names,
+        )
+
+    @property
+    def by_name(self) -> dict[str, Tool]:
+        return {tool.name: tool for tool in self.tools}
+
+    def resolve(self, name: str) -> Tool | None:
+        trimmed = str(name).strip()
+        if trimmed in self.by_name:
+            return self.by_name[trimmed]
+        canonical = self.aliases.get(trimmed.lower(), trimmed)
+        return self.by_name.get(canonical)
+
+    def openai_specs(self) -> list[dict]:
+        return _registry_from_tools(self.tools).openai_specs()
+
+    def names(self) -> str:
+        return "/".join(tool.name for tool in self.tools)
+
+    def activate_tools(self, names: Iterable[str]) -> ToolActivationResult:
+        """Activate declared native tools without widening selected policy."""
+        activated: list[str] = []
+        denied: list[str] = []
+        missing: list[str] = []
+        seen: set[str] = set()
+        # A name the operator's policy excluded is denied; a name no registry
+        # knows at all is missing. Reporting both as denied tells a skill
+        # author to fix permissions when the real problem is a typo.
+        known = self.allowed.known_names or frozenset(self.allowed.by_name)
+        for requested in names:
+            tool = self.allowed.resolve(requested)
+            if tool is None:
+                bucket = denied if str(requested).strip() in known else missing
+                if requested not in bucket:
+                    bucket.append(requested)
+                continue
+            if tool.name not in seen:
+                activated.append(tool.name)
+                seen.add(tool.name)
+                if tool.name in self._sources:
+                    self._loaded.add(tool.name)
+        return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
+
+    def catalog(self) -> tuple[CatalogEntry, ...]:
+        native = (
+            CatalogEntry(
+                item_id,
+                tool.name,
+                tool.description.split("\n", 1)[0][:240],
+                "native",
+                self._sources[tool.name],
+            )
+            for item_id, tool in self._lazy.items()
+        )
+        skills = (
+            CatalogEntry(item_id, skill.name, skill.description, "skill", skill.source)
+            for item_id, skill in self._skills.items()
+        )
+        mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
+        return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
+
+    async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+        folded_source = str(source).strip().casefold()
+        mcp_source = (
+            self.mcp_host is not None
+            and bool(folded_source)
+            and self.mcp_host.is_server_source(source)
+        )
+        if self.mcp_host is not None and not load and (
+            str(kind).strip().lower() == "mcp"
+            or folded_source == "mcp"
+            or mcp_source
+            or "mcp" in str(query).casefold().split()
+        ):
+            entries = await self.mcp_host.discover(
+                query=query,
+                source="" if folded_source == "mcp" else source,
+            )
+            return discovery.compact_result({"results": [
+                {"id": item.id, "kind": item.kind, "name": item.name,
+                 "description": item.description, "source": item.source,
+                 "loaded": item.name in self._mcp_loaded}
+                for item in entries
+            ]})
+        return self.discover(query=query, kind=kind, source=source, load=load)
+
+    def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+        load_id = str(load).strip()
+        if load_id:
+            return self._load(load_id)
+        folded_kind = str(kind).strip().lower()
+        folded_source = str(source).strip().lower()
+        if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
+            return "ERROR: kind must be native, skill, or mcp"
+        terms = str(query).casefold().split()
+        matches = []
+        for item in self.catalog():
+            haystack = f"{item.id} {item.name} {item.description} {item.source}".casefold()
+            if folded_kind and item.kind != folded_kind:
+                continue
+            if folded_source and item.source.casefold() != folded_source:
+                continue
+            if terms and not all(term in haystack for term in terms):
+                continue
+            matches.append({
+                "id": item.id,
+                "kind": item.kind,
+                "name": item.name,
+                "description": item.description,
+                "source": item.source,
+                "loaded": item.name in self._loaded,
+            })
+        return discovery.compact_result({"results": matches})
+
+    def _load(self, item_id: str) -> str:
+        if self.mcp_host is not None:
+            loaded = self.mcp_host.load(item_id)
+            if loaded is not None:
+                self._mcp_loaded.update(loaded)
+                return discovery.compact_result({"loaded": loaded, "id": item_id})
+        tool = self._lazy.get(item_id)
+        if tool is not None:
+            self._loaded.add(tool.name)
+            return discovery.compact_result({"loaded": [tool.name], "id": item_id})
+        skill = self._skills.get(item_id)
+        if skill is None:
+            return f"ERROR: no allowed catalog entry with id {item_id!r}"
+        try:
+            loaded = load_skill(self._skill_catalog, skill.name, tool_registry=self)
+        except OSError:
+            return f"ERROR: skill {skill.name!r} instructions could not be read"
+        if loaded is None:
+            return f"ERROR: skill {skill.name!r} instructions could not be read"
+        result: dict[str, object] = {
+            "id": item_id,
+            "instructions": loaded.instructions,
+            "loaded": list(loaded.activation.activated),
+        }
+        if loaded.activation.denied:
+            result["denied_tools"] = list(loaded.activation.denied)
+        if loaded.activation.missing:
+            result["missing_tools"] = list(loaded.activation.missing)
+        return discovery.compact_result(result)
+
+
+def _registry_from_tools(
+    tools: tuple[Tool, ...], *, known_names: frozenset[str] | None = None
+) -> ToolRegistry:
     aliases: dict[str, str] = {}
     for tool in tools:
         aliases[tool.name.lower()] = tool.name
         for alias in tool.aliases:
             aliases[alias.lower()] = tool.name
-    return ToolRegistry(tools=tools, aliases=aliases)
+    return ToolRegistry(tools=tools, aliases=aliases, known_names=known_names)
 
 
 def _selected_names(registry: ToolRegistry, selectors: Iterable[str], agent_id: str | None = None) -> set[str]:
@@ -151,6 +370,7 @@ def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, fl
         + artifact.tools()
     )
     reserved = {tool.name for tool in base_tools}
+    reserved.add(discovery.DISCOVERY_TOOL_NAME)
     all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
     return _registry_from_tools(all_tools)
 
