@@ -77,19 +77,21 @@ class Tool:
     params: dict[str, dict]
     required: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    input_schema: dict[str, Any] | None = None
 
     def openai_spec(self) -> dict:
+        parameters = self.input_schema if self.input_schema is not None else {
+            "type": "object",
+            "properties": self.params,
+            "required": list(self.required),
+            "additionalProperties": False,
+        }
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": self.params,
-                    "required": list(self.required),
-                    "additionalProperties": False,
-                },
+                "parameters": parameters,
             },
         }
 

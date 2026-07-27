@@ -100,11 +100,17 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         assert host.load("mcp:alpha_server__read_file") == ["alpha_server__read_file"]
         tool = host.tools()[0]
         assert tool.params["path"]["type"] == "string" and tool.required == ("path",)
+        assert tool.openai_spec()["function"]["parameters"] == client.tools[0]["inputSchema"]
         result = await tool.handler(path="a")
         assert [block["type"] for block in result.blocks] == [
             "text", "image", "resource_link", "resource", "structured"
         ]
         assert client.calls == [("Read File", {"path": "a"})]
+        client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "refreshed"
+        host._dirty.add("Alpha Server")
+        await host.before_model_call()
+        refreshed = next(tool for tool in host.tools() if tool.name == "alpha_server__read_file")
+        assert refreshed.params["path"]["description"] == "refreshed"
         history = result.dehydrated()
         assert base64.b64encode(b"png").decode() not in history and "SENTINEL" not in history
         assert "inside" in history and '{"ok":true}' in history
@@ -133,13 +139,50 @@ def test_resource_prompt_controls_notifications_and_redaction(config):
         for name, args in calls:
             host.load(f"mcp:{name}")
             value = await next(tool for tool in host.tools() if tool.name == name).handler(**args)
-            json.loads(value) if isinstance(value, str) else isinstance(value, ToolResult)
+            assert json.loads(value) if isinstance(value, str) else isinstance(value, ToolResult)
         assert client.subscriptions == [("subscribe", "file:///x"), ("unsubscribe", "file:///x")]
         client.kwargs["log_sink"]({"level": "info", "data": "safe"})
         client.kwargs["progress_sink"]({"progressToken": 1, "progress": 0.5})
         client.kwargs["on_resource_updated"]({"uri": "file:///x"})
         assert [kind for kind, _ in events[-3:]] == ["mcp_log", "mcp_progress", "mcp_resource_updated"]
         assert "SENTINEL" not in repr(events)
+
+    asyncio.run(drive())
+
+
+def test_discovery_defensively_skips_denied_servers():
+    async def drive():
+        FakeClient.instances.clear()
+        denied = MCPServer("Denied", "denied", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((denied,), MCPPolicy(server_deny=("Denied",))),
+            client_factory=FakeClient,
+        )
+        await host.discover(query="mcp")
+        assert not FakeClient.instances
+
+    asyncio.run(drive())
+
+
+def test_prompt_get_preserves_media_content(config):
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        await host.discover()
+        client = FakeClient.instances[-1]
+
+        async def get_prompt(_name, _arguments):
+            return GetPromptResult(description="Media", messages=[
+                {"role": "user", "content": {"type": "image", "data": "cG5n", "mimeType": "image/png"}},
+                {"role": "assistant", "content": {"type": "text", "text": "done"}},
+            ])
+
+        client.get_prompt = get_prompt
+        host.load("mcp:mcp_prompt_get")
+        result = await next(tool for tool in host.tools() if tool.name == "mcp_prompt_get").handler(
+            server="Alpha Server", name="media"
+        )
+        assert [block["type"] for block in result.blocks] == ["text", "text", "image", "text"]
+        assert result.blocks[-1]["text"] == "[assistant]\ndone"
 
     asyncio.run(drive())
 

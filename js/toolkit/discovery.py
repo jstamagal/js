@@ -123,7 +123,7 @@ def discovery_tool(surface: Any) -> Tool:
         discover,
         {
             "query": {"type": "string", "description": "Words to find in catalog names and descriptions."},
-            "kind": {"type": "string", "enum": ["native", "skill"], "description": "Optional catalog kind filter."},
+            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": "Optional catalog kind filter."},
             "source": {"type": "string", "description": "Optional exact source filter."},
             "load": {"type": "string", "description": "Stable catalog id to load, such as native:browser_open or skill:review."},
         },
