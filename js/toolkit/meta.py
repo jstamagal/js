@@ -11,7 +11,6 @@ import secrets
 import time
 from typing import Any
 
-from ..skills import discover_skills, load_skill
 from .core import Todo, Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default
@@ -85,10 +84,17 @@ def plan(plan_name: str, version: str, content: str, context: ToolContext | None
 
 def skill(name: str, context: ToolContext | None = None) -> str:
     assert context is not None
-    catalog = discover_skills(context.cwd)
-    loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
-    if loaded is not None:
-        return loaded.render()
+    pkg_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        pkg_root / "skills" / f"{name}.md",
+        pkg_root / "skills" / name / "SKILL.md",
+        context.resolve_path(Path("skills") / f"{name}.md"),
+        context.resolve_path(Path("skills") / name / "README.md"),
+        context.resolve_path(Path(".skills") / f"{name}.md"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.read_text(errors="replace")
     return f"ERROR: skill {name!r} not found in js/skills or local skills directories"
 
 

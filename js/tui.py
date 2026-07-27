@@ -171,6 +171,9 @@ class JsTuiApp(App[int]):
             self.consumer.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.consumer
+        host = self.state.get("mcp_host")
+        if host is not None:
+            await host.close()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         line = event.value.strip()
@@ -266,6 +269,7 @@ class JsTuiApp(App[int]):
                 sampling=self._sampling_for_turn(turn_cfg, before_sampling),
                 event_hooks=self.state.get("events"),
                 suppress_output=True,
+                mcp_host=self.state.get("mcp_host"),
             )
             after_sampling = self.deps.sync_sampling_from_live_settings(self.state["settings"])
             if after_sampling != before_sampling:

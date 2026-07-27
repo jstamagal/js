@@ -1365,7 +1365,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              provider_api_key_override: str | None = None,
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
-             event_hooks: event_mod.EventHooks | None = None) -> None:
+             event_hooks: event_mod.EventHooks | None = None,
+             mcp_host: Any = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -1388,15 +1389,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     base_registry = tool_registry or T._REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.DEFAULT_CONTEXT
-    mcp_host = None
-    if getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
+    owns_mcp_host = mcp_host is None
+    if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
 
-        mcp_host = MCPHost(
-            cfg.mcp,
-            telemetry=telemetry,
-            event_sink=lambda event, **payload: _emit_event(event, **payload),
-        )
+        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry)
     # Lazy state belongs to this invocation only. The selected registry remains
     # the authorization boundary; discovery can reveal/load only entries in it.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
@@ -1450,6 +1447,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     error=result.error,
                 )
         return emission.hooks
+
+    if mcp_host is not None:
+        mcp_host.telemetry = telemetry
+        mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
 
     def _end_turn(reason: str, **extra: Any) -> None:
         _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
@@ -1979,11 +1980,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _end_turn("cancelled")
         raise
     finally:
-        if mcp_host is not None:
+        if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()
 
 
-def run_turn(*args, **kwargs) -> None:
+def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None:
     """Sync wrapper over :func:`run_turn_async` — spins a throwaway loop for this
     turn. The OLD blocking path; the non-blocking runtime awaits
     ``run_turn_async`` directly on its shared loop. Kept so the current sync
@@ -1991,4 +1992,6 @@ def run_turn(*args, **kwargs) -> None:
     transition. `messages` is still mutated in place, so ^C mid-turn preserves
     partial work exactly as before.
     """
+    if loop_runner is not None:
+        return loop_runner.run(run_turn_async(*args, **kwargs))
     return asyncio.run(run_turn_async(*args, **kwargs))

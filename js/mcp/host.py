@@ -84,7 +84,7 @@ def prompt_result(result: Any) -> ToolResult:
 
 
 class MCPHost:
-    """Own clients and lazy remote metadata for a single runtime invocation."""
+    """Own clients and lazy remote metadata for one js session."""
 
     CONTROL_TOOLS = (
         ("mcp_resource_list", "List resources from an initialized MCP server."),
