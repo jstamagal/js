@@ -393,3 +393,46 @@ def test_close_unblocks_send_still_waiting_for_response_headers():
         listener.close()
 
     run(drive())
+
+
+def test_close_unblocks_https_operation_stalled_in_tls_handshake():
+    async def drive():
+        import contextlib
+        import socket as socketlib
+        import time
+
+        listener = socketlib.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        accepted = []
+
+        def serve():
+            with contextlib.suppress(Exception):
+                conn, _ = listener.accept()
+                accepted.append(conn)
+                conn.recv(65536)  # swallow ClientHello, never answer
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        transport = StreamableHTTPTransport(
+            f"https://127.0.0.1:{port}/mcp", name="tls-hang", timeout=30.0
+        )
+        await transport.start()
+        send_task = asyncio.create_task(transport.send(request()))
+        deadline = time.monotonic() + 5
+        while not accepted and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert accepted, "server never accepted the TLS connection"
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        await asyncio.wait_for(transport.close(), 5)
+        assert time.monotonic() - started < 3, "close blocked on the TLS handshake"
+        with pytest.raises((StreamableHTTPTransportError, asyncio.CancelledError)):
+            await asyncio.wait_for(send_task, 5)
+        for conn in accepted:
+            with contextlib.suppress(Exception):
+                conn.close()
+        listener.close()
+
+    run(drive())
