@@ -12,7 +12,8 @@ from js.mcp.client import CapabilityError, MCPClient, MCPClientError
 from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
-from js.toolkit.core import ToolContext, ToolResult
+from js.toolkit.core import Tool, ToolContext, ToolResult
+from js.toolkit.registry import ToolRegistry
 
 
 class FakeClient:
@@ -648,28 +649,71 @@ def test_url_query_and_stdio_arg_credentials_are_redacted():
     assert "-v" in scrubbed
 
 
-def test_percent_encoded_query_credentials_are_redacted_from_text_and_media():
+@pytest.mark.parametrize(
+    "configured, variants",
+    [
+        ("a:b", ("a:b", "a%3Ab", "a%3ab", "a%253Ab", "a%253ab")),
+        ("a%2Fb", ("a/b", "a%2Fb", "a%2fb", "a%252Fb", "a%252fb")),
+        ("a+b", ("a+b", "a%2Bb", "a%2bb", "a%252Bb", "a%252bb")),
+    ],
+)
+def test_query_credentials_are_redacted_across_percent_encoding_variants(configured, variants):
     from js.mcp.host import _redact_value, _secret_values
 
     server = MCPServer(
         name="encoded", normalized_name="encoded", transport="http",
-        url="http://127.0.0.1:1/mcp?token=abc%2Fdef",
+        url=f"http://127.0.0.1:1/mcp?token={configured}",
     )
     secrets = _secret_values(server)
-    echoed = "server echoed abc%2Fdef, abc%2fdef, and abc/def"
+    echoed = "before " + " between ".join(variants) + " after"
 
-    assert _redact_value(echoed, secrets) == "server echoed [REDACTED], [REDACTED], and [REDACTED]"
+    assert _redact_value(echoed, secrets) == (
+        "before " + " between ".join("[REDACTED]" for _ in variants) + " after"
+    )
 
-    encoded_media = base64.b64encode(b"image contains abc%2Fdef").decode()
-    result = mcp_tool_result(CallToolResult(content=[
-        {"type": "text", "text": echoed},
-        {"type": "image", "data": encoded_media, "mimeType": "image/png"},
-    ]), secrets)
-    exposed = repr(result)
-    assert "abc%2Fdef" not in exposed
-    assert "abc%2fdef" not in exposed
-    assert "abc/def" not in exposed
-    assert result.blocks[1] == {"type": "text", "text": "[image content suppressed]"}
+    for variant in variants:
+        encoded_media = base64.b64encode(f"image contains {variant}".encode()).decode()
+        result = mcp_tool_result(CallToolResult(content=[
+            {"type": "image", "data": encoded_media, "mimeType": "image/png"},
+        ]), secrets)
+        assert result.blocks == [{"type": "text", "text": "[image content suppressed]"}]
+
+
+def test_turn_surface_withholds_mcp_name_claimed_by_generated_native_tool(tmp_path):
+    async def drive():
+        events = []
+        server = MCPServer("Alpha Server", "alpha_server", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            client_factory=FakeClient,
+            event_sink=lambda kind, **payload: events.append((kind, payload)),
+        )
+        def generated_handler():
+            return "native"
+
+        generated_handler._js_agent_id = "alpha_server__read_file"
+        native = Tool("alpha_server__read_file", "generated agent", generated_handler, {})
+        allowed = ToolRegistry(
+            tools=(native,),
+            aliases={native.name.casefold(): native.name},
+        )
+        surface = allowed.lazy_surface(tmp_path, mcp_host=host)
+
+        await host.discover(query="mcp")
+        catalog = await host.discover(query="mcp")
+
+        assert all(entry.id != "mcp:alpha_server__read_file" for entry in catalog)
+        assert surface.discover(load="mcp:alpha_server__read_file").startswith(
+            "ERROR: no allowed catalog entry"
+        )
+        assert json.loads(surface.discover(load="native:alpha_server__read_file"))["loaded"] == [
+            "alpha_server__read_file"
+        ]
+        assert [tool.name for tool in surface.tools].count("alpha_server__read_file") == 1
+        assert surface.resolve("alpha_server__read_file") is native
+        assert events.count(("mcp_catalog_collision", {"tool": "alpha_server__read_file"})) == 1
+
+    asyncio.run(drive())
 
 
 def test_inline_flag_credentials_in_stdio_args_are_redacted():

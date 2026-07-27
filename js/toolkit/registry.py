@@ -98,6 +98,11 @@ class TurnToolSurface:
             for alias, canonical in allowed.aliases.items()
             if alias != discovery.DISCOVERY_TOOL_NAME
         }
+        if self.mcp_host is not None:
+            reserved = {tool.name for tool in allowed.tools}
+            reserved.update(self.aliases)
+            reserved.add(discovery.DISCOVERY_TOOL_NAME)
+            self.mcp_host.reserve_public_names(reserved)
         self._skills = (
             {skill.id: skill for skill in discovery.discover_skills(cwd)}
             if allowed.resolve("skill") is not None
