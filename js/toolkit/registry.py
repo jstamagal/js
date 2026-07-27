@@ -8,9 +8,9 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 import sys
 
-from .core import Tool
+from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import artifact, browser, fs, meta, process_net, search, terminal, wiki
+from . import artifact, browser, discovery, fs, meta, process_net, search, terminal, wiki
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,136 @@ class ToolRegistry:
             if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
         return ToolRegistry(tools=self.tools, aliases=merged)
+
+    def lazy_surface(self, cwd: Path) -> TurnToolSurface:
+        """Create fresh lazy state for one model turn without changing selection."""
+        return TurnToolSurface(self, cwd)
+
+
+_LAZY_SUITES = {
+    **{tool.name: "browser" for tool in browser.tools()},
+    **{tool.name: "terminal" for tool in terminal.tools()},
+    **{tool.name: "wiki" for tool in wiki.tools()},
+    **{tool.name: "artifact" for tool in artifact.tools()},
+}
+
+
+class TurnToolSurface:
+    """A selected registry split into deterministic eager and loaded subsets."""
+
+    def __init__(self, allowed: ToolRegistry, cwd: Path) -> None:
+        self.allowed = allowed
+        self.aliases = dict(allowed.aliases)
+        self._skills = (
+            {skill.id: skill for skill in discovery.discover_skills(cwd)}
+            if allowed.resolve("skill") is not None
+            else {}
+        )
+        self._lazy: dict[str, Tool] = {}
+        self._sources: dict[str, str] = {}
+        for tool in allowed.tools:
+            source = _LAZY_SUITES.get(tool.name)
+            if source is None and getattr(tool.handler, "_js_agent_id", None) is not None:
+                source = "agent"
+            if source is not None:
+                self._lazy[f"native:{tool.name}"] = tool
+                self._sources[tool.name] = source
+        self._eager = tuple(
+            tool for tool in allowed.tools
+            if tool.name not in self._sources and tool.name != "skill"
+        )
+        self._loaded: set[str] = set()
+        self._discovery = discovery.discovery_tool(self)
+
+    @property
+    def tools(self) -> tuple[Tool, ...]:
+        loaded = tuple(
+            tool for tool in self.allowed.tools
+            if tool.name in self._loaded
+        )
+        include_discovery = bool(self._lazy or self._skills)
+        return self._eager + loaded + ((self._discovery,) if include_discovery else ())
+
+    @property
+    def by_name(self) -> dict[str, Tool]:
+        return {tool.name: tool for tool in self.tools}
+
+    def resolve(self, name: str) -> Tool | None:
+        trimmed = str(name).strip()
+        canonical = self.aliases.get(trimmed.lower(), trimmed)
+        return self.by_name.get(canonical)
+
+    def openai_specs(self) -> list[dict]:
+        return _registry_from_tools(self.tools).openai_specs()
+
+    def names(self) -> str:
+        return "/".join(tool.name for tool in self.tools)
+
+    def catalog(self) -> tuple[CatalogEntry, ...]:
+        native = (
+            CatalogEntry(
+                item_id,
+                tool.name,
+                tool.description.split("\n", 1)[0][:240],
+                "native",
+                self._sources[tool.name],
+            )
+            for item_id, tool in self._lazy.items()
+        )
+        skills = (
+            CatalogEntry(skill.id, skill.name, skill.description, "skill", skill.source)
+            for skill in self._skills.values()
+        )
+        return tuple(sorted((*native, *skills), key=lambda item: item.id))
+
+    def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+        load_id = str(load).strip()
+        if load_id:
+            return self._load(load_id)
+        folded_kind = str(kind).strip().lower()
+        folded_source = str(source).strip().lower()
+        if folded_kind and folded_kind not in {"native", "skill"}:
+            return "ERROR: kind must be native or skill"
+        terms = str(query).casefold().split()
+        matches = []
+        for item in self.catalog():
+            haystack = f"{item.id} {item.name} {item.description} {item.source}".casefold()
+            if folded_kind and item.kind != folded_kind:
+                continue
+            if folded_source and item.source.casefold() != folded_source:
+                continue
+            if terms and not all(term in haystack for term in terms):
+                continue
+            matches.append({
+                "id": item.id,
+                "kind": item.kind,
+                "name": item.name,
+                "description": item.description,
+                "source": item.source,
+                "loaded": item.name in self._loaded,
+            })
+        return discovery.compact_result({"results": matches})
+
+    def _load(self, item_id: str) -> str:
+        tool = self._lazy.get(item_id)
+        if tool is not None:
+            self._loaded.add(tool.name)
+            return discovery.compact_result({"loaded": [tool.name], "id": item_id})
+        skill = self._skills.get(item_id)
+        if skill is None:
+            return f"ERROR: no allowed catalog entry with id {item_id!r}"
+        required: list[str] = []
+        for requested in skill.tools:
+            tool = self.allowed.resolve(requested)
+            if tool is None:
+                return f"ERROR: skill {skill.name!r} requires disallowed tool {requested!r}"
+            required.append(tool.name)
+        self._loaded.update(required)
+        return discovery.compact_result({
+            "id": item_id,
+            "instructions": skill.instructions,
+            "loaded": required,
+        })
 
 
 def _registry_from_tools(tools: tuple[Tool, ...]) -> ToolRegistry:

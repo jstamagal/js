@@ -1318,8 +1318,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T._REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
-    active_registry = base_registry.aliased(alias_map)
     active_context = tool_context or T.DEFAULT_CONTEXT
+    # Lazy state belongs to this invocation only. The selected registry remains
+    # the authorization boundary; discovery can reveal/load only entries in it.
+    active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd)
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
