@@ -216,6 +216,55 @@ def test_async_dispatch_cancellation_reaches_handler():
     asyncio.run(drive())
 
 
+def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeypatch, config, tmp_path):
+    async def drive():
+        FakeClient.instances.clear()
+        host = MCPHost(config, client_factory=FakeClient)
+        calls = 0
+
+        async def stream_stub(**_kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                text="done",
+                tool_calls=[],
+                reasoning="",
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                finish_reason="stop",
+                assistant_message=SimpleNamespace(parts=[]),
+            )
+
+        monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+        from js.config import Config
+
+        cfg = Config(
+            agent_id="test", agent_dir=tmp_path, model="offline", provider_id=None,
+            provider_base_url=None, provider_api_key=None, reasoning_effort=None,
+            max_output_tokens=10, max_tool_iterations=1, max_bash_output_bytes=65536,
+            max_tool_result_bytes=65536, fetch_timeout_s=5, debug_log=None, trace=False,
+            history_file=tmp_path / "history", sessions_dir=tmp_path,
+            session_file=tmp_path / "session.jsonl", prompts_dir=tmp_path,
+            settings={}, mcp=config,
+        )
+        registry = __import__("js.toolkit.registry", fromlist=["build_default_registry"]).build_default_registry().select([])
+        await host.discover(query="mcp")
+        client = FakeClient.instances[0]
+
+        for prompt in ("one", "two"):
+            await runtime.run_turn_async(
+                cfg, "system", [{"role": "user", "content": prompt}], runtime.Telemetry(None),
+                tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), mcp_host=host,
+                suppress_output=True,
+            )
+            assert not host._closed
+            assert host.clients["Alpha Server"] is client
+        assert calls == 2
+        await host.close()
+        assert host._closed and client.closed
+
+    asyncio.run(drive())
+
+
 def test_structured_result_provider_media_and_dehydrated_history():
     result = ToolResult([
         {"type": "text", "text": "hello"},

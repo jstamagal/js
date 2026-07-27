@@ -2583,6 +2583,20 @@ def _warn_missing_binaries() -> None:
             )
 
 
+def _session_mcp_host(cfg, telemetry):
+    if getattr(cfg, "mcp", None) is None or not getattr(cfg.mcp, "servers", ()):
+        return None
+    from .mcp.host import MCPHost
+
+    return MCPHost(cfg.mcp, telemetry=telemetry)
+
+
+async def _close_session_mcp_host(state: dict) -> None:
+    host = state.get("mcp_host")
+    if host is not None:
+        await host.close()
+
+
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then auto-compacts (in the executor because
@@ -2612,6 +2626,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             tool_registry=state["tool_registry"],
             sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
             event_hooks=state.get("events"),
+            mcp_host=state.get("mcp_host"),
         )
         after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
         if after_turn_sampling != before_turn_sampling:
@@ -2806,6 +2821,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
             await consumer
         for job in sup.jobs():  # backstop: cancel any straggler
             job.task.cancel()
+        await _close_session_mcp_host(state)
     return 0
 
 
@@ -3314,6 +3330,7 @@ def main(argv: list[str] | None = None) -> int:
         "compact_paused": False,
     }
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+    state["mcp_host"] = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn (all three REPL
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
@@ -3350,6 +3367,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             transcript_stack.close()
 
+    mcp_loop = asyncio.Runner()
     while state["running"]:
         try:
             line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
@@ -3416,6 +3434,8 @@ def main(argv: list[str] | None = None) -> int:
                 tool_registry=state["tool_registry"],
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
                 event_hooks=state.get("events"),
+                mcp_host=state.get("mcp_host"),
+                loop_runner=mcp_loop,
             )
             after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             if after_turn_sampling != before_turn_sampling:
@@ -3481,6 +3501,8 @@ def main(argv: list[str] | None = None) -> int:
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
+    mcp_loop.run(_close_session_mcp_host(state))
+    mcp_loop.close()
     transcript_stack.close()
     return 0
 if __name__ == "__main__":
