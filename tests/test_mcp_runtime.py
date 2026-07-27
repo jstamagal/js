@@ -221,6 +221,29 @@ def test_exact_server_scoped_discovery_initializes_only_that_server():
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("source", ["Beta Server", "beta_server"])
+def test_turn_surface_exact_server_source_connects_only_that_server(tmp_path, source):
+    async def drive():
+        from js.toolkit.registry import build_default_registry
+
+        FakeClient.instances.clear()
+        alpha = MCPServer("Alpha Server", "alpha_server", "stdio", command="alpha")
+        beta = MCPServer("Beta Server", "beta_server", "stdio", command="beta")
+        host = MCPHost(
+            MCPConfiguration((alpha, beta), MCPPolicy()),
+            client_factory=FakeClient,
+        )
+        surface = build_default_registry().select([]).lazy_surface(tmp_path, mcp_host=host)
+
+        found = json.loads(await surface.discover_async(source=source))["results"]
+
+        assert set(host.clients) == {"Beta Server"}
+        assert len(FakeClient.instances) == 1
+        assert {entry["source"] for entry in found} == {"Beta Server"}
+
+    asyncio.run(drive())
+
+
 def test_prompt_get_preserves_media_content(config):
     async def drive():
         host = MCPHost(config, client_factory=FakeClient)
@@ -623,6 +646,30 @@ def test_url_query_and_stdio_arg_credentials_are_redacted():
     scrubbed = _redact_value("saw ARG_TOKEN_5432 and -v here", _secret_values(stdio_server))
     assert "ARG_TOKEN_5432" not in scrubbed
     assert "-v" in scrubbed
+
+
+def test_percent_encoded_query_credentials_are_redacted_from_text_and_media():
+    from js.mcp.host import _redact_value, _secret_values
+
+    server = MCPServer(
+        name="encoded", normalized_name="encoded", transport="http",
+        url="http://127.0.0.1:1/mcp?token=abc%2Fdef",
+    )
+    secrets = _secret_values(server)
+    echoed = "server echoed abc%2Fdef, abc%2fdef, and abc/def"
+
+    assert _redact_value(echoed, secrets) == "server echoed [REDACTED], [REDACTED], and [REDACTED]"
+
+    encoded_media = base64.b64encode(b"image contains abc%2Fdef").decode()
+    result = mcp_tool_result(CallToolResult(content=[
+        {"type": "text", "text": echoed},
+        {"type": "image", "data": encoded_media, "mimeType": "image/png"},
+    ]), secrets)
+    exposed = repr(result)
+    assert "abc%2Fdef" not in exposed
+    assert "abc%2fdef" not in exposed
+    assert "abc/def" not in exposed
+    assert result.blocks[1] == {"type": "text", "text": "[image content suppressed]"}
 
 
 def test_inline_flag_credentials_in_stdio_args_are_redacted():

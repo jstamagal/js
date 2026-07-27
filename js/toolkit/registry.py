@@ -172,12 +172,22 @@ class TurnToolSurface:
         return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
 
     async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+        folded_source = str(source).strip().casefold()
+        mcp_source = (
+            self.mcp_host is not None
+            and bool(folded_source)
+            and self.mcp_host.is_server_source(source)
+        )
         if self.mcp_host is not None and not load and (
             str(kind).strip().lower() == "mcp"
-            or str(source).strip().lower() == "mcp"
+            or folded_source == "mcp"
+            or mcp_source
             or "mcp" in str(query).casefold().split()
         ):
-            entries = await self.mcp_host.discover(query=query, source="" if source == "mcp" else source)
+            entries = await self.mcp_host.discover(
+                query=query,
+                source="" if folded_source == "mcp" else source,
+            )
             return discovery.compact_result({"results": [
                 {"id": item.id, "kind": item.kind, "name": item.name,
                  "description": item.description, "source": item.source,
