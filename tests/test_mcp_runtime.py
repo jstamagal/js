@@ -800,29 +800,59 @@ def test_separated_flag_credentials_and_wrapper_context_delivery():
     asyncio.run(drive())
 
 
-def test_client_gets_encoding_aware_redactor_and_names_are_bounded():
-    from js.mcp.host import MAX_PUBLIC_TOOL_NAME, MCPHost, _bounded_public_name
+def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
+    from js.mcp.host import MAX_PUBLIC_TOOL_NAME, MCPHost
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 
     captured = {}
+    remote_names = ("remote_tool_" + "y" * 80, "remote_tool_" + "y" * 79 + "z")
 
     class CapturingClient(FakeClient):
         def __init__(self, factory, **kwargs):
             super().__init__(factory, **kwargs)
             captured.update(kwargs)
+            self.tools = [
+                {
+                    "name": name,
+                    "description": "long remote tool",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                }
+                for name in remote_names
+            ]
 
     async def drive():
-        server = MCPServer("Q", "q", "http", url="http://127.0.0.1:1/mcp?token=a%3Ab")
+        normalized = "server_" + "x" * 80
+        server = MCPServer(
+            "Long Server",
+            normalized,
+            "http",
+            url="http://127.0.0.1:1/mcp?token=a%3Ab",
+        )
         host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=CapturingClient)
         await host.discover(query="mcp")
+        public_names = tuple(sorted(host.remote_tools))
+        assert len(public_names) == len(remote_names)
+        assert len(set(public_names)) == len(remote_names)
+        assert all(len(name) <= MAX_PUBLIC_TOOL_NAME for name in public_names)
 
+        tools = host.tools(set(public_names))
+        assert {tool.openai_spec()["function"]["name"] for tool in tools} == set(public_names)
+        await tools[0].handler(value="ok")
+        expected_remote = host.remote_tools[tools[0].name][1]
+        assert CapturingClient.instances[-1].calls == [(expected_remote, {"value": "ok"})]
+
+    CapturingClient.instances.clear()
     asyncio.run(drive())
+
     redactor = captured.get("redactor")
     assert redactor is not None, "client must receive the host redactor"
-    assert "a:b" not in redactor("echo a:b")
-    assert "a%3Ab" not in redactor("echo a%3Ab")
-
-    long_name = _bounded_public_name("a_very_long_server_name_indeed", "an_even_longer_remote_tool_name_here")
-    assert len(long_name) <= MAX_PUBLIC_TOOL_NAME
-    other = _bounded_public_name("a_very_long_server_name_indeed", "an_even_longer_remote_tool_name_there")
-    assert long_name != other, "distinct remote names must not collapse"
+    client = MCPClient(lambda: None, redactor=redactor)
+    for variant in ("a:b", "a%3Ab", "a%253Ab"):
+        with pytest.raises(MCPClientError) as raised:
+            client._raise_redacted(MCPClientError(f"remote error echoed {variant}"))
+        assert variant not in str(raised.value)
+        assert "[REDACTED]" in str(raised.value)
