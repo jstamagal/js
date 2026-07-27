@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Lazy MCP host integration.** Added configured stdio and streamable-HTTP servers, per-agent server/tool policy, canonical discovery/resource/prompt controls, namespaced remote tools, turn-scoped schema loading and refresh, reconnect-safe transport handling, credential redaction, and fully offline end-to-end and prompt-budget coverage.
 - **Persistent interactive terminal tools.** Added `terminal_session` for starting and driving isolated real PTYs across tool calls and `terminal_snapshot` for rendering their current screen as a PNG when layout, colour, wrapping, or clipping matters.
 - **Pixel-level browser probing.** Added `browser_probe` to serve local HTML or open HTTP(S) pages in Playwright Chromium, interact with visible controls, capture page or canvas frames, and report WebGL, visual-change, console, and page-error measurements.
 - **Interactive-tool regression coverage.** Added tests for canonical registry names and schemas, persistent and context-isolated PTY sessions, PNG terminal snapshots, and local browser interactions with screenshot and error reporting.

@@ -116,6 +116,54 @@ current directory and finding a `PURPOSE.md` sentinel or a directory whose name
 matches `wiki-*`. If nothing resolves, the run stops with an error. There is no
 default vault.
 
+## MCP Servers And Per-Agent Policy
+
+`mcp.servers` and `mcp.agents` are JSON-valued `jsrc` settings. A stdio server
+uses `command`, optional `args`/`env`, and an optional `enabled` boolean:
+
+```text
+set mcp.servers {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
+```
+
+A streamable-HTTP server uses `url` and optional `headers`:
+
+```text
+set mcp.servers {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
+```
+
+The value is one JSON object, so combine both entries when using both transports.
+Server names must normalize uniquely. A server requires exactly one of `command`
+or `url`; HTTP URLs must use `http` or `https` and may not contain userinfo.
+Disabled servers are omitted before runtime.
+
+`mcp.agents` applies independent server and namespaced-tool policy by agent id.
+Allow/deny entries are case-sensitive glob patterns and deny always wins:
+
+```text
+set mcp.agents {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
+```
+
+An absent `allow` permits everything not denied; an empty `allow` permits
+nothing. The resolved policy is also applied defensively during discovery, so a
+denied server is never connected. Agent and skill tool manifests select the
+canonical `tool_discovery` tool; remote names are not static frontmatter
+selectors.
+
+MCP connections are lazy. Merely configuring servers starts no subprocess and
+opens no HTTP connection. An MCP-scoped `tool_discovery` call initializes the
+matching server(s), and loading one catalog id exposes its full schema only for
+the current turn. A normal turn-owned host closes every stdio process and HTTP
+session on exit. Session-owned hosts may retain connections across turns, but
+loaded MCP schemas do not carry into the next turn.
+
+Configured credential values are redacted from remote schemas, text/structured
+results, resources, prompts, errors, progress/log notifications, provider tool
+results, and append-only session JSONL. Credential sources include environment
+values, header values and authorization payloads, URL query values, and stdio
+flag values (`--token value` or `--token=value`). Stdio stderr is drained but
+never surfaced. Redaction is a last-resort output boundary, not a reason to put
+secrets in prompts or server-controlled content.
+
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same

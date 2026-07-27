@@ -507,6 +507,43 @@ Parameters:
 - `tags`
 - `desc`
 
+## Lazy Discovery And MCP Controls
+
+### `tool_discovery`
+
+The canonical discovery and load tool. It is emitted whenever the selected
+surface has lazy native tools, skills, or configured MCP servers.
+
+Parameters:
+
+- `query`: words to match in catalog metadata; include `mcp` to connect eligible
+  configured servers and fetch their catalogs.
+- `kind`: optional `native`, `skill`, or `mcp` filter.
+- `source`: optional exact source. For MCP, use `mcp` for all eligible servers or
+  the configured server name/normalized name for one server.
+- `load`: stable catalog id such as `mcp:files__read_file`.
+
+MCP server tools are model-facing as `<normalized_server>__<normalized_tool>`.
+Their full remote schemas are absent until discovery connects the server and a
+later `load` call loads that exact catalog id. The schema is emitted on the next
+model call, never retroactively in the batch which loaded it.
+
+The canonical resource and prompt controls are:
+
+- `mcp_resource_list(server)`
+- `mcp_resource_templates(server)`
+- `mcp_resource_read(server, uri)`
+- `mcp_resource_subscribe(server, uri)`
+- `mcp_resource_unsubscribe(server, uri)`
+- `mcp_prompt_list(server)`
+- `mcp_prompt_get(server, name, arguments?)`
+
+Controls also load through `tool_discovery`, for example
+`{"load":"mcp:mcp_resource_read"}`. Their `server` argument is the exact
+configured server name returned by discovery. Server tools, controls, and loaded
+schemas last only for the current turn; persistent MCP connections may be reused
+by a session host, but a later turn begins with only `tool_discovery` again.
+
 ## Generated Agent Tools
 
 Prompt directories under repo `prompts/`, global `agents/` in the platform config dir, and
