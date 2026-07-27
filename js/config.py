@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -192,11 +193,38 @@ def _reserve_session(agent_dir: Path, sessions_dir: Path) -> Path:
     raise RuntimeError(f"could not reserve unique session under {sessions_dir}")
 
 
-def resolve_session_file(sessions_dir: Path, session: str) -> Path:
-    """Resolve a user-supplied existing session under sessions_dir."""
+def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
+    """Derive a stable, opaque session name scoped to an agent and directory."""
+    digest = hashlib.sha256()
+    for value in (agent_id, str(Path(cwd).expanduser().resolve(strict=False)), caller_key):
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return f"derived/{digest.hexdigest()}"
+
+
+def _relative_session_path(session: str) -> Path:
+    if not session or "\\" in session:
+        raise ValueError(f"session name must be a safe relative path: {session}")
+    components = session.split("/")
+    if any(not component or component in {".", ".."} for component in components):
+        raise ValueError(f"session name must not contain empty or traversal components: {session}")
+
+    raw_path = Path(session)
+    if raw_path.is_absolute():
+        raise ValueError(f"session name must be a relative path: {session}")
+    if raw_path.suffix and raw_path.suffix != ".jsonl":
+        raise ValueError(f"session name must have no suffix or end in .jsonl: {session}")
+    return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
+
+
+def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False) -> Path:
+    """Resolve a safe session name, optionally reserving it when absent."""
     raw_path = Path(session).expanduser()
     resolved_sessions_dir = sessions_dir.resolve(strict=False)
 
+    # Existing absolute paths inside this agent remain a compatibility seam. New
+    # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
         if raw_path.suffix != ".jsonl" or not raw_path.is_file():
             raise ValueError(f"session path must be an existing .jsonl file: {session}")
@@ -205,13 +233,36 @@ def resolve_session_file(sessions_dir: Path, session: str) -> Path:
             raise ValueError(f"session path must be inside {sessions_dir}: {session}")
         return raw_path
 
-    concrete_path = sessions_dir / (raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl"))
-    if concrete_path.suffix != ".jsonl" or not concrete_path.is_file():
-        raise ValueError(f"session must identify an existing .jsonl file: {session}")
-
-    resolved_path = concrete_path.resolve(strict=True)
+    relative_path = _relative_session_path(session)
+    concrete_path = sessions_dir / relative_path
+    resolved_path = concrete_path.resolve(strict=False)
     if not resolved_path.is_relative_to(resolved_sessions_dir):
         raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+
+    if concrete_path.exists():
+        if not concrete_path.is_file():
+            raise ValueError(f"session path must be a .jsonl file: {session}")
+        return concrete_path
+    if not create:
+        raise ValueError(f"session must identify an existing .jsonl file: {session}")
+
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    parent = sessions_dir
+    for component in relative_path.parent.parts:
+        parent /= component
+        try:
+            parent.mkdir()
+        except FileExistsError:
+            if not parent.is_dir():
+                raise ValueError(f"session parent must be a directory: {session}") from None
+        if not parent.resolve(strict=True).is_relative_to(resolved_sessions_dir):
+            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+    try:
+        with concrete_path.open("x", encoding="utf-8"):
+            pass
+    except FileExistsError:
+        if not concrete_path.is_file() or not concrete_path.resolve(strict=True).is_relative_to(resolved_sessions_dir):
+            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session}") from None
     return concrete_path
 
 
@@ -223,7 +274,7 @@ def _write_latest_session(agent_dir: Path, session_file: Path) -> None:
         json.dumps(
             {
                 "session_file": str(session_file),
-                "session_name": session_file.name,
+                "session_name": session_file.relative_to(agent_dir).as_posix(),
             },
             separators=(",", ":"),
         )
@@ -426,8 +477,10 @@ def from_env(
     state_dir.mkdir(parents=True, exist_ok=True)
 
     session_name = session if session is not None else env.get("JS_SESSION")
-    if session_name:
-        session_file = resolve_session_file(sessions_dir, session_name)
+    if session_name is not None:
+        session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
+        if save_session:
+            _write_latest_session(sessions_dir, session_file)
     elif save_session:
         session_file = _reserve_default_session(sessions_dir, sessions_dir)
     else:

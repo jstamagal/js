@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from js import memory, settings
-from js.config import from_env, resolve_session_file
+from js.config import derive_session_name, from_env, resolve_session_file
 
 
 def test_memory_loader_ignores_noise_and_honors_reset_and_rollback_marks(tmp_path):
@@ -200,14 +200,112 @@ def test_documented_bytes_env_names_are_canonical(monkeypatch, tmp_path):
     assert actual.max_tool_result_bytes == 444
 
 
+def test_resolve_session_file_creates_and_resumes_nested_named_session(tmp_path):
+    sessions_dir = tmp_path / "sessions" / "agent"
+
+    created = resolve_session_file(sessions_dir, "mcp/lazy-integration/slice02", create=True)
+    created.write_text("keep me\n", encoding="utf-8")
+    resumed = resolve_session_file(sessions_dir, "mcp/lazy-integration/slice02", create=True)
+
+    assert created == sessions_dir / "mcp" / "lazy-integration" / "slice02.jsonl"
+    assert resumed == created
+    assert resumed.read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_named_session_creation_respects_save_flag_and_updates_latest(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+
+    with pytest.raises(ValueError, match="existing"):
+        from_env(session="batch/slice01", save_session=False)
+
+    actual = from_env(session="batch/slice01", save_session=True)
+    latest = json.loads((actual.agent_dir / "latest.json").read_text(encoding="utf-8"))
+
+    assert actual.session_file == actual.agent_dir / "batch" / "slice01.jsonl"
+    assert actual.session_file.is_file()
+    assert latest == {
+        "session_file": str(actual.session_file),
+        "session_name": "batch/slice01.jsonl",
+    }
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        "",
+        ".",
+        "..",
+        "../outside",
+        "nested/../outside",
+        "nested//outside",
+        "nested/./outside",
+        "wrong.txt",
+        "nested/wrong.txt",
+        r"nested\outside",
+    ],
+)
+def test_resolve_session_file_rejects_unsafe_names_without_creating_files(tmp_path, session):
+    sessions_dir = tmp_path / "agent" / "sessions"
+
+    with pytest.raises(ValueError):
+        resolve_session_file(sessions_dir, session, create=True)
+
+    assert not sessions_dir.exists()
+
+
 def test_resolve_session_file_rejects_relative_traversal_even_when_target_exists(tmp_path):
     sessions_dir = tmp_path / "agent" / "sessions"
     outside = tmp_path / "outside.jsonl"
     sessions_dir.mkdir(parents=True)
     outside.write_text("", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="inside"):
-        resolve_session_file(sessions_dir, "../../outside.jsonl")
+    with pytest.raises(ValueError, match="traversal"):
+        resolve_session_file(sessions_dir, "../../outside.jsonl", create=True)
+    assert outside.read_text(encoding="utf-8") == ""
+
+
+def test_resolve_session_file_only_resumes_existing_absolute_path_inside_agent(tmp_path):
+    sessions_dir = tmp_path / "sessions" / "agent"
+    sessions_dir.mkdir(parents=True)
+    existing = sessions_dir / "existing.jsonl"
+    existing.write_text("history\n", encoding="utf-8")
+
+    assert resolve_session_file(sessions_dir, str(existing), create=True) == existing
+    assert existing.read_text(encoding="utf-8") == "history\n"
+
+    missing = sessions_dir / "missing.jsonl"
+    with pytest.raises(ValueError, match="existing"):
+        resolve_session_file(sessions_dir, str(missing), create=True)
+    assert not missing.exists()
+
+
+def test_generated_sessions_remain_unique_and_latest_tracks_each(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+
+    first = from_env()
+    second = from_env()
+    latest = json.loads((second.agent_dir / "latest.json").read_text(encoding="utf-8"))
+
+    assert first.session_file != second.session_file
+    assert first.session_file.is_file()
+    assert second.session_file.is_file()
+    assert latest["session_file"] == str(second.session_file)
+    assert latest["session_name"] == second.session_file.name
+
+
+def test_derived_session_names_are_stable_safe_and_isolated(tmp_path):
+    cwd = tmp_path / "project"
+    same = derive_session_name("agent-a", cwd / "missing" / "..", "opaque-key")
+
+    assert same == derive_session_name("agent-a", cwd, "opaque-key")
+    assert same.startswith("derived/")
+    assert Path(same).parts[0] == "derived"
+    assert len(Path(same).name) == 64
+    assert same != derive_session_name("agent-b", cwd, "opaque-key")
+    assert same != derive_session_name("agent-a", tmp_path / "elsewhere", "opaque-key")
+    assert same != derive_session_name("agent-a", cwd, "other-key")
 
 
 def test_load_messages_strips_orphan_reasoning_without_rewriting_file(tmp_path):
