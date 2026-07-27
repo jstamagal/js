@@ -202,19 +202,25 @@ def _curses_multiselect(
             return None
 
 
-def _select_models_to_cache(provider_id: str, models: list[str]) -> list[str] | None:
+def _select_models_to_cache(
+    provider_id: str,
+    models: list[str],
+    *,
+    annotate_dialects: bool = True,
+) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
     Interactive: a spacebar checklist (freshly fetched models preselected, stale
     cached-only rows visible but unselected) plus a free-text line to add ids the
     endpoint omitted. Non-interactive (piped/no TTY): keep every fetched model,
-    the prior behavior.
+    the prior behavior. Cached-model editing disables dialect annotation so it
+    never refreshes the models.dev catalog over the network.
     """
     if not models:
         return models
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return models
-    dialects = _dialect_map(provider_id)
+    dialects = _dialect_map(provider_id) if annotate_dialects else {}
     cache = load_model_cache()
     cached = cache.get(provider_id, [])
     options = list(dict.fromkeys([*models, *cached]))
@@ -619,7 +625,7 @@ def _run_models_edit(provider_id: str) -> int:
         print(f"{C.ORANGE}no cached models for {target}{C.RESET}", file=sys.stderr)
         return 1
 
-    curated = _select_models_to_cache(target, cached)
+    curated = _select_models_to_cache(target, cached, annotate_dialects=False)
     if curated is None:
         print(f"{C.GREY}model cache edit cancelled; {target} unchanged{C.RESET}")
         return 0

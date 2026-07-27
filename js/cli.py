@@ -2569,16 +2569,17 @@ def _printonly_run(args, cli_agent, presets) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Handle login/logout before argparse so they don't require a valid agent/config.
-    if argv and argv[0] in ("--login", "login"):
+    if dispatch_argv and dispatch_argv[0] in ("--login", "login"):
         from . import login_cli
-        return login_cli.main(argv[1:])
-    if argv and argv[0] in ("--logout", "logout"):
+        return login_cli.main(dispatch_argv[1:])
+    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout"):
         from . import login_cli
-        return login_cli.main(["logout"] + (argv[1:] if len(argv) > 1 else []))
-    if argv and argv[0] in ("--models-edit", "models-edit"):
+        return login_cli.main(["logout"] + dispatch_argv[1:])
+    if dispatch_argv and dispatch_argv[0] in ("--models-edit", "models-edit"):
         from . import login_cli
-        return login_cli.main(["models-edit"] + (argv[1:] if len(argv) > 1 else []))
+        return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
