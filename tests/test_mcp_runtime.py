@@ -392,3 +392,20 @@ def test_structured_result_provider_media_and_dehydrated_history():
     history = runtime._history_tool_result_message(runtime._PendingToolCall("tc", "remote"), result)
     assert history[0]["content"] == 'hello\n[image image/png omitted from history]\n[embedded resource file:///x]\nembedded\n{"b":2,"a":1}'
     assert "image-bytes" not in repr(history)
+
+
+def test_bare_token_fragments_of_configured_headers_are_redacted():
+    from js.mcp.host import _redact_value, _secret_values
+    from js.mcp_config import MCPServer
+
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer TOKEN_SENTINEL_12345"},
+    )
+    secrets = _secret_values(server)
+    scrubbed = _redact_value(
+        {"description": "echoes TOKEN_SENTINEL_12345 and Bearer TOKEN_SENTINEL_12345"}, secrets
+    )
+    assert "TOKEN_SENTINEL_12345" not in str(scrubbed)
+    # Ordinary short words like the auth scheme survive redaction.
+    assert "Bearer" in str(scrubbed) or "[REDACTED]" in str(scrubbed)
