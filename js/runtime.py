@@ -607,6 +607,40 @@ class ToolErrorTracker:
 # Tool dispatch
 # --------------------------------------------------------------------------
 
+def _tool_result_content_size(result: ToolResult) -> int:
+    """Measure model-facing payload content without charging block metadata."""
+    size = 0
+    for block in result.blocks:
+        kind = str(block.get("type", "unknown"))
+        if kind == "text":
+            size += len(str(block.get("text", "")))
+        elif kind == "structured":
+            size += len(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), default=str))
+        elif kind in {"image", "audio"}:
+            size += len(str(block.get("data", "")))
+        elif kind == "resource":
+            resource = block.get("resource")
+            if isinstance(resource, dict):
+                payload = resource.get("text", resource.get("blob", ""))
+                size += len(str(payload))
+        elif kind == "resource_link":
+            size += len(str(block.get("name", ""))) + len(str(block.get("uri", "")))
+        else:
+            size += len(json.dumps(block, ensure_ascii=False, separators=(",", ":"), default=str))
+    return size
+
+
+def _result_size(result: Any) -> int:
+    return _tool_result_content_size(result) if isinstance(result, ToolResult) else len(result)
+
+
+def _dehydrate_capped_result(result: ToolResult, keep: int, marker: str) -> ToolResult:
+    text = result.dehydrated()
+    if len(text) > keep:
+        text = text[:keep]
+    return ToolResult.text(text + marker)
+
+
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
     """Spill-then-clip a tool result.
 
@@ -618,6 +652,11 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     actually shortens it — same wording the subagent layer uses (meta.py) so a
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
+    if isinstance(result, ToolResult):
+        if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
+            marker = f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
+            return _dehydrate_capped_result(result, cap_bytes, marker)
+        return result
     if not isinstance(result, str):
         return result
     if inline_cap is None:
@@ -683,7 +722,7 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     """
     if cap_bytes <= 0:
         return results
-    sizes = [len(r) if isinstance(r, str) else len(r.dehydrated()) for r in results]
+    sizes = [_result_size(r) for r in results]
     if sum(sizes) <= cap_bytes:
         return results
     marker = f"\n[truncated: limits.max_tool_results_per_turn_bytes ({cap_bytes}) reached]"
@@ -691,10 +730,15 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     if allowance < 0:
         return results
     keep = max(0, allowance - len(marker))
-    return [
-        r if not isinstance(r, str) or len(r) <= allowance else r[:keep] + marker
-        for r in results
-    ]
+    capped: list[Any] = []
+    for result, size in zip(results, sizes, strict=True):
+        if size <= allowance:
+            capped.append(result)
+        elif isinstance(result, ToolResult):
+            capped.append(_dehydrate_capped_result(result, keep, marker))
+        else:
+            capped.append(result[:keep] + marker)
+    return capped
 
 
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
@@ -740,7 +784,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
-    if error_tracker is not None:
+    if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     return args, _cap_result(result, cap_bytes)
 
