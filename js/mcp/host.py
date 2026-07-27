@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import inspect
 import urllib.parse
 import re
@@ -164,6 +165,26 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     for start, end in reversed(merged):
         value = value[:start] + "[REDACTED]" + value[end:]
     return value
+
+
+MAX_PUBLIC_TOOL_NAME = 64
+
+
+def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TOOL_NAME) -> str:
+    """server__tool, trimmed to the provider's function-name limit.
+
+    Providers commonly reject names over 64 characters, which would fail the
+    whole request rather than hide one tool. Keep the server prefix readable
+    and shorten the tool component, ending with a short hash so two long
+    remote names cannot collapse onto the same public name.
+    """
+    public = f"{server}__{component}"
+    if len(public) <= limit:
+        return public
+    digest = hashlib.sha256(public.encode("utf-8")).hexdigest()[:6]
+    prefix = server[: max(1, min(len(server), limit // 3))]
+    room = limit - len(prefix) - len(digest) - 3  # two underscores plus one
+    return f"{prefix}__{component[: max(1, room)]}_{digest}"
 
 
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
@@ -416,6 +437,11 @@ class MCPHost:
             log_sink=log,
             progress_sink=progress,
             secrets=secrets,
+            # The client's own replacement is literal; give it the host's
+            # encoding-aware scrubber so a server echoing a%3Ab for a:b in a
+            # JSON-RPC error cannot carry the credential out through an
+            # exception message.
+            redactor=(lambda text: _redact_text(text, secrets)),
         )
         self.clients[server.name] = client
         await client.initialize()
@@ -455,7 +481,7 @@ class MCPHost:
                     continue
                 safe_raw = _redact_value(dict(raw), secrets)
                 component = normalize_tool_name(safe_raw["name"])
-                public = f"{server.normalized_name}__{component}"
+                public = _bounded_public_name(server.normalized_name, component)
                 if (
                     not component
                     or not self.config.allows_tool(public)
