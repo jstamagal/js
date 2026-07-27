@@ -321,15 +321,15 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
         assert await asyncio.to_thread(state.post_started.wait, 1)
         sending.cancel()
         closing = asyncio.create_task(transport.close())
-        await asyncio.sleep(0.05)
-        assert not closing.done()
-        state.release_post.set()
         with pytest.raises(asyncio.CancelledError):
             await sending
-        await asyncio.wait_for(closing, 1)
-        assert state.post_finished.wait(1)
+        # close() no longer waits out the header-blocked POST: it shuts the
+        # tracked socket down, the request thread errors out promptly, and
+        # ownership is still settled before close returns.
+        await asyncio.wait_for(closing, 2)
         assert not transport._request_tasks
         assert not transport._active
+        state.release_post.set()
 
     with server() as (state, url):
         state.delay_post_headers = True
@@ -350,3 +350,46 @@ def test_cancellation_and_close_unblock_long_lived_get():
 
     with server() as (_state, url):
         run(scenario(url))
+
+
+def test_close_unblocks_send_still_waiting_for_response_headers():
+    async def drive():
+        import contextlib
+        import socket as socketlib
+        import time
+
+        listener = socketlib.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        accepted = []
+
+        def serve():
+            with contextlib.suppress(Exception):
+                conn, _ = listener.accept()
+                accepted.append(conn)
+                conn.recv(65536)  # swallow the request, never send headers
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        transport = StreamableHTTPTransport(
+            f"http://127.0.0.1:{port}/mcp", name="hung", timeout=30.0
+        )
+        await transport.start()
+        send_task = asyncio.create_task(transport.send(request()))
+        deadline = time.monotonic() + 5
+        while not accepted and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert accepted, "server never accepted the connection"
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        await asyncio.wait_for(transport.close(), 5)
+        assert time.monotonic() - started < 3, "close blocked on the header wait"
+        with pytest.raises((StreamableHTTPTransportError, asyncio.CancelledError)):
+            await asyncio.wait_for(send_task, 5)
+        for conn in accepted:
+            with contextlib.suppress(Exception):
+                conn.close()
+        listener.close()
+
+    run(drive())

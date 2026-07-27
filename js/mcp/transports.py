@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
+import http.client
 import json
 import os
 import threading
 import urllib.error
 import urllib.request
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -19,6 +22,49 @@ Redactor = Callable[[str], str]
 
 class StreamableHTTPTransportError(ConnectionError):
     """A safe-to-display streamable HTTP transport failure."""
+
+
+class _TrackedHTTPConnection(http.client.HTTPConnection):
+    """Registers its socket the moment it connects, so close() can reach
+    operations still waiting for response headers."""
+
+    def __init__(self, *args: Any, track: Callable[[Any], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._track = track
+
+    def connect(self) -> None:
+        super().connect()
+        self._track(self.sock)
+
+
+class _TrackedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, track: Callable[[Any], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._track = track
+
+    def connect(self) -> None:
+        super().connect()
+        self._track(self.sock)
+
+
+class _SocketTrackingHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, track: Callable[[Any], None]) -> None:
+        super().__init__()
+        self._track = track
+
+    def http_open(self, req: urllib.request.Request):
+        return self.do_open(functools.partial(_TrackedHTTPConnection, track=self._track), req)
+
+
+class _SocketTrackingHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, track: Callable[[Any], None]) -> None:
+        super().__init__()
+        self._track = track
+
+    def https_open(self, req: urllib.request.Request):
+        return self.do_open(
+            functools.partial(_TrackedHTTPSConnection, track=self._track), req, context=self._context
+        )
 
 
 class StdioTransportError(ConnectionError):
@@ -312,6 +358,11 @@ class StreamableHTTPTransport:
         self._active_lock = threading.Lock()
         self._closing = threading.Event()
         self._closed = False
+        self._pending_sockets: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._opener = urllib.request.build_opener(
+            _SocketTrackingHTTPHandler(self._track_socket),
+            _SocketTrackingHTTPSHandler(self._track_socket),
+        )
 
     @property
     def session_id(self) -> str | None:
@@ -536,7 +587,11 @@ class StreamableHTTPTransport:
         if self._closing.is_set() and not allow_closing:
             raise StreamableHTTPTransportError(self._diagnostic("is closed"))
         try:
-            response = urllib.request.urlopen(request, timeout=self._timeout)  # noqa: S310
+            if allow_closing:
+                # close()'s own DELETE must not be shut down by close().
+                response = urllib.request.urlopen(request, timeout=self._timeout)  # noqa: S310
+            else:
+                response = self._opener.open(request, timeout=self._timeout)  # noqa: S310
         except urllib.error.HTTPError as exc:
             if allowed_errors is not None and exc.code in allowed_errors:
                 response = exc
@@ -642,9 +697,23 @@ class StreamableHTTPTransport:
         with contextlib.suppress(Exception):
             response.close()
 
+    def _track_socket(self, sock: Any) -> None:
+        with self._active_lock:
+            self._pending_sockets.add(sock)
+            closing = self._closing.is_set()
+        if closing:
+            with contextlib.suppress(Exception):
+                sock.shutdown(2)
+
     def _close_active_responses(self) -> None:
         with self._active_lock:
             responses = tuple(self._active)
+            sockets = list(self._pending_sockets)
+        # Shut down connections still waiting for response headers; they are
+        # not yet registered as active responses but hold a live socket.
+        for sock in sockets:
+            with contextlib.suppress(Exception):
+                sock.shutdown(2)
         for response in responses:
             # Closing HTTPResponse alone does not reliably wake a thread blocked in
             # socket readline().  Shut down the underlying connection first.
