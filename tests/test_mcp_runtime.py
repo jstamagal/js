@@ -98,7 +98,8 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         found = await host.discover()
         assert any(entry.name == "alpha_server__read_file" for entry in found)
         assert host.load("mcp:alpha_server__read_file") == ["alpha_server__read_file"]
-        tool = host.tools()[0]
+        loaded = {"alpha_server__read_file"}
+        tool = host.tools(loaded)[0]
         assert tool.params["path"]["type"] == "string" and tool.required == ("path",)
         assert tool.openai_spec()["function"]["parameters"] == client.tools[0]["inputSchema"]
         result = await tool.handler(path="a")
@@ -109,7 +110,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "refreshed"
         host._dirty.add("Alpha Server")
         await host.before_model_call()
-        refreshed = next(tool for tool in host.tools() if tool.name == "alpha_server__read_file")
+        refreshed = next(tool for tool in host.tools(loaded) if tool.name == "alpha_server__read_file")
         assert refreshed.params["path"]["description"] == "refreshed"
         history = result.dehydrated()
         assert base64.b64encode(b"png").decode() not in history and "SENTINEL" not in history
@@ -138,7 +139,7 @@ def test_resource_prompt_controls_notifications_and_redaction(config):
         )
         for name, args in calls:
             host.load(f"mcp:{name}")
-            value = await next(tool for tool in host.tools() if tool.name == name).handler(**args)
+            value = await next(tool for tool in host.tools({name}) if tool.name == name).handler(**args)
             assert json.loads(value) if isinstance(value, str) else isinstance(value, ToolResult)
         assert client.subscriptions == [("subscribe", "file:///x"), ("unsubscribe", "file:///x")]
         client.kwargs["log_sink"]({"level": "info", "data": "safe"})
@@ -178,7 +179,7 @@ def test_prompt_get_preserves_media_content(config):
 
         client.get_prompt = get_prompt
         host.load("mcp:mcp_prompt_get")
-        result = await next(tool for tool in host.tools() if tool.name == "mcp_prompt_get").handler(
+        result = await next(tool for tool in host.tools({"mcp_prompt_get"}) if tool.name == "mcp_prompt_get").handler(
             server="Alpha Server", name="media"
         )
         assert [block["type"] for block in result.blocks] == ["text", "text", "image", "text"]
@@ -261,6 +262,119 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
         assert calls == 2
         await host.close()
         assert host._closed and client.closed
+
+    asyncio.run(drive())
+
+
+def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        await host.discover(query="mcp")
+        client = FakeClient.instances[-1]
+        client.tools = [client.tools[0]]
+        host._dirty.add("Alpha Server")
+        await host.before_model_call()
+
+        from js.toolkit.registry import build_default_registry
+
+        allowed = build_default_registry().select([])
+        first = allowed.lazy_surface(tmp_path, mcp_host=host)
+        assert "alpha_server__read_file" not in first.by_name
+        first.discover(load="mcp:alpha_server__read_file")
+        assert first.by_name["alpha_server__read_file"].params["path"]["type"] == "string"
+
+        client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "new schema"
+        host._dirty.add("Alpha Server")
+        await host.before_model_call()
+        assert first.by_name["alpha_server__read_file"].params["path"]["description"] == "new schema"
+
+        second = allowed.lazy_surface(tmp_path, mcp_host=host)
+        assert "alpha_server__read_file" not in second.by_name
+        assert host.clients["Alpha Server"] is client
+
+    asyncio.run(drive())
+
+
+def test_successful_server_data_is_redacted_everywhere(config):
+    async def drive():
+        FakeClient.instances.clear()
+        events = []
+        host = MCPHost(
+            config,
+            client_factory=FakeClient,
+            event_sink=lambda kind, **payload: events.append((kind, payload)),
+        )
+        await host.discover(query="mcp")
+        client = FakeClient.instances[-1]
+        client.tools = [{
+            "name": "echo",
+            "description": "metadata SENTINEL",
+            "inputSchema": {"type": "object", "properties": {"value": {"description": "SENTINEL"}}},
+        }]
+        host._dirty.add("Alpha Server")
+        await host.before_model_call()
+        catalog = await host.discover(query="mcp")
+
+        async def call_tool(_name, _arguments):
+            return CallToolResult(
+                content=[
+                    {"type": "text", "text": "text SENTINEL"},
+                    {"type": "resource", "resource": {"uri": "secret://SENTINEL", "text": "SENTINEL"}},
+                ],
+                structured_content={"SENTINEL": ["SENTINEL"]},
+            )
+
+        async def list_resources():
+            return [{"uri": "secret://SENTINEL", "name": "SENTINEL"}]
+
+        async def list_templates():
+            return [{"uriTemplate": "secret://SENTINEL/{x}", "name": "SENTINEL"}]
+
+        async def read_resource(_uri):
+            return ReadResourceResult(contents=[{"uri": "secret://SENTINEL", "text": "SENTINEL"}])
+
+        async def list_prompts():
+            return [{"name": "SENTINEL", "description": "SENTINEL"}]
+
+        async def get_prompt(_name, _arguments):
+            return GetPromptResult(
+                description="SENTINEL",
+                messages=[{"role": "user", "content": {"type": "text", "text": "SENTINEL"}}],
+            )
+
+        client.call_tool = call_tool
+        client.list_resources = list_resources
+        client.list_resource_templates = list_templates
+        client.read_resource = read_resource
+        client.list_prompts = list_prompts
+        client.get_prompt = get_prompt
+
+        outputs = []
+        for name, args in (
+            ("alpha_server__echo", {"value": "safe"}),
+            ("mcp_resource_list", {"server": "Alpha Server"}),
+            ("mcp_resource_templates", {"server": "Alpha Server"}),
+            ("mcp_resource_read", {"server": "Alpha Server", "uri": "safe"}),
+            ("mcp_prompt_list", {"server": "Alpha Server"}),
+            ("mcp_prompt_get", {"server": "Alpha Server", "name": "safe"}),
+        ):
+            tool = host.tools({name})[0]
+            outputs.append((tool.openai_spec(), await tool.handler(**args)))
+
+        client.kwargs["log_sink"]({"data": "SENTINEL"})
+        client.kwargs["progress_sink"]({"message": "SENTINEL"})
+        client.kwargs["on_resource_updated"]({"uri": "secret://SENTINEL"})
+
+        provider_messages = []
+        history = []
+        for index, (_spec, value) in enumerate(outputs):
+            provider_messages.extend(model_client.build_tool_result_messages(str(index), "mcp", value))
+            history.extend(runtime._history_tool_result_message(
+                runtime._PendingToolCall(str(index), "mcp"), value
+            ))
+        exposed = repr((catalog, outputs, provider_messages, history, events))
+        assert "SENTINEL" not in exposed
+        assert "[REDACTED]" in exposed
 
     asyncio.run(drive())
 

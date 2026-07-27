@@ -37,18 +37,35 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
     return tuple(value for value in values if value)
 
 
+def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
+    """Recursively scrub configured credentials from server-controlled data."""
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "[REDACTED]")
+        return value
+    if isinstance(value, dict):
+        return {
+            _redact_value(key, secrets) if isinstance(key, str) else key: _redact_value(item, secrets)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(item, secrets) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item, secrets) for item in value)
+    return value
 
-def mcp_tool_result(result: Any) -> ToolResult:
-    blocks = [dict(item) for item in result.content]
+
+def mcp_tool_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
+    blocks = [_redact_value(dict(item), secrets) for item in result.content]
     if result.structured_content is not None:
-        blocks.append({"type": "structured", "value": result.structured_content})
+        blocks.append({"type": "structured", "value": _redact_value(result.structured_content, secrets)})
     return ToolResult(blocks=blocks, is_error=result.is_error)
 
 
-def resource_result(result: Any) -> ToolResult:
+def resource_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     blocks: list[dict[str, Any]] = []
     for content in result.contents:
-        item = dict(content)
+        item = _redact_value(dict(content), secrets)
         if "text" in item:
             blocks.append({"type": "text", "text": f"[{item.get('uri', '')}]\n{item['text']}"})
         elif "blob" in item:
@@ -63,12 +80,14 @@ def resource_result(result: Any) -> ToolResult:
     return ToolResult(blocks=blocks)
 
 
-def prompt_result(result: Any) -> ToolResult:
+def prompt_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     """Preserve prompt media while rendering roles in a deterministic text form."""
     blocks: list[dict[str, Any]] = []
-    if result.description:
-        blocks.append({"type": "text", "text": f"[description]\n{result.description}"})
-    for message in result.messages:
+    description = _redact_value(result.description, secrets)
+    if description:
+        blocks.append({"type": "text", "text": f"[description]\n{description}"})
+    for raw_message in result.messages:
+        message = _redact_value(raw_message, secrets)
         role = str(message.get("role", "user"))
         content = message.get("content")
         if not isinstance(content, dict):
@@ -111,7 +130,6 @@ class MCPHost:
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
-        self.loaded: set[str] = set()
         self._dirty: set[str] = set()
         self._closed = False
 
@@ -152,14 +170,16 @@ class MCPHost:
         def changed(_params: dict[str, Any], name: str = server.name) -> None:
             self._dirty.add(name)
 
+        secrets = _secret_values(server)
+
         def resource_updated(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_resource_updated", server=name, **params)
+            self._event("mcp_resource_updated", server=name, **_redact_value(params, secrets))
 
         def log(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_log", server=name, **params)
+            self._event("mcp_log", server=name, **_redact_value(params, secrets))
 
         def progress(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_progress", server=name, **params)
+            self._event("mcp_progress", server=name, **_redact_value(params, secrets))
 
         client = self._client_factory(
             transport_factory(server),
@@ -169,7 +189,7 @@ class MCPHost:
             on_resource_updated=resource_updated,
             log_sink=log,
             progress_sink=progress,
-            secrets=_secret_values(server),
+            secrets=secrets,
         )
         self.clients[server.name] = client
         await client.initialize()
@@ -195,11 +215,13 @@ class MCPHost:
             replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
             collisions: set[str] = set()
             server = next(s for s in self.config.servers if s.name == server_name)
+            secrets = _secret_values(server)
             for raw in tools:
                 remote = raw.get("name")
                 if not isinstance(remote, str):
                     continue
-                component = normalize_tool_name(remote)
+                safe_raw = _redact_value(dict(raw), secrets)
+                component = normalize_tool_name(safe_raw["name"])
                 public = f"{server.normalized_name}__{component}"
                 if not component or not self.config.allows_tool(public) or public in collisions:
                     continue
@@ -207,7 +229,7 @@ class MCPHost:
                     replacement.pop(public, None)
                     collisions.add(public)
                     continue
-                replacement[public] = (server_name, remote, dict(raw))
+                replacement[public] = (server_name, remote, safe_raw)
             for public in collisions:
                 self._event("mcp_catalog_collision", tool=public)
             self._server_tools[server_name] = replacement
@@ -222,22 +244,20 @@ class MCPHost:
                 self.remote_tools[public] = candidates[0]
             else:
                 self._event("mcp_catalog_collision", tool=public)
-        controls = dict(self.CONTROL_TOOLS)
-        self.loaded.intersection_update(set(controls) | set(self.remote_tools))
-
     async def before_model_call(self) -> None:
         if self._dirty:
             await self.refresh()
 
     def load(self, item_id: str) -> list[str] | None:
+        """Validate one catalog id; the caller owns the turn-scoped loaded set."""
         name = item_id.removeprefix("mcp:")
         if name in dict(self.CONTROL_TOOLS) or name in self.remote_tools:
-            self.loaded.add(name)
             return [name]
         return None
 
-    def tools(self) -> tuple[Tool, ...]:
-        return tuple(self._make_tool(name) for name in sorted(self.loaded))
+    def tools(self, loaded: set[str] | tuple[str, ...] = ()) -> tuple[Tool, ...]:
+        available = set(dict(self.CONTROL_TOOLS)) | set(self.remote_tools)
+        return tuple(self._make_tool(name) for name in sorted(set(loaded) & available))
 
     def _make_tool(self, name: str) -> Tool:
         remote = self.remote_tools.get(name)
@@ -252,7 +272,11 @@ class MCPHost:
                 if current is None or not self.config.allows_tool(name):
                     return ToolResult.text(f"ERROR: MCP tool {name!r} is no longer available", is_error=True)
                 client = self.clients[current[0]]
-                return mcp_tool_result(await client.call_tool(current[1], kwargs))
+                server_config = next(item for item in self.config.servers if item.name == current[0])
+                return mcp_tool_result(
+                    await client.call_tool(current[1], kwargs),
+                    _secret_values(server_config),
+                )
 
             return Tool(
                 name,
@@ -271,19 +295,28 @@ class MCPHost:
 
     def _control_tool(self, name: str) -> Tool:
         description = dict(self.CONTROL_TOOLS)[name]
+
+        def secrets(server: str) -> tuple[str, ...]:
+            config = next(item for item in self.config.servers if item.name == server)
+            return _secret_values(config)
+
         if name == "mcp_resource_list":
             async def handler(server: str, context=None):
-                return compact_json(await self._server(server).list_resources())
+                value = await self._server(server).list_resources()
+                return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         elif name == "mcp_resource_templates":
             async def handler(server: str, context=None):
-                return compact_json(await self._server(server).list_resource_templates())
+                value = await self._server(server).list_resource_templates()
+                return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         elif name == "mcp_resource_read":
             async def handler(server: str, uri: str, context=None):
-                return resource_result(await self._server(server).read_resource(uri))
+                return resource_result(
+                    await self._server(server).read_resource(uri), secrets(server)
+                )
             params = {"server": {"type": "string"}, "uri": {"type": "string"}}
             required = ("server", "uri")
         elif name in {"mcp_resource_subscribe", "mcp_resource_unsubscribe"}:
@@ -296,13 +329,14 @@ class MCPHost:
             required = ("server", "uri")
         elif name == "mcp_prompt_list":
             async def handler(server: str, context=None):
-                return compact_json(await self._server(server).list_prompts())
+                value = await self._server(server).list_prompts()
+                return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         else:
             async def handler(server: str, name: str, arguments: dict | None = None, context=None):
                 result = await self._server(server).get_prompt(name, arguments or None)
-                return prompt_result(result)
+                return prompt_result(result, secrets(server))
             params = {
                 "server": {"type": "string"}, "name": {"type": "string"},
                 "arguments": {"type": "object", "additionalProperties": {"type": "string"}},
