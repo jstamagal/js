@@ -1392,7 +1392,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     if getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
 
-        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry)
+        mcp_host = MCPHost(
+            cfg.mcp,
+            telemetry=telemetry,
+            event_sink=lambda event, **payload: _emit_event(event, **payload),
+        )
     # Lazy state belongs to this invocation only. The selected registry remains
     # the authorization boundary; discovery can reveal/load only entries in it.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)

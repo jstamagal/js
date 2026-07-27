@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import re
 from collections.abc import Callable
 from typing import Any
@@ -61,6 +63,26 @@ def resource_result(result: Any) -> ToolResult:
     return ToolResult(blocks=blocks)
 
 
+def prompt_result(result: Any) -> ToolResult:
+    """Preserve prompt media while rendering roles in a deterministic text form."""
+    blocks: list[dict[str, Any]] = []
+    if result.description:
+        blocks.append({"type": "text", "text": f"[description]\n{result.description}"})
+    for message in result.messages:
+        role = str(message.get("role", "user"))
+        content = message.get("content")
+        if not isinstance(content, dict):
+            blocks.append({"type": "text", "text": f"[{role}]\n{compact_json(content)}"})
+            continue
+        item = dict(content)
+        if item.get("type") == "text":
+            blocks.append({"type": "text", "text": f"[{role}]\n{item.get('text', '')}"})
+        else:
+            blocks.append({"type": "text", "text": f"[{role}]"})
+            blocks.append(item)
+    return ToolResult(blocks=blocks)
+
+
 class MCPHost:
     """Own clients and lazy remote metadata for a single runtime invocation."""
 
@@ -88,6 +110,7 @@ class MCPHost:
         self.event_sink = event_sink
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
         self.loaded: set[str] = set()
         self._dirty: set[str] = set()
         self._closed = False
@@ -102,7 +125,8 @@ class MCPHost:
     async def discover(self, query: str = "", source: str = "") -> tuple[CatalogEntry, ...]:
         terms = [term for term in str(query).casefold().split() if term != "mcp"]
         for server in self.config.servers:
-            await self._ensure_server(server)
+            if self.config.policy.allows_server(server.name):
+                await self._ensure_server(server)
         await self.refresh()
         entries = list(self.initial_catalog())
         for public, (server_name, _remote, raw) in self.remote_tools.items():
@@ -156,7 +180,9 @@ class MCPHost:
         if self.telemetry is not None:
             self.telemetry.event(kind, **payload)
         if self.event_sink is not None:
-            self.event_sink(kind, **payload)
+            result = self.event_sink(kind, **payload)
+            if inspect.isawaitable(result):
+                asyncio.create_task(result)
 
     async def refresh(self) -> None:
         names = set(self._dirty)
@@ -168,28 +194,36 @@ class MCPHost:
             tools = await client.list_tools()
             replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
             collisions: set[str] = set()
+            server = next(s for s in self.config.servers if s.name == server_name)
             for raw in tools:
                 remote = raw.get("name")
                 if not isinstance(remote, str):
                     continue
                 component = normalize_tool_name(remote)
-                server = next(s for s in self.config.servers if s.name == server_name)
                 public = f"{server.normalized_name}__{component}"
                 if not component or not self.config.allows_tool(public) or public in collisions:
                     continue
-                if public in replacement or (
-                    public in self.remote_tools and self.remote_tools[public][0] != server_name
-                ):
-                    self._event("mcp_catalog_collision", tool=public)
+                if public in replacement:
                     replacement.pop(public, None)
-                    self.remote_tools.pop(public, None)
                     collisions.add(public)
                     continue
                 replacement[public] = (server_name, remote, dict(raw))
-            self.remote_tools = {
-                name: value for name, value in self.remote_tools.items() if value[0] != server_name
-            }
-            self.remote_tools.update(replacement)
+            for public in collisions:
+                self._event("mcp_catalog_collision", tool=public)
+            self._server_tools[server_name] = replacement
+
+        grouped: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
+        for catalog in self._server_tools.values():
+            for public, value in catalog.items():
+                grouped.setdefault(public, []).append(value)
+        self.remote_tools = {}
+        for public, candidates in grouped.items():
+            if len(candidates) == 1:
+                self.remote_tools[public] = candidates[0]
+            else:
+                self._event("mcp_catalog_collision", tool=public)
+        controls = dict(self.CONTROL_TOOLS)
+        self.loaded.intersection_update(set(controls) | set(self.remote_tools))
 
     async def before_model_call(self) -> None:
         if self._dirty:
@@ -220,7 +254,14 @@ class MCPHost:
                 client = self.clients[current[0]]
                 return mcp_tool_result(await client.call_tool(current[1], kwargs))
 
-            return Tool(name, str(raw.get("description") or "MCP tool"), call, properties, tuple(required))
+            return Tool(
+                name,
+                str(raw.get("description") or "MCP tool"),
+                call,
+                properties,
+                tuple(required),
+                input_schema=dict(schema),
+            )
         return self._control_tool(name)
 
     def _server(self, server: str) -> MCPClient:
@@ -261,7 +302,7 @@ class MCPHost:
         else:
             async def handler(server: str, name: str, arguments: dict | None = None, context=None):
                 result = await self._server(server).get_prompt(name, arguments or None)
-                return compact_json({"description": result.description, "messages": result.messages})
+                return prompt_result(result)
             params = {
                 "server": {"type": "string"}, "name": {"type": "string"},
                 "arguments": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -275,5 +316,4 @@ class MCPHost:
         self._closed = True
         clients, self.clients = list(self.clients.values()), {}
         if clients:
-            import asyncio
             await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
