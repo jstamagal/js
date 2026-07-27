@@ -268,6 +268,46 @@ def test_prompt_get_preserves_media_content(config):
     asyncio.run(drive())
 
 
+def test_mixed_sync_and_async_dispatch_preserves_model_order():
+    async def drive():
+        events: list[str] = []
+
+        def sync(label: str, context=None):
+            events.append(label)
+            return f"sync:{label}"
+
+        async def async_tool(label: str, context=None):
+            events.append(label)
+            return f"async:{label}"
+
+        registry = ToolRegistry(
+            tools=(
+                Tool("sync", "sync", sync, {"label": {"type": "string"}}),
+                Tool("async", "async", async_tool, {"label": {"type": "string"}}),
+            ),
+            aliases={"sync": "sync", "async": "async"},
+        )
+        calls = [
+            runtime._PendingToolCall("1", "sync", ['{"label":"first"}']),
+            runtime._PendingToolCall("2", "async", ['{"label":"second"}']),
+            runtime._PendingToolCall("3", "sync", ['{"label":"third"}']),
+            runtime._PendingToolCall("4", "async", ['{"label":"fourth"}']),
+        ]
+
+        records = await runtime._dispatch_batch(
+            calls, runtime.Telemetry(debug_log=None), 0, False,
+            runtime.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
+        )
+
+        assert events == ["first", "second", "third", "fourth"]
+        assert [record[0].id for record in records] == ["1", "2", "3", "4"]
+        assert [record[2] for record in records] == [
+            "sync:first", "async:second", "sync:third", "async:fourth",
+        ]
+
+    asyncio.run(drive())
+
+
 def test_async_dispatch_cancellation_reaches_handler():
     async def drive():
         started = asyncio.Event()

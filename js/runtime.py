@@ -961,21 +961,33 @@ async def _dispatch_batch(
         if tool is not None and inspect.iscoroutinefunction(tool.handler):
             async_idx.append(i)
     if async_idx:
+        # Mixed batches must keep the model's order: run each call in position,
+        # awaiting async handlers and shipping runs of sync calls to a thread.
+        # Executing all async calls first would silently reorder side effects
+        # that the sequential dispatch contract guarantees.
         async_set = set(async_idx)
-        records: list[tuple[_PendingToolCall, dict, Any] | None] = [None] * len(tool_calls)
-        for i in async_idx:
-            records[i] = await _dispatch_async_tool(
-                tool_calls[i], telemetry, cap_bytes, trace, error_tracker, registry, tool_context
-            )
-        sync_calls = [pc for i, pc in enumerate(tool_calls) if i not in async_set]
-        if sync_calls:
-            sync_records = iter(await asyncio.to_thread(
-                _dispatch_tool_calls, sync_calls, telemetry, cap_bytes, trace,
+        records: list[tuple[_PendingToolCall, dict, Any]] = []
+        pending_sync: list[_PendingToolCall] = []
+
+        async def flush_sync() -> None:
+            if not pending_sync:
+                return
+            batch = list(pending_sync)
+            pending_sync.clear()
+            records.extend(await asyncio.to_thread(
+                _dispatch_tool_calls, batch, telemetry, cap_bytes, trace,
                 error_tracker, registry, tool_context
             ))
-            for i in range(len(records)):
-                if records[i] is None:
-                    records[i] = next(sync_records)
+
+        for i, pc in enumerate(tool_calls):
+            if i in async_set:
+                await flush_sync()
+                records.append(await _dispatch_async_tool(
+                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
+                ))
+            else:
+                pending_sync.append(pc)
+        await flush_sync()
         return records  # type: ignore[return-value]
 
     fan_out_idx: list[int] = []
