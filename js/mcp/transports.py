@@ -520,7 +520,9 @@ class StreamableHTTPTransport:
 
     def _get_once(self) -> None:
         headers = self._headers()
-        if self._last_event_id is not None:
+        # An empty committed id resets resume state: the header must be
+        # omitted, not sent empty.
+        if self._last_event_id:
             headers["Last-Event-ID"] = self._last_event_id
         request = urllib.request.Request(self._url, headers=headers, method="GET")
         try:
@@ -655,15 +657,12 @@ class StreamableHTTPTransport:
         data_lines: list[bytes] = []
         pending_event_id: str | None = None
         event_size = 0
-        while not self._closing.is_set():
-            line = response.readline(self._max_response_bytes + 1)
+        first_chunk = True
+
+        def handle_line(line: bytes) -> None:
+            nonlocal event_size, pending_event_id
             if not line:
-                break
-            event_size += len(line)
-            if event_size > self._max_response_bytes:
-                raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
-            line = line.rstrip(b"\r\n")
-            if not line:
+                event_size = 0
                 # Event boundary: only now does the id buffer commit to the
                 # resume position. Committing on the id line would let a
                 # reconnect skip an event whose data never arrived.
@@ -672,10 +671,9 @@ class StreamableHTTPTransport:
                 if data_lines:
                     emit(self._decode_message(b"\n".join(data_lines)))
                 data_lines.clear()
-                event_size = 0
-                continue
+                return
             if line.startswith(b":"):
-                continue
+                return
             field, separator, value = line.partition(b":")
             if separator and value.startswith(b" "):
                 value = value[1:]
@@ -683,13 +681,33 @@ class StreamableHTTPTransport:
                 data_lines.append(value)
             elif field == b"id" and b"\x00" not in value:
                 pending_event_id = value.decode("utf-8", "replace")
-            elif field == b"retry":
-                with contextlib.suppress(ValueError):
-                    retry = int(value)
-                    if retry >= 0:
-                        self._retry_seconds = retry / 1000
-        # EOF with no terminating blank line: per SSE semantics the
-        # incomplete event is discarded, and its id never commits.
+            elif field == b"retry" and value.isdigit():
+                self._retry_seconds = int(value) / 1000
+
+        while not self._closing.is_set():
+            chunk = response.readline(self._max_response_bytes + 1)
+            if not chunk:
+                break
+            event_size += len(chunk)
+            if event_size > self._max_response_bytes:
+                raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
+            if first_chunk:
+                first_chunk = False
+                chunk = chunk.removeprefix(b"\xef\xbb\xbf")
+            # readline splits on LF only; the event-stream grammar also
+            # allows CRLF and lone-CR terminators. Chop exactly one
+            # terminator, then lone CRs inside the chunk are boundaries.
+            if chunk.endswith(b"\r\n"):
+                body = chunk[:-2]
+            elif chunk.endswith((b"\n", b"\r")):
+                body = chunk[:-1]
+            else:
+                # Unterminated final line at EOF: the grammar discards it.
+                continue
+            for line in body.split(b"\r"):
+                handle_line(line)
+        # EOF without a final boundary: the incomplete event is discarded
+        # and its id never commits.
 
     def _decode_message(self, payload: bytes) -> dict[str, Any]:
         try:
