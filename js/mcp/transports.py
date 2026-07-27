@@ -46,7 +46,9 @@ class StdioTransport:
         self._terminate_timeout = max(0.0, terminate_timeout)
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._stdout_buffer = bytearray()
         self._start_lock = asyncio.Lock()
+        self._read_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._closed = False
@@ -112,7 +114,8 @@ class StdioTransport:
         if process is None or process.stdout is None:
             raise StdioTransportError(self._diagnostic("has no stdout"))
         try:
-            line = await process.stdout.readline()
+            async with self._read_lock:
+                line = await self._readline(process.stdout)
         except asyncio.CancelledError:
             raise
         except (ConnectionError, OSError):
@@ -139,61 +142,80 @@ class StdioTransport:
         return message
 
     async def close(self) -> None:
-        async with self._close_lock:
-            if self._closed:
-                return
-            self._closed = True
-            process = self._process
-            if process is None:
-                return
-            if process.stdin is not None:
-                process.stdin.close()
-                with contextlib.suppress(BrokenPipeError, ConnectionError, OSError):
-                    await process.stdin.wait_closed()
-            if process.returncode is None and not await self._wait(process, self._close_timeout):
-                with contextlib.suppress(ProcessLookupError):
-                    process.terminate()
-                if not await self._wait(process, self._terminate_timeout):
+        # Wait for an in-flight spawn before deciding that there is no child to reap.
+        async with self._start_lock:
+            async with self._close_lock:
+                if self._closed:
+                    return
+                self._closed = True
+                process = self._process
+                if process is None:
+                    return
+                if process.stdin is not None:
+                    process.stdin.close()
+                    with contextlib.suppress(BrokenPipeError, ConnectionError, OSError):
+                        await process.stdin.wait_closed()
+                if process.returncode is None and not await self._wait(process, self._close_timeout):
                     with contextlib.suppress(ProcessLookupError):
-                        process.kill()
+                        process.terminate()
+                    if not await self._wait(process, self._terminate_timeout):
+                        with contextlib.suppress(ProcessLookupError):
+                            process.kill()
+                        await process.wait()
+                else:
                     await process.wait()
-            else:
-                await process.wait()
-            stderr_task, self._stderr_task = self._stderr_task, None
-            if stderr_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stderr_task
+                stderr_task, self._stderr_task = self._stderr_task, None
+                if stderr_task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stderr_task
 
     async def _abort(self) -> None:
         """Reap a broken child without waiting for stdin-driven graceful exit."""
-        async with self._close_lock:
-            if self._closed:
-                return
-            self._closed = True
-            process = self._process
-            if process is None:
-                return
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    process.terminate()
-                if not await self._wait(process, self._terminate_timeout):
+        async with self._start_lock:
+            async with self._close_lock:
+                if self._closed:
+                    return
+                self._closed = True
+                process = self._process
+                if process is None:
+                    return
+                if process.stdin is not None:
+                    process.stdin.close()
+                if process.returncode is None:
                     with contextlib.suppress(ProcessLookupError):
-                        process.kill()
+                        process.terminate()
+                    if not await self._wait(process, self._terminate_timeout):
+                        with contextlib.suppress(ProcessLookupError):
+                            process.kill()
+                        await process.wait()
+                else:
                     await process.wait()
-            else:
-                await process.wait()
-            stderr_task, self._stderr_task = self._stderr_task, None
-            if stderr_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stderr_task
+                stderr_task, self._stderr_task = self._stderr_task, None
+                if stderr_task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stderr_task
 
     async def __aenter__(self) -> StdioTransport:
         return await self.start()
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.close()
+
+    async def _readline(self, stream: asyncio.StreamReader) -> bytes:
+        """Read one line without StreamReader's default 64 KiB readline limit."""
+        while True:
+            newline = self._stdout_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self._stdout_buffer[: newline + 1])
+                del self._stdout_buffer[: newline + 1]
+                return line
+            chunk = await stream.read(65536)
+            if chunk:
+                self._stdout_buffer.extend(chunk)
+                continue
+            line = bytes(self._stdout_buffer)
+            self._stdout_buffer.clear()
+            return line
 
     async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
         stream = process.stderr
