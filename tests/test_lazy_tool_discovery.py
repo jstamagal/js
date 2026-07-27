@@ -158,6 +158,24 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert forbidden.resolve("browser_probe") is None
 
 
+def test_skill_load_distinguishes_denied_and_missing_requirements(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "inspect.md").write_text(
+        "---\ndescription: Inspect with unavailable tools\ntools:\n"
+        "  - browser_probe\n  - tool_that_does_not_exist\n---\n"
+        "Inspect the target.\n",
+        encoding="utf-8",
+    )
+    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+
+    loaded = json.loads(surface.discover(load="skill:inspect"))
+
+    assert loaded["loaded"] == []
+    assert loaded["denied_tools"] == ["browser_probe"]
+    assert loaded["missing_tools"] == ["tool_that_does_not_exist"]
+
+
 def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path):
     skills = tmp_path / "skills"
     skills.mkdir()

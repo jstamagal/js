@@ -18,6 +18,7 @@ from . import artifact, browser, discovery, fs, meta, process_net, search, termi
 class ToolRegistry:
     tools: tuple[Tool, ...]
     aliases: dict[str, str]
+    known_names: frozenset[str] | None = None
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -52,7 +53,8 @@ class ToolRegistry:
     def select(self, selectors: Iterable[str] | None, agent_id: str | None = None) -> ToolRegistry:
         wanted = _selected_names(self, selectors or (), agent_id)
         selected = tuple(tool for tool in self.tools if tool.name in wanted)
-        return _registry_from_tools(selected)
+        known_names = self.known_names or frozenset(self.by_name)
+        return _registry_from_tools(selected, known_names=known_names)
 
     def aliased(self, profile: dict[str, str] | None) -> ToolRegistry:
         """Return a registry that also resolves model-facing aliases back to
@@ -73,7 +75,7 @@ class ToolRegistry:
             existing = merged.get(key)
             if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
-        return ToolRegistry(tools=self.tools, aliases=merged)
+        return ToolRegistry(tools=self.tools, aliases=merged, known_names=self.known_names)
 
     def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
         """Create fresh lazy state for one model turn without changing selection."""
@@ -141,7 +143,11 @@ class TurnToolSurface:
 
     def dispatch_registry(self) -> ToolRegistry:
         """Freeze the tools available for one model response's dispatch batch."""
-        return ToolRegistry(tools=self.tools, aliases=self.aliases)
+        return ToolRegistry(
+            tools=self.tools,
+            aliases=self.aliases,
+            known_names=self.allowed.known_names,
+        )
 
     @property
     def by_name(self) -> dict[str, Tool]:
@@ -164,19 +170,25 @@ class TurnToolSurface:
         """Activate declared native tools without widening selected policy."""
         activated: list[str] = []
         denied: list[str] = []
+        missing: list[str] = []
         seen: set[str] = set()
+        # A name the operator's policy excluded is denied; a name no registry
+        # knows at all is missing. Reporting both as denied tells a skill
+        # author to fix permissions when the real problem is a typo.
+        known = self.allowed.known_names or frozenset(self.allowed.by_name)
         for requested in names:
             tool = self.allowed.resolve(requested)
             if tool is None:
-                if requested not in denied:
-                    denied.append(requested)
+                bucket = denied if str(requested).strip() in known else missing
+                if requested not in bucket:
+                    bucket.append(requested)
                 continue
             if tool.name not in seen:
                 activated.append(tool.name)
                 seen.add(tool.name)
                 if tool.name in self._sources:
                     self._loaded.add(tool.name)
-        return ToolActivationResult(activated=tuple(activated), denied=tuple(denied))
+        return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
         native = (
@@ -280,13 +292,15 @@ class TurnToolSurface:
         return discovery.compact_result(result)
 
 
-def _registry_from_tools(tools: tuple[Tool, ...]) -> ToolRegistry:
+def _registry_from_tools(
+    tools: tuple[Tool, ...], *, known_names: frozenset[str] | None = None
+) -> ToolRegistry:
     aliases: dict[str, str] = {}
     for tool in tools:
         aliases[tool.name.lower()] = tool.name
         for alias in tool.aliases:
             aliases[alias.lower()] = tool.name
-    return ToolRegistry(tools=tools, aliases=aliases)
+    return ToolRegistry(tools=tools, aliases=aliases, known_names=known_names)
 
 
 def _selected_names(registry: ToolRegistry, selectors: Iterable[str], agent_id: str | None = None) -> set[str]:
