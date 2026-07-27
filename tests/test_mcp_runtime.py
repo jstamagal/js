@@ -9,7 +9,7 @@ import pytest
 
 from js import events as event_mod, model_client, runtime
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
-from js.mcp.host import MCPHost
+from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.toolkit.core import ToolContext, ToolResult
@@ -198,6 +198,25 @@ def test_discovery_defensively_skips_denied_servers():
         )
         await host.discover(query="mcp")
         assert not FakeClient.instances
+
+    asyncio.run(drive())
+
+
+def test_exact_server_scoped_discovery_initializes_only_that_server():
+    async def drive():
+        FakeClient.instances.clear()
+        alpha = MCPServer("Alpha Server", "alpha_server", "stdio", command="alpha")
+        beta = MCPServer("Beta Server", "beta_server", "stdio", command="beta")
+        host = MCPHost(
+            MCPConfiguration((alpha, beta), MCPPolicy()),
+            client_factory=FakeClient,
+        )
+
+        found = await host.discover(query="mcp", source="beta_server")
+
+        assert set(host.clients) == {"Beta Server"}
+        assert len(FakeClient.instances) == 1
+        assert {entry.source for entry in found} == {"Beta Server"}
 
     asyncio.run(drive())
 
@@ -485,6 +504,81 @@ def test_structured_result_provider_media_and_dehydrated_history():
     history = runtime._history_tool_result_message(runtime._PendingToolCall("tc", "remote"), result)
     assert history[0]["content"] == 'hello\n[image image/png omitted from history]\n[embedded resource file:///x]\nembedded\n{"b":2,"a":1}'
     assert "image-bytes" not in repr(history)
+
+
+def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():
+    safe_blocks = [
+        {"type": "image", "data": base64.b64encode(b"safe-image").decode(), "mimeType": "image/png"},
+        {"type": "audio", "data": base64.b64encode(b"safe-audio").decode(), "mimeType": "audio/wav"},
+        {
+            "type": "resource",
+            "resource": {
+                "uri": "file:///safe.bin",
+                "mimeType": "application/octet-stream",
+                "blob": base64.b64encode(b"safe-resource").decode(),
+            },
+        },
+        {"type": "image", "data": "not base64", "mimeType": "image/png"},
+    ]
+
+    result = mcp_tool_result(CallToolResult(content=safe_blocks), ("SENTINEL",))
+    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    media = [
+        part.data for message in messages for part in message.parts
+        if isinstance(part, model_client.ai.types.messages.FilePart)
+    ]
+
+    assert media == [b"safe-image", b"safe-audio", b"safe-resource"]
+    assert result.blocks[-1] == {"type": "text", "text": "[image content suppressed]"}
+
+
+@pytest.mark.parametrize("kind", ["image", "audio", "resource"])
+@pytest.mark.parametrize("result_source", ["tool", "prompt", "resource_read"])
+def test_mcp_credential_media_is_suppressed_from_provider_and_history(kind, result_source):
+    encoded = base64.b64encode(b"prefix-SENTINEL-suffix").decode()
+    if kind == "resource":
+        content = {
+            "type": "resource",
+            "resource": {
+                "uri": "file:///secret.bin",
+                "mimeType": "application/octet-stream",
+                "blob": encoded,
+            },
+        }
+    else:
+        content = {"type": kind, "data": encoded, "mimeType": f"{kind}/test"}
+
+    if result_source == "tool":
+        result = mcp_tool_result(CallToolResult(content=[content]), ("SENTINEL",))
+    elif result_source == "prompt":
+        result = prompt_result(
+            GetPromptResult(messages=[{"role": "user", "content": content}]),
+            ("SENTINEL",),
+        )
+    else:
+        resource = content.get("resource", content)
+        result = resource_result(
+            ReadResourceResult(contents=[{
+                "uri": resource.get("uri", "file:///secret.bin"),
+                "mimeType": resource.get("mimeType", f"{kind}/test"),
+                "blob": resource.get("blob", resource.get("data", encoded)),
+            }]),
+            ("SENTINEL",),
+        )
+
+    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    history = runtime._history_tool_result_message(
+        runtime._PendingToolCall("tc", "remote"), result
+    )
+
+    assert all(
+        not isinstance(part, model_client.ai.types.messages.FilePart)
+        for message in messages for part in message.parts
+    )
+    exposed = repr((result, messages, history))
+    assert "SENTINEL" not in exposed
+    assert encoded not in exposed
+    assert "suppressed" in exposed
 
 
 def test_short_authorization_credentials_are_redacted_from_results_events_and_errors():
