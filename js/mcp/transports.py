@@ -653,6 +653,7 @@ class StreamableHTTPTransport:
 
     def _consume_sse(self, response: Any, emit: Callable[[dict[str, Any]], None]) -> None:
         data_lines: list[bytes] = []
+        pending_event_id: str | None = None
         event_size = 0
         while not self._closing.is_set():
             line = response.readline(self._max_response_bytes + 1)
@@ -663,6 +664,11 @@ class StreamableHTTPTransport:
                 raise StreamableHTTPTransportError(self._diagnostic("SSE event was too large"))
             line = line.rstrip(b"\r\n")
             if not line:
+                # Event boundary: only now does the id buffer commit to the
+                # resume position. Committing on the id line would let a
+                # reconnect skip an event whose data never arrived.
+                if pending_event_id is not None:
+                    self._last_event_id = pending_event_id
                 if data_lines:
                     emit(self._decode_message(b"\n".join(data_lines)))
                 data_lines.clear()
@@ -676,14 +682,14 @@ class StreamableHTTPTransport:
             if field == b"data":
                 data_lines.append(value)
             elif field == b"id" and b"\x00" not in value:
-                self._last_event_id = value.decode("utf-8", "replace")
+                pending_event_id = value.decode("utf-8", "replace")
             elif field == b"retry":
                 with contextlib.suppress(ValueError):
                     retry = int(value)
                     if retry >= 0:
                         self._retry_seconds = retry / 1000
-        if data_lines:
-            emit(self._decode_message(b"\n".join(data_lines)))
+        # EOF with no terminating blank line: per SSE semantics the
+        # incomplete event is discarded, and its id never commits.
 
     def _decode_message(self, payload: bytes) -> dict[str, Any]:
         try:
