@@ -131,7 +131,12 @@ def _aliased_tool_specs(specs: list[dict], alias_map: dict[str, str]) -> list[di
 
 def _canonical_tool_call_name(name: str, registry: ToolRegistry) -> str:
     tool = registry.resolve(name)
-    return tool.name if tool is not None else name
+    if tool is not None:
+        return tool.name
+    # An unloaded lazy tool has no Tool object in this dispatch batch, but
+    # its alias still maps to a canonical name; persisted history must
+    # record the canonical, never a configured alias.
+    return registry.aliases.get(str(name).strip().lower(), name)
 
 
 def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
