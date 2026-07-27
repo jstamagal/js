@@ -154,6 +154,43 @@ Dispatch rules:
 
 Inside the `task` tool, multiple task strings also run concurrently.
 
+## Lazy MCP Host
+
+Configured MCP servers join the turn surface through the eager canonical
+`tool_discovery` tool, not by adding every remote schema at startup. Before an
+MCP-scoped discovery, no server process or HTTP connection is opened and adding
+more configured servers does not enlarge the emitted tool schemas beyond the
+fixed discovery schema. Discovery initializes only eligible candidates (an exact
+`source` can select one); loading `mcp:<server>__<tool>` adds that remote schema
+for the rest of the current turn.
+
+Remote names are normalized and namespaced as
+`<normalized_server>__<normalized_tool>`. Tool allow/deny policy applies to that
+public name. `notifications/tools/list_changed` marks the catalog dirty; it is
+refetched before the next model call, so an already loaded tool receives the new
+schema without becoming callable before the model sees it. Tool calls are
+non-replayable: transport death can reconnect a later safe list/read/get request,
+but never silently duplicates the failed call.
+
+Resources and prompts use the canonical controls listed in
+[tools-reference.md](tools-reference.md). MCP clients and loaded names live for a
+turn unless a caller supplies a session-owned host; clients in that host may be
+reused across turns, while each new turn still starts with no loaded MCP schemas.
+Owned hosts close stdio children and streamable-HTTP sessions at turn end.
+
+Skills can request the discovery surface in frontmatter:
+
+```yaml
+---
+description: Inspect remote project data
+tools:
+  - tool_discovery
+---
+```
+
+A skill names only canonical local tools; remote MCP tools remain dynamically
+discovered and loaded by catalog id.
+
 ## File Safety
 
 `read` records that a file was read and remembers its hash. `write`, `patch`,
