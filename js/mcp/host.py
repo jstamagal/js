@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import urllib.parse
 import re
 from collections.abc import Callable
 from typing import Any
@@ -34,7 +35,15 @@ def transport_factory(server: MCPServer):
 
 
 def _secret_values(server: MCPServer) -> tuple[str, ...]:
-    secrets = {value for value in (*server.env.values(), *server.headers.values()) if value}
+    values = [value for value in (*server.env.values(), *server.headers.values()) if value]
+    if server.url:
+        # URL query values are a supported credential location (?key=TOKEN).
+        for parameters in urllib.parse.parse_qs(urllib.parse.urlsplit(server.url).query).values():
+            values.extend(parameter for parameter in parameters if parameter)
+    # stdio arguments commonly carry tokens; flags themselves are not
+    # secrets and very short args would over-redact ordinary output.
+    values.extend(arg for arg in server.args if arg and not arg.startswith("-") and len(arg) >= 6)
+    secrets = set(values)
     authorization_schemes = {
         "apikey", "basic", "bearer", "digest", "hoba", "mutual", "negotiate", "scram", "vapid",
     }
