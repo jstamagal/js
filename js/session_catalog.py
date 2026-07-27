@@ -216,6 +216,10 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
                     message = record.get("message")
                     if isinstance(message, dict) and message.get("role") == "user":
                         user_turns += 1
+                elif record.get("role") == "user":
+                    # Sessions predating the append-only envelope stored messages
+                    # directly. Keep their turn counts useful in the catalog.
+                    user_turns += 1
                 elif record.get("kind") == _METADATA_KIND:
                     metadata = record
     except OSError:

@@ -50,7 +50,15 @@ from . import settings
 from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
-from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
+from .config import (
+    Config,
+    _norm_effort,
+    derive_session_name,
+    from_env,
+    validate_agent_id,
+    vision_enabled_for_model,
+)
+from .session_catalog import acquire_session, catalog_sessions, record_session_start
 from .tool_binaries import resolve_binary
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
@@ -70,7 +78,9 @@ PICK
   -r EFFORT   off|minimal|low|medium|high|xhigh|max
 
 STATE (sessions are saved by default — this is what a driven agent normally wants)
-  -s ID       resume a named or generated session
+  -s NAME     create or resume a named session
+  --session-key KEY   derive a stable session from agent + cwd + key
+  --list [--json]     list every saved session
   -n, --no-save
               expensive throwaway choice: resume is unavailable, so the next
               run must re-read context. Use only for throwaway one-liners.
@@ -215,6 +225,91 @@ def _session_hint_arg(cfg: Config) -> str:
         return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
     except ValueError:
         return str(cfg.session_file)
+
+
+_session_leases = threading.local()
+
+
+def _session_scope(func):
+    """Release every saved session activated during one CLI entry point."""
+
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        leases = getattr(_session_leases, "items", None)
+        if leases is None:
+            leases = []
+            _session_leases.items = leases
+        start = len(leases)
+        old_caller_key = getattr(_session_leases, "caller_key", None)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            while len(leases) > start:
+                leases.pop().release()
+            _session_leases.caller_key = old_caller_key
+
+    return wrapped
+
+
+def _activate_saved_session(
+    cfg: Config,
+    *,
+    caller_key: str | None = None,
+    announce_generated: bool = False,
+) -> None:
+    if cfg.session_file == Path(os.devnull):
+        return
+    effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
+    record_session_start(cfg.session_file, cwd=Path.cwd(), caller_key=effective_key)
+    lease = acquire_session(cfg.session_file)
+    _session_leases.items.append(lease)
+    if announce_generated:
+        _announce_generated_session(cfg)
+
+
+def _announce_generated_session(cfg: Config) -> None:
+    payload = {
+        "js_session": {
+            "agent": cfg.agent_id,
+            "session_id": _session_hint_arg(cfg),
+            "path": str(cfg.session_file.resolve(strict=False)),
+        }
+    }
+    print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), file=sys.stderr)
+
+
+def _print_session_list(*, json_lines: bool) -> int:
+    records = catalog_sessions(_paths.sessions_root())
+    if json_lines:
+        for record in records:
+            print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
+        return 0
+
+    headings = ("AGENT", "NAME", "MTIME", "SIZE", "TURNS", "IN-FLIGHT", "CWD", "JOB")
+    rows = []
+    for record in records:
+        identity = record["caller_key"]
+        if record["job_id"] is not None:
+            identity = str(record["job_id"]) if identity is None else f"{identity}/{record['job_id']}"
+        rows.append(
+            (
+                record["agent"],
+                record["name"],
+                datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
+                str(record["size"]),
+                str(record["user_turns"]),
+                "yes" if record["in_flight"] else "no",
+                record["cwd"] or "-",
+                identity or "-",
+            )
+        )
+    widths = [len(value) for value in headings]
+    for row in rows:
+        widths = [max(width, len(value)) for width, value in zip(widths, row, strict=True)]
+    print("  ".join(value.ljust(width) for value, width in zip(headings, widths, strict=True)))
+    for row in rows:
+        print("  ".join(value.ljust(width) for value, width in zip(row, widths, strict=True)))
+    return 0
 
 
 def _read_stdin_if_piped() -> str:
@@ -1570,6 +1665,7 @@ def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
     return settings.coerce_value(spec, reasoning)
 
 
+@_session_scope
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -1580,7 +1676,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 ignore_local_config: bool = False, ignore_global_config: bool = False,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
                 presets: list[str] | None = None,
-                stats_json: str | None = None, stats_csv: str | None = None) -> int:
+                stats_json: str | None = None, stats_csv: str | None = None,
+                caller_key: str | None = None, announce_generated: bool | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
@@ -1604,6 +1701,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
+    if announce_generated is None:
+        announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
+    _activate_saved_session(
+        cfg,
+        caller_key=caller_key,
+        announce_generated=announce_generated and save,
+    )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
 
@@ -2606,6 +2710,7 @@ def _printonly_run(args, cli_agent, presets) -> int:
     return 0
 
 
+@_session_scope
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Handle login/logout before argparse so they don't require a valid agent/config.
@@ -2631,7 +2736,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
-    parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
+    session_group = parser.add_mutually_exclusive_group()
+    session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
+    session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
     parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
     parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
@@ -2651,6 +2758,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
     parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
     parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
+    parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
+    parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
     parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
     parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
@@ -2681,6 +2790,39 @@ def main(argv: list[str] | None = None) -> int:
         # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+    if args.json and not args.list:
+        print(f"{C.ORANGE}error: --json only works with --list{C.RESET}", file=sys.stderr)
+        return 2
+    if args.list:
+        ambiguous = any(
+            (
+                args.prompt is not None,
+                args.session is not None,
+                args.session_key is not None,
+                args.agent is not None,
+                args.wiki is not None,
+                args.artifact is not None,
+                args.commit,
+                args.compact is not None,
+                args.bench is not None,
+                args.target is not None,
+            )
+        )
+        if ambiguous:
+            print(f"{C.ORANGE}error: --list cannot be combined with run or session options{C.RESET}", file=sys.stderr)
+            return 2
+        return _print_session_list(json_lines=args.json)
+    if args.session_key is not None:
+        try:
+            mode_agent = "wiki" if args.wiki else "artifact" if args.artifact else "commit" if args.commit else None
+            effective_agent = validate_agent_id(
+                args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
+            )
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+        args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
+    _session_leases.caller_key = args.session_key
     if presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
@@ -2842,8 +2984,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             stdin_text = _read_stdin_if_piped()
             prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+        generated_session = (
+            not args.no_save
+            and args.session is None
+            and os.environ.get("JS_SESSION") is None
+        )
         result = _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
                              agent=args.agent, session=args.session, save=not args.no_save,
+                             caller_key=args.session_key, announce_generated=generated_session,
                              reasoning=args.reasoning, maxout=args.max_out,
                              show_continue=not args.quiet,
                              extras=args.extras,
@@ -2904,6 +3052,7 @@ def main(argv: list[str] | None = None) -> int:
     messages = M.load_messages(cfg.session_file)
     if messages:
         print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
+    _activate_saved_session(cfg, caller_key=args.session_key)
     M.append_mark(cfg.session_file, "session_start")
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
