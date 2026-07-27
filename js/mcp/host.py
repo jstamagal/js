@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import re
 from collections.abc import Callable
@@ -67,8 +68,34 @@ def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
     return value
 
 
+def _safe_media_data(data: Any, secrets: tuple[str, ...]) -> bool:
+    """Accept only strict base64 whose decoded bytes contain no credential."""
+    try:
+        decoded = base64.b64decode(str(data), validate=True)
+    except (ValueError, TypeError):
+        return False
+    return not any(secret.encode() in decoded for secret in secrets)
+
+
+def _safe_content_block(raw: Any, secrets: tuple[str, ...]) -> dict[str, Any]:
+    """Redact text and replace unsafe media before it can reach model conversion."""
+    item = _redact_value(dict(raw), secrets)
+    kind = item.get("type")
+    if kind in {"image", "audio"} and not _safe_media_data(item.get("data", ""), secrets):
+        return {"type": "text", "text": f"[{kind} content suppressed]"}
+    if kind == "resource":
+        resource = item.get("resource")
+        if (
+            isinstance(resource, dict)
+            and "blob" in resource
+            and not _safe_media_data(resource["blob"], secrets)
+        ):
+            return {"type": "text", "text": "[embedded resource content suppressed]"}
+    return item
+
+
 def mcp_tool_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
-    blocks = [_redact_value(dict(item), secrets) for item in result.content]
+    blocks = [_safe_content_block(item, secrets) for item in result.content]
     if result.structured_content is not None:
         blocks.append({"type": "structured", "value": _redact_value(result.structured_content, secrets)})
     return ToolResult(blocks=blocks, is_error=result.is_error)
@@ -81,6 +108,9 @@ def resource_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
         if "text" in item:
             blocks.append({"type": "text", "text": f"[{item.get('uri', '')}]\n{item['text']}"})
         elif "blob" in item:
+            if not _safe_media_data(item["blob"], secrets):
+                blocks.append({"type": "text", "text": "[resource content suppressed]"})
+                continue
             blocks.append({
                 "type": "resource",
                 "resource": {
@@ -105,7 +135,7 @@ def prompt_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
         if not isinstance(content, dict):
             blocks.append({"type": "text", "text": f"[{role}]\n{compact_json(content)}"})
             continue
-        item = dict(content)
+        item = _safe_content_block(content, secrets)
         if item.get("type") == "text":
             blocks.append({"type": "text", "text": f"[{role}]\n{item.get('text', '')}"})
         else:
@@ -154,9 +184,27 @@ class MCPHost:
 
     async def discover(self, query: str = "", source: str = "") -> tuple[CatalogEntry, ...]:
         terms = [term for term in str(query).casefold().split() if term != "mcp"]
-        for server in self.config.servers:
-            if self.config.policy.allows_server(server.name):
-                await self._ensure_server(server)
+        servers = [
+            server for server in self.config.servers
+            if self.config.policy.allows_server(server.name)
+        ]
+        source_scope = str(source).strip().casefold()
+        if source_scope and source_scope != "mcp":
+            servers = [
+                server for server in servers
+                if source_scope in {server.name.casefold(), server.normalized_name.casefold()}
+            ]
+        elif terms:
+            matching = [
+                server for server in servers
+                if all(term in f"{server.name} {server.normalized_name} {server.transport}".casefold() for term in terms)
+            ]
+            # A query for remote metadata cannot be resolved before connecting.
+            # Narrow only when configured server metadata identifies candidates.
+            if matching:
+                servers = matching
+        for server in servers:
+            await self._ensure_server(server)
         await self.refresh()
         entries = list(self.initial_catalog())
         for server_name, client in self.clients.items():
@@ -181,7 +229,12 @@ class MCPHost:
         for entry in sorted(entries, key=lambda item: item.id):
             haystack = f"{entry.id} {entry.name} {entry.description} {entry.source}".casefold()
             if source and entry.source.casefold() != source.casefold():
-                continue
+                server = next(
+                    (item for item in self.config.servers if item.name == entry.source),
+                    None,
+                )
+                if server is None or server.normalized_name.casefold() != source.casefold():
+                    continue
             if terms and not all(term in haystack for term in terms):
                 continue
             result.append(entry)
