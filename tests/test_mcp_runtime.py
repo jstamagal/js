@@ -798,3 +798,31 @@ def test_separated_flag_credentials_and_wrapper_context_delivery():
         assert ContextClient.instances[-1].calls == [("ctx_tool", {"context": "schema-value"})]
 
     asyncio.run(drive())
+
+
+def test_client_gets_encoding_aware_redactor_and_names_are_bounded():
+    from js.mcp.host import MAX_PUBLIC_TOOL_NAME, MCPHost, _bounded_public_name
+    from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
+
+    captured = {}
+
+    class CapturingClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            captured.update(kwargs)
+
+    async def drive():
+        server = MCPServer("Q", "q", "http", url="http://127.0.0.1:1/mcp?token=a%3Ab")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=CapturingClient)
+        await host.discover(query="mcp")
+
+    asyncio.run(drive())
+    redactor = captured.get("redactor")
+    assert redactor is not None, "client must receive the host redactor"
+    assert "a:b" not in redactor("echo a:b")
+    assert "a%3Ab" not in redactor("echo a%3Ab")
+
+    long_name = _bounded_public_name("a_very_long_server_name_indeed", "an_even_longer_remote_tool_name_here")
+    assert len(long_name) <= MAX_PUBLIC_TOOL_NAME
+    other = _bounded_public_name("a_very_long_server_name_indeed", "an_even_longer_remote_tool_name_there")
+    assert long_name != other, "distinct remote names must not collapse"
