@@ -455,3 +455,44 @@ def test_sse_id_commits_only_at_event_boundary_and_eof_discards_partial():
 
     assert [m["method"] for m in received] == ["a"]
     assert transport.last_event_id == "one"
+
+
+class ReadlineStream:
+    """readline() that splits on LF only, like a binary HTTP response."""
+
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self._pos = 0
+
+    def readline(self, _limit):
+        if self._pos >= len(self._payload):
+            return b""
+        index = self._payload.find(b"\n", self._pos)
+        end = len(self._payload) if index == -1 else index + 1
+        chunk = self._payload[self._pos:end]
+        self._pos = end
+        return chunk
+
+
+def test_sse_grammar_cr_terminators_bom_and_empty_id_reset():
+    received = []
+    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
+
+    # Lone-CR terminated stream with a leading BOM.
+    cr_stream = (
+        b'\xef\xbb\xbfid: cr-one\rdata: {"jsonrpc":"2.0","method":"a"}\r\r'
+    )
+    transport._consume_sse(ReadlineStream(cr_stream), received.append)
+    assert [m["method"] for m in received] == ["a"]
+    assert transport.last_event_id == "cr-one"
+
+    # A completed empty id resets resume state to the empty string.
+    reset_stream = b"id\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"b\"}\n\n"
+    transport._consume_sse(ReadlineStream(reset_stream), received.append)
+    assert [m["method"] for m in received] == ["a", "b"]
+    assert transport.last_event_id == ""
+
+    # Non-digit retry values are ignored per the grammar.
+    before = transport._retry_seconds
+    transport._consume_sse(ReadlineStream(b"retry: -5\nretry: x\n\n"), received.append)
+    assert transport._retry_seconds == before
