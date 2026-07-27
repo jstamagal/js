@@ -669,3 +669,41 @@ def test_short_inline_credentials_redact_and_schema_context_reaches_server():
     native = Tool("native", "d", native_handler, {})
     call_tool(native, {"context": "model-noise"}, ToolContext(cwd=None))
     assert isinstance(injected["context"], ToolContext)
+
+
+def test_separated_flag_credentials_and_wrapper_context_delivery():
+    from js.mcp.host import MCPHost, _redact_value, _secret_values
+    from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
+    from js.toolkit.core import ToolContext, call_tool_async
+
+    server = MCPServer(
+        name="s3", normalized_name="s3", transport="stdio",
+        command="server", args=("--token", "abc", "serve"),
+    )
+    secrets = _secret_values(server)
+    scrubbed = _redact_value("echo abc while we serve", secrets)
+    assert "abc" not in scrubbed
+    assert "serve" in scrubbed
+
+    class ContextClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [{
+                "name": "ctx_tool", "description": "needs context",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"context": {"type": "string"}},
+                    "required": ["context"],
+                },
+            }]
+
+    async def drive():
+        ContextClient.instances.clear()
+        cfg_server = MCPServer("Ctx", "ctx", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((cfg_server,), MCPPolicy()), client_factory=ContextClient)
+        await host.discover(query="mcp")
+        tool = next(t for t in host.tools({"ctx__ctx_tool"}) if t.name == "ctx__ctx_tool")
+        await call_tool_async(tool, {"context": "schema-value"}, ToolContext(cwd=None))
+        assert ContextClient.instances[-1].calls == [("ctx_tool", {"context": "schema-value"})]
+
+    asyncio.run(drive())

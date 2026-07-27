@@ -42,8 +42,10 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
             values.extend(parameter for parameter in parameters if parameter)
     # stdio arguments commonly carry tokens; flags themselves are not
     # secrets and very short args would over-redact ordinary output.
+    following_flag = False
     for arg in server.args:
         if not arg:
+            following_flag = False
             continue
         if arg.startswith("-"):
             # Inline credential form: --token=SECRET. The value side is an
@@ -51,8 +53,14 @@ def _secret_values(server: MCPServer) -> tuple[str, ...]:
             _flag, separator, inline = arg.partition("=")
             if separator and inline:
                 values.append(inline)
-        elif len(arg) >= 6:
-            values.append(arg)
+            following_flag = not separator
+        else:
+            # A value right after a bare flag (--token abc) is a credential
+            # position at any length; standalone positionals keep a floor so
+            # subcommands like "serve" are not scrubbed from ordinary text.
+            if following_flag or len(arg) >= 6:
+                values.append(arg)
+            following_flag = False
     secrets = set(values)
     authorization_schemes = {
         "apikey", "basic", "bearer", "digest", "hoba", "mutual", "negotiate", "scram", "vapid",
@@ -373,7 +381,13 @@ class MCPHost:
             properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
             required = schema.get("required") if isinstance(schema.get("required"), list) else []
 
+            declares_context = "context" in properties
+
             async def call(context=None, **kwargs: Any) -> ToolResult:
+                if declares_context and context is not None:
+                    # The schema's own context property must reach the server;
+                    # it binds to this wrapper parameter, not kwargs.
+                    kwargs["context"] = context
                 current = self.remote_tools.get(name)
                 if current is None or not self.config.allows_tool(name):
                     return ToolResult.text(f"ERROR: MCP tool {name!r} is no longer available", is_error=True)
