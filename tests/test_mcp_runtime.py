@@ -7,9 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import model_client, runtime
+from js import events as event_mod, model_client, runtime
+from js.mcp.client import CapabilityError, MCPClient, MCPClientError
 from js.mcp.host import MCPHost
-from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult
+from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.toolkit.core import ToolContext, ToolResult
 
@@ -93,7 +94,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
 
         client = FakeClient.instances[0]
         client.tools = [client.tools[0]]
-        host._dirty.add("Alpha Server")
+        host._dirty.setdefault("Alpha Server", set()).add("tools")
         await host.before_model_call()
         found = await host.discover()
         assert any(entry.name == "alpha_server__read_file" for entry in found)
@@ -108,7 +109,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         ]
         assert client.calls == [("Read File", {"path": "a"})]
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "refreshed"
-        host._dirty.add("Alpha Server")
+        host._dirty.setdefault("Alpha Server", set()).add("tools")
         await host.before_model_call()
         refreshed = next(tool for tool in host.tools(loaded) if tool.name == "alpha_server__read_file")
         assert refreshed.params["path"]["description"] == "refreshed"
@@ -147,6 +148,42 @@ def test_resource_prompt_controls_notifications_and_redaction(config):
         client.kwargs["on_resource_updated"]({"uri": "file:///x"})
         assert [kind for kind, _ in events[-3:]] == ["mcp_log", "mcp_progress", "mcp_resource_updated"]
         assert "SENTINEL" not in repr(events)
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("feature", ["resources", "prompts"])
+def test_discovery_respects_resource_or_prompt_only_capabilities(feature):
+    class CapabilityClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.server_capabilities = ServerCapabilities({feature: {"listChanged": True}})
+            self.list_tools_called = False
+
+        async def list_tools(self):
+            self.list_tools_called = True
+            raise CapabilityError("tools are not advertised")
+
+    async def drive():
+        CapabilityClient.instances.clear()
+        server = MCPServer("Catalog Only", "catalog_only", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=CapabilityClient)
+        found = await host.discover(query="mcp")
+        client = CapabilityClient.instances[-1]
+
+        assert not client.list_tools_called
+        metadata = next(entry for entry in found if entry.id == "mcp:server:catalog_only")
+        assert metadata.name == "Catalog Only"
+        assert feature in metadata.description
+        control = "mcp_resource_list" if feature == "resources" else "mcp_prompt_list"
+        result = await next(tool for tool in host.tools({control}) if tool.name == control).handler(
+            server="Catalog Only"
+        )
+        assert json.loads(result)
+
+        client.kwargs[f"on_{feature}_changed"]({})
+        await host.before_model_call()
+        assert not client.list_tools_called
 
     asyncio.run(drive())
 
@@ -272,7 +309,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         await host.discover(query="mcp")
         client = FakeClient.instances[-1]
         client.tools = [client.tools[0]]
-        host._dirty.add("Alpha Server")
+        host._dirty.setdefault("Alpha Server", set()).add("tools")
         await host.before_model_call()
 
         from js.toolkit.registry import build_default_registry
@@ -284,7 +321,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         assert first.by_name["alpha_server__read_file"].params["path"]["type"] == "string"
 
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "new schema"
-        host._dirty.add("Alpha Server")
+        host._dirty.setdefault("Alpha Server", set()).add("tools")
         await host.before_model_call()
         assert first.by_name["alpha_server__read_file"].params["path"]["description"] == "new schema"
 
@@ -311,7 +348,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
             "description": "metadata SENTINEL",
             "inputSchema": {"type": "object", "properties": {"value": {"description": "SENTINEL"}}},
         }]
-        host._dirty.add("Alpha Server")
+        host._dirty.setdefault("Alpha Server", set()).add("tools")
         await host.before_model_call()
         catalog = await host.discover(query="mcp")
 
@@ -379,6 +416,62 @@ def test_successful_server_data_is_redacted_everywhere(config):
     asyncio.run(drive())
 
 
+def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, config, tmp_path):
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        await host.discover(query="mcp")
+        client = FakeClient.instances[-1]
+        delivered = []
+        telemetry_events = []
+        telemetry = SimpleNamespace(
+            event=lambda kind, **payload: telemetry_events.append((kind, payload))
+        )
+        hooks = event_mod.EventHooks(
+            lambda hook, emission: (
+                delivered.append((emission.event, emission.payload)),
+                event_mod.EventHandlerResult(hook=hook),
+            )[1]
+        )
+        for name in ("mcp_log", "mcp_progress", "mcp_resource_updated", "mcp_catalog_collision"):
+            hooks.add(name, "record")
+
+        async def stream_stub(**_kwargs):
+            client.kwargs["log_sink"]({"level": "info", "data": "safe"})
+            client.kwargs["progress_sink"]({"progressToken": 1, "progress": 0.5})
+            client.kwargs["on_resource_updated"]({"uri": "file:///x"})
+            host._event("mcp_catalog_collision", tool="catalog_only__duplicate")
+            return SimpleNamespace(
+                text="done", tool_calls=[], reasoning="",
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                finish_reason="stop", assistant_message=SimpleNamespace(parts=[]),
+            )
+
+        monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+        from js.config import Config
+
+        cfg = Config(
+            agent_id="test", agent_dir=tmp_path, model="offline", provider_id=None,
+            provider_base_url=None, provider_api_key=None, reasoning_effort=None,
+            max_output_tokens=10, max_tool_iterations=1, max_bash_output_bytes=65536,
+            max_tool_result_bytes=65536, fetch_timeout_s=5, debug_log=None, trace=False,
+            history_file=tmp_path / "history", sessions_dir=tmp_path,
+            session_file=tmp_path / "session.jsonl", prompts_dir=tmp_path,
+            settings={}, mcp=config,
+        )
+        registry = __import__("js.toolkit.registry", fromlist=["build_default_registry"]).build_default_registry().select([])
+        await runtime.run_turn_async(
+            cfg, "system", [{"role": "user", "content": "events"}], telemetry,
+            tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), mcp_host=host,
+            event_hooks=hooks, suppress_output=True,
+        )
+
+        expected = ["mcp_log", "mcp_progress", "mcp_resource_updated", "mcp_catalog_collision"]
+        assert [name for name, _payload in delivered] == expected
+        assert [name for name, _payload in telemetry_events if name in expected] == expected
+
+    asyncio.run(drive())
+
+
 def test_structured_result_provider_media_and_dehydrated_history():
     result = ToolResult([
         {"type": "text", "text": "hello"},
@@ -394,18 +487,26 @@ def test_structured_result_provider_media_and_dehydrated_history():
     assert "image-bytes" not in repr(history)
 
 
-def test_bare_token_fragments_of_configured_headers_are_redacted():
+def test_short_authorization_credentials_are_redacted_from_results_events_and_errors():
     from js.mcp.host import _redact_value, _secret_values
-    from js.mcp_config import MCPServer
 
     server = MCPServer(
         name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer TOKEN_SENTINEL_12345"},
+        headers={"Authorization": "Bearer abc123", "X-Label": "safe words"},
+        env={"REMOTE_AUTH": "Bearer xyz789"},
     )
     secrets = _secret_values(server)
-    scrubbed = _redact_value(
-        {"description": "echoes TOKEN_SENTINEL_12345 and Bearer TOKEN_SENTINEL_12345"}, secrets
-    )
-    assert "TOKEN_SENTINEL_12345" not in str(scrubbed)
-    # Ordinary short words like the auth scheme survive redaction.
-    assert "Bearer" in str(scrubbed) or "[REDACTED]" in str(scrubbed)
+    assert "abc123" in secrets
+    assert "xyz789" in secrets
+    assert "Bearer" not in secrets
+    assert "safe" not in secrets
+
+    response = _redact_value({"description": "Bearer echoes xyz789"}, secrets)
+    event = _redact_value({"data": {"token": "abc123"}}, secrets)
+    client = MCPClient(lambda: None, secrets=secrets)
+    with pytest.raises(MCPClientError) as caught:
+        client._raise_redacted(RuntimeError("server rejected abc123"))
+    exposed = repr((response, event, caught.value))
+    assert "abc123" not in exposed
+    assert "Bearer" in exposed
+    assert exposed.count("[REDACTED]") == 3

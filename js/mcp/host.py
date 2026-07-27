@@ -33,18 +33,18 @@ def transport_factory(server: MCPServer):
 
 
 def _secret_values(server: MCPServer) -> tuple[str, ...]:
-    values = [*server.env.values(), *server.headers.values()]
-    secrets: set[str] = set()
-    for value in values:
+    secrets = {value for value in (*server.env.values(), *server.headers.values()) if value}
+    authorization_schemes = {
+        "apikey", "basic", "bearer", "digest", "hoba", "mutual", "negotiate", "scram", "vapid",
+    }
+    for value in (*server.env.values(), *server.headers.values()):
         if not value:
             continue
-        secrets.add(value)
-        # "Authorization: Bearer TOKEN" must also redact the bare token: a
-        # server can echo it without the scheme prefix. Short fragments and
-        # auth scheme words stay unredacted to avoid mangling ordinary text.
-        for part in value.split():
-            if len(part) >= 8 and part.lower() not in {"negotiate", "signature"}:
-                secrets.add(part)
+        scheme, separator, credential = value.strip().partition(" ")
+        if separator and credential and scheme.casefold() in authorization_schemes:
+            # Servers commonly echo only the credential. Redact it even when it
+            # is short, but never treat the ordinary auth scheme word as secret.
+            secrets.add(credential)
     # Longest first so full values redact before their own fragments.
     return tuple(sorted(secrets, key=len, reverse=True))
 
@@ -142,7 +142,7 @@ class MCPHost:
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
-        self._dirty: set[str] = set()
+        self._dirty: dict[str, set[str]] = {}
         self._closed = False
 
     def initial_catalog(self) -> tuple[CatalogEntry, ...]:
@@ -159,6 +159,21 @@ class MCPHost:
                 await self._ensure_server(server)
         await self.refresh()
         entries = list(self.initial_catalog())
+        for server_name, client in self.clients.items():
+            capabilities = getattr(client, "server_capabilities", None)
+            advertised = (
+                sorted(name for name in ("tools", "resources", "prompts") if capabilities.supports(name))
+                if capabilities is not None
+                else []
+            )
+            detail = ", ".join(advertised) or "connected"
+            entries.append(CatalogEntry(
+                f"mcp:server:{normalize_tool_name(server_name)}",
+                server_name,
+                f"Connected MCP server ({detail}); use this exact server name with MCP controls.",
+                "mcp",
+                server_name,
+            ))
         for public, (server_name, _remote, raw) in self.remote_tools.items():
             description = str(raw.get("description") or raw.get("title") or "MCP tool")[:240]
             entries.append(CatalogEntry(f"mcp:{public}", public, description, "mcp", server_name))
@@ -179,8 +194,8 @@ class MCPHost:
                 await client.initialize()
             return client
 
-        def changed(_params: dict[str, Any], name: str = server.name) -> None:
-            self._dirty.add(name)
+        def changed(feature: str, name: str = server.name) -> None:
+            self._dirty.setdefault(name, set()).add(feature)
 
         secrets = _secret_values(server)
 
@@ -195,9 +210,9 @@ class MCPHost:
 
         client = self._client_factory(
             transport_factory(server),
-            on_tools_changed=changed,
-            on_resources_changed=changed,
-            on_prompts_changed=changed,
+            on_tools_changed=lambda _params: changed("tools"),
+            on_resources_changed=lambda _params: changed("resources"),
+            on_prompts_changed=lambda _params: changed("prompts"),
             on_resource_updated=resource_updated,
             log_sink=log,
             progress_sink=progress,
@@ -205,7 +220,12 @@ class MCPHost:
         )
         self.clients[server.name] = client
         await client.initialize()
-        self._dirty.add(server.name)
+        capabilities = getattr(client, "server_capabilities", None)
+        features = {
+            name for name in ("tools", "resources", "prompts")
+            if capabilities is None or capabilities.supports(name)
+        }
+        self._dirty.setdefault(server.name, set()).update(features)
         return client
 
     def _event(self, kind: str, **payload: Any) -> None:
@@ -217,11 +237,13 @@ class MCPHost:
                 asyncio.create_task(result)
 
     async def refresh(self) -> None:
-        names = set(self._dirty)
-        self._dirty.clear()
-        for server_name in sorted(names):
+        dirty, self._dirty = self._dirty, {}
+        for server_name in sorted(dirty):
             client = self.clients.get(server_name)
-            if client is None:
+            if client is None or "tools" not in dirty[server_name]:
+                continue
+            capabilities = getattr(client, "server_capabilities", None)
+            if capabilities is not None and not capabilities.supports("tools"):
                 continue
             tools = await client.list_tools()
             replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
