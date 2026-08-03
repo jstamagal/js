@@ -7,6 +7,9 @@ concern, not ours)."""
 from __future__ import annotations
 
 import contextlib
+from types import SimpleNamespace
+
+from textual.binding import Binding
 
 from js import cli
 from js.memory import load_messages
@@ -84,6 +87,31 @@ def test_tui_flag_routes_to_textual_repl(monkeypatch, tmp_path):
     assert seen["model"] == "flag-model"
     assert seen["system"]
     assert seen["deps"].handle_command is cli._handle_command
+
+
+def test_tui_ctrl_z_suspends_the_uv_run_process_group(monkeypatch):
+    binding = next(
+        binding
+        for binding in cli.tui.JsTuiApp.BINDINGS
+        if isinstance(binding, Binding) and binding.key == "ctrl+z"
+    )
+    seen = []
+    app = SimpleNamespace(
+        _driver=SimpleNamespace(can_suspend=True),
+        _suspend_signal=lambda: seen.append("terminal-restored"),
+    )
+    monkeypatch.setattr(cli.tui.os, "getpgrp", lambda: 1234)
+    monkeypatch.setattr(
+        cli.tui.os,
+        "killpg",
+        lambda process_group, sig: seen.append((process_group, sig)),
+    )
+
+    cli.tui.JsTuiApp.action_suspend_process(app)
+
+    assert binding.action == "suspend_process"
+    assert binding.priority is True
+    assert seen == ["terminal-restored", (1234, cli.tui.signal.SIGTSTP)]
 
 
 def test_turn_state_commands_are_refused_while_a_turn_runs():
