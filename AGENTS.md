@@ -33,7 +33,7 @@ no hide.
    (hash, staging, "let me commit") — that noise the owner hate. a real
    defect/risk/decision 🦍 DO bark.
    - **commit subject = PLAIN ENGLISH.** `Restore removed files through
-     symlinked paths` — a plain sentence, like a plain person wrote it. robot
+symlinked paths` — a plain sentence, like a plain person wrote it. robot
      git-log-speak (`fix(scope):`, `feat(x):`, `docs:`) mean a MODEL leaked
      convention over the owner voice; 🦍 write the plain sentence instead.
 7. **backup in place of push.** owner server is down, so after a batch of work
@@ -104,7 +104,7 @@ need reading many files to see:
   `.js/agents/` — **project win over global win over repo.** `tools:`
   frontmatter pick the tool surface. id rule in `config.py`.
 - **`js/promptexpand.py` — inline directive expansion at load.** `{{VAR}}` (env),
-  `!{sub ...}` inline, `` ```!sub `` fenced block. read-only subs (`env`,`file`)
+  `!{sub ...}` inline, ` ```!sub ` fenced block. read-only subs (`env`,`file`)
   always on; code subs (`sh`,`bash`,`python`,`node`,`c`) ON by default
   (`runtime.allow_inline_code`), opt out per-run with `--im-a-pussy` or
   `JS_ALLOW_INLINE_CODE=0`. SINGLE pass = the injection guard: output stay
@@ -130,7 +130,7 @@ Before doing a deterministic, mechanical task through a sequence of tool calls �
 gathering state, computing a value, reshaping data, checking a condition — first
 ask whether code can produce the result and hand it to you directly. This harness
 evaluates inline directives at prompt-load (`!{sh ...}`, `!{python ...}`, fenced
-`` ```!lang `` blocks) and injects their output, and you can shell out to a helper
+` ```!lang ` blocks) and injects their output, and you can shell out to a helper
 at runtime. Your leverage is judgment; the rote work is cheaper, steadier, and
 reproducible as code. When you catch yourself driving mechanical machinery through
 a fragile channel — anything interactive, order-sensitive, or many-round-trip —
@@ -144,9 +144,6 @@ let code do the rote.
   `cat`, `grep`, `semantic_search`) are dead and stay dead — the python symbol
   `fs.fs_read` still exist as the implementation, that fine, it the registry
   name that matter.
-- **owner deliberate edits are relics** — rage-text, quips, hand-tuned comment
-  alignment. leave them exactly as they sit. `just format` collapse intentional
-  alignment across ~110 files — run it when owner say, and review the diff.
 
 ## docs
 
