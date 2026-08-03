@@ -267,7 +267,9 @@ when vision is enabled, otherwise a visual-file metadata stub.
 
 Launches Playwright Chromium with SwiftShader/WebGL support, opens an HTTP(S)
 URL or serves a local HTML target, interacts with visible controls, and saves
-screenshots into a unique run directory.
+screenshots into a unique run directory. The Playwright backend is optional
+because upstream publishes no musllinux wheels; `just` enables it automatically
+on supported platforms.
 
 Parameters:
 

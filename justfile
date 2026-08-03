@@ -13,6 +13,12 @@
 
 set dotenv-load
 
+# Playwright publishes glibc Linux wheels but no musllinux wheels. Keep its
+# browser backend automatic everywhere it is installable without breaking the
+# rest of js on Alpine and other musl systems.
+browser-extra := `if ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
+browser-target := `if ldd --version 2>&1 | grep -qi musl; then printf '%s' '.'; else printf '%s' '.[browser]'; fi`
+
 # show all recipes (default when `just` is called with no argument)
 default:
     @just --list
@@ -24,11 +30,11 @@ default:
 #   just run --commit
 # just run --wiki=ingest --vault=creative ~/notes/source.md
 run *args:
-    uv run js {{ args }}
+    uv run {{ browser-extra }} js {{ args }}
 
 # run js-drain (drain jobs). e.g. just drain creative -a
 drain *args:
-    uv run js-drain {{ args }}
+    uv run {{ browser-extra }} js-drain {{ args }}
 
 # Commit workflow is deliberately plain: run `js --commit` from repo root.
 # Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
@@ -43,11 +49,11 @@ commit:
 # feels off. this is the real fix for "the venv is broken": it rebuilds it from
 # the lockfile.
 sync:
-    uv sync --extra test
+    uv sync --extra test {{ browser-extra }}
 
 # drop into a shell with the project env active (uv owns the venv).
 shell:
-    uv run bash
+    uv run {{ browser-extra }} bash
 
 # install `js` + `js-drain` onto PATH as launchers shebanged to a managed venv,
 # editable so they track the working tree (no reinstall after a code edit). uv
@@ -57,7 +63,7 @@ shell:
 install:
     #!/usr/bin/env bash
     set -euo pipefail
-    uv tool install --force --editable .
+    uv tool install --force --editable "{{ browser-target }}"
     just ensure-tools
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
@@ -136,39 +142,39 @@ uninstall:
 # offline suite — the verified command from docs/testing-and-development.md.
 # skips ai_provider (needs live creds) and vision (needs a local vision model).
 test:
-    uv run --extra test pytest -m "not ai_provider and not vision" -p no:cacheprovider
+    uv run {{ browser-extra }} --extra test pytest -m "not ai_provider and not vision" -p no:cacheprovider
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:
-    uv run --extra test pytest -q {{ file }}
+    uv run {{ browser-extra }} --extra test pytest -q {{ file }}
 
 # run tests by pytest marker. e.g. just test-mark "not ai_provider"
 test-mark marker:
-    uv run --extra test pytest -q -m "{{ marker }}"
+    uv run {{ browser-extra }} --extra test pytest -q -m "{{ marker }}"
 
 # live ai_provider suite — needs configured provider creds or a local
 # OpenAI-compatible endpoint. e.g. AI_GATEWAY_API_KEY=... just test-live
 test-live:
-    uv run --extra test pytest -q -m ai_provider tests/test_real_integrations.py
+    uv run {{ browser-extra }} --extra test pytest -q -m ai_provider tests/test_real_integrations.py
 
 # live vision suite — needs ollama + a pulled vision model. default gemma4:e4b,
 # override with JS_VISION_TEST_MODEL=<tag>. e.g. just test-vision
 test-vision:
-    uv run --extra test pytest -q -m vision tests/test_real_integrations.py
+    uv run {{ browser-extra }} --extra test pytest -q -m vision tests/test_real_integrations.py
 
 # focused suites — mirror the groups in docs/testing-and-development.md
 test-tools:
-    uv run --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
 test-runtime:
-    uv run --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py
 test-subagents:
-    uv run --extra test pytest -q tests/test_subagent_isolation.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_subagent_isolation.py
 test-cli:
-    uv run --extra test pytest -q tests/test_cli_prompt_mode.py tests/test_repl_harness.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_cli_prompt_mode.py tests/test_repl_harness.py
 test-memory:
-    uv run --extra test pytest -q tests/test_memory_config_harness.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_memory_config_harness.py
 test-wiki:
-    uv run --extra test pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py tests/test_drain_harness.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py tests/test_drain_harness.py
 
 # ── quality ─────────────────────────────────────────────────────────────────
 # ruff lives in the dev dependency-group, so `uv sync` installs it and it's on
@@ -180,19 +186,19 @@ test-wiki:
 
 # ruff check: errors + pyflakes (defaults) + pyupgrade.
 lint:
-    uv run ruff check .
+    uv run {{ browser-extra }} ruff check .
 
 # apply ruff's safe auto-fixes (dequote annotations, deprecated-import updates,
 # lru_cache->cache, etc.). does NOT remove unused imports (those may be
 # re-exports — needs --unsafe-fixes + your judgment) and does NOT reformat.
 fix:
-    uv run ruff check --fix .
+    uv run {{ browser-extra }} ruff check --fix .
 
 # ruff format in place. one-time full-repo adoption: rewrites ~110 files and
 # collapses intentional comment alignment — run deliberately, review the diff,
 # only if you want ruff's formatting.
 format:
-    uv run ruff format .
+    uv run {{ browser-extra }} ruff format .
 
 # quality gate = lint. stops at the first failure.
 check: lint

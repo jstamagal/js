@@ -153,7 +153,10 @@ def browser_probe(
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return "ERROR: playwright is not installed; run just sync"
+        return (
+            "ERROR: browser_probe requires the optional Playwright backend; "
+            "install js[browser] (Playwright does not publish musllinux wheels)"
+        )
 
     target = text_or_default(target).strip()
     if not target:

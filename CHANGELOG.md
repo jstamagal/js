@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Interactive and visual tooling is part of the default registry.** Registered the PTY and browser probes, added their model-facing contracts and public reference documentation, and promoted Pillow alongside the new pexpect, pyte, and Playwright packages to runtime dependencies.
+- **Interactive and visual tooling is part of the default registry.** Registered the PTY and browser probes, added their model-facing contracts and public reference documentation, promoted Pillow alongside pexpect and pyte to runtime dependencies, and added Playwright through the automatically selected browser extra.
 - **`_dispatch_batch` now uses explicit `ThreadPoolExecutor` with guaranteed cleanup.** Replaced `functools.partial` + `loop.run_in_executor` with direct `ThreadPoolExecutor` construction and a `finally` block that calls `executor.shutdown(wait=True)`, so leaf-tool threads are reliably joined before the coroutine returns even when fan-out tasks raise.
 - **`_login_for_provider` validates API key before constructing a `Login`.** The API key is resolved early via `providers.provider_api_key` and checked against `provider_def.requires_api_key`. A missing required key now raises a `ValueError` with a clear message suggesting `--login` or `set provider.api_key`, rather than passing `None` through to a confusing downstream failure.
 - **`_canonical_tool_args` and `_repair_jsonish` delegate to `tool_args` module.** Inline implementations in `runtime.py` now call through to the extracted module; behavior is unchanged.
@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`just sync` failed on musl Linux because Playwright has no musllinux distribution.** Moved the browser backend to an optional extra, made `just` select it automatically on supported libc targets, and skip only the Playwright integration test when the backend cannot be installed.
 - **Test `test_run_turn_hydrates_tool_context_caps_from_config` assertion was too loose.** The old assertion only checked for `"--- stdout ---\nabc"` in the result; the capped subprocess runner appends a truncation marker that the assertion now also verifies, preventing false passes when the truncation message is absent.
 
 ### Added
