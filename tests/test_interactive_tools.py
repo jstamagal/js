@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from js.toolkit.browser import browser_probe
@@ -14,6 +16,24 @@ from js.toolkit.terminal import close_terminal_sessions, terminal_session, termi
 def _payload(result: str) -> dict:
     assert not result.startswith("ERROR:"), result
     return json.loads(result)
+
+
+def test_browser_probe_reports_optional_backend_when_playwright_is_missing(
+    tmp_path, monkeypatch
+):
+    real_import = __import__
+
+    def import_without_playwright(name, *args, **kwargs):
+        if name == "playwright.sync_api":
+            raise ImportError
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", import_without_playwright)
+
+    result = browser_probe(target="unused", context=ToolContext(cwd=tmp_path))
+
+    assert "requires the optional Playwright backend" in result
+    assert "musllinux" in result
 
 
 def test_registry_exposes_only_canonical_interactive_tool_names():
@@ -132,6 +152,10 @@ def test_terminal_snapshot_writes_png_and_uses_image_result(tmp_path):
         close_terminal_sessions(context)
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("playwright") is None,
+    reason="optional Playwright backend is unavailable on this platform",
+)
 def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path):
     target = tmp_path / "index.html"
     target.write_text(

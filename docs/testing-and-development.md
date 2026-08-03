@@ -7,8 +7,12 @@ planning, wiki/artifact tools, and live proxy paths.
 ## Install Test Dependencies
 
 ```bash
-pip install -e ".[test]"
+pip install -e ".[test,browser]"
 ```
+
+Playwright does not publish musllinux wheels. On Alpine or another musl system,
+omit `browser`; the browser-probe integration test skips while the rest of the
+suite remains available.
 
 or:
 

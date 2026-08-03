@@ -47,7 +47,7 @@ burn it in: **commit = reversible, do it.**
 
 ```bash
 just                 # list every recipe
-just sync            # rebuild env from uv.lock (extra: test). the fix for a broken venv.
+just sync            # rebuild env (test + browser except on musl). the fix for a broken venv.
 just run -p "..."    # run js (REPL with no args). forwards all flags
 just test            # offline suite: -m "not ai_provider and not vision" -p no:cacheprovider
 just test-file tests/test_picker.py        # one file or node
@@ -64,7 +64,8 @@ focused suites exist too — `just test-tools`, `test-wiki`, `test-runtime`,
 the rest (`format`, `install`, `lock`, `upgrade`, `clean`, `drain`).
 
 run one test directly when 🦍 need a single node:
-`uv run --extra test pytest -q tests/test_foo.py::test_bar`
+`uv run --extra test --extra browser pytest -q tests/test_foo.py::test_bar`
+(omit `--extra browser` on musl; Playwright publishes no musllinux wheel)
 
 **live tests** (`ai_provider`, `e2e`, `vision`) need real provider creds or a
 local OpenAI-compatible / vision endpoint — `just test` skips them on purpose.

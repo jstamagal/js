@@ -301,7 +301,6 @@ dependencies = [
     { name = "pexpect" },
     { name = "pillow" },
     { name = "platformdirs" },
-    { name = "playwright" },
     { name = "prompt-toolkit" },
     { name = "pyte" },
     { name = "pyyaml" },
@@ -310,6 +309,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "playwright" },
+]
 test = [
     { name = "pytest" },
 ]
@@ -325,7 +327,7 @@ requires-dist = [
     { name = "pexpect", specifier = ">=4.9.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "platformdirs", specifier = ">=4.0" },
-    { name = "playwright", specifier = ">=1.61.0" },
+    { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.61.0" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pyte", specifier = ">=0.8.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0" },
@@ -333,7 +335,7 @@ requires-dist = [
     { name = "textual", specifier = ">=0.85" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]
-provides-extras = ["test"]
+provides-extras = ["browser", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15" }]
