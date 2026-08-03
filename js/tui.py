@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import functools
 import io
+import os
+import signal
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -116,7 +118,18 @@ class JsTuiApp(App[int]):
         Binding("ctrl+c", "cancel_turn", "cancel/drain", show=False, priority=True),
         Binding("ctrl+d", "quit_now", "quit", show=False, priority=True),
         Binding("ctrl+l", "clear_logs", "clear", show=False),
+        Binding("ctrl+z", "suspend_process", "suspend", show=False, priority=True),
     ]
+
+    def action_suspend_process(self) -> None:
+        """Restore the terminal, then suspend the whole `uv run` process group."""
+        if (
+            hasattr(signal, "SIGTSTP")
+            and self._driver is not None
+            and self._driver.can_suspend
+        ):
+            self._suspend_signal()
+            os.killpg(os.getpgrp(), signal.SIGTSTP)
 
     def __init__(self, cfg: Config, state: dict, telemetry: runtime.Telemetry, prompt_spec: Any, deps: TuiDeps) -> None:
         super().__init__()

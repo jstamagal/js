@@ -3276,6 +3276,7 @@ def main(argv: list[str] | None = None) -> int:
         completer=completer,
         complete_while_typing=False,  # Tab-triggered, never auto-pops
         complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
+        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
     )
 
     messages = M.load_messages(cfg.session_file)

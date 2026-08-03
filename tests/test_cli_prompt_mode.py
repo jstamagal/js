@@ -189,6 +189,26 @@ def test_interactive_cli_model_flag_overrides_banner_model(monkeypatch, tmp_path
     assert "deepseek/deepseek-v4-flash" not in output
 
 
+def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    seen = {}
+
+    class PromptSessionStub:
+        def __init__(self, history, **kwargs):
+            seen.update(kwargs)
+
+        def prompt(self, *_args, **_kwargs):
+            raise EOFError
+
+    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
+
+    assert cli.main([]) == 0
+    assert seen["enable_suspend"] is True
+
+
 def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
