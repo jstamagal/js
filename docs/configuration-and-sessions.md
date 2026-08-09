@@ -83,9 +83,6 @@ as `<set>`.
 | `sampling.top_k` | `<unset>` | Provider-default top_k sampling; unset = do not send. |
 | `sampling.repetition_penalty` | `<unset>` | Provider-default repetition penalty; unset = do not send. |
 | `sampling.presence_penalty` | `<unset>` | Provider-default presence penalty; unset = do not send. |
-| `artifact.dir` | `<none>` | Artifact library directory. |
-| `artifact.url` | `<none>` | Artifact HTTP base URL. |
-| `artifact.bin` | `<none>` | Artifact CLI binary. |
 
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
@@ -95,11 +92,6 @@ case-insensitive substring-matched against the active model id and provider id.
 `{"read":"Read"}`. At runtime, a matching profile with no aliases usable for
 the active tool registry is skipped, so a later matching profile can apply.
 Aliases that collide with an active canonical tool name are also ignored.
-
-Artifact config values are unset by default in `jsrc`. Artifact helpers resolve
-directory, URL, and binary with this precedence: `set artifact.*` in `jsrc`,
-then the matching `ARTIFACT_*` environment variable, then the built-in default
-(`/srv/artifacts`, `http://localhost`, or `artifact`).
 
 ## MCP Servers And Per-Agent Policy
 

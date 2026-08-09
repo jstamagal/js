@@ -540,39 +540,6 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     assert max_tool_result_bytes == [123]
 
 
-def test_repl_set_artifact_settings_update_turn_config(monkeypatch, tmp_path):
-    cfg = make_cfg(tmp_path)
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
-    artifacts: list[tuple[str | None, str | None, str | None]] = []
-
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
-                "/set artifact.dir /tmp/live-artifacts",
-                "/set artifact.url http://artifact.live/",
-                "/set artifact.bin artifact-live",
-                "hello",
-                "exit",
-            ])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        artifacts.append((cfg_arg.artifact_dir, cfg_arg.artifact_url, cfg_arg.artifact_bin))
-
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    actual = cli.main([])
-
-    assert actual == 0
-    assert artifacts == [("/tmp/live-artifacts", "http://artifact.live/", "artifact-live")]
-
-
 def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)

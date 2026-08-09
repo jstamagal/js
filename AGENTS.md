@@ -9,7 +9,7 @@ to this file — one set of instruction, every agent read the same thing.
 
 `js` = personal terminal LLM harness, Python, one silverback (the owner), one box.
 no customer, no prod, no other dev. interactive chat, one-shot `-p`, pipe
-workflows, local hacking tools, parallel subagents, wiki agents, artifact mode,
+workflows, local hacking tools, parallel subagents, wiki agents,
 commit-agent — all over the Vercel AI Python SDK (`ai`). bias = low friction,
 many knob. when owner say remove, it GONE — deleted, no rename, no compat alias,
 no hide.
@@ -97,7 +97,7 @@ need reading many files to see:
     `meta.py` todo/plan/skill/task/subagents.
   - `tool_descriptions/*.md` — model-facing tool contracts, shipped as
     package-data. the WORDS the model read about each tool live here, not in code.
-  - `wiki/` — deterministic tools for installed wiki agents. `artifact/` — built-in mode tools and prompts.
+  - `wiki/` — deterministic tools for installed wiki agents.
 - **`js/persona.py` + `prompts/` — agents are PROMPT DIRECTORIES.** a dir of
   numbered `NN-*.md` files concatenated into the system prompt. layered:
   repo `prompts/` < global `agents/` (platform config dir) < project
@@ -121,7 +121,7 @@ need reading many files to see:
   one isolated state per agent. **compaction APPENDS marks and leave history
   intact** (`/compact [focus]`, `/compact up to here`, `js --compact <session>`).
 - **`js/cli.py` — arg parse + mode dispatch** (REPL / `-p` / `--commit` /
-  `--artifact` / `--compact` / `--tui` / `--nonblocking` /
+  `--compact` / `--tui` / `--nonblocking` /
   `--login`/`--logout` / `--bench`).
 
 ## prefer computed context over manual probing
@@ -151,5 +151,5 @@ deep dives live in `docs/` — `technical-guide.md` (internals), `tool-system.md
 `tools-reference.md` (the canonical tool names), `subagents.md`,
 `inline-directives.md`, `configuration-and-sessions.md`,
 `models-and-providers.md`, `testing-and-development.md`, `user-guide.md`,
-`artifact.md`, `nonblocking-windows.md`, `ircii/`.
+`nonblocking-windows.md`, `ircii/`.
 `CHANGELOG.md` track what moved.

@@ -2,7 +2,7 @@
 
 `js` is a personal terminal LLM harness written in Python. It runs interactive
 chat, one-shot prompts, pipe workflows, Forge-style local tools, parallel
-subagents, wiki agents, artifact curation, and commit-agent
+subagents, wiki agents, and commit-agent
 workflows through the Vercel AI Python SDK (`ai-python`).
 This repo is for a power user, not a product team. The design bias is low
 friction with lots of knobs: direct shell access, explicit sessions, prompt
@@ -26,8 +26,6 @@ Common built-in modes:
 ```bash
 wiki ingest ~/wiki --unit ~/wiki/inbox/source.md
 wiki flow ~/wiki "ingest inbox"
-js --artifact=curate
-js --artifact=query "find the last handoff"
 wiki flow ~/wiki "ingest all inbox units"
 ```
 
@@ -43,7 +41,6 @@ Start here:
 - [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `tools:` frontmatter, isolation, and limits.
 - [docs/inline-directives.md](docs/inline-directives.md): `{{VAR}}` / `!{sub}` / `` ```!lang `` expansion and the inline-code flag.
 - [docs/configuration-and-sessions.md](docs/configuration-and-sessions.md): config precedence, full key reference, env vars, sessions, memory, and compaction.
-- [docs/artifact.md](docs/artifact.md): built-in artifact mode.
 - [docs/models-and-providers.md](docs/models-and-providers.md): ai-python routing, proxies, Claude naming, reasoning, vision.
 
 ## Project Map
@@ -55,9 +52,8 @@ js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs.py                  read/write/search/patch/remove/undo
 js/toolkit/process_net.py         shell and fetch
-js/toolkit/meta.py                todo/followup/plan/skill/task/subagents
+js/toolkit/meta.py                todo/plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
-js/toolkit/artifact/              artifact tools and artifact prompt builder
 js/toolkit/tool_descriptions/     model-facing tool contracts
 prompts/                          repo prompt-directory agents; layered with platform config agents/ and project .js/agents/
                                   (repo `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`;

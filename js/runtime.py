@@ -1478,9 +1478,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
-    active_context.artifact_dir = getattr(cfg, "artifact_dir", None)
-    active_context.artifact_url = getattr(cfg, "artifact_url", None)
-    active_context.artifact_bin = getattr(cfg, "artifact_bin", None)
     active_context.last_incomplete_reason = None
     active_context.last_output_tokens = 0
     active_context.last_max_output_tokens = max_out
@@ -1997,7 +1994,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 (pc, args, new_result)
                 for (pc, args, _old), new_result in zip(dispatch_records, capped, strict=True)
             ]
-            followup = False
             for pc, _args, result_value in dispatch_records:
                 canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
                 _emit_event(
@@ -2009,12 +2005,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
                 ai_convo.extend(tool_msgs)
                 messages.extend(_history_tool_result_message(canonical_pc, result_value))
-                followup = followup or (
-                    isinstance(result_value, str) and result_value.startswith("FOLLOWUP_REQUIRED")
-                )
-            if followup:
-                _end_turn("followup_required")
-                return
             if error_tracker.limit_reached():
                 name, last_error = next(
                     ((_canonical_tool_call_name(pc.name, active_registry), result_value)

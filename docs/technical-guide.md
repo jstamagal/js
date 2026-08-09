@@ -33,7 +33,7 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
-| `js/cli.py` | argument parser, REPL, prompt/pipe mode, artifact/commit orchestration |
+| `js/cli.py` | argument parser, REPL, prompt/pipe mode, commit orchestration |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
@@ -44,9 +44,8 @@ persists each completed turn.
 | `js/toolkit/registry.py` | default registry assembly and selector matching |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/process_net.py` | shell and fetch tools |
-| `js/toolkit/meta.py` | todo/followup/plan/skill/task and generated agent tools |
+| `js/toolkit/meta.py` | todo/plan/skill/task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
-| `js/toolkit/artifact/` | artifact tools and mode prompts |
 
 ## Prompt Loading
 
@@ -80,7 +79,6 @@ fs tools
 process/network tools
 meta tools
 wiki tools
-artifact tools
 generated prompt-directory agent tools
 ```
 
@@ -121,7 +119,7 @@ by prepending the system prompt to the current messages.
 5. Dispatches through `call_tool` and appends tool-result messages.
 6. Repeats until the model returns a stop or the tool-iteration cap is hit.
 7. Appends tool result messages.
-8. Stops on `FOLLOWUP_REQUIRED`, tool retry limit, or max iterations.
+8. Stops on tool retry limit or max iterations.
 Provider transport retry:
 
 - Retries `APIConnectionError`, `RateLimitError`, `ServiceUnavailableError`,
@@ -174,12 +172,7 @@ Image result shape:
 
 ## Built-In Modes
 
-`--artifact` does not require a prompt dir. It builds its system prompt
-from code constants and select the full registry. If `--agent` is provided,
-that agent's persona is prepended to the built-in prompt.
-
-`--commit` is different: it is a convenience wrapper around the prompt-directory
-`commit` agent.
+`--commit` is a convenience wrapper around the prompt-directory `commit` agent.
 
 ## Commit Helper
 
@@ -249,8 +242,8 @@ This project intentionally does not preserve old tool aliases. The canonical
 surface is the contract:
 
 ```text
-read write fs_search sem_search remove patch multi_patch undo shell fetch
-followup plan skill todo_write todo_read task
+read write fs_search remove patch multi_patch undo shell fetch
+plan skill todo_write todo_read task
 ```
 
 Tests should protect current behavior, not old names.

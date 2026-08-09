@@ -15,7 +15,7 @@ import pytest
 
 from js.toolkit import ToolContext
 from js.toolkit import fs
-from js.toolkit.fs import _iter_files, fs_read, fs_search, sem_search
+from js.toolkit.fs import _iter_files, fs_read, fs_search
 
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
@@ -190,18 +190,6 @@ def test_iter_files_skips_fifo_and_yields_regular_only(tmp_path):
 
     names = {p.name for p in found}
     assert names == {"real.txt"}
-
-
-def test_sem_search_over_directory_with_fifo_does_not_hang(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    (tmp_path / "mod.py").write_text("def handler():\n    return 1\n", encoding="utf-8")
-    os.mkfifo(tmp_path / "pipe")
-
-    actual = _call_with_timeout(
-        sem_search, [{"query": "handler", "path": ".", "glob": "*.py"}], context=context, timeout=10.0
-    )
-
-    assert "mod.py" in actual
 
 
 def test_fs_read_of_fifo_refuses_without_hanging(tmp_path):

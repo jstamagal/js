@@ -175,16 +175,6 @@ def test_fs_search_negative_bounds_are_ignored(tmp_path):
     assert str(tmp_path / "two.txt") in actual
 
 
-def test_semantic_search_negative_limit_is_ignored(tmp_path):
-    (tmp_path / "one.txt").write_text("needle alpha\n", encoding="utf-8")
-    (tmp_path / "two.txt").write_text("needle beta\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = fs.sem_search([{"query": "needle", "limit": -1}], context=context)
-
-    assert "one.txt" in actual
-    assert "two.txt" in actual
-
 def test_fs_search_boolean_head_limit_is_ignored(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
@@ -207,26 +197,6 @@ def test_fs_search_repeated_query_is_deduplicated(tmp_path):
     assert str(tmp_path / "two.txt") in first
     assert second == first + "\n[deduplicated repeated search]"
 
-
-def test_semantic_search_boolean_limit_is_ignored(tmp_path):
-    (tmp_path / "one.txt").write_text("needle alpha\n", encoding="utf-8")
-    (tmp_path / "two.txt").write_text("needle beta\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = fs.sem_search([{"query": "needle", "limit": True}], context=context)
-
-    assert "one.txt" in actual
-    assert "two.txt" in actual
-
-
-def test_semantic_search_boolean_scope_values_are_ignored(tmp_path):
-    (tmp_path / "one.txt").write_text("needle alpha\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = fs.sem_search([{"query": "needle", "path": True, "glob": True}], context=context)
-
-    assert "path does not exist" not in actual
-    assert "one.txt" in actual
 
 def test_tool_resolution_is_canonical_case_insensitive_and_not_compat_alias_based():
     registry = build_default_registry()
