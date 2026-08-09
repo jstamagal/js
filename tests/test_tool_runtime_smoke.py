@@ -39,6 +39,207 @@ def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
+def _read_file(tmp_path, name: str, body: str) -> tuple:
+    """A file plus a context that has already read it, so the read-before-edit
+    guard is satisfied and the test is about patching, not about the guard."""
+    target = tmp_path / name
+    target.write_text(body, encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+    fs.read(name, context=context)
+    return target, context
+
+
+def test_patch_scalar_form_accepts_search_and_content_aliases(tmp_path):
+    target, context = _read_file(tmp_path, "aliased.txt", "alpha\nbeta\n")
+
+    named = fs.patch(file_path="aliased.txt", old_string="alpha", new_string="ALPHA", context=context)
+    aliased = fs.patch(path="aliased.txt", search="beta", content="BETA", context=context)
+
+    assert named.startswith(f"patched {target} (1 replacement, hash ")
+    assert aliased.startswith(f"patched {target} (1 replacement, hash ")
+    assert "+BETA" in aliased
+    assert target.read_text(encoding="utf-8") == "ALPHA\nBETA\n"
+
+
+def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tmp_path):
+    target, context = _read_file(tmp_path, "chain.txt", "one\ntwo\n")
+
+    result = fs.patch(
+        file_path="chain.txt",
+        edits=[
+            {"old_string": "one", "new_string": "two"},   # file now has two\ntwo
+            {"old_string": "two\ntwo", "new_string": "three"},  # only matches after edit 1
+        ],
+        context=context,
+    )
+
+    assert result.startswith(f"patched {target} (2 edits, hash ")
+    assert target.read_text(encoding="utf-8") == "three\n"
+
+
+def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
+    target, context = _read_file(tmp_path, "atomic.txt", "alpha\nbeta\n")
+    before = target.read_bytes()
+
+    result = fs.patch(
+        file_path="atomic.txt",
+        edits=[
+            {"old_string": "alpha", "new_string": "ALPHA"},
+            {"old_string": "gamma", "new_string": "GAMMA"},
+        ],
+        context=context,
+    )
+
+    assert result.startswith("ERROR: edit 2: Could not find match for search text: 'gamma'")
+    # The first edit resolved cleanly; nothing may reach disk regardless.
+    assert target.read_bytes() == before
+    assert not context.snapshots.get(target)
+
+
+def test_patch_rejects_no_op_edit_in_both_scalar_and_list_form(tmp_path):
+    target, context = _read_file(tmp_path, "noop.txt", "alpha\nbeta\n")
+    before = target.read_bytes()
+
+    scalar = fs.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
+    listed = fs.patch(
+        file_path="noop.txt",
+        edits=[
+            {"old_string": "alpha", "new_string": "ALPHA"},
+            {"old_string": "beta", "new_string": "beta"},
+        ],
+        context=context,
+    )
+
+    assert scalar == "ERROR: old_string and new_string must be different"
+    assert listed == "ERROR: edit 2: old_string and new_string must be different"
+    assert target.read_bytes() == before
+
+
+def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):
+    target, context = _read_file(tmp_path, "dupes.txt", "x = 1\ny = 1\n")
+
+    scalar_rejected = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", context=context)
+    list_rejected = fs.patch(
+        file_path="dupes.txt",
+        edits=[{"old_string": "1", "new_string": "2"}],
+        context=context,
+    )
+    assert scalar_rejected.startswith("ERROR: Multiple matches found for search text: '1'")
+    assert list_rejected.startswith("ERROR: edit 1: Multiple matches found for search text: '1'")
+    assert target.read_text(encoding="utf-8") == "x = 1\ny = 1\n"
+
+    scalar_ok = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", replace_all=True, context=context)
+    assert scalar_ok.startswith(f"patched {target} (2 replacements, hash ")
+    assert target.read_text(encoding="utf-8") == "x = 2\ny = 2\n"
+
+    list_ok = fs.patch(
+        file_path="dupes.txt",
+        edits=[{"old_string": "2", "new_string": "3", "replace_all": True}],
+        context=context,
+    )
+    assert list_ok.startswith(f"patched {target} (1 edit, hash ")
+    assert target.read_text(encoding="utf-8") == "x = 3\ny = 3\n"
+
+
+def test_patch_rejects_mixing_the_scalar_form_with_edits(tmp_path):
+    target, context = _read_file(tmp_path, "mixed.txt", "alpha\n")
+    before = target.read_bytes()
+
+    mixed = fs.patch(
+        file_path="mixed.txt",
+        old_string="alpha",
+        new_string="ALPHA",
+        edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
+        context=context,
+    )
+    with_flag = fs.patch(
+        file_path="mixed.txt",
+        replace_all=True,
+        edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
+        context=context,
+    )
+
+    expected = (
+        "ERROR: pass either the scalar form (old_string/new_string/replace_all) "
+        "or edits, not both"
+    )
+    assert mixed == expected
+    assert with_flag == expected
+    assert target.read_bytes() == before
+
+
+def test_patch_edits_list_still_requires_a_prior_read(tmp_path):
+    target = tmp_path / "unread.txt"
+    target.write_text("alpha\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    result = fs.patch(
+        file_path="unread.txt",
+        edits=[{"old_string": "alpha", "new_string": "ALPHA"}],
+        context=context,
+    )
+
+    assert result == "ERROR: You must read the file with the read tool before attempting to edit it."
+    assert target.read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_undo_reverts_a_whole_multi_edit_patch_in_one_step(tmp_path):
+    target, context = _read_file(tmp_path, "undoable.txt", "one\ntwo\nthree\n")
+
+    patched = fs.patch(
+        file_path="undoable.txt",
+        edits=[
+            {"old_string": "one", "new_string": "ONE"},
+            {"old_string": "two", "new_string": "TWO"},
+            {"old_string": "three", "new_string": "THREE"},
+        ],
+        context=context,
+    )
+    assert patched.startswith(f"patched {target} (3 edits, hash ")
+    assert target.read_text(encoding="utf-8") == "ONE\nTWO\nTHREE\n"
+
+    undone = fs.undo("undoable.txt", context=context)
+
+    assert undone.startswith(f"restored {target}")
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+
+
+def test_patch_empty_or_malformed_edits_list_is_rejected(tmp_path):
+    target, context = _read_file(tmp_path, "shape.txt", "alpha\n")
+    before = target.read_bytes()
+
+    empty = fs.patch(file_path="shape.txt", edits=[], context=context)
+    missing_new = fs.patch(file_path="shape.txt", edits=[{"old_string": "alpha"}], context=context)
+    not_an_object = fs.patch(file_path="shape.txt", edits=["alpha"], context=context)
+
+    assert empty == "ERROR: edits must be a non-empty list of {old_string, new_string} objects"
+    assert missing_new == "ERROR: edit 1: every edit requires old_string and new_string"
+    assert not_an_object == "ERROR: edit 1: each edit must be an object with old_string and new_string"
+    assert target.read_bytes() == before
+
+
+def test_patch_matches_crlf_search_text_per_edit(tmp_path):
+    # read_text() applies universal newlines, so a CRLF file reads back as LF.
+    # An old_string the model wrote with CRLF must still match, and must keep
+    # matching for a later edit against the already-rewritten text.
+    target = tmp_path / "crlf.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    context = ToolContext(cwd=tmp_path)
+    fs.read("crlf.txt", context=context)
+
+    result = fs.patch(
+        file_path="crlf.txt",
+        edits=[
+            {"old_string": "alpha\r\nbeta", "new_string": "one\r\ntwo"},
+            {"old_string": "two\r\ngamma", "new_string": "three"},
+        ],
+        context=context,
+    )
+
+    assert result.startswith(f"patched {target} (2 edits, hash ")
+    assert target.read_text(encoding="utf-8") == "one\nthree\n"
+
+
 def test_read_boolean_line_range_values_are_ignored(tmp_path):
     target = tmp_path / "lines.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")

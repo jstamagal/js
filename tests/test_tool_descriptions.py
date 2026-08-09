@@ -15,7 +15,6 @@ CORE_TOOL_NAMES = {
     "sem_search",
     "remove",
     "patch",
-    "multi_patch",
     "undo",
     "shell",
     "fetch",
@@ -78,7 +77,6 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("sem_search").name == "sem_search"
     assert registry.resolve("remove").name == "remove"
     assert registry.resolve("patch").name == "patch"
-    assert registry.resolve("multi_patch").name == "multi_patch"
     assert registry.resolve("undo").name == "undo"
     assert registry.resolve("fs_read") is None
     assert registry.resolve("cat") is None
@@ -249,7 +247,7 @@ def test_rendered_surfaces_never_mention_unavailable_core_tools():
     full = build_default_registry()
     surfaces = [
         ["shell"],
-        ["shell", "read", "write", "patch", "multi_patch", "remove", "undo"],
+        ["shell", "read", "write", "patch", "remove", "undo"],
         ["shell", "read", "write", "patch", "fs_search"],
         ["read"],
         ["write"],
@@ -261,12 +259,12 @@ def test_rendered_surfaces_never_mention_unavailable_core_tools():
         ["read", "write", "fs_search", "patch", "undo", "shell"],  # commit agent
         [
             "read", "write", "fs_search", "sem_search", "remove", "patch",
-            "multi_patch", "undo", "shell", "fetch", "todo_read", "todo_write",
+            "undo", "shell", "fetch", "todo_read", "todo_write",
             "followup", "plan", "skill", "task",
         ],
         None,
     ]
-    core = CORE_TOOL_NAMES | {"multi_patch"}
+    core = CORE_TOOL_NAMES
 
     for sel in surfaces:
         registry = full if sel is None else full.select(sel)

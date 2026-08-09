@@ -30,10 +30,7 @@ Do not use this for normal file operations:
 - File reads: use `read`, not `cat`, `head`, or `tail`.
 {{/if}}
 {{#if patch}}
-- File edits: use `patch`, not `sed` or `awk`.
-{{/if}}
-{{#if multi_patch}}
-- Multi-replacement edits in one file: use `multi_patch`, not `sed` or `awk`.
+- File edits, single or multi-replacement: use `patch`, not `sed` or `awk`.
 {{/if}}
 {{#if write}}
 - File writes: use `write`, not `echo > file` or heredocs.
@@ -51,7 +48,7 @@ When shell is the only tool for file work, use real Unix tools carefully:
   atomically enough for the task (`Path(...).write_text(...)` / `write_bytes(...)`).
   Verify the parent directory first.
 {{/unless}}
-{{#unless patch multi_patch}}
+{{#unless patch}}
 - Edit existing files with Python scripts that read, validate the exact old text,
   replace it, and fail if the match count is not what you intended. Do not rely on
   blind `sed -i` rewrites for source changes.

@@ -5,7 +5,6 @@ tools:
   - sem_search
   - remove
   - patch
-  - multi_patch
   - undo
   - shell
   - fetch

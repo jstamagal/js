@@ -16,5 +16,4 @@ When to use:
 
 When not to use:
 - Do not create documentation proactively.
-- Do not use this for ordinary source edits; use `patch`, `multi_patch`, or
-  `write`.
+- Do not use this for ordinary source edits; use `patch` or `write`.
