@@ -6,7 +6,7 @@ hits, so it is the closest to "what a person would find".
 
 Parameters:
 - `query` (required): the search terms, phrased like a Google query.
-- `num` (default `8`): how many organic results to return.
+- `num` (default `8`, range `1`–`100`): how many organic results to return.
 
 Output: an answer-box line when Google shows one, then numbered results as
 title, URL, and snippet.
