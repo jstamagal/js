@@ -9,7 +9,6 @@ import pytest
 from js import cli, runtime
 from js.config import Config
 from js.memory import load_messages
-from js.toolkit.registry import build_default_registry
 from js.model_client import ModelStreamResult
 
 def _fake_stream_result(text: str = "ok"):
@@ -936,87 +935,6 @@ def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path, caps
     assert "--reasoning auto" in err
 
 
-def test_artifact_mode_forwards_debug_file_reasoning_and_maxout(monkeypatch, tmp_path):
-    calls: list[dict] = []
-
-    def run_prompt_stub(
-        prompt,
-        model=None,
-        debug=False,
-        debug_file=None,
-        agent=None,
-        session=None,
-        save=True,
-        system_override=None,
-        resume_prefix=None,
-        reasoning=None,
-        maxout=None,
-        show_continue=True,
-        tool_registry=None,
-        extras=None,
-        ignore_local_config=False,
-        ignore_global_config=False,
-        presets=None,
-        tool_context=None,
-    ):
-        calls.append(
-            {
-                "prompt": prompt,
-                "model": model,
-                "debug": debug,
-                "debug_file": debug_file,
-                "agent": agent,
-                "session": session,
-                "save": save,
-                "reasoning": reasoning,
-                "maxout": maxout,
-                "show_continue": show_continue,
-                "has_system": bool(system_override),
-                "has_registry": tool_registry is not None,
-                "resume_prefix": resume_prefix,
-                "ignore_local_config": ignore_local_config,
-                "ignore_global_config": ignore_global_config,
-                "presets": presets,
-            }
-        )
-        return 0
-
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None, **_kwargs: Config(
-        agent_id="mode-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "mode-agent",
-        model="offline-test-model",
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        reasoning_effort=None,
-        max_output_tokens=None,
-        max_tool_iterations=5,
-        max_bash_output_bytes=65536,
-        max_tool_result_bytes=65536,
-        fetch_timeout_s=5,
-        debug_log=None,
-        trace=False,
-        history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "mode-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "mode-agent" / "mode.jsonl",
-        prompts_dir=tmp_path / "prompts",
-    ))
-
-    artifact_rc = cli.main(["--artifact=query", "--debug-file", str(tmp_path / "artifact.log"), "-r", "low", "--max-out", "222", "-m", "model-b", "--ignore-global", "-n", "find thing"])
-
-    assert artifact_rc == 0
-    assert calls[0]["debug_file"] == str(tmp_path / "artifact.log")
-    assert calls[0]["reasoning"] == "low"
-    assert calls[0]["maxout"] == 222
-    assert calls[0]["model"] == "model-b"
-    assert calls[0]["has_system"] is True
-    assert calls[0]["has_registry"] is True
-    assert calls[0]["ignore_global_config"] is True
-    assert calls[0]["ignore_local_config"] is False
-    assert calls[0]["presets"] == []
-
-
 def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     session_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
@@ -1202,55 +1120,6 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
         {"role": "assistant", "content": "KINGAPE_SESSION_OK"},
     ]
     assert load_messages(default_session) == [{"role": "user", "content": "default old"}]
-
-
-def test_artifact_combined_modes_run_as_sequential_turns_in_one_session(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-
-    systems: list[str] = []
-
-    def completion_stub(**kwargs):
-        systems.append(kwargs["messages"][0].parts[0].text)
-        return _fake_stream_result(f"artifact turn {len(systems)} done.")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-
-    actual = cli.main(["--artifact=curate,digest"])
-
-    assert actual == 0
-    assert len(systems) == 2
-    assert "## MODE: CURATE" in systems[0] and "## MODE: DIGEST" not in systems[0]
-    assert "## MODE: DIGEST" in systems[1] and "## MODE: CURATE" not in systems[1]
-
-    sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "artifact"
-    nonempty = [p for p in sessions_dir.glob("*.jsonl") if p.stat().st_size > 0]
-    assert len(nonempty) == 1
-    roles = [m["role"] for m in load_messages(nonempty[0])]
-    assert roles == ["user", "assistant", "user", "assistant"]
-
-
-def test_artifact_invalid_mode_is_rejected(capsys):
-    actual = cli.main(["--artifact=banana"])
-
-    captured = capsys.readouterr()
-    assert actual == 2
-    assert "--artifact" in captured.err
-    assert "curate" in captured.err
-
-
-def test_artifact_tools_are_registered():
-    names = set(build_default_registry().by_name)
-
-    assert {
-        "artifact_overview",
-        "artifact_search",
-        "artifact_read",
-        "artifact_curate",
-        "artifact_write_page",
-        "artifact_ingest",
-    }.issubset(names)
 
 
 def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:

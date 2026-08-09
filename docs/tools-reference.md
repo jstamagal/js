@@ -109,18 +109,6 @@ Parameters:
 
 Skips common dependency/cache dirs and binary files.
 
-### `sem_search`
-
-Local intent-ranked search over files.
-
-Parameters:
-
-- `queries`: strings or objects with `query`, `use_case`, `path`, `glob`,
-  `limit`
-
-This is not embedding search. It tokenizes query/use-case text and ranks line
-and path matches locally.
-
 ## Process And Network
 
 ### `shell`
@@ -304,18 +292,6 @@ the item.
 
 Reads the in-process todo map.
 
-### `followup`
-
-Stops the current run with a structured follow-up request.
-
-Parameters:
-
-- `question`
-- `multiple`
-- `option1` through `option5`
-
-Returns `FOLLOWUP_REQUIRED`, which the runtime treats as a stop condition.
-
 ### `plan`
 
 Writes a markdown plan under `plans/`.
@@ -364,61 +340,6 @@ exact-slug overwrite protection, near-match dedup guards, and vault locking.
 
 Closes one top-level inbox unit in order: archive into `Clippings/`, append
 `log.md`, then commit when vault is a git repository.
-
-## Artifact Tools
-
-### `artifact_overview`
-
-Returns manifest/curation overview JSON.
-
-### `artifact_search`
-
-Searches artifacts through the artifact CLI.
-
-Parameters:
-
-- `query`
-- `limit`
-
-### `artifact_read`
-
-Reads one artifact's metadata and text preview.
-
-Parameters:
-
-- `slug`
-
-Accepts slug, HTML path, title fragment, or slug fragment when unambiguous.
-
-### `artifact_curate`
-
-Installs curation JSON through the artifact CLI.
-
-Parameters:
-
-- `curation_json`
-
-### `artifact_write_page`
-
-Creates or updates a templated markdown artifact.
-
-Parameters:
-
-- `title`
-- `body`
-- `slug`
-- `tags`
-- `desc`
-
-### `artifact_ingest`
-
-Ingests one or more files through the artifact CLI.
-
-Parameters:
-
-- `paths`
-- `tags`
-- `desc`
 
 ## Lazy Discovery And MCP Controls
 

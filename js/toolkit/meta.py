@@ -1,4 +1,4 @@
-"""Meta tools: todos, followup, plans, skills, and isolated task delegation."""
+"""Meta tools: todos, plans, skills, and isolated task delegation."""
 
 from __future__ import annotations
 
@@ -53,25 +53,6 @@ def todo_read(context: ToolContext | None = None) -> str:
     return "\n".join(f"- [{todo.status}] {todo.content}" for todo in context.todos.values())
 
 
-def followup(
-    question: str,
-    multiple: bool | None = False,
-    option1: str | None = None,
-    option2: str | None = None,
-    option3: str | None = None,
-    option4: str | None = None,
-    option5: str | None = None,
-    context: ToolContext | None = None,
-) -> str:
-    options = [opt for opt in (option1, option2, option3, option4, option5) if opt]
-    lines = ["FOLLOWUP_REQUIRED", question]
-    if options:
-        choice_kind = "select one or more" if multiple else "select one"
-        lines.append(choice_kind + ":")
-        lines.extend(f"{idx}. {opt}" for idx, opt in enumerate(options, 1))
-    return "\n".join(lines)
-
-
 def plan(plan_name: str, version: str, content: str, context: ToolContext | None = None) -> str:
     assert context is not None
     safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in plan_name).strip("-.") or "plan"
@@ -120,9 +101,6 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         max_bash_output_bytes=parent.max_bash_output_bytes,
         fetch_timeout_s=parent.fetch_timeout_s,
         task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
-        artifact_dir=getattr(parent, "artifact_dir", None),
-        artifact_url=getattr(parent, "artifact_url", None),
-        artifact_bin=getattr(parent, "artifact_bin", None),
     )
     child.tool_registry = registry
     child.agent_id = agent
@@ -622,13 +600,6 @@ def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
             required=("todos",),
         ),
         Tool("todo_read", load_description("todo_read"), todo_read, {}),
-        Tool(
-            "followup",
-            load_description("followup"),
-            followup,
-            {"question": {"type": "string"}, "multiple": {"type": "boolean"}, "option1": {"type": "string"}, "option2": {"type": "string"}, "option3": {"type": "string"}, "option4": {"type": "string"}, "option5": {"type": "string"}},
-            required=("question",),
-        ),
         Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}}, required=("plan_name", "version", "content")),
         Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",)),
         Tool(

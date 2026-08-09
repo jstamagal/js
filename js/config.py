@@ -161,9 +161,6 @@ class Config:
     allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
-    artifact_dir: str | None = None  # artifact library dir; None = ARTIFACT_DIR env or built-in default
-    artifact_url: str | None = None  # artifact base URL; None = ARTIFACT_URL env or built-in default
-    artifact_bin: str | None = None  # artifact CLI binary; None = ARTIFACT_BIN env or built-in default
     debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
     debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
     transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
@@ -393,9 +390,6 @@ def from_env(
     transcript_log_dir = _settings.get_dotted(js_root_settings, ("runtime", "transcript_log_dir"))
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
-    artifact_dir = _settings.get_dotted(js_root_settings, ("artifact", "dir"))
-    artifact_url = _settings.get_dotted(js_root_settings, ("artifact", "url"))
-    artifact_bin = _settings.get_dotted(js_root_settings, ("artifact", "bin"))
 
     agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
     from . import mcp_config
@@ -461,9 +455,6 @@ def from_env(
         allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
-        artifact_dir=artifact_dir,
-        artifact_url=artifact_url,
-        artifact_bin=artifact_bin,
         debug_autolog=debug_autolog,
         debug_autolog_dir=debug_autolog_dir,
         transcript_log=transcript_log,
