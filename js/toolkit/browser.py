@@ -30,6 +30,14 @@ GL_ARGS = (
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path.partition("?")[0] == "/favicon.ico":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super().do_GET()
+
     def log_message(self, *_args: object) -> None:
         pass
 
@@ -72,15 +80,72 @@ def _frame_metrics(png: bytes) -> tuple[dict[str, Any], Any]:
     )
 
 
-def _changed_pct(before: Any, after: Any) -> float | None:
-    if before is None or after is None or before.size != after.size:
-        return None
+def _changed_pct(
+    before: Any,
+    after: Any,
+    before_region: str | None,
+    after_region: str,
+) -> tuple[float | None, str | None]:
+    if before is None:
+        return None, "no_previous_frame"
+    if before_region != after_region:
+        return None, "region_changed"
+    if after is None or before.size != after.size:
+        return None, "dimensions_changed"
     changed = 0
     total = before.width * before.height
     for left, right in zip(_rgb_pixels(before), _rgb_pixels(after), strict=True):
         if max(abs(left[channel] - right[channel]) for channel in range(3)) > 8:
             changed += 1
-    return round(changed * 100.0 / total, 3)
+    return round(changed * 100.0 / total, 3), None
+
+
+def _record_error(report: dict[str, Any], key: str, value: object) -> None:
+    entries = report[key]
+    if len(entries) < 50:
+        entries.append(str(value)[:500])
+    else:
+        report[f"{key}_dropped"] += 1
+
+
+def _serialize_report(report: dict[str, Any], max_bytes: int) -> str:
+    """Fit a report at JSON boundaries so callers always receive valid JSON."""
+
+    def render(value: dict[str, Any]) -> str:
+        return json.dumps(value, indent=2)
+
+    text = render(report)
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+
+    limited = {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in report.items()
+    }
+    limited["result_truncated"] = True
+    for key in ("console_errors", "page_errors", "clicked", "frames"):
+        entries = limited.get(key)
+        if not isinstance(entries, list):
+            continue
+        dropped_key = f"{key}_dropped"
+        while entries and len(render(limited).encode("utf-8")) > max_bytes:
+            remove_count = max(1, len(entries) // 2)
+            del entries[-remove_count:]
+            limited[dropped_key] = int(limited.get(dropped_key, 0)) + remove_count
+
+    text = render(limited)
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+
+    minimal = {
+        "error": "browser probe report exceeded the tool-result byte limit",
+        "output_dir": str(report.get("output_dir", ""))[:500],
+        "result_truncated": True,
+    }
+    text = render(minimal)
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    return "{}"
 
 
 def _largest_canvas(page: Any) -> Any | None:
@@ -180,10 +245,12 @@ def browser_probe(
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
 
-    base = context.resolve_path(output_dir) if output_dir else (root or context.cwd) / "browser-probes"
+    base = (
+        context.resolve_path(output_dir)
+        if output_dir
+        else (root or context.cwd) / "browser-probes"
+    )
     run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    context.snapshot(run_dir)
-    run_dir.mkdir(parents=True, exist_ok=False)
 
     report: dict[str, Any] = {
         "url": url,
@@ -192,45 +259,62 @@ def browser_probe(
         "webgl": {},
         "clicked": [],
         "console_errors": [],
+        "console_errors_dropped": 0,
         "page_errors": [],
+        "page_errors_dropped": 0,
     }
     previous_image = None
+    previous_region = None
     browser = None
 
     try:
+        context.snapshot(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=False)
         with sync_playwright() as playwright:
             browser = _launch_browser(playwright)
             page = browser.new_page(viewport={"width": width, "height": height})
             page.on(
                 "console",
-                lambda message: report["console_errors"].append(message.text[:500])
+                lambda message: _record_error(
+                    report, "console_errors", message.text
+                )
                 if message.type == "error"
                 else None,
             )
             page.on(
-                "pageerror", lambda error: report["page_errors"].append(str(error)[:500])
+                "pageerror", lambda error: _record_error(report, "page_errors", error)
             )
             page.goto(url, wait_until="load", timeout=30_000)
             page.wait_for_timeout(settle)
             report["webgl"] = _webgl_report(page)
+            surface = _largest_canvas(page)
+            capture_region = "canvas" if surface is not None else "page"
 
             def capture(label: str) -> None:
-                nonlocal previous_image
-                surface = _largest_canvas(page)
+                nonlocal previous_image, previous_region
                 png = surface.screenshot() if surface is not None else page.screenshot()
                 path = run_dir / f"{len(report['frames']) + 1:02d}-{_safe_label(label)}.png"
                 path.write_bytes(png)
                 metrics, image = _frame_metrics(png)
+                changed_pct, unavailable_reason = _changed_pct(
+                    previous_image,
+                    image,
+                    previous_region,
+                    capture_region,
+                )
                 metrics.update(
                     {
                         "label": label,
-                        "region": "canvas" if surface is not None else "page",
+                        "region": capture_region,
                         "path": str(path),
-                        "changed_pct_from_previous": _changed_pct(previous_image, image),
+                        "changed_pct_from_previous": changed_pct,
                     }
                 )
+                if unavailable_reason is not None:
+                    metrics["change_unavailable_reason"] = unavailable_reason
                 report["frames"].append(metrics)
                 previous_image = image
+                previous_region = capture_region
 
             capture("landing")
 
@@ -295,18 +379,27 @@ def browser_probe(
         if frame["changed_pct_from_previous"] is not None
     ]
     report["changed_pixel_percentages"] = changed
+    report["pixel_change_unavailable"] = [
+        {"label": frame["label"], "reason": frame["change_unavailable_reason"]}
+        for frame in report["frames"][1:]
+        if "change_unavailable_reason" in frame
+    ]
+    failed = "error" in report and not report["frames"]
     report["reading"] = (
-        "Frame paths are PNGs; use read on them when available. "
-        "dominant_color_share and unique_colors describe each frame. "
-        "changed_pct_from_previous is the percent of pixels moving by more than "
-        "eight RGB levels after each interaction. These are measurements, not verdicts."
+        "The probe failed before it captured a frame; do not infer page, WebGL, or "
+        "visual state from the empty measurements."
+        if failed
+        else (
+            "Frame paths are PNGs; use read on them when available. "
+            "dominant_color_share and unique_colors describe each frame. "
+            "changed_pct_from_previous is the percent of pixels moving by more than "
+            "eight RGB levels after each interaction. These are measurements, not verdicts."
+        )
     )
-    text = json.dumps(report, indent=2)
-    if len(text.encode("utf-8")) > context.max_tool_result_bytes:
-        return text.encode("utf-8")[: context.max_tool_result_bytes].decode(
-            "utf-8", errors="ignore"
-        ) + "\n[truncated]"
-    return text
+    prefix = "ERROR: browser probe failed\n" if failed else ""
+    return prefix + _serialize_report(
+        report, max(2, context.max_tool_result_bytes - len(prefix.encode("utf-8")))
+    )
 
 
 def tools() -> tuple[Tool, ...]:
