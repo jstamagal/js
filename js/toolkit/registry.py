@@ -128,6 +128,7 @@ class TurnToolSurface:
         )
         self._loaded: set[str] = set()
         self._mcp_loaded: set[str] = set()
+        self._loaded_ids: set[str] = set()
         self._discovery = discovery.discovery_tool(self)
 
     @property
@@ -188,6 +189,7 @@ class TurnToolSurface:
                 seen.add(tool.name)
                 if tool.name in self._sources:
                     self._loaded.add(tool.name)
+                    self._loaded_ids.add(f"native:{tool.name}")
         return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
@@ -217,9 +219,7 @@ class TurnToolSurface:
         )
         if self.mcp_host is not None and not load and (
             str(kind).strip().lower() == "mcp"
-            or folded_source == "mcp"
             or mcp_source
-            or "mcp" in str(query).casefold().split()
         ):
             entries = await self.mcp_host.discover(
                 query=query,
@@ -228,7 +228,7 @@ class TurnToolSurface:
             return discovery.compact_result({"results": [
                 {"id": item.id, "kind": item.kind, "name": item.name,
                  "description": item.description, "source": item.source,
-                 "loaded": item.name in self._mcp_loaded}
+                 "loaded": item.id in self._loaded_ids}
                 for item in entries
             ]})
         return self.discover(query=query, kind=kind, source=source, load=load)
@@ -257,7 +257,7 @@ class TurnToolSurface:
                 "name": item.name,
                 "description": item.description,
                 "source": item.source,
-                "loaded": item.name in self._loaded,
+                "loaded": item.id in self._loaded_ids,
             })
         return discovery.compact_result({"results": matches})
 
@@ -266,10 +266,12 @@ class TurnToolSurface:
             loaded = self.mcp_host.load(item_id)
             if loaded is not None:
                 self._mcp_loaded.update(loaded)
+                self._loaded_ids.add(item_id)
                 return discovery.compact_result({"loaded": loaded, "id": item_id})
         tool = self._lazy.get(item_id)
         if tool is not None:
             self._loaded.add(tool.name)
+            self._loaded_ids.add(item_id)
             return discovery.compact_result({"loaded": [tool.name], "id": item_id})
         skill = self._skills.get(item_id)
         if skill is None:
@@ -280,6 +282,7 @@ class TurnToolSurface:
             return f"ERROR: skill {skill.name!r} instructions could not be read"
         if loaded is None:
             return f"ERROR: skill {skill.name!r} instructions could not be read"
+        self._loaded_ids.add(item_id)
         result: dict[str, object] = {
             "id": item_id,
             "instructions": loaded.instructions,

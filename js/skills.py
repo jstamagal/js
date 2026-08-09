@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 import yaml
@@ -15,7 +16,6 @@ from . import paths
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _MAX_DESCRIPTION = 500
-_MAX_METADATA_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -179,14 +179,23 @@ def discover_skills(
         for root in roots:
             root_records: dict[str, _SkillRecord] = {}
             for path in _skill_paths(root):
-                record = _index_skill(path, source)
+                try:
+                    record = _index_skill(path, source)
+                except ValueError as exc:
+                    print(
+                        f"WARNING: skipping malformed skill {path}: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
                 key = record.metadata.name.casefold()
                 prior = root_records.get(key)
                 if prior is not None:
-                    raise ValueError(
-                        f"duplicate skill name {record.metadata.name!r} in {root}: "
-                        f"{prior.metadata.path} and {path}"
+                    print(
+                        f"WARNING: skipping malformed skill {path}: duplicate skill name "
+                        f"{record.metadata.name!r} in {root}: {prior.metadata.path} and {path}",
+                        file=sys.stderr,
                     )
+                    continue
                 root_records[key] = record
             selected.update(root_records)
     return SkillCatalog(selected.values())
@@ -206,9 +215,7 @@ def _skill_paths(root: Path) -> tuple[Path, ...]:
 
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:
-    with path.open("rb") as stream:
-        raw = stream.read(_MAX_METADATA_BYTES)
-    text = raw.decode("utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     manifest, body, _ = _split_frontmatter(path, text)
     derived_name = (
         path.stem
