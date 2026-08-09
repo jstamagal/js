@@ -7,7 +7,7 @@ synthesized answer.
 
 Parameters:
 - `query` (required): the question or search terms; full questions work well.
-- `max_results` (default `8`): how many results to return.
+- `max_results` (default `8`, range `1`–`20`): how many results to return.
 
 Output: an answer line when Tavily produces one, then numbered results as
 title, URL, and extracted content.

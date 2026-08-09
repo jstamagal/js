@@ -7,8 +7,9 @@ content where a plain HTTP fetch returns an empty shell. It cannot run WebGL
 or take screenshots — it reads, it does not look.
 
 Parameters:
-- `url` (required): the page to read. Localhost and private-network URLs are
-  allowed and flagged through automatically.
+- `url` (required): the page to read. Private, loopback, and link-local IP
+  literals are allowed automatically. Hostnames retain obscura's private-network
+  guard, even when their names resemble a private address.
 - `dump` (default `markdown`): what to return — `markdown` for readable
   content, `text` for plain text, `html` for rendered source, `links` for
   the page's link list.

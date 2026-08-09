@@ -12,7 +12,8 @@ Parameters:
 - `topic`: narrow the returned docs to one area, e.g. `middleware`,
   `routing`, `authentication`. Strongly recommended — untargeted dumps are
   long.
-- `tokens` (default `4000`): rough size budget for the returned docs.
+- `tokens` (default `4000`, minimum `500`): rough size budget for the returned
+  docs.
 
 Output: a header naming the matched library id, then documentation snippets,
 each with its source URL.
