@@ -8,8 +8,9 @@ pages by meaning, and each result includes a slice of page text.
 Parameters:
 - `query` (required): a description of what you are looking for; full natural
   sentences beat keyword strings here.
-- `num` (default `8`): how many results to return.
-- `text_chars` (default `1500`): how much page text to include per result.
+- `num` (default `8`, range `1`–`100`): how many results to return.
+- `text_chars` (default `1500`, minimum `100`): how much page text to include
+  per result.
 
 Output: numbered results as title, URL, and page text.
 
