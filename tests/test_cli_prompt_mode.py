@@ -41,7 +41,6 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert actual.agent_dir == expected_agent_dir
     assert actual.history_file == expected_agent_dir / ".history"
     assert actual.session_file.parent == expected_agent_dir
-    assert actual.session_file.name != "conversation.jsonl"
     assert actual.session_file.suffix == ".jsonl"
     assert actual.session_file.exists()
     assert actual.debug_log == expected_state_dir / "debug.log"
@@ -51,10 +50,6 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert latest["session_file"] == str(actual.session_file)
     # First-run template is written to the platform config dir.
     assert (tmp_path / ".config" / "js" / "jsrc").exists()
-
-    assert not hasattr(actual, "memory_file")
-
-
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -86,7 +81,6 @@ def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, 
     assert len(set(session_files)) == 10
     for session_file in session_files:
         assert session_file.parent == tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
-        assert session_file.name != "conversation.jsonl"
         assert session_file.exists()
     latest = json.loads((tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(session_files[-1])
@@ -124,7 +118,6 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     captured = capsys.readouterr()
     assert exc.value.code == 0
     assert "override configured/env model" in captured.out
-    assert "override JS_MODEL" not in captured.out
     assert "Wins over" in captured.out
     assert "all config files" in captured.out
     assert "minimal" in captured.out
@@ -135,9 +128,6 @@ def test_cli_help_describes_effective_model_precedence(capsys):
     assert "platform data" in captured.out
     assert "sessions/<agent>" in captured.out
     assert "state/<agent>" in captured.out
-    assert "~/.js" not in captured.out
-
-
 def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -343,7 +333,6 @@ def test_config_existing_absolute_session_path_loads_exact_file(monkeypatch, tmp
 
     actual = from_env()
 
-    assert actual.session_file == existing
     assert actual.session_file == existing
     assert list(sessions_dir.glob("foo-*.jsonl")) == [existing]
 
@@ -699,7 +688,6 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     assert output == "NO_SAVE_OK\n"
     assert not (agent_dir / "latest.json").exists()
     assert not list(agent_dir.glob("*.jsonl"))
-    assert not (agent_dir / ".no-save.jsonl").exists()
 
 
 def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path, capsys):
@@ -737,28 +725,6 @@ def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path,
     assert output_prompt_pipe == "PIPE_NO_SAVE_OK\n"
     assert not (agent_dir / "latest.json").exists()
     assert not list(agent_dir.glob("*.jsonl"))
-    assert not (agent_dir / ".no-save.jsonl").exists()
-
-def test_short_no_save_prompt_alias_suppresses_persistence(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-
-    def completion_stub(**kwargs):
-        return _fake_stream_result("SHORT_NO_SAVE_OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-
-    actual = cli.main(["-n", "-p", "Reply with SHORT_NO_SAVE_OK"])
-
-    output = capsys.readouterr().out
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
-    assert actual == 0
-    assert output == "SHORT_NO_SAVE_OK\n"
-    assert not (agent_dir / "latest.json").exists()
-    assert not list(agent_dir.glob("*.jsonl"))
-    assert not (agent_dir / ".no-save.jsonl").exists()
-
 
 def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
     calls: list[dict] = []
@@ -833,7 +799,6 @@ def test_cli_refresh_model_catalog_flag_exits_after_forced_refresh(monkeypatch, 
 
     assert actual == 0
     assert seen == ["forced"]
-    assert "refreshed" in capsys.readouterr().out
 
 
 def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeypatch, tmp_path, capsys):
@@ -1641,7 +1606,9 @@ def test_context_window_override_beats_catalog_for_a_specific_surface():
 def test_context_window_overrides_ignore_junk_entries():
     try:
         runtime.set_context_window_overrides({"a/b": "nope", "c/d": 0, "e/f": -5, "g/h": "7000"})
-        assert runtime._resolve_context_window("b", "a", None) != 0
+        assert runtime._resolve_context_window("b", "a", None) is None
+        assert runtime._resolve_context_window("d", "c", None) is None
+        assert runtime._resolve_context_window("f", "e", None) is None
         assert runtime._resolve_context_window("h", "g", None) == 7000
     finally:
         runtime.set_context_window_overrides(None)

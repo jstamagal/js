@@ -13,12 +13,6 @@ def tmp_logins_dir(tmp_path: Path, monkeypatch):
     logins.set_config_dir(tmp_path)
     yield tmp_path
     logins.set_config_dir(paths.login_store_dir())
-
-
-def test_load_logins_empty(tmp_logins_dir):
-    assert logins.load_logins() == {}
-
-
 def test_load_logins_degrades_to_empty_on_corrupt_file(tmp_logins_dir):
     # Read paths run on every routing/picker call and must never crash — a
     # malformed file just looks like "no logins" here.

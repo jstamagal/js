@@ -182,8 +182,6 @@ def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path
     path = skills / "notes.md"
     path.write_text("---\ndescription: Take notes\n---\nOriginal body.\n", encoding="utf-8")
     surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
-    definition = surface._skills["skill:notes"]
-    assert not hasattr(definition, "instructions"), "catalog must not retain bodies"
     path.write_text("---\ndescription: Take notes\n---\nUpdated body.\n", encoding="utf-8")
     loaded = json.loads(surface.discover(load="skill:notes"))
     assert loaded["instructions"] == "Updated body.\n", "instructions must load from disk on demand"

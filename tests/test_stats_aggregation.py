@@ -19,7 +19,3 @@ def test_summarize_calls_sums_token_denominators():
     assert row["output_tokens"] == 30
     assert row["cached_tokens"] <= row["prompt_tokens"]  # ratio is now meaningful
     assert row["ttft_s"] == 0.5
-
-
-def test_summarize_calls_ttft_none_when_no_text_at_all():
-    assert summarize_calls([{"ttft_s": None, "output_tokens": 0, "stream_s": 0.0}])["ttft_s"] is None

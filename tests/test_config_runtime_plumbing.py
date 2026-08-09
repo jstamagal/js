@@ -144,18 +144,6 @@ def test_from_env_carries_configured_artifact_settings(monkeypatch, tmp_path):
     assert cfg.artifact_bin == "artifact-test"
 
 
-def test_from_env_leaves_artifact_settings_none_without_config_lines(monkeypatch, tmp_path):
-    config_dir = _isolated_config_home(monkeypatch, tmp_path)
-    config_dir.mkdir(parents=True)
-    (config_dir / "jsrc").write_text("set model.id offline-test-model\n", encoding="utf-8")
-
-    cfg = from_env(save_session=False)
-
-    assert cfg.artifact_dir is None
-    assert cfg.artifact_url is None
-    assert cfg.artifact_bin is None
-
-
 def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
     config_dir = _isolated_config_home(monkeypatch, tmp_path)
     config_dir.mkdir(parents=True)

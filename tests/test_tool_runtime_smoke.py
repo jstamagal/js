@@ -378,7 +378,10 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert args == {"file_path": "created.txt", "content": "ok"}
     assert result.startswith(f"wrote 2 bytes to {tmp_path / 'created.txt'}")
     assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "ok"
-    assert telemetry_events == [("tool_ok", {"tool": "write", "latency_ms": 0})] or telemetry_events[0][0] == "tool_ok"
+    assert len(telemetry_events) == 1
+    kind, payload = telemetry_events[0]
+    assert kind == "tool_ok"
+    assert payload["tool"] == "write"
 
     _, error = runtime._dispatch(
         "missing_tool",

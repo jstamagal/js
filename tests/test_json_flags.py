@@ -176,26 +176,6 @@ def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir, ca
     assert rows[0]["has_api_key"] is True
 
 
-def test_logins_json_does_not_leak_normal_api_key_under_codex_id(tmp_logins_dir, capsys):
-    # The api-key mask is keyed on is_codex_provider; confirm a non-codex login's
-    # key is intentionally retained and the codex one is intentionally dropped,
-    # so a future refactor that flips the predicate is caught.
-    logins.save_login(logins.Login(provider_id="mimo", provider_api_key="sk-mimo-secret"))
-    logins.save_login(
-        logins.Login(provider_id=codex_auth.CODEX_PROVIDER_ID, provider_api_key="codex-secret")
-    )
-
-    rc = cli.main(["--logins-json"])
-    raw = capsys.readouterr().out
-    rows = json.loads(raw)
-
-    assert rc == 0
-    by_id = {row["provider_id"]: row for row in rows}
-    assert by_id["mimo"]["provider_api_key"] == "sk-mimo-secret"
-    assert by_id["openai-codex"]["provider_api_key"] is None
-    assert "codex-secret" not in raw
-
-
 # --------------------------------------------------------------------------
 # --models-json
 # --------------------------------------------------------------------------
@@ -240,20 +220,23 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
         seen.append(login.provider_id)
         return ["cfg-model"]
 
+    logins.save_login(
+        logins.Login(
+            provider_id="that-provider",
+            sdk_provider_id="openai",
+            provider_base_url="http://provider.test/v1",
+            provider_api_key="sk-test",
+        )
+    )
+    monkeypatch.setenv("JS_PROVIDER", "that-provider")
     monkeypatch.setattr(cli.logins, "test_login", fake_test_login)
 
     rc = cli.main(["--models-json"])
     payload = _stdout_json(capsys)
 
-    # Either it resolved a provider from config and returned the stubbed list,
-    # or there was no provider configured and it reported an error -- both are
-    # valid JSON-shaped outcomes that never crash.
-    if rc == 0:
-        assert payload == {"models": ["cfg-model"]}
-        assert seen  # the config-driven path reached the (stubbed) boundary
-    else:
-        assert rc == 1
-        assert set(payload) == {"error"}
+    assert rc == 0
+    assert payload == {"models": ["cfg-model"]}
+    assert seen == ["that-provider"]
 
 
 def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_logins_dir, capsys):

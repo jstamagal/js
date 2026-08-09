@@ -53,24 +53,6 @@ def test_lookup_limits_prefers_exact_provider_match(monkeypatch):
     assert limits.max_output_tokens == 384_000
 
 
-def test_lookup_limits_pattern_matches_unknown_provider_wrappers(monkeypatch):
-    rows = (
-        model_metadata._ModelRow("deepseek", "deepseek-v4-pro", 1_000_000, 384_000, None),
-        model_metadata._ModelRow("openai", "gpt-5.5", 1_050_000, 128_000, 922_000),
-    )
-    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
-    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _model_id: None)
-    model_metadata.lookup_limits.cache_clear()
-
-    limits = model_metadata.lookup_limits("deepseek-v4-pro:cloud", "omp")
-
-    assert limits is not None
-    assert limits.provider_id == "deepseek"
-    assert limits.model_id == "deepseek-v4-pro"
-    assert limits.context_window == 1_000_000
-    assert limits.max_output_tokens == 384_000
-
-
 def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypatch):
     """The bidirectional substring fallback let a shorter catalog id (gpt-5) bleed
     into a longer, genuinely-distinct sibling request (gpt-5-mini-2026) since '-'

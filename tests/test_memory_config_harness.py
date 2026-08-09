@@ -143,6 +143,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     monkeypatch.setenv("JS_BASE_URL", "http://proxy.test/v1")
     monkeypatch.setenv("JS_API_KEY", "sk-proxy")
     monkeypatch.setenv("JS_AGENT", "agent_one")
+    monkeypatch.setenv("JS_DEBUG", "1")
     monkeypatch.setenv("JS_TRACE", "0")
     monkeypatch.setenv("JS_REASONING", "max")
     monkeypatch.setenv("JS_MAX_OUTPUT_TOKENS", "1234")
@@ -183,8 +184,8 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.vision_enabled is False
     # save_session=False means no session file, no latest.json.
     assert not (expected_agent_dir / "latest.json").exists()
-    # debug.log path now lives under state/, even when JS_DEBUG is unset.
-    assert actual.debug_log is None or actual.debug_log == expected_state_dir / "debug.log"
+    # JS_DEBUG writes under state/, separate from append-only sessions.
+    assert actual.debug_log == expected_state_dir / "debug.log"
 
 
 def test_documented_bytes_env_names_are_canonical(monkeypatch, tmp_path):
