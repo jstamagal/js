@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import socket
 import time
 from pathlib import Path
 from typing import Any
@@ -95,12 +96,14 @@ def test_callback_redirect_uri_is_unchanged():
     assert codex_auth.CALLBACK_REDIRECT_URI == "http://localhost:1455/auth/callback"
 
 
-def test_bind_callback_servers_binds_available_loopback_families():
+def test_bind_callback_servers_binds_available_loopback_families(monkeypatch):
+    monkeypatch.setattr(codex_auth, "CALLBACK_PORT", 0)
     servers = codex_auth._bind_callback_servers(codex_auth._CallbackHandler)
     try:
         assert servers  # at least 127.0.0.1 must be available in CI/sandboxes
-        for server in servers:
-            assert server.server_address[1] == codex_auth.CALLBACK_PORT
+        assert servers[0].address_family == socket.AF_INET
+        for server in servers[1:]:
+            assert server.address_family == socket.AF_INET6
     finally:
         for server in servers:
             server.server_close()
@@ -112,11 +115,12 @@ def test_bind_callback_servers_degrades_when_v6_unavailable(monkeypatch):
     def boom(self, *args, **kwargs):
         raise OSError("Address family not supported by protocol")
 
+    monkeypatch.setattr(codex_auth, "CALLBACK_PORT", 0)
     monkeypatch.setattr(codex_auth._CallbackServerV6, "__init__", boom)
     servers = codex_auth._bind_callback_servers(codex_auth._CallbackHandler)
     try:
         assert len(servers) == 1
-        assert not isinstance(servers[0], codex_auth._CallbackServerV6)
+        assert servers[0].address_family == socket.AF_INET
     finally:
         for server in servers:
             server.server_close()
@@ -292,7 +296,8 @@ async def _collect_provider_stream(provider: codex_provider.OpenAICodexProvider)
     return events
 
 
-def test_codex_provider_lists_models_and_streams_responses_shape():
+def test_codex_provider_lists_models_and_streams_responses_shape(monkeypatch):
+    monkeypatch.setattr(codex_provider, "_client_version", lambda: "0.145.0")
     client = _FakeCodexHttpClient()
     provider = codex_provider.OpenAICodexProvider(
         access_token=_fake_jwt(),
@@ -307,7 +312,7 @@ def test_codex_provider_lists_models_and_streams_responses_shape():
     assert list_call["url"].endswith("/codex/models")
     # the backend drops any model whose minimal_client_version outranks this,
     # so a stale value here silently hides newly released models
-    assert list_call["params"]["client_version"] == codex_provider._client_version()
+    assert list_call["params"]["client_version"] == "0.145.0"
     assert list_call["headers"]["Authorization"].startswith("Bearer ")
     assert list_call["headers"]["chatgpt-account-id"] == "acct_123"
 

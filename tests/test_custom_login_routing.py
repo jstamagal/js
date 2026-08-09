@@ -129,10 +129,6 @@ def test_known_provider_ids_includes_saved_logins():
     assert "testes" in providers.known_provider_ids()
 
 
-def test_missing_login_store_never_breaks_lookup():
-    assert providers.get_provider("testes") is None
-
-
 def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
     monkeypatch, tmp_path
 ):

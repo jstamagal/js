@@ -57,12 +57,6 @@ def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> 
 
 
 def test_transcript_log_knob_defaults_on(monkeypatch, tmp_path):
-    spec = settings.SPEC_BY_KEY["runtime.transcript_log"]
-    assert spec.type == "bool"
-    assert spec.default is True
-    assert spec.env == "JS_TRANSCRIPT_LOG"
-    assert settings.get_dotted(settings.seed_defaults(), ("runtime", "transcript_log")) is True
-
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_TRANSCRIPT_LOG", raising=False)

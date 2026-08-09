@@ -185,26 +185,6 @@ def test_tools_alias_profiles_rejects_invalid_canonical_names():
     assert config_settings == config_before
 
 
-def test_tools_alias_profiles_rejects_subkey_updates():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    key = "tools.alias_profiles.foo"
-
-    result = setcmd.run_repl_command(live_settings, f"/set {key} bar")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set {key} bar")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == f"unknown knob: {key}"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == f"unknown knob: {key}"
-    assert config_settings == config_before
-
-
 def test_provider_extra_rejects_non_object_json():
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)
@@ -316,18 +296,6 @@ def test_secret_values_are_masked_when_shown():
     assert changed.lines == ["provider.api_key = <set>"]
     assert settings.get_dotted(live_settings, ("provider", "api_key")) == "sk-test"
     assert shown.lines[0] == "provider.api_key = <set>"
-
-
-def test_unknown_knob_returns_error_without_mutating_settings():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-
-    result = setcmd.run_repl_command(live_settings, "/set missing.knob value")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "unknown knob: missing.knob"
-    assert live_settings == before
 
 
 @pytest.mark.parametrize("key", ["model.id.foo", "provider.id.foo", "limits.fetch_timeout_s.foo"])

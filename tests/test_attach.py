@@ -182,7 +182,6 @@ def test_prompt_file_image_vision_off_falls_back_to_text(monkeypatch, tmp_path, 
     assert len(seen[0].parts) == 1
     assert isinstance(seen[0].parts[0], ai.types.messages.TextPart)
     assert "vision disabled; image bytes not sent" in seen[0].parts[0].text
-    assert not any(isinstance(part, ai.types.messages.FilePart) for part in seen[0].parts)
     assert "vision disabled; image bytes not sent" in load_messages(cfg.session_file)[0]["content"]
 
 

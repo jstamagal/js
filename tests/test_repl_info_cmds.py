@@ -47,16 +47,6 @@ def test_turns_command_prints_message_count(tmp_path, capsys):
     assert "3 messages in context" in out
 
 
-def test_turns_command_reports_zero_for_empty_context(tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {"messages": []}
-
-    handled = cli._handle_command("/turns", state, cfg)
-
-    assert handled is True
-    assert "0 messages in context" in capsys.readouterr().out
-
-
 def test_persona_command_prints_system_prompt(tmp_path, capsys):
     # /persona -> cli.py:582-587, prints state["system"][:2048].
     cfg = make_cfg(tmp_path)

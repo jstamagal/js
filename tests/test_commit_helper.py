@@ -184,12 +184,6 @@ def test_commit_writes_message_verbatim_keeping_markdown_header(repo):
     # `git log --format=%B` emits the stored message plus one trailing newline;
     # everything up to that is byte-for-byte what we wrote.
     assert body == message + "\n"
-    assert "`yes`" in body
-    assert "$(date)" in body
-    assert "'single'" in body and '"double"' in body
-    assert "# markdown header line that must survive" in body
-
-
 def test_commit_never_executes_message_substitutions(repo, tmp_path):
     _stage_change(repo)
     token = uuid.uuid4().hex

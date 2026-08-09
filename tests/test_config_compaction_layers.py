@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 
 from js import memory, persona, runtime, settings
 from js.capped_process import CappedProcessResult
@@ -93,9 +94,17 @@ def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
     (proj / "project_only" / "01.md").write_text("p", encoding="utf-8")
 
     reg = build_default_registry(prompts_root=[repo, glob, proj])
+    same = persona.load_agent_prompt_spec(
+        "same",
+        repo_prompts_root=repo,
+        global_agents_root=glob,
+        project_agents_root=proj,
+        agents_files=[],
+    )
 
     names = set(reg.by_name)
     assert {"same", "global_only", "project_only"} <= names
+    assert same.system == "project\n"
 
 
 
@@ -166,21 +175,23 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
 
 
 def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
-    captured: list[object] = []
+    captured: list[int | None] = []
 
-    def summarize_stub(cfg, model, messages, focus, guidance):
-        captured.append(cfg.settings.get("compact", {}).get("summary_max_tokens", "missing"))
-        return "Summary"
+    def stream_stub(**kwargs):
+        captured.append(kwargs["max_output_tokens"])
+        return SimpleNamespace(text="Summary")
 
-    monkeypatch.setattr(runtime, "_summarize_for_compaction", summarize_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": "bad-max"})
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "done"},
+    ]
 
-    for raw in ("bad-max", True):
-        cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": raw})
-        actual = runtime._summarize_for_compaction(cfg, "offline-test-model", [], "", "")
-        assert actual == "Summary", f"expected 'Summary' for {raw}"
+    result = runtime.compact_messages(cfg, "SYSTEM", messages, forced=True)
 
-    # The fallback in _compact_int_setting returns 4096 when max_value=8192 for bad values
-    assert captured == ["bad-max", True]
+    assert result.startswith("compacted:")
+    assert captured == [4096]
 
 
 def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_path):

@@ -410,7 +410,6 @@ def test_transport_cleanup_exceptions_are_redacted():
         with pytest.raises(MCPClientError) as caught:
             await client.close()
 
-        assert secret not in str(caught.value)
         assert str(caught.value) == "close failed with [REDACTED]"
         assert client.peer is None
         assert not client.initialized

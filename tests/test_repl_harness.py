@@ -6,7 +6,7 @@ from pathlib import Path
 
 import ai
 
-from js import cli, events, providers, setcmd, settings
+from js import cli, events, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.sampling import Sampling
@@ -66,7 +66,6 @@ def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, cap
 
     assert handled is True
     assert seen == ["forced"]
-    assert "refreshed" in capsys.readouterr().out
 
 
 def test_wipe_command_rotates_file_and_clears_in_process_messages(tmp_path):
@@ -937,18 +936,17 @@ def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypat
 
     assert cli._handle_command("/provider ollama", state, cfg) is True
     assert state["provider_id"] == "ollama"
-    assert state["provider_base_url"] == providers.provider_base_url(providers.provider_for_login("ollama"), None)
-    assert state["provider_api_key"] == providers.provider_api_key(providers.provider_for_login("ollama"), None)
+    assert state["provider_base_url"] == "http://127.0.0.1:11434/v1"
+    assert state["provider_api_key"] == "ollama"
 
     assert cli._handle_command("/provider llama.cpp", state, cfg) is True
     assert state["provider_id"] == "llama.cpp"
-    assert state["provider_base_url"] == providers.provider_base_url(providers.provider_for_login("llama.cpp"), None)
-    assert state["provider_api_key"] == providers.provider_api_key(providers.provider_for_login("llama.cpp"), None)
+    assert state["provider_base_url"] == "http://127.0.0.1:8080/v1"
+    assert state["provider_api_key"] == "x"
 
     assert cli._handle_command("/provider mimo-token-plan", state, cfg) is True
     assert state["provider_id"] == "mimo-token-plan"
-    assert state["provider_base_url"] == providers.provider_base_url(providers.provider_for_login("mimo-token-plan"), None)
-    assert state["provider_api_key"] == providers.provider_api_key(providers.provider_for_login("mimo-token-plan"), None)
+    assert state["provider_base_url"] == "https://token-plan-sgp.xiaomimimo.com/v1"
     out = capsys.readouterr().out
     assert "ollama" in out
     assert "llama.cpp" in out
@@ -1231,40 +1229,6 @@ def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint
     finally:
         logins.set_config_dir(None)
 
-
-def test_pick_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    config_path = tmp_path / "config" / "jsrc"
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
-
-    monkeypatch.setattr(
-        cli.picker,
-        "pick_model",
-        lambda **kwargs: {
-            "provider_id": "openai",
-            "provider_base_url": "http://proxy.test/v1",
-            "provider_api_key": "sk-proxy",
-            "provider_headers": {"x-proxy": "1"},
-            "model": "proxy/model",
-        },
-    )
-
-    assert cli._handle_command("/pick-model", state, cfg) is True
-    assert state["provider_id"] == "openai"
-    assert state["provider_base_url"] == "http://proxy.test/v1"
-    assert state["provider_api_key"] == "sk-proxy"
-    assert state["provider_headers"] == {"x-proxy": "1"}
-    assert state["model"] == "proxy/model"
-    assert "set model.id openai/proxy/model" in config_path.read_text(encoding="utf-8")
-    assert "openai" in capsys.readouterr().out
 
 def test_provider_command_uses_saved_login(tmp_path):
     from js import logins

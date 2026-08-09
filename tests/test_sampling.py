@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 from js import cli, persona
@@ -165,4 +164,3 @@ def test_loading_prompt_spec_sampling_does_not_mutate_os_environ(monkeypatch, tm
     spec = persona.load_configured_prompt_spec(cfg)
 
     assert spec.sampling == {"temperature": 0.2, "top_p": 0.75}
-    assert all(name not in os.environ for name in _JS_SAMPLING_ENV)

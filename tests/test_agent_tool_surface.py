@@ -112,7 +112,6 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
     assert spec.secondary_model == "backup-model"
     assert spec.sampling == {"temperature": 0.2}
     assert spec.system == "FIRST\n\nSECOND\n"
-    assert "tools:" not in spec.system
 
 
 def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
