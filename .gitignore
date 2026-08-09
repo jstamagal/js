@@ -1,3 +1,5 @@
+.commandcode/
+.reasonix/
 *.html
 *.yaml1
 my_*
