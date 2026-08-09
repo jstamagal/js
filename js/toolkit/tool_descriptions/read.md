@@ -24,11 +24,7 @@ Text output format:
 - Do not include the `12ab|` prefix when passing exact text to `patch`; only the
   content after `|` belongs to the file.
 {{/if}}
-{{#if multi_patch}}
-- Do not include the `12ab|` prefix when passing exact text to `multi_patch`; only
-  the content after `|` belongs to the file.
-{{/if}}
-{{#unless patch multi_patch}}
+{{#unless patch}}
 - Do not include the `12ab|` prefix if you later edit the file another way; only
   the content after `|` belongs to the file.
 {{/unless}}

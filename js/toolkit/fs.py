@@ -444,6 +444,41 @@ def undo(path: str, context: ToolContext | None = None) -> str:
         return f"ERROR: {exc}"
 
 
+def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
+    """Validate one edit's *shape* — the part that does not depend on file content.
+
+    Returns ``(old, new, replace_all)`` or an ERROR string. Runs for every edit
+    before the file is touched, so a malformed batch is rejected without a read
+    or a write. ``search``/``content`` are accepted as aliases here for the same
+    reason they are accepted at the top level: models emit both spellings.
+    """
+    if not isinstance(raw, dict):
+        return f"ERROR: {label}each edit must be an object with old_string and new_string"
+    old = raw.get("old_string") if raw.get("old_string") is not None else raw.get("search")
+    new = raw.get("new_string") if raw.get("new_string") is not None else raw.get("content")
+    if old is None or new is None:
+        return f"ERROR: {label}every edit requires old_string and new_string"
+    old, new = str(old), str(new)
+    if old == new:
+        return f"ERROR: {label}old_string and new_string must be different"
+    return old, new, bool(raw.get("replace_all", False))
+
+
+def _apply_edit(text: str, old: str, new: str, replace_all: bool, label: str) -> tuple[str, int] | str:
+    """Apply one exact replacement to ``text`` in memory. Returns the updated text
+    and its match count, or an ERROR string. Line endings are normalised per edit
+    against the text as it stands *now*, so a later edit sees an earlier one's result."""
+    line_ending = _detect_line_ending(text)
+    old_norm = _normalize_line_endings(old, line_ending)
+    new_norm = _normalize_line_endings(new, line_ending)
+    count = text.count(old_norm)
+    if count == 0:
+        return f"ERROR: {label}Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
+    if count > 1 and not replace_all:
+        return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
+    return text.replace(old_norm, new_norm, -1 if replace_all else 1), count
+
+
 def patch(
     path: str | None = None,
     file_path: str | None = None,
@@ -452,79 +487,77 @@ def patch(
     search: str | None = None,
     content: str | None = None,
     replace_all: bool = False,
+    edits: list[dict] | None = None,
     context: ToolContext | None = None,
 ) -> str:
+    """Exact string replacement in one file, in one of two forms.
+
+    Scalar (the common case)::
+
+        patch(file_path, old_string, new_string, replace_all=False)
+
+    Batch — several replacements applied in order, each seeing the previous
+    one's result::
+
+        patch(file_path, edits=[{old_string, new_string, replace_all}, ...])
+
+    Both forms are ONE code path: same read-before-edit guard, same match rules
+    (must exist, must be unique unless replace_all, must differ from new_string),
+    one snapshot, one write. The batch is atomic — every edit is validated and
+    applied in memory first, so a miss, an ambiguity or a no-op anywhere in the
+    list writes nothing and names the offending edit. Mixing the two forms is an
+    error, never a silent precedence rule.
+    """
     assert context is not None
     raw_path = file_path or path
     if not raw_path:
         return "ERROR: path is required"
+
     old = old_string if old_string is not None else search
     new = new_string if new_string is not None else content
-    if old is None or new is None:
-        return "ERROR: old_string and new_string are required"
-    if old == new:
-        return "ERROR: old_string and new_string must be different"
+    batch = edits is not None
 
-    target = context.resolve_path(raw_path)
-    guard = context.require_read(target, "edit it")
-    if guard:
-        return guard
-    try:
-        source = target.read_text()
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"ERROR: {exc}"
+    if batch and (old is not None or new is not None or replace_all):
+        return (
+            "ERROR: pass either the scalar form (old_string/new_string/replace_all) "
+            "or edits, not both"
+        )
 
-    line_ending = _detect_line_ending(source)
-    old_norm = _normalize_line_endings(old, line_ending)
-    new_norm = _normalize_line_endings(new, line_ending)
-    count = source.count(old_norm)
-    if count == 0:
-        return f"ERROR: Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
-    if count > 1 and not replace_all:
-        return f"ERROR: Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
-
-    updated = source.replace(old_norm, new_norm, -1 if replace_all else 1)
-    context.snapshot(target)
-    target.write_text(updated)
-    data = updated.encode("utf-8")
-    content_hash = _hash_bytes(data)
-    context.file_hashes[target] = content_hash
-    diff = "".join(difflib.unified_diff(source.splitlines(True), updated.splitlines(True), fromfile=str(target), tofile=str(target)))
-    if len(diff) > 4000:
-        diff = diff[:4000] + "\n... [diff truncated]"
-    return f"patched {target} ({count if replace_all else 1} replacement{'s' if replace_all and count != 1 else ''}, hash {content_hash})\n{diff}"
-
-
-def multi_patch(path: str | None = None, file_path: str | None = None, edits: list[dict] | None = None, context: ToolContext | None = None) -> str:
-    assert context is not None
-    raw_path = file_path or path
-    if not raw_path:
-        return "ERROR: path is required"
-    target = context.resolve_path(raw_path)
-    guard = context.require_read(target, "edit it")
-    if guard:
-        return guard
-    edits = edits or []
-    try:
-        source = target.read_text()
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"ERROR: {exc}"
-    updated = source
-    for edit in edits:
-        old = edit.get("old_string")
-        new = edit.get("new_string")
-        replace_all = bool(edit.get("replace_all", False))
+    if not batch:
         if old is None or new is None:
-            return "ERROR: every edit requires old_string and new_string"
-        line_ending = _detect_line_ending(updated)
-        old_norm = _normalize_line_endings(str(old), line_ending)
-        new_norm = _normalize_line_endings(str(new), line_ending)
-        count = updated.count(old_norm)
-        if count == 0:
-            return f"ERROR: Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
-        if count > 1 and not replace_all:
-            return f"ERROR: Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
-        updated = updated.replace(old_norm, new_norm, -1 if replace_all else 1)
+            return "ERROR: old_string and new_string are required"
+        single = _normalize_edit({"old_string": old, "new_string": new, "replace_all": replace_all}, "")
+        if isinstance(single, str):
+            return single
+        pending = [single]
+    else:
+        if not isinstance(edits, list) or not edits:
+            return "ERROR: edits must be a non-empty list of {old_string, new_string} objects"
+        pending = []
+        for index, raw in enumerate(edits, start=1):
+            normalized = _normalize_edit(raw, f"edit {index}: ")
+            if isinstance(normalized, str):
+                return normalized
+            pending.append(normalized)
+
+    target = context.resolve_path(raw_path)
+    guard = context.require_read(target, "edit it")
+    if guard:
+        return guard
+    try:
+        source = target.read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR: {exc}"
+
+    updated = source
+    replacements = 0
+    for index, (old_text, new_text, edit_replace_all) in enumerate(pending, start=1):
+        applied = _apply_edit(updated, old_text, new_text, edit_replace_all, f"edit {index}: " if batch else "")
+        if isinstance(applied, str):
+            return applied
+        updated, count = applied
+        replacements += count if edit_replace_all else 1
+
     context.snapshot(target)
     target.write_text(updated)
     data = updated.encode("utf-8")
@@ -533,7 +566,11 @@ def multi_patch(path: str | None = None, file_path: str | None = None, edits: li
     diff = "".join(difflib.unified_diff(source.splitlines(True), updated.splitlines(True), fromfile=str(target), tofile=str(target)))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
-    return f"patched {target} ({len(edits)} edits, hash {content_hash})\n{diff}"
+    if batch:
+        summary = f"{len(pending)} edit{'s' if len(pending) != 1 else ''}"
+    else:
+        summary = f"{replacements} replacement{'s' if replacements != 1 else ''}"
+    return f"patched {target} ({summary}, hash {content_hash})\n{diff}"
 
 
 def _iter_files(root: Path) -> Iterable[Path]:
@@ -940,21 +977,25 @@ def tools() -> tuple[Tool, ...]:
             patch,
             {
                 "file_path": {"type": "string", "description": "File path to edit."},
-                "old_string": {"type": "string", "description": "Exact text to replace."},
-                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                "old_string": {"type": "string", "description": "Exact text to replace. Required unless edits is used."},
+                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string. Required unless edits is used."},
                 "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {"type": "string", "description": "Exact text to replace."},
+                            "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                            "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
+                        },
+                        "required": ["old_string", "new_string"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Several replacements applied in order, atomically. Use instead of old_string/new_string, never alongside them.",
+                },
             },
-            required=("file_path", "old_string", "new_string"),
-        ),
-        Tool(
-            "multi_patch",
-            load_description("multi_patch"),
-            multi_patch,
-            {
-                "file_path": {"type": "string", "description": "File path to edit."},
-                "edits": {"type": "array", "items": {"type": "object"}, "description": "Sequential exact replacements with old_string, new_string, and optional replace_all."},
-            },
-            required=("file_path", "edits"),
+            required=("file_path",),
         ),
         Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest in-process snapshot should be restored."}}, required=("path",)),
     )

@@ -9,10 +9,8 @@ Rules:
 - Snapshots can come from `write`.
 {{/if}}
 {{#if patch}}
-- Snapshots can come from `patch`.
-{{/if}}
-{{#if multi_patch}}
-- Snapshots can come from `multi_patch`.
+- Snapshots can come from `patch`; one multi-edit call takes one snapshot, so a
+  single undo reverts the whole call.
 {{/if}}
 {{#if remove}}
 - Snapshots can come from `remove`.

@@ -21,8 +21,8 @@ Text output lines are prefixed like:
 12ab|line content
 ```
 
-The prefix is a display anchor, not file content. Do not include it in
-`patch`/`multi_patch` strings.
+The prefix is a display anchor, not file content. Do not include it in `patch`
+strings.
 
 Images return either a vision-disabled text stub or an internal image marker
 that the runtime expands for vision models. PDFs use `pdftotext`.
@@ -42,7 +42,7 @@ The previous state is snapshotted for `undo`.
 
 ### `patch`
 
-Performs one exact replacement.
+Performs exact replacements in one file, one or many.
 
 Parameters:
 
@@ -50,20 +50,18 @@ Parameters:
 - `old_string`
 - `new_string`
 - `replace_all`
+- `edits`: list of `{old_string, new_string, replace_all?}`, used instead of
+  `old_string`/`new_string`
 
-Requires a prior `read`. Fails when the old string is absent. Fails on multiple
-matches unless `replace_all=true`.
+Requires a prior `read`. Each edit fails when its old string is absent, on
+multiple matches without `replace_all=true`, and when `old_string` equals
+`new_string`.
 
-### `multi_patch`
-
-Performs sequential exact replacements in one file.
-
-Parameters:
-
-- `file_path`
-- `edits`: list of `{old_string, new_string, replace_all?}`
-
-Requires a prior `read`. The file is snapshotted once before writing.
+`edits` applies its replacements in order, each seeing the previous one's
+result, and is atomic: any failure writes nothing and the error names the
+offending edit by position. Passing `edits` together with the scalar
+`old_string`/`new_string`/`replace_all` arguments is an error. A successful call
+writes once and snapshots once, so one `undo` reverts the whole call.
 
 ### `remove`
 

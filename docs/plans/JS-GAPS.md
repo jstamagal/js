@@ -12,7 +12,7 @@ DRAFT SKELETON — reference columns being filled in.
 ### What js does today
 
 - Tools are frozen dataclasses with an OpenAI-shape schema and a sync handler taking a shared mutable `ToolContext` (`js/toolkit/core.py:24`, `js/toolkit/core.py:58`).
-- Registry: fs (read/write/patch/multi_patch/fs_search/sem_search/remove/undo), process_net (shell/fetch), meta (todo_write/todo_read/followup/plan/skill/task), wiki, artifact, plus one auto-generated named-agent tool per prompt directory (`js/toolkit/registry.py:142`, `js/toolkit/registry.py:121`).
+- Registry: fs (read/write/patch/fs_search/sem_search/remove/undo), process_net (shell/fetch), meta (todo_write/todo_read/followup/plan/skill/task), wiki, artifact, plus one auto-generated named-agent tool per prompt directory (`js/toolkit/registry.py:142`, `js/toolkit/registry.py:121`).
 - Per-agent tool surface picked by `tools:` selectors with glob support and typo warnings (`js/toolkit/registry.py:87`).
 - Model-facing alias profiles rewrite tool names per model match (`js/runtime.py:48`, `js/runtime.py:91`).
 - Dispatch: `task` calls from one assistant batch run in a ThreadPoolExecutor; all other tools run sequentially in-order (`js/runtime.py:440`). Under the non-blocking supervisor, fan-out calls are awaited on-loop, leaf calls in one executor thread (`js/runtime.py:549`).

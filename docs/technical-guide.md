@@ -249,7 +249,7 @@ This project intentionally does not preserve old tool aliases. The canonical
 surface is the contract:
 
 ```text
-read write fs_search sem_search remove patch multi_patch undo shell fetch
+read write fs_search sem_search remove patch undo shell fetch
 followup plan skill todo_write todo_read task
 ```
 

@@ -493,8 +493,7 @@ _TOOL_DISPLAY: dict[str, list[tuple[str, int]]] = {
     "shell":          [("command", 120), ("cwd", 40), ("description", 60)],
     "read":           [("file_path", 80), ("path", 80), ("range", 0)],
     "write":          [("file_path", 80), ("path", 80), ("content", 0), ("overwrite", 0)],
-    "patch":          [("file_path", 80), ("path", 80), ("old_string", 30), ("new_string", 0)],
-    "multi_patch":    [("file_path", 80), ("path", 80), ("edits", 0)],
+    "patch":          [("file_path", 80), ("path", 80), ("old_string", 30), ("new_string", 0), ("edits", 0)],
     "fs_search":      [("pattern", 60), ("path", 40), ("output_mode", 20)],
     "fetch":          [("url", 100), ("raw", 0)],
 }
