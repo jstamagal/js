@@ -348,11 +348,11 @@ surface has lazy native tools, skills, or configured MCP servers.
 
 Parameters:
 
-- `query`: words to match in catalog metadata; include `mcp` to connect eligible
-  configured servers and fetch their catalogs.
-- `kind`: optional `native`, `skill`, or `mcp` filter.
-- `source`: optional exact source. For MCP, use `mcp` for all eligible servers or
-  the configured server name/normalized name for one server.
+- `query`: words to match in catalog metadata.
+- `kind`: optional `native`, `skill`, or `mcp` filter. Use `mcp` to connect all
+  eligible configured servers and fetch their catalogs.
+- `source`: optional exact source. A configured MCP server name or normalized
+  name connects only that server.
 - `load`: stable catalog id such as `mcp:files__read_file`.
 
 MCP server tools are model-facing as `<normalized_server>__<normalized_tool>`.

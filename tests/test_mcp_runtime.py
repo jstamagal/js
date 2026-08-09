@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from pathlib import Path
+import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -34,13 +37,13 @@ class FakeClient:
         self.subscriptions = []
         type(self).instances.append(self)
 
-    async def initialize(self):
+    async def initialize(self, *, timeout=None):
         self.initialized = True
 
-    async def list_tools(self):
+    async def list_tools(self, *, timeout=None):
         return self.tools
 
-    async def call_tool(self, name, arguments):
+    async def call_tool(self, name, arguments, *, timeout=None):
         self.calls.append((name, arguments))
         return CallToolResult(content=[
             {"type": "text", "text": "hello"},
@@ -49,25 +52,25 @@ class FakeClient:
             {"type": "resource", "resource": {"uri": "file:///y", "text": "inside"}},
         ], structured_content={"ok": True})
 
-    async def list_resources(self):
+    async def list_resources(self, *, timeout=None):
         return [{"uri": "file:///x", "name": "x"}]
 
-    async def list_resource_templates(self):
+    async def list_resource_templates(self, *, timeout=None):
         return [{"uriTemplate": "file:///{name}", "name": "files"}]
 
-    async def read_resource(self, uri):
+    async def read_resource(self, uri, *, timeout=None):
         return ReadResourceResult(contents=[{"uri": uri, "text": "body"}])
 
-    async def subscribe_resource(self, uri):
+    async def subscribe_resource(self, uri, *, timeout=None):
         self.subscriptions.append(("subscribe", uri))
 
-    async def unsubscribe_resource(self, uri):
+    async def unsubscribe_resource(self, uri, *, timeout=None):
         self.subscriptions.append(("unsubscribe", uri))
 
-    async def list_prompts(self):
+    async def list_prompts(self, *, timeout=None):
         return [{"name": "review", "description": "Review"}]
 
-    async def get_prompt(self, name, arguments):
+    async def get_prompt(self, name, arguments, *, timeout=None):
         return GetPromptResult(description="Review", messages=[{
             "role": "user", "content": {"type": "text", "text": f"{name}:{arguments['file']}"}
         }])
@@ -82,6 +85,133 @@ def config():
     return MCPConfiguration((server,), MCPPolicy(tool_deny=("alpha_server__denied",)))
 
 
+def test_control_tools_obey_mcp_tool_policy_in_catalog_load_and_surface():
+    policy = MCPPolicy(
+        tool_allow=("srva__alpha",),
+        tool_deny=("mcp_resource_read", "mcp_prompt_get"),
+    )
+    host = MCPHost(MCPConfiguration((), policy), client_factory=FakeClient)
+
+    assert host.initial_catalog() == ()
+    assert host.load("mcp:mcp_resource_read") is None
+    assert host.load("mcp:mcp_resource_list") is None
+    assert host.tools({"mcp_resource_read", "mcp_resource_list"}) == ()
+
+
+@pytest.mark.parametrize("failure_stage", ("initialize", "list_tools"))
+def test_failed_server_is_visible_without_hiding_healthy_server_tools(failure_stage):
+    class MixedClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.server_name = factory()._name
+            self.tools = [{
+                "name": "alpha",
+                "description": "healthy tool",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]
+
+        async def initialize(self, *, timeout=None):
+            if self.server_name == "Broken" and failure_stage == "initialize":
+                raise RuntimeError("server is unreachable")
+            await super().initialize(timeout=timeout)
+
+        async def list_tools(self, *, timeout=None):
+            if self.server_name == "Broken" and failure_stage == "list_tools":
+                raise RuntimeError("server is unreachable")
+            return await super().list_tools(timeout=timeout)
+
+    async def drive():
+        servers = (
+            MCPServer("Healthy", "healthy", "stdio", command="healthy"),
+            MCPServer("Broken", "broken", "stdio", command="broken"),
+        )
+        host = MCPHost(MCPConfiguration(servers, MCPPolicy()), client_factory=MixedClient)
+
+        found = await host.discover(query="mcp")
+
+        assert "healthy__alpha" in host.remote_tools
+        assert any(entry.id == "mcp:healthy__alpha" for entry in found)
+        failure = next(entry for entry in found if entry.id == "mcp:server-error:broken")
+        assert failure.source == "Broken"
+        assert "unreachable" in failure.description
+
+    asyncio.run(drive())
+
+
+def test_silent_stdio_server_returns_within_configured_deadline():
+    async def drive():
+        fixture = Path(__file__).parent / "fixtures" / "fake_mcp_stdio_server.py"
+        server = MCPServer(
+            "Silent",
+            "silent",
+            "stdio",
+            command=sys.executable,
+            args=(str(fixture), "--mode", "silent"),
+        )
+        deadline = 0.1
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            request_timeout=deadline,
+        )
+        started = time.monotonic()
+        found = await host.discover(query="mcp")
+        elapsed = time.monotonic() - started
+        await host.close()
+
+        assert elapsed < 1.0, f"silent server exceeded deadline: {elapsed:.3f}s"
+        assert any(entry.id == "mcp:server-error:silent" for entry in found)
+
+    asyncio.run(drive())
+
+
+def test_host_passes_deadline_to_metadata_calls_remote_calls_and_controls():
+    class DeadlineClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.seen = []
+            self.tools = [{
+                "name": "alpha",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]
+
+        async def initialize(self, *, timeout=None):
+            self.seen.append(("initialize", timeout))
+            await super().initialize(timeout=timeout)
+
+        async def list_tools(self, *, timeout=None):
+            self.seen.append(("list_tools", timeout))
+            return await super().list_tools(timeout=timeout)
+
+        async def call_tool(self, name, arguments, *, timeout=None):
+            self.seen.append(("call_tool", timeout))
+            return await super().call_tool(name, arguments, timeout=timeout)
+
+        async def list_resources(self, *, timeout=None):
+            self.seen.append(("list_resources", timeout))
+            return await super().list_resources(timeout=timeout)
+
+    async def drive():
+        server = MCPServer("Timed", "timed", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            client_factory=DeadlineClient,
+            request_timeout=0.25,
+        )
+        await host.discover(query="mcp")
+        client = DeadlineClient.instances[-1]
+        await host.tools({"timed__alpha"})[0].handler()
+        await host.tools({"mcp_resource_list"})[0].handler(server="Timed")
+
+        assert client.seen == [
+            ("initialize", 0.25),
+            ("list_tools", 0.25),
+            ("call_tool", 0.25),
+            ("list_resources", 0.25),
+        ]
+
+    asyncio.run(drive())
+
+
 def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
     async def drive():
         FakeClient.instances.clear()
@@ -90,7 +220,11 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         assert not FakeClient.instances
         found = await host.discover(query="mcp")
         assert FakeClient.instances[0].initialized
-        assert "alpha_server__read_file" not in repr(found)
+        assert len(host.remote_tools) == 2
+        assert all(
+            name.startswith("alpha_server__read_file_") for name in host.remote_tools
+        )
+        assert any(entry.id.startswith("mcp:collision:") for entry in found)
         assert "secret metadata" not in repr(found)
 
         client = FakeClient.instances[0]
@@ -161,7 +295,7 @@ def test_discovery_respects_resource_or_prompt_only_capabilities(feature):
             self.server_capabilities = ServerCapabilities({feature: {"listChanged": True}})
             self.list_tools_called = False
 
-        async def list_tools(self):
+        async def list_tools(self, *, timeout=None):
             self.list_tools_called = True
             raise CapabilityError("tools are not advertised")
 
@@ -251,7 +385,7 @@ def test_prompt_get_preserves_media_content(config):
         await host.discover()
         client = FakeClient.instances[-1]
 
-        async def get_prompt(_name, _arguments):
+        async def get_prompt(_name, _arguments, *, timeout=None):
             return GetPromptResult(description="Media", messages=[
                 {"role": "user", "content": {"type": "image", "data": "cG5n", "mimeType": "image/png"}},
                 {"role": "assistant", "content": {"type": "text", "text": "done"}},
@@ -435,7 +569,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
         await host.before_model_call()
         catalog = await host.discover(query="mcp")
 
-        async def call_tool(_name, _arguments):
+        async def call_tool(_name, _arguments, *, timeout=None):
             return CallToolResult(
                 content=[
                     {"type": "text", "text": "text SENTINEL"},
@@ -444,19 +578,19 @@ def test_successful_server_data_is_redacted_everywhere(config):
                 structured_content={"SENTINEL": ["SENTINEL"]},
             )
 
-        async def list_resources():
+        async def list_resources(*, timeout=None):
             return [{"uri": "secret://SENTINEL", "name": "SENTINEL"}]
 
-        async def list_templates():
+        async def list_templates(*, timeout=None):
             return [{"uriTemplate": "secret://SENTINEL/{x}", "name": "SENTINEL"}]
 
-        async def read_resource(_uri):
+        async def read_resource(_uri, *, timeout=None):
             return ReadResourceResult(contents=[{"uri": "secret://SENTINEL", "text": "SENTINEL"}])
 
-        async def list_prompts():
+        async def list_prompts(*, timeout=None):
             return [{"name": "SENTINEL", "description": "SENTINEL"}]
 
-        async def get_prompt(_name, _arguments):
+        async def get_prompt(_name, _arguments, *, timeout=None):
             return GetPromptResult(
                 description="SENTINEL",
                 messages=[{"role": "user", "content": {"type": "text", "text": "SENTINEL"}}],
@@ -752,6 +886,112 @@ def test_turn_surface_withholds_mcp_name_claimed_by_generated_native_tool(tmp_pa
         assert [tool.name for tool in surface.tools].count("alpha_server__read_file") == 1
         assert surface.resolve("alpha_server__read_file") is native
         assert events.count(("mcp_catalog_collision", {"tool": "alpha_server__read_file"})) == 1
+
+    asyncio.run(drive())
+
+
+def test_reserved_public_name_stays_absent_after_clean_refresh():
+    class SingleToolClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [{
+                "name": "alpha",
+                "description": "reserved later",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]
+
+    async def drive():
+        server = MCPServer("Srv A", "srva", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            client_factory=SingleToolClient,
+        )
+        await host.discover(query="mcp")
+        assert "srva__alpha" in host.remote_tools
+
+        host.reserve_public_names({"srva__alpha"})
+        await host.refresh()
+
+        assert "srva__alpha" not in host.remote_tools
+        assert all(entry.id != "mcp:srva__alpha" for entry in await host.discover(query="mcp"))
+        assert host.load("mcp:srva__alpha") is None
+        assert host.tools({"srva__alpha"}) == ()
+
+    asyncio.run(drive())
+
+
+def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
+    class SchemaClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [
+                {"name": "noschema"},
+                {"name": "nullschema", "inputSchema": None},
+                {"name": "strschema", "inputSchema": "wrong"},
+                {
+                    "name": "weird",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": "wrong",
+                        "required": "wrong",
+                    },
+                },
+            ]
+
+    async def drive():
+        server = MCPServer("Schema", "schema", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            client_factory=SchemaClient,
+        )
+        await host.discover(query="mcp")
+
+        expected = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+        for name in ("noschema", "nullschema", "strschema", "weird"):
+            tool = host.tools({f"schema__{name}"})[0]
+            assert tool.openai_spec()["function"]["parameters"] == expected
+
+    asyncio.run(drive())
+
+
+def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
+    class CollisionClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [
+                {
+                    "name": name,
+                    "description": f"remote {name}",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+                for name in ("My-Tool", "my_tool", "MY TOOL")
+            ]
+
+    async def drive():
+        server = MCPServer("Collision", "collision", "stdio", command="fake")
+        host = MCPHost(
+            MCPConfiguration((server,), MCPPolicy()),
+            client_factory=CollisionClient,
+        )
+        found = await host.discover(query="mcp")
+
+        public_names = tuple(sorted(host.remote_tools))
+        assert len(public_names) == 3
+        assert len(set(public_names)) == 3
+        assert all(name.startswith("collision__my_tool_") for name in public_names)
+        assert {item[1] for item in host.remote_tools.values()} == {
+            "My-Tool",
+            "my_tool",
+            "MY TOOL",
+        }
+        warning = next(entry for entry in found if entry.id.startswith("mcp:collision:"))
+        assert "normalize to the same public name" in warning.description
+        assert all(name in warning.description for name in ("My-Tool", "my_tool", "MY TOOL"))
 
     asyncio.run(drive())
 
