@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -275,3 +276,76 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
     assert seen["allow_code"] is True
     assert seen["timeout_s"] == 17
     assert seen["max_output_bytes"] == 256 * 1024
+
+
+# --- fenced directives must open a line, like real markdown fences -------------
+#
+# Regression: AGENTS.md documents js's own syntax and mentions ` ```!sub ` inside a
+# backtick span mid-sentence. The fenced branch had no line anchor and no backtick
+# guard, so it matched there and (body being .*? under DOTALL) swallowed the next
+# paragraph as a script, printing
+#   js: prompt directive left literal: unknown inline subsystem 'sub'
+# on every single run, because AGENTS.md is loaded into the system prompt.
+
+def test_fence_mentioned_mid_sentence_is_not_a_directive(capsys):
+    text = "see ```!sub ` fenced block for detail\nmore prose\n```\ntail"
+
+    actual = expand_prompt(text, allow_code=True, on_error="warn")
+
+    assert actual == text
+    assert "unknown inline subsystem" not in capsys.readouterr().err
+
+
+def test_fence_at_line_start_still_runs():
+    actual = expand_prompt("```!sh\necho HELLO\n```", allow_code=True)
+
+    assert actual.strip() == "HELLO"
+
+
+def test_fence_indented_up_to_three_spaces_still_runs():
+    """Markdown allows a fence up to three spaces in; a list-nested fence must work."""
+    actual = expand_prompt("  ```!sh\necho INDENTED\n```", allow_code=True)
+
+    assert actual.strip() == "INDENTED"
+
+
+def test_fence_indented_four_spaces_is_a_code_block_not_a_fence():
+    text = "    ```!sh\necho NO\n```"
+
+    assert expand_prompt(text, allow_code=True) == text
+
+
+def test_escaped_fence_drops_only_the_backslash():
+    actual = expand_prompt("\\```!sh\necho NOPE\n```", allow_code=True)
+
+    assert actual == "```!sh\necho NOPE\n```"
+
+
+def test_escaped_indented_fence_keeps_its_indent():
+    actual = expand_prompt("  \\```!sh\necho NOPE\n```", allow_code=True)
+
+    assert actual == "  ```!sh\necho NOPE\n```"
+
+
+def test_repo_agents_md_expands_to_itself(capsys):
+    """The file that triggered this bug, verbatim, must round-trip untouched."""
+    agents_md = Path(__file__).resolve().parents[1] / "AGENTS.md"
+    if not agents_md.is_file():
+        pytest.skip("AGENTS.md not present in this tree")
+    text = agents_md.read_text(encoding="utf-8")
+
+    actual = expand_prompt(text, allow_code=True, on_error="warn")
+
+    assert actual == text
+    assert "prompt directive left literal" not in capsys.readouterr().err
+
+
+# --- global instruction files ---------------------------------------------------
+
+def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
+    """Global context is JS.md. A global AGENTS.md must NOT be loaded everywhere."""
+    from js import paths
+
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
+
+    assert [p.name for p in paths.global_instruction_files()] == ["JS.md", "JS.local.md"]

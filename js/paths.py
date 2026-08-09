@@ -39,9 +39,17 @@ def global_skills_dir() -> Path:
     return config_dir() / "skills"
 
 
-def global_agents_files() -> tuple[Path, Path]:
+def global_instruction_files() -> tuple[Path, Path]:
+    """js's own always-on operator context, loaded whatever directory js runs in.
+
+    Named JS.md, deliberately NOT AGENTS.md. AGENTS.md is the per-repo convention a
+    dozen other tools also read, so a global one would silently apply repo-shaped
+    instructions everywhere. ~/.config/js/AGENTS.md now loads only the way any other
+    directory's does: by running js from inside ~/.config/js, where it is the project
+    file for that directory.
+    """
     root = config_dir()
-    return root / "AGENTS.md", root / "AGENTS.local.md"
+    return root / "JS.md", root / "JS.local.md"
 
 
 def sessions_root() -> Path:

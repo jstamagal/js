@@ -73,12 +73,18 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # fully wrapped in a backtick code span is matched as a unit and emitted literally,
 # while a directive with no backticks -- or only a stray leading one -- backtracks
 # to the unwrapped form and expands.
+#
+# The fenced form additionally must OPEN A LINE, like a real markdown fence: the
+# lookbehind admits only the start of the text or a position straight after a newline
+# (an optional escape backslash may sit between). Without it, prose that merely
+# mentions the syntax -- AGENTS.md documents `` ```!sub `` mid-sentence -- matched, and
+# since the body is .*? under DOTALL it swallowed the following paragraph as a script
+# and reported `unknown inline subsystem 'sub'` on every single run.
 _DIRECTIVE = re.compile(
-    r"(?P<bs>\\)?"
     r"(?:"
-    r"```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
-    r"|(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
-    r"|(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
+    r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
+    r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
+    r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r")",
     re.DOTALL,
 )
@@ -119,8 +125,12 @@ def expand_prompt(
 
     def _resolve(m: re.Match) -> str:
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
-        if m.group("bs") is not None:
-            return m.group(0)[1:]
+        # Each branch carries its own escape group because the fenced branch has to
+        # sit behind a line-start lookbehind that a shared leading group would break.
+        if (m.group("bs") or m.group("ibs") or m.group("ebs")) is not None:
+            # Drop the escape backslash only. A fenced match may carry up to three
+            # spaces of markdown indent ahead of it, so slicing [1:] would eat a space.
+            return m.group(0).replace("\\", "", 1)
         try:
             if m.group("fsub") is not None:
                 return _run_subsystem(

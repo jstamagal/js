@@ -51,10 +51,16 @@ from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
 from .toolkit.artifact import build_artifact_system
-from .toolkit.registry import build_default_registry
+from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
-_FULL_REGISTRY = build_default_registry()
+def _fallback_registry():
+    """Registry for the handful of paths that genuinely have no cfg in hand.
+
+    Prefer `_registry_for(cfg)` everywhere else: this one sees only the js repo's own
+    prompts/ dir, so none of the operator's agents in ~/.config/js/agents appear.
+    """
+    return registry_for_roots(())
 
 
 def _error_text(e: BaseException) -> str:
@@ -64,12 +70,16 @@ def _error_text(e: BaseException) -> str:
 
 
 def _registry_for(cfg) -> object:
-    # The default registry exposes the subagent `model` override on the task tool.
-    # When the operator has locked subagent model selection, rebuild without that
-    # flag so the param is gone from both the tool description and its schema.
-    if getattr(cfg, "lock_subagent_model", False):
-        return build_default_registry(cfg.prompt_roots, flags=())
-    return _FULL_REGISTRY
+    # Always build from THIS cfg's prompt roots. The old code returned a module-level
+    # registry built with no roots on the normal path, and only passed cfg.prompt_roots
+    # on the locked branch — so every agent in ~/.config/js/agents and .js/agents was
+    # invisible as a tool unless the operator happened to lock subagent models.
+    #
+    # The `model_override` flag exposes the subagent `model` param on the task tool;
+    # when the operator has locked subagent model selection it is dropped from both the
+    # schema and the description rather than merely ignored.
+    flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
+    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags)
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -1736,7 +1746,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     prompt_spec = None
     if system_override is not None:
         system = system_override
-        active_registry = tool_registry or _FULL_REGISTRY
+        active_registry = tool_registry or _registry_for(cfg)
     else:
         try:
             prompt_spec = P.load_configured_prompt_spec(cfg)
@@ -2114,7 +2124,7 @@ def _run_artifact(artifact_arg: str, target: str | None,
         rc = _run_prompt(prompt, model=model, debug=debug, agent=eff_agent,
                          debug_file=debug_file, session=active_session, save=save, system_override=system,
                          resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
-                         tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
+                         tool_registry=_fallback_registry(), reasoning=reasoning, maxout=maxout,
                          extras=extras,
                          ignore_local_config=ignore_local_config,
                          ignore_global_config=ignore_global_config, presets=presets)
