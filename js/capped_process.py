@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 
 
@@ -74,9 +75,9 @@ def _run_capped(
     Raises ``subprocess.TimeoutExpired`` like ``subprocess.run``; on timeout the
     whole process tree is killed. After a normal exit, readers get a short
     grace to drain the pipe buffers; a reader still blocked past that (a
-    backgrounded grandchild deliberately keeps the pipe open) is left parked —
-    intentionally-spawned daemons are not killed — and whatever was captured
-    so far is returned.
+    backgrounded grandchild deliberately keeps the pipe open) is stopped and
+    the parent's read end is closed. Intentionally-spawned daemons are not
+    killed, and whatever was captured so far is returned.
     """
     popen_kwargs: dict = {}
     if sys.platform != "win32":
@@ -90,38 +91,74 @@ def _run_capped(
         **popen_kwargs,
     )
     captures = {"stdout": _StreamCapture(cap), "stderr": _StreamCapture(cap)}
+    stop_readers = threading.Event()
 
     def _reader(name: str, stream) -> None:
         capture = captures[name]
         try:
+            if sys.platform != "win32":
+                os.set_blocking(stream.fileno(), False)
             while True:
-                # read1: return whatever is available instead of blocking for a
-                # full 64 KiB — chunks must publish as they arrive, not at EOF.
-                chunk = stream.read1(65536)
+                if stop_readers.is_set():
+                    return
+                try:
+                    chunk = (
+                        stream.read1(65536)
+                        if sys.platform == "win32"
+                        else os.read(stream.fileno(), 65536)
+                    )
+                except BlockingIOError:
+                    stop_readers.wait(0.01)
+                    continue
                 if not chunk:
                     return
                 capture.feed(chunk)
         except Exception:  # noqa: BLE001 - a dying pipe just ends the capture
             return
-        finally:
+
+    threads = [
+        threading.Thread(
+            target=_reader,
+            args=("stdout", proc.stdout),
+            daemon=True,
+            name="capped-process-stdout",
+        ),
+        threading.Thread(
+            target=_reader,
+            args=("stderr", proc.stderr),
+            daemon=True,
+            name="capped-process-stderr",
+        ),
+    ]
+
+    def finish_readers() -> None:
+        deadline = time.monotonic() + 2
+        for thread in threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            stop_readers.set()
+            for stream in (proc.stdout, proc.stderr):
+                with contextlib.suppress(Exception):
+                    os.close(stream.fileno())
+            for thread in threads:
+                thread.join(timeout=0.5)
+        for stream in (proc.stdout, proc.stderr):
             with contextlib.suppress(Exception):
                 stream.close()
 
-    threads = [
-        threading.Thread(target=_reader, args=("stdout", proc.stdout), daemon=True),
-        threading.Thread(target=_reader, args=("stderr", proc.stderr), daemon=True),
-    ]
     for thread in threads:
         thread.start()
     try:
         rc = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
-        for thread in threads:
-            thread.join(timeout=2)
-        raise
-    for thread in threads:
-        thread.join(timeout=2)
+        finish_readers()
+        stdout, _ = captures["stdout"].snapshot()
+        stderr, _ = captures["stderr"].snapshot()
+        raise subprocess.TimeoutExpired(
+            argv, timeout, output=stdout, stderr=stderr
+        ) from None
+    finish_readers()
     stdout, stdout_truncated = captures["stdout"].snapshot()
     stderr, stderr_truncated = captures["stderr"].snapshot()
     return CappedProcessResult(
