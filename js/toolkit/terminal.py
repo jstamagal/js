@@ -116,9 +116,12 @@ def _drain(state: dict[str, Any], wait_ms: int) -> None:
 
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
     child = state["child"]
-    while time.monotonic() < deadline:
+    first_read = True
+    while first_read or time.monotonic() < deadline:
+        first_read = False
+        timeout = min(0.1, max(0.0, deadline - time.monotonic()))
         try:
-            chunk = child.read_nonblocking(size=65536, timeout=0.1)
+            chunk = child.read_nonblocking(size=65536, timeout=timeout)
         except pexpect.TIMEOUT:
             continue
         except (pexpect.EOF, OSError):
@@ -215,8 +218,8 @@ def terminal_session(
     keys: str | None = "",
     cwd: str | None = "",
     wait_ms: int | None = 700,
-    cols: int | None = DEFAULT_COLS,
-    rows: int | None = DEFAULT_ROWS,
+    cols: int | None = None,
+    rows: int | None = None,
     context: ToolContext | None = None,
 ) -> str:
     """Start, drive, inspect, stop, or list a persistent PTY session."""
@@ -233,9 +236,14 @@ def terminal_session(
     command = text_or_default(command)
     keys = text_or_default(keys)
     wait = min(int_or_default(wait_ms, 700, minimum=0), 10_000)
+    cols_supplied = cols is not None
+    rows_supplied = rows is not None
     width = min(int_or_default(cols, DEFAULT_COLS, minimum=1), 400)
     height = min(int_or_default(rows, DEFAULT_ROWS, minimum=1), 200)
     sessions = context.terminal_sessions
+
+    if action != "start" and (cols_supplied or rows_supplied):
+        return "ERROR: cols and rows apply only to action=start"
 
     if action == "list":
         return _report(
@@ -256,9 +264,6 @@ def terminal_session(
     if action == "start":
         if not command.strip():
             return "ERROR: action=start requires command"
-        old = sessions.pop(session, None)
-        if old is not None:
-            _stop_state(old)
         workdir = context.resolve_path(cwd) if cwd else context.cwd.resolve()
         if not workdir.is_dir():
             return f"ERROR: no such directory: {workdir}"
@@ -281,7 +286,7 @@ def terminal_session(
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
         screen = pyte.Screen(width, height)
-        sessions[session] = {
+        replacement = {
             "child": child,
             "screen": screen,
             "stream": pyte.Stream(screen),
@@ -291,6 +296,10 @@ def terminal_session(
             "previous_lines": None,
         }
         _LIVE_CHILDREN.add(child)
+        old = sessions.get(session)
+        if old is not None:
+            _stop_state(old)
+        sessions[session] = replacement
         return _observe(sessions[session], session, f"started {command}", wait, context)
 
     state = sessions.get(session)
@@ -381,25 +390,28 @@ def terminal_snapshot(
     state = context.terminal_sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use terminal_session first"
+    raw_output_path = text_or_default(output_path)
+    if raw_output_path and Path(raw_output_path).suffix.lower() != ".png":
+        return "ERROR: output_path must end in .png"
     _drain(state, min(int_or_default(wait_ms, 100, minimum=0), 10_000))
-    state["snapshot_n"] += 1
-    if output_path:
-        target = context.resolve_path(text_or_default(output_path))
+    state["previous_lines"] = _render_lines(state["screen"])
+    snapshot_n = state["snapshot_n"] + 1
+    if raw_output_path:
+        target = context.resolve_path(raw_output_path)
     else:
         safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "-", session).strip("-") or "main"
         target = (
             state["cwd"]
             / "terminal-snapshots"
-            / f"{safe_session}-{state['snapshot_n']:02d}.png"
+            / f"{safe_session}-{snapshot_n:02d}.png"
         )
-    if target.suffix.lower() != ".png":
-        return "ERROR: output_path must end in .png"
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         _draw_screen(state["screen"], target)
     except Exception as exc:
         return f"ERROR: could not render terminal snapshot: {type(exc).__name__}: {exc}"
+    state["snapshot_n"] = snapshot_n
     return fs.fs_read(file_path=str(target), context=context)
 
 
@@ -416,8 +428,8 @@ def tools() -> tuple[Tool, ...]:
                 "keys": {"type": "string"},
                 "cwd": {"type": "string"},
                 "wait_ms": {"type": "integer", "default": 700},
-                "cols": {"type": "integer", "default": DEFAULT_COLS},
-                "rows": {"type": "integer", "default": DEFAULT_ROWS},
+                "cols": {"type": "integer"},
+                "rows": {"type": "integer"},
             },
             required=("action",),
         ),

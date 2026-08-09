@@ -14,8 +14,11 @@ Parameters:
   typed literally; use `comma` to type a comma.
 - `cwd`: working directory for `start`, relative to the task workspace unless
   absolute.
-- `wait_ms` (default `700`): time to collect redraw output after the action.
-- `cols` and `rows` (defaults `64` by `36`): terminal screen dimensions.
+- `wait_ms` (default `700`, maximum `10000`): time to collect redraw output
+  after the action. A zero wait still polls once for output already available.
+- `cols` and `rows` (defaults `64` by `36`, maximum `400` by `200`): terminal
+  screen dimensions for `start` only. Passing either with another action is an
+  error.
 
 The result includes the rendered terminal lines, cursor position, process
 state, and whether displayed lines changed after input. A running process is
