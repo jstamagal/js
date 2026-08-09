@@ -101,7 +101,7 @@ The offline suite covers:
 - Runtime context cap hydration.
 - Claude provider-facing names with canonical persisted history.
 - Tool retry limit final error behavior.
-- Filesystem read/write/patch/multi_patch/remove/undo behavior.
+- Filesystem read/write/patch/remove/undo behavior, including multi-edit atomicity.
 - Image result dehydration.
 - Registry generation and tool selector behavior.
 - Tool description file coverage.

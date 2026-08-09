@@ -96,7 +96,6 @@ write
 fs_search
 remove
 patch
-multi_patch
 undo
 shell
 fetch
@@ -189,9 +188,9 @@ discovered and loaded by catalog id.
 
 ## File Safety
 
-`read` records that a file was read and remembers its hash. `write`, `patch`,
-and `multi_patch` require a prior read before changing existing files. New file
-creation does not require a prior read.
+`read` records that a file was read and remembers its hash. `write` and `patch`
+require a prior read before changing existing files. New file creation does not
+require a prior read.
 
 Edit operations snapshot prior state for `undo`:
 

@@ -4,13 +4,9 @@ Use this for new files, generated complete-file content, or replacing an entire
 file intentionally.
 {{#if patch}}
 For existing source files, prefer `patch` so the edit stays narrow and
-reviewable.
+reviewable; it takes several replacements in one call.
 {{/if}}
-{{#if multi_patch}}
-For several replacements in one existing source file, prefer `multi_patch` so the
-edit stays narrow and reviewable.
-{{/if}}
-{{#unless patch multi_patch}}
+{{#unless patch}}
 For existing source files, keep overwrites deliberate and complete; this surface
 has no narrower edit tool.
 {{/unless}}
