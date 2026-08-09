@@ -936,7 +936,7 @@ def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path, caps
     assert "--reasoning auto" in err
 
 
-def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeypatch, tmp_path):
+def test_artifact_mode_forwards_debug_file_reasoning_and_maxout(monkeypatch, tmp_path):
     calls: list[dict] = []
 
     def run_prompt_stub(
@@ -1003,32 +1003,18 @@ def test_wiki_and_artifact_modes_forward_debug_file_reasoning_and_maxout(monkeyp
         prompts_dir=tmp_path / "prompts",
     ))
 
-    vault = tmp_path / "wiki-forward"
-    vault.mkdir()
-    wiki_rc = cli.main(["--wiki=ingest", "--vault", str(vault), "--debug-file", str(tmp_path / "wiki.log"), "-r", "off", "--max-out", "111", "-m", "model-a", "--ignore-local", "--preset", "fast", "-n", str(tmp_path)])
     artifact_rc = cli.main(["--artifact=query", "--debug-file", str(tmp_path / "artifact.log"), "-r", "low", "--max-out", "222", "-m", "model-b", "--ignore-global", "-n", "find thing"])
 
-    assert wiki_rc == 0
     assert artifact_rc == 0
-    assert calls[0]["debug_file"] == str(tmp_path / "wiki.log")
-    assert calls[0]["reasoning"] == "off"
-    assert calls[0]["maxout"] == 111
-    assert calls[0]["model"] == "model-a"
+    assert calls[0]["debug_file"] == str(tmp_path / "artifact.log")
+    assert calls[0]["reasoning"] == "low"
+    assert calls[0]["maxout"] == 222
+    assert calls[0]["model"] == "model-b"
     assert calls[0]["has_system"] is True
     assert calls[0]["has_registry"] is True
-    # --preset / --ignore-local now reach the mode runner instead of no-op'ing.
-    assert calls[0]["ignore_local_config"] is True
-    assert calls[0]["ignore_global_config"] is False
-    assert calls[0]["presets"] == ["fast"]
-    assert calls[1]["debug_file"] == str(tmp_path / "artifact.log")
-    assert calls[1]["reasoning"] == "low"
-    assert calls[1]["maxout"] == 222
-    assert calls[1]["model"] == "model-b"
-    assert calls[1]["has_system"] is True
-    assert calls[1]["has_registry"] is True
-    assert calls[1]["ignore_global_config"] is True
-    assert calls[1]["ignore_local_config"] is False
-    assert calls[1]["presets"] == []
+    assert calls[0]["ignore_global_config"] is True
+    assert calls[0]["ignore_local_config"] is False
+    assert calls[0]["presets"] == []
 
 
 def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, capsys):
@@ -1216,59 +1202,6 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
         {"role": "assistant", "content": "KINGAPE_SESSION_OK"},
     ]
     assert load_messages(default_session) == [{"role": "user", "content": "default old"}]
-
-
-def test_wiki_continue_hint_preserves_model_override(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-
-    def completion_stub(**kwargs):
-        return _fake_stream_result("WIKI_MODEL_HINT_OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-
-    vault = tmp_path / "wiki-hints"
-    vault.mkdir()
-    actual = cli.main(["--wiki=ingest", "--vault", str(vault), "--model", "wiki-model"])
-
-    output = capsys.readouterr().out
-    session_file = next((tmp_path / ".local" / "share" / "js" / "sessions" / "wiki").glob("*.jsonl"))
-    assert actual == 0
-    assert output == (
-        "WIKI_MODEL_HINT_OK\n"
-        f"Continue: js --wiki=ingest --vault={vault} --model wiki-model --session {session_file.stem}\n"
-    )
-
-
-def test_wiki_combined_modes_run_as_sequential_turns_in_one_session(monkeypatch, tmp_path):
-    # Regression: ingest's prompt says "then stop" and a text-only turn ends the
-    # loop, so cramming ingest+synthesize into one prompt stranded the run at the
-    # seam. Each mode must run as its own driven turn over one shared session.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-
-    systems: list[str] = []
-
-    def completion_stub(**kwargs):
-        systems.append(kwargs["messages"][0].parts[0].text)
-        return _fake_stream_result(f"turn{len(systems)} done.")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-
-    actual = cli.main(["--wiki=ingest,synthesize", "--vault", str(tmp_path)])
-
-    assert actual == 0
-    assert len(systems) == 2
-    assert "## MODE: INGEST" in systems[0] and "## MODE: SYNTHESIZE" not in systems[0]
-    assert "## MODE: SYNTHESIZE" in systems[1] and "## MODE: INGEST" not in systems[1]
-
-    sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "wiki"
-    nonempty = [p for p in sessions_dir.glob("*.jsonl") if p.stat().st_size > 0]
-    assert len(nonempty) == 1
-    roles = [m["role"] for m in load_messages(nonempty[0])]
-    assert roles == ["user", "assistant", "user", "assistant"]
 
 
 def test_artifact_combined_modes_run_as_sequential_turns_in_one_session(monkeypatch, tmp_path):

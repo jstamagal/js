@@ -51,8 +51,6 @@ from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
 from .toolkit.artifact import build_artifact_system
-from .toolkit.wiki import build_wiki_system, infer_vault
-from .toolkit.wiki.helpers import resolve_vault
 from .toolkit.registry import build_default_registry
 from .toolkit import ToolContext
 
@@ -386,7 +384,6 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
-    ("wiki_vault_lock_timeout_s", ("limits", "wiki_vault_lock_timeout_s")),
 )
 
 
@@ -2047,167 +2044,6 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     return 130 if interrupted else 0
 
 
-def _wiki_kickoff(mode: str, vault: str, target_desc: str, resuming: bool,
-                  immediate_file: str | None = None, immediate_unit: str | None = None) -> str:
-    """The single-mode kickoff prompt that opens a wiki turn."""
-    # Single-file ingest takes priority over the generic resume/ingest text (even on
-    # resume) so it never falls back to a prompt that tells the agent to call wiki_inbox.
-    if mode == "ingest" and immediate_file:
-        # Ingest exactly this one named file instead of the inbox flow picking a unit.
-        # If it IS a top-level inbox unit, close with wiki_finish_ingest so it is
-        # archived (the done-marker) and cannot be re-ingested/duplicated later. The
-        # inbox tool itself is never modified.
-        if immediate_unit:
-            close = (f"Then close out with ONE call: wiki_finish_ingest(\"{vault}\", \"{immediate_unit}\", "
-                     f"\"<title>\", \"<pages written>\") — it archives inbox/{immediate_unit} to Clippings, "
-                     f"writes the log entry, and commits, all at once (the done-marker that stops it duping on "
-                     f"a later run). Do NOT also call wiki_log — wiki_finish_ingest already logs.")
-        else:
-            close = (f"Then call wiki_log(\"{vault}\", \"ingest\", \"<title>\", \"<note>\"). Do NOT call "
-                     f"wiki_finish_ingest or wiki_archive — leave the file exactly where it sits.")
-        return (f"Wiki mode: ingest ONE FILE (SOURCE PAGE ONLY). vault={vault}. file={immediate_file}. "
-                f"Begin: call wiki_purpose(\"{vault}\") for the lens. Convert and read fully: "
-                f"wiki_convert(\"{immediate_file}\"). BEFORE writing, check whether a source page already "
-                f"covers this file (wiki_search + ls sources/); if so READ it and UPSERT (overwrite=true) — "
-                f"never duplicate. Write EXACTLY ONE kind=\"source\" page: a rich factual summary plus "
-                f"'## Candidate entities' and '## Candidate concepts' lists (each line: name — one-line why) "
-                f"as the synthesize pass's worklist. Do NOT write entity/concept/synthesis pages — the "
-                f"synthesize pass owns those (wiki_write refuses them in ingest mode). "
-                f"Do NOT call wiki_inbox; do NOT pick any other unit. {close} Report what you wrote, then stop.")
-    if resuming:
-        return (f"RESUME wiki mode: {mode}. vault={vault}. target={target_desc}. "
-                f"You were interrupted mid-task. Re-check state first (wiki_purpose, wiki_inbox, "
-                f"and read any pages you already started), then FINISH the {mode} flow. Pages that "
-                f"already exist -> read and UPSERT (wiki_write overwrite=true), never recreate.")
-    if mode == "ingest":
-        return (f"Wiki mode: ingest. vault={vault}. target={target_desc}. "
-                f"Begin: call wiki_purpose(\"{vault}\") first, then run the ingest flow — write ONE rich "
-                f"kind=\"source\" page (factual summary + '## Candidate entities' / '## Candidate concepts' "
-                f"lists, each line: name — one-line why), then wiki_finish_ingest. Do NOT write "
-                f"entity/concept/synthesis pages — those are the synthesize pass's job.")
-    if mode == "synthesize":
-        return (f"Wiki mode: synthesize. vault={vault}. "
-                f"Begin: call wiki_purpose(\"{vault}\") first, then run the synthesize flow — derive and "
-                f"UPSERT the SHARED entity/concept pages from the source pages' candidate lists, then weave "
-                f"synthesis pages citing every source with [[links]] and flagging contradictions, then commit.")
-    if mode == "query":
-        return (f"Wiki mode: query. vault={vault}. question={target_desc}. "
-                f"Begin: call wiki_purpose(\"{vault}\") first, then answer from the wiki with [[links]] "
-                f"and file a synthesis page if the answer is substantial.")
-    return (f"Wiki mode: lint. vault={vault}. "
-            f"Begin: call wiki_purpose(\"{vault}\") first, then health-check the wiki and fix mechanical "
-            f"issues (contradictions, orphans, stale claims, missing cross-refs).")
-
-
-def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
-              model: str | None = None, debug: bool = False, debug_file: str | None = None,
-              agent: str | None = None, session: str | None = None, save: bool = True,
-              reasoning: str | None = None, maxout: int | None = None,
-              extras: list[str] | None = None,
-              ignore_local_config: bool = False, ignore_global_config: bool = False,
-              presets: list[str] | None = None) -> int:
-    """js --wiki=ingest,synthesize [--vault=creative] <target>.
-
-    Built-in wiki prompting (ignores defaultagent). If --agent is given, that
-    agent's persona leads and the wiki prompting follows.
-
-    Each mode runs as its OWN kickoff turn over one shared session, in order.
-    Cramming every mode section into a single loop made the model obey the
-    ingest prompt's "then stop" and never reach synthesize; each mode prompt
-    re-orients from disk (wiki_purpose) so sequencing doesn't need shared chat.
-    """
-    valid = {"ingest", "synthesize", "query", "lint"}
-    modes = [m.strip().lower() for m in wiki_arg.split(",") if m.strip()]
-    bad = [m for m in modes if m not in valid]
-    if not modes or bad:
-        print(f"{C.ORANGE}error: --wiki expects a comma list of {sorted(valid)} (got {wiki_arg!r}){C.RESET}", file=sys.stderr)
-        return 2
-
-    if not vault:
-        vault = infer_vault(target, Path(os.getcwd()))
-    if not vault:
-        print(f"{C.ORANGE}error: no vault given and none inferred; pass --vault <name|path> or cd into a vault (PURPOSE.md sentinel or wiki-* dir){C.RESET}", file=sys.stderr)
-        return 2
-
-    # wiki mode runs under its own agent id ('wiki') unless --agent is given;
-    # an explicit --agent loads that persona AND prepends it to the wiki prompting.
-    eff_agent = agent or "wiki"
-    persona = ""
-    if agent:
-        try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
-                                       ignore_local_config=ignore_local_config,
-                                       ignore_global_config=ignore_global_config, presets=presets)
-            persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
-        except (ValueError, FileNotFoundError) as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-            return 2
-
-    # Reserve ONE session up front so every mode turn appends to the same jsonl.
-    active_session = session
-    if save and active_session is None:
-        try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
-                                       ignore_local_config=ignore_local_config,
-                                       ignore_global_config=ignore_global_config, presets=presets)
-        except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-            return 2
-        active_session = _session_hint_arg(cfg)
-
-    modes_arg = ",".join(modes)
-    resume_prefix = f"js --wiki={modes_arg} --vault={vault}"
-    if agent:
-        resume_prefix += f" --agent {agent}"
-    target_desc = target if target else "the inbox"
-    # Single-file ingest: if `target` is an actual file, ingest THAT one file (instead
-    # of the inbox flow picking a unit). Self-contained — uses BASE only, NOT the
-    # INGEST/inbox mode prompt, so the inbox tool/flow is never modified. If the file
-    # is an inbox unit, it is archived on success (wiki_finish_ingest = the done-marker)
-    # so it cannot be re-ingested or duplicated on a later run.
-    immediate_file = os.path.abspath(target) if target and os.path.isfile(target) else None
-    immediate_unit = None
-    if immediate_file:
-        # Resolve the vault the SAME way the wiki toolkit does (config aliases + ~ + cwd-relative).
-        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent,
-                                          ignore_local_config=ignore_local_config,
-                                          ignore_global_config=ignore_global_config, presets=presets)
-        _wiki = (getattr(_alias_cfg, "settings", {}) or {}).get("wiki")
-        _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
-        vp = resolve_vault(vault, ToolContext(cwd=Path(os.getcwd()), vault_aliases=_aliases))
-        try:
-            rel = Path(immediate_file).resolve().relative_to((vp / "inbox").resolve())
-        except ValueError:
-            rel = None
-        # Only a TOP-LEVEL inbox unit is archiveable. A nested file (inbox/proj/child)
-        # must NOT archive its parent folder — that would hide unprocessed siblings.
-        # Skip _skipped and dotfiles, which the inbox tool itself ignores.
-        if rel is not None and len(rel.parts) == 1 and rel.parts[0] != "_skipped" \
-                and not rel.parts[0].startswith("."):
-            immediate_unit = rel.parts[0]
-
-    rc = 0
-    for idx, mode in enumerate(modes):
-        if immediate_file and mode == "ingest":
-            system = persona + build_wiki_system([])
-        else:
-            system = persona + build_wiki_system([mode])
-        prompt = _wiki_kickoff(mode, vault, target_desc, resuming=(session is not None and idx == 0),
-                               immediate_file=immediate_file, immediate_unit=immediate_unit)
-        mode_context = ToolContext(cwd=Path.cwd(), wiki_mode=mode)
-        rc = _run_prompt_compat(prompt, model=model, debug=debug, agent=eff_agent,
-                                debug_file=debug_file, session=active_session, save=save, system_override=system,
-                                resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
-                                tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                                extras=extras, tool_context=mode_context,
-                                ignore_local_config=ignore_local_config,
-                                ignore_global_config=ignore_global_config, presets=presets)
-        if rc != 0:
-            break
-    return rc
-
-
-
 def _artifact_kickoff(mode: str, target_desc: str, resuming: bool) -> str:
     if resuming:
         return (f"RESUME artifact mode: {mode}. target={target_desc}. "
@@ -2988,7 +2824,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
-    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
+    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
@@ -3016,11 +2852,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
     parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
     parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
-    parser.add_argument("--wiki", metavar="MODES", help="wiki mode: comma list of ingest,synthesize,query,lint (e.g. --wiki=ingest,synthesize). Built-in wiki prompting; ignores defaultagent unless --agent is also given (persona + wiki).")
     parser.add_argument("--artifact", metavar="MODES", help="artifact mode: comma list of curate,digest,query,lint (e.g. --artifact=digest). Built-in artifact prompting; ignores defaultagent unless --agent is also given.")
     parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
-    parser.add_argument("--vault", help="wiki vault: creative|general|path (default: infer from target/cwd, else creative)")
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
                         help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
                              "and ```!lang fences are left literal instead of running. Inline code runs by "
@@ -3032,7 +2866,7 @@ def main(argv: list[str] | None = None) -> int:
                              "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
                              ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
                              "Never errors — unknown letters/unwritable paths degrade with a warning.")
-    parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
+    parser.add_argument("target", nargs="?", help="target path for built-in artifact or commit mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
@@ -3109,7 +2943,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if (
             args.prompt is None
-            and args.wiki is None
             and args.artifact is None
             and not args.commit
             and args.compact is None
@@ -3139,9 +2972,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.printonly is not None:
         return _printonly_run(args, cli_agent, presets)
 
-    selected_modes = [name for name, enabled in (("wiki", args.wiki), ("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
+    selected_modes = [name for name, enabled in (("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
-        print(f"{C.ORANGE}error: choose only one built-in mode: --wiki, --artifact, --commit, or --compact{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}error: choose only one built-in mode: --artifact, --commit, or --compact{C.RESET}", file=sys.stderr)
         return 2
     if args.files and selected_modes:
         print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
@@ -3162,15 +2995,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
-
-    if args.wiki:
-        return _run_wiki(args.wiki, args.target, args.vault, model=args.model,
-                         debug=args.debug, debug_file=args.debug_file, agent=args.agent,
-                         session=args.session, save=not args.no_save,
-                         reasoning=args.reasoning, maxout=args.max_out,
-                         extras=args.extras,
-                         ignore_local_config=args.ignore_local,
-                         ignore_global_config=args.ignore_global, presets=presets)
 
     if args.artifact:
         return _run_artifact(args.artifact, args.target, model=args.model,

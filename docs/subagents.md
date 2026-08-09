@@ -109,38 +109,12 @@ Child contexts do not inherit:
 - search cache
 - todos
 
-## Built-In Wiki/Artifact Modes Are Not Subagent Types
+## Wiki Agents And Built-In Artifact Mode
 
-`js --wiki=...` and `js --artifact=...` are CLI modes with built-in prompt
-builders. The generic `task` tool does not run a child "as if `--wiki` was
-passed".
-
-To make a wiki-capable subagent, create a prompt directory such as
-`prompts/wiki-worker/00-tools.md`:
-
-```markdown
----
-tools:
-  - read
-  - fs_search
-  - shell
-  - wiki_*
----
-
-You are a wiki worker. Start with wiki_purpose(vault), then perform the assigned
-wiki task.
-```
-
-Then call:
-
-```json
-{
-  "tasks": ["vault=creative; ingest the one specified inbox unit ..."],
-  "agent_id": "wiki-worker"
-}
-```
-
-That passes wiki tools by selection, not by inheriting the parent surface.
+Wiki workers are ordinary prompt-directory agents selected with `--agent`; the
+`wiki` wrapper routes friendly commands to installed `wiki-*` agents. Native
+`wiki_convert`, `wiki_write`, and `wiki_finish_ingest` tools provide deterministic
+ingestion operations. Artifact remains a built-in CLI mode.
 
 ## Predefined Subagent Types
 
@@ -154,7 +128,7 @@ What exists today:
   `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`.
 - generated direct tools for prompt directories.
 - bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
-- built-in CLI modes: wiki/artifact/commit/drain, but only commit is exposed as
+- built-in CLI modes: artifact/commit, but only commit is exposed as
   a prompt-directory agent and `js --commit` wrapper.
 
 ## No Monitor/Stop Handles Yet

@@ -246,7 +246,7 @@ ANSI is stripped unless `keep_ansi=true`.
 
 ## Wiki And Artifact Tools
 
-Wiki and artifact tools live in the default registry even when the active prompt
+Wiki and artifact tools live in default registry even when active prompt
 does not select them. Built-in modes select the full registry and rely on their
 mode prompts to steer behavior.
 

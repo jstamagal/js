@@ -15,8 +15,8 @@ from collections.abc import Iterable
 
 from .core import Tool, ToolContext
 from .sanitize import int_or_default, text_or_default
-from .descriptions import load_description
 from .wiki.helpers import run
+from .descriptions import load_description
 
 
 _TEXT_EXTS = {

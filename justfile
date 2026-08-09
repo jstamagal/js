@@ -7,7 +7,7 @@
 # whole `.venv/bin/js` dance is what this file replaces). This justfile is the
 # single workflow entry point for the repo.
 #
-# `just` with no arg lists recipes. Pass-through recipes (run/drain/commit)
+# `just` with no arg lists recipes. Pass-through recipes (run/commit)
 # forward everything after the recipe name, so `just run -p "summarize this"`
 # reaches js unchanged.
 
@@ -28,13 +28,8 @@ default:
 # run js. no args -> interactive REPL. pass any js flags/args through.
 #   just run -p "summarize this repo"
 #   just run --commit
-# just run --wiki=ingest --vault=creative ~/notes/source.md
 run *args:
     uv run {{ browser-extra }} js {{ args }}
-
-# run js-drain (drain jobs). e.g. just drain creative -a
-drain *args:
-    uv run {{ browser-extra }} js-drain {{ args }}
 
 # Commit workflow is deliberately plain: run `js --commit` from repo root.
 # Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
@@ -55,7 +50,7 @@ sync:
 shell:
     uv run {{ browser-extra }} bash
 
-# install `js` + `js-drain` onto PATH as launchers shebanged to a managed venv,
+# install `js` onto PATH as launchers shebanged to a managed venv,
 # editable so they track the working tree (no reinstall after a code edit). uv
 # puts the launchers in its tool bin dir — usually ~/.local/bin. Also provisions
 # the CLI binaries the tools lean on (ripgrep/fd/bat/fzf).
@@ -64,6 +59,8 @@ install:
     #!/usr/bin/env bash
     set -euo pipefail
     uv tool install --force --editable "{{ browser-target }}"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
     just ensure-tools
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
@@ -174,7 +171,7 @@ test-cli:
 test-memory:
     uv run {{ browser-extra }} --extra test pytest -q tests/test_memory_config_harness.py
 test-wiki:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py tests/test_drain_harness.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py
 
 # ── quality ─────────────────────────────────────────────────────────────────
 # ruff lives in the dev dependency-group, so `uv sync` installs it and it's on

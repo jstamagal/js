@@ -29,7 +29,6 @@ test = [
 
 [project.scripts]
 js = "js.cli:main"
-js-drain = "js.drain:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -56,7 +55,6 @@ dev = [
 [tool.ruff]
 line-length = 100
 # giant prompt-string template builder; linting it is pure noise.
-extend-exclude = ["js/toolkit/wiki/prompts.py"]
 
 [tool.ruff.lint]
 # defaults already cover E (errors) + F (pyflakes); add pyupgrade.

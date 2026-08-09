@@ -13,7 +13,6 @@ from js.config import Config, from_env
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext, build_default_registry
 from js.toolkit.artifact import _artifact_bin, _artifact_dir, _base_url
-from js.toolkit.wiki.helpers import infer_vault, resolve_vault
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
@@ -170,7 +169,7 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
     assert cfg.subagent_max_workers == 3
 
 
-def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monkeypatch, tmp_path):
+def test_run_turn_copies_artifact_config_to_tool_context(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("ok"))
     cfg = replace(
         _config(
@@ -178,7 +177,6 @@ def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monke
             artifact_dir="/cfg/artifacts",
             artifact_url="http://cfg.local/",
             artifact_bin="artifact-cfg",
-            settings_view={"wiki": {"aliases": {"creative": "/p"}}},
         ),
         subagent_max_workers=3,
     )
@@ -199,28 +197,3 @@ def test_run_turn_copies_artifact_config_and_vault_aliases_to_tool_context(monke
     assert context.artifact_url == "http://cfg.local/"
     assert context.artifact_bin == "artifact-cfg"
     assert context.subagent_max_workers == 3
-    assert context.vault_aliases == {"creative": "/p"}
-
-
-def test_resolve_vault_uses_context_aliases_and_falls_through_to_paths(monkeypatch, tmp_path):
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    context = ToolContext(cwd=tmp_path, vault_aliases={"creative": "~/wiki-creative"})
-
-    assert resolve_vault("creative", context) == (home / "wiki-creative").resolve()
-    assert resolve_vault("missing", context) == (tmp_path / "missing").resolve()
-
-
-def test_infer_vault_fails_closed_and_detects_sentinel_or_wiki_dir(tmp_path):
-    non_vault = tmp_path / "plain"
-    non_vault.mkdir()
-    assert infer_vault(None, non_vault) is None
-
-    sentinel_vault = tmp_path / "notes"
-    sentinel_vault.mkdir()
-    (sentinel_vault / "PURPOSE.md").write_text("purpose\n", encoding="utf-8")
-    assert infer_vault(None, sentinel_vault / "nested") == str(sentinel_vault.resolve())
-
-    named_vault = tmp_path / "wiki-general"
-    named_vault.mkdir()
-    assert infer_vault(None, named_vault) == str(named_vault.resolve())

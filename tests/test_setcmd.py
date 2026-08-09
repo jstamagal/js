@@ -346,14 +346,14 @@ def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: 
 def test_map_sub_key_updates_parent_map_and_shows_parent():
     live_settings = settings.seed_defaults()
 
-    changed = setcmd.run_repl_command(live_settings, "/set wiki.aliases.creative /p")
-    shown = setcmd.run_repl_command(live_settings, "/show wiki.aliases")
+    changed = setcmd.run_repl_command(live_settings, "/set provider.extra.organization /p")
+    shown = setcmd.run_repl_command(live_settings, "/show provider.extra")
 
     assert changed.error is None
-    assert changed.lines == ["wiki.aliases.creative = /p"]
-    assert settings.get_dotted(live_settings, ("wiki", "aliases", "creative")) == "/p"
+    assert changed.lines == ["provider.extra.organization = /p"]
+    assert settings.get_dotted(live_settings, ("provider", "extra", "organization")) == "/p"
     assert shown.error is None
-    assert shown.lines[0] == "wiki.aliases = creative=/p"
+    assert shown.lines[0] == "provider.extra = organization=/p"
 
 
 @pytest.mark.parametrize("line", ["show model.id", "run something"])
@@ -438,10 +438,10 @@ def test_set_dash_key_on_already_unset_is_noop():
 
 def test_set_dash_key_clears_map_subkey():
     cfg = {}
-    settings.set_dotted(cfg, ("wiki", "aliases", "creative"), "/tmp/x")
-    result = setcmd.run_repl_command(cfg, "/set -wiki.aliases.creative")
+    settings.set_dotted(cfg, ("provider", "extra", "organization"), "/tmp/x")
+    result = setcmd.run_repl_command(cfg, "/set -provider.extra.organization")
     assert result.changed is True
-    assert settings.get_dotted(cfg, ("wiki", "aliases", "creative")) is None
+    assert settings.get_dotted(cfg, ("provider", "extra", "organization")) is None
 
 
 def test_set_dash_unknown_knob_errors():

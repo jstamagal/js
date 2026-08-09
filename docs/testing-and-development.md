@@ -1,8 +1,7 @@
 # Testing And Development
 
 The test suite is designed to exercise public harness behavior: CLI dispatch,
-runtime tool loops, registry surfaces, subagent isolation, memory, drain
-planning, wiki/artifact tools, and live proxy paths.
+runtime tool loops, registry surfaces, subagent isolation, memory, wiki/artifact tools, and live proxy paths.
 
 ## Install Test Dependencies
 
@@ -64,10 +63,10 @@ Memory/config:
 pytest -q tests/test_memory_config_harness.py
 ```
 
-Wiki/artifact/drain:
+Wiki/artifact:
 
 ```bash
-pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py tests/test_drain_harness.py
+pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py
 ```
 
 ## Live Tests
@@ -108,9 +107,8 @@ The offline suite covers:
 - Tool description file coverage.
 - Subagent context/session/tool-surface isolation.
 - Parallel subagent sibling failure preservation.
-- Wiki native tools and leave-in-place closeout.
+- Wiki conversion, guarded page writes, and ordered closeout.
 - Artifact native tools.
-- Drain job planning, `--limit` archive safety, nested archive ownership.
 
 ## Development Style
 

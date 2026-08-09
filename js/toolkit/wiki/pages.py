@@ -1,14 +1,13 @@
 """wiki_write: create or UPSERT a wiki page with correct frontmatter."""
 from __future__ import annotations
 
-import os
+import json
 import re
 from pathlib import Path
 
 from ..core import ToolContext
 from ..sanitize import int_or_default, text_or_default
-from ... import colors as C
-from .helpers import resolve_vault, slugify, today, KIND_FOLDER, KIND_TYPE, KIND_TAG, vault_lock, wiki_say
+from .helpers import resolve_vault, slugify, today, KIND_FOLDER, KIND_TYPE, KIND_TAG, vault_lock
 
 
 # Words that don't carry identity — strip before comparing slugs, so
@@ -80,14 +79,6 @@ def wiki_write(
     k = kind.strip().lower()
     if k not in KIND_FOLDER:
         return f"ERROR: kind must be source|entity|concept|synthesis (got {raw_kind!r})"
-    wiki_mode = getattr(context, "wiki_mode", "") or os.environ.get("JS_WIKI_MODE", "")
-    if wiki_mode == "ingest" and k != "source":
-        return ("ERROR: ingest mode writes ONLY source pages — entities, concepts, and "
-                "synthesis are built in the synthesize pass. Name them in the source body "
-                "under '## Candidate entities' / '## Candidate concepts' instead.")
-    if wiki_mode == "synthesize" and k == "source":
-        return ("ERROR: synthesize mode does not write source pages (no re-ingest). Derive "
-                "entity/concept/synthesis pages from the existing source pages.")
     vp = resolve_vault(vault, context)
     if not vp.is_dir():
         return f"ERROR: no vault at {vp}"
@@ -99,6 +90,10 @@ def wiki_write(
     if existed and not overwrite:
         return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
                 f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
+    if existed:
+        guard = context.require_read(page, "overwrite it")
+        if guard:
+            return guard
 
     # Near-match guard for entity/concept: refuse silently-different slugs that
     # describe the same thing (e.g. -prompting / -method / -specs variants).
@@ -116,11 +111,11 @@ def wiki_write(
 
     ptype = KIND_TYPE[k]
     tag_list = [KIND_TAG[ptype]] + [t.strip() for t in tags.split(",") if t.strip()]
-    fm = ["---", f"type: {ptype}", "tags: [" + ", ".join(tag_list) + "]"]
+    fm = ["---", f"type: {ptype}", f"tags: {json.dumps(tag_list, ensure_ascii=False)}"]
     if ptype == "source-summary" and source:
-        fm.append(f'source: "{source}"')
+        fm.append(f"source: {json.dumps(source, ensure_ascii=False)}")
     if ptype == "concept" and confidence:
-        fm.append(f"confidence: {confidence}")
+        fm.append(f"confidence: {json.dumps(confidence, ensure_ascii=False)}")
     if ptype in ("entity", "concept"):
         fm.append(f"source_count: {source_count}")
     fm.append(f"date_updated: {today()}")
@@ -128,13 +123,8 @@ def wiki_write(
     head = f"# {title}" if title else f"# {s}"
     content = "\n".join(fm) + "\n\n" + head + "\n\n" + body.strip() + "\n"
     try:
-        with vault_lock(vp, getattr(context, "wiki_vault_lock_timeout_s", 30)):
+        with vault_lock(vp):
             page.write_text(content, encoding="utf-8")
     except OSError as exc:
         return f"ERROR: {exc}"
-    try:
-        rel = page.relative_to(vp)
-    except ValueError:
-        rel = page.name
-    wiki_say(f"{C.BR_GREEN}+{ptype}{C.RESET} {rel}", context)
     return f"{'overwrote' if existed else 'wrote'} {page} (type: {ptype})"

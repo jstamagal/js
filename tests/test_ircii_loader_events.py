@@ -35,7 +35,7 @@ def test_repl_load_applies_slashless_script_lines(tmp_path):
     script = tmp_path / "boot.irc"
     script.write_text(
         "set runtime.trace off\n"
-        "set wiki.aliases.creative ./wiki\n",
+        "set provider.extra.organization ./wiki\n",
         encoding="utf-8",
     )
     live_settings = settings.seed_defaults()
@@ -47,7 +47,7 @@ def test_repl_load_applies_slashless_script_lines(tmp_path):
     assert result.changed is True
     assert result.error is None
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
-    assert settings.get_dotted(live_settings, ("wiki", "aliases", "creative")) == "./wiki"
+    assert settings.get_dotted(live_settings, ("provider", "extra", "organization")) == "./wiki"
     assert result.lines[-1] == f"loaded {script}"
 
 

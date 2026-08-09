@@ -26,12 +26,7 @@ Stock template lines include:
 
 ```text
 set model.id deepseek/deepseek-v4-flash
-set wiki.aliases.creative ~/wiki-creative
-set wiki.aliases.general ~/wiki-general
 ```
-
-Map-valued keys can be extended by setting sub-keys, so
-`set wiki.aliases.work /path` adds or overrides only that alias.
 
 `provider.id`, `provider.base_url`, and `provider.api_key` are `<none>` by
 default. When `provider.id` is set, the provider is constructed explicitly with
@@ -66,7 +61,6 @@ as `<set>`.
 | `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
 | `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
 | `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
-| `limits.wiki_vault_lock_timeout_s` | `30` | Wiki vault lock timeout in seconds. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
 | `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
@@ -89,7 +83,6 @@ as `<set>`.
 | `sampling.top_k` | `<unset>` | Provider-default top_k sampling; unset = do not send. |
 | `sampling.repetition_penalty` | `<unset>` | Provider-default repetition penalty; unset = do not send. |
 | `sampling.presence_penalty` | `<unset>` | Provider-default presence penalty; unset = do not send. |
-| `wiki.aliases` | `<none>` | Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`. |
 | `artifact.dir` | `<none>` | Artifact library directory. |
 | `artifact.url` | `<none>` | Artifact HTTP base URL. |
 | `artifact.bin` | `<none>` | Artifact CLI binary. |
@@ -107,14 +100,6 @@ Artifact config values are unset by default in `jsrc`. Artifact helpers resolve
 directory, URL, and binary with this precedence: `set artifact.*` in `jsrc`,
 then the matching `ARTIFACT_*` environment variable, then the built-in default
 (`/srv/artifacts`, `http://localhost`, or `artifact`).
-
-Wiki vault aliases come from config via `set wiki.aliases.<name> <path>`; the
-stock `jsrc` defines `creative` as `~/wiki-creative` and `general` as
-`~/wiki-general`. `--vault` may name a configured alias or a path. Without
-`--vault`, wiki mode infers a vault only by walking up from the target path or
-current directory and finding a `PURPOSE.md` sentinel or a directory whose name
-matches `wiki-*`. If nothing resolves, the run stops with an error. There is no
-default vault.
 
 ## MCP Servers And Per-Agent Policy
 
@@ -192,8 +177,7 @@ do not need to be copied into `jsrc`.
 
 Agent/session env remains accepted for compatibility (`JS_AGENT`, `JS_SESSION`),
 but CLI code threads selected agent/session through `Config` instead of mutating
-`os.environ`. Wiki/artifact mode is threaded through `ToolContext`; env fallbacks
-remain only for direct tool compatibility and subprocess boundaries.
+`os.environ`. Artifact mode is threaded through `ToolContext`.
 
 The byte caps use the canonical `_BYTES` env names only
 (`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter

@@ -18,8 +18,8 @@ Root `README.md` is only a launch pad.
 6. [Tools Reference](tools-reference.md): every built-in tool and what it does.
 7. [Subagents](subagents.md): `task`, direct agent tools, parallelism, isolation,
    and what is not implemented.
-8. [Wiki Mode](wiki.md), [Artifact Mode](artifact.md), [Drain](drain.md):
-   built-in high-level workflows.
+8. [Artifact Mode](artifact.md): built-in artifact workflow. Installed `wiki-*`
+   agents and `wiki` wrapper provide wiki workflows.
 9. [Models And Providers](models-and-providers.md): ai-python, proxies, Claude
    name handling, reasoning, output caps, and vision.
 10. [Testing And Development](testing-and-development.md): test suite layout and
@@ -38,7 +38,7 @@ compatibility. The harness optimizes for:
 - Prompt-directory agents.
 - Parallel subagent delegation.
 - Durable JSONL sessions.
-- Built-in wiki and artifact maintenance modes.
+- Installed wiki agents and built-in artifact maintenance mode.
 
 ## What This Project Is Not
 
