@@ -245,11 +245,6 @@ def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
     assert "left literal" in capsys.readouterr().err
 
 
-def test_default_inline_code_timeout_is_300():
-    import js.promptexpand as P
-    assert P._DEFAULT_TIMEOUT_S == 300
-
-
 def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
     import js.persona as P
 

@@ -98,7 +98,6 @@ def test_fs_search_invalid_regex_degrades_without_traceback(tmp_path):
     actual = fs_search("(", path=".", context=context)
 
     assert actual.startswith("ERROR:")
-    assert "(no matches)" != actual
 
 
 @requires_rg
@@ -223,4 +222,3 @@ def test_fs_read_empty_file_message_uses_resolved_path(tmp_path):
     actual = fs_read(path="empty.txt", context=context)
 
     assert actual == f"{empty} is empty (hash {fs._hash_bytes(b'')})"
-    assert "None" not in actual

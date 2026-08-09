@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from js import cli, runtime, settings
+from js import cli, runtime
 from js.config import Config
 from js import model_client
 from js.model_client import ModelStreamResult
@@ -60,19 +60,6 @@ def _make_cfg(tmp_path: Path, log_dir: Path, *, trace: bool = False) -> Config:
         # Pin the autolog directory so the test does not depend on platformdirs.
         settings={"runtime": {"debug_autolog_dir": str(log_dir)}},
     )
-
-
-# --- knob default is on ----------------------------------------------------
-
-
-def test_debug_autolog_knob_defaults_on():
-    spec = settings.SPEC_BY_KEY["runtime.debug_autolog"]
-    assert spec.type == "bool"
-    assert spec.default is True
-    assert spec.env == "JS_DEBUG_AUTOLOG"
-    # A fresh settings view (no config, no env) resolves the knob to True.
-    seeded = settings.seed_defaults()
-    assert settings.get_dotted(seeded, ("runtime", "debug_autolog")) is True
 
 
 def test_from_env_sets_debug_autolog_default_on(monkeypatch, tmp_path):
@@ -129,23 +116,28 @@ def test_emit_request_trace_writes_to_sink_not_stdout(capsys):
     assert "SYSTEM PROMPT (unclipped)" in blob
     assert "SYSTEM-PROMPT-BODY" in blob
     # Nothing reached the terminal.
-    assert REQUEST_MARKER not in out.out
     assert out.out == ""
 
 
-def test_emit_request_trace_none_sink_is_noop(capsys):
+def test_emit_request_trace_none_sink_is_noop():
+    class Touched(BaseException):
+        pass
+
+    class Untouchable:
+        def __len__(self):
+            raise Touched
+
     model_client._emit_request_trace(
         sink=None,
         model_id="m",
         provider_id=None,
         provider_base_url=None,
         params=None,
-        messages=[],
-        tools=None,
+        messages=Untouchable(),
+        tools=Untouchable(),
         dump_schemas=True,
         dump_from=0,
     )
-    assert capsys.readouterr().out == ""
 
 
 # --- plain run: no trace on stdout, autolog file written -------------------

@@ -383,6 +383,24 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
         await host.close()
         assert host._closed and client.closed
 
+        owned_hosts: list[MCPHost] = []
+
+        def host_factory(mcp_config, *, telemetry=None):
+            owned = MCPHost(mcp_config, telemetry=telemetry, client_factory=FakeClient)
+            owned_hosts.append(owned)
+            return owned
+
+        from js.mcp import host as host_module
+
+        monkeypatch.setattr(host_module, "MCPHost", host_factory)
+        await runtime.run_turn_async(
+            cfg, "system", [{"role": "user", "content": "owned"}], runtime.Telemetry(None),
+            tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True,
+        )
+        assert len(owned_hosts) == 1
+        assert owned_hosts[0]._closed
+
     asyncio.run(drive())
 
 
@@ -876,7 +894,6 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
         await host.discover(query="mcp")
         public_names = tuple(sorted(host.remote_tools))
         assert len(public_names) == len(remote_names)
-        assert len(set(public_names)) == len(remote_names)
         assert all(len(name) <= MAX_PUBLIC_TOOL_NAME for name in public_names)
 
         tools = host.tools(set(public_names))

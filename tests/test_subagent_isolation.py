@@ -160,7 +160,6 @@ def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_
     actual = task(["work"], agent_id="worker", context=parent)
 
     assert "BOOL_DEPTH_DONE" in actual
-    assert "recursion depth limit reached (1)" not in actual
 
 def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo\n")
@@ -336,7 +335,6 @@ def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
     elapsed = time.perf_counter() - started
 
     assert "1. A" in actual and "2. B" in actual and "3. C" in actual
-    assert "max_workers" not in actual
     assert elapsed < 0.65
 
 

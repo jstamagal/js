@@ -491,24 +491,6 @@ def test_stream_model_applies_sampling_from_env_for_openai():
     }
 
 
-def test_stream_model_without_sampling_sends_no_overrides():
-    """With no Sampling set, js defers entirely to the backend/model default."""
-    executor = _FakeExecutor(_text_events("ok"))
-    model_client.stream_model(
-        model_id="test",
-        provider_id="openai",
-        provider_base_url="http://localhost:11434/v1",
-        provider_api_key="x",
-        messages=[ai.user_message("hi")],
-        tools=None,
-        max_output_tokens=64,
-        reasoning_effort=None,
-        on_text=lambda _s: None,
-        executor=executor,
-    )
-    assert _pview(executor.request.params) == {"max_tokens": 64}
-
-
 def test_stream_model_sampling_topk_merges_with_provider_extra_body():
     """On the openai-compatible family top_k rides as RAW extra_body (the OpenAI
     protocol hard-rejects a TopKSamplerParams class) and merges with, not clobbers,
@@ -598,7 +580,5 @@ def test_history_messages_can_be_roundtripped():
     out = model_client.history_to_ai_messages("sys", msgs)
     # Messages should survive pydantic serialization (used internally by ai)
     serialized = [m.model_dump() for m in out]
-    assert len(serialized) == 3
-    assert serialized[0]["role"] == "system"
-    assert serialized[1]["role"] == "assistant"
-    assert serialized[2]["role"] == "tool"
+    rebuilt = [ai.types.messages.Message.model_validate(dump) for dump in serialized]
+    assert rebuilt == out

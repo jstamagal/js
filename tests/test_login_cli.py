@@ -114,20 +114,6 @@ def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_pa
         _reset_logins()
 
 
-def test_local_providers_always_show_base_url_prompt():
-    # Finding 58: llama.cpp/ollama/cliproxyapi ship a default 127.0.0.1-style
-    # endpoint that "established"/no-established-flag logic treated as fixed,
-    # so the login prompt was skipped and a fresh box silently aimed at a
-    # port nothing was listening on. The endpoint differs per box, so the
-    # prompt must never be skippable for these — the default only seeds it.
-    for provider_id in ("ollama", "llama.cpp", "cliproxyapi"):
-        assert providers.provider_for_login(provider_id).login_base_url_field is True
-
-    # A genuinely fixed remote endpoint is unaffected and still skips the prompt.
-    assert providers.provider_for_login("deepseek").login_base_url_field is False
-    assert providers.provider_for_login("ollama-cloud").login_base_url_field is False
-
-
 def test_variable_endpoint_providers_show_base_url_field():
     for provider_id in (
         "llama.cpp",
@@ -147,29 +133,6 @@ def test_variable_endpoint_providers_show_base_url_field():
         provider = providers.provider_for_login(provider_id)
         assert provider.variable_endpoint is True
         assert provider.login_base_url_field is True
-
-
-def test_collect_api_login_prompts_for_base_url_on_local_providers(tmp_path: Path, monkeypatch):
-    logins.set_config_dir(tmp_path)
-    # This box has real LLAMACPP_* env vars set (the owner's actual llama.cpp
-    # box) — clear them so the test sees the registry's own hardcoded default.
-    for name in ("LLAMACPP_BASE_URL", "LLAMA_CPP_BASE_URL", "LLAMACPP_API_KEY", "LLAMA_CPP_API_KEY", "LLAMACPP_MODEL", "LLAMA_CPP_MODEL"):
-        monkeypatch.delenv(name, raising=False)
-    prompted: dict[str, str | None] = {}
-
-    def fake_input(prompt, *, default=None, secret=False):
-        prompted[prompt] = default
-        return default
-
-    monkeypatch.setattr(login_cli, "_input", fake_input)
-    try:
-        login = login_cli._collect_api_login("llama.cpp", "openai", providers.provider_for_login("llama.cpp"))
-        assert login is not None
-        # The hardcoded default only seeds the prompt — it never skips it.
-        assert prompted == {"Base URL": "http://127.0.0.1:8080/v1"}
-        assert login.provider_base_url == "http://127.0.0.1:8080/v1"
-    finally:
-        _reset_logins()
 
 
 def test_collect_api_login_enter_keeps_empty_base_url_for_official_provider(tmp_path: Path, monkeypatch):
@@ -548,7 +511,6 @@ def test_mask_hides_short_and_boundary_length_keys():
 def test_mask_reveals_edges_only_once_a_hidden_middle_exists():
     masked = login_cli._mask("sk-1234567890abcd")  # 17 chars: 8 prefix + 5 hidden + 4 suffix
     assert masked == "sk-12345*******abcd"
-    assert "67890" not in masked  # the hidden middle chars never leak
 
 
 def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):

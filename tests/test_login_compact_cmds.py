@@ -118,10 +118,11 @@ def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, 
     assert params_seen[0].extra_body == {"compact_flag": True}
 
 
-def test_compact_auto_bad_arg_usage(tmp_path):
+def test_compact_auto_bad_arg_usage(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     assert cli._handle_command("/compact-auto maybe", state, cfg) is True  # handled, prints usage
+    assert "usage:" in capsys.readouterr().out
     # unchanged
     assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
 

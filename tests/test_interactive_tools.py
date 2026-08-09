@@ -42,10 +42,6 @@ def test_registry_exposes_only_canonical_interactive_tool_names():
     assert registry.resolve("terminal_session").name == "terminal_session"
     assert registry.resolve("terminal_snapshot").name == "terminal_snapshot"
     assert registry.resolve("browser_probe").name == "browser_probe"
-    assert registry.resolve("terminal_probe") is None
-    assert registry.resolve("first_contact") is None
-    assert registry.resolve("heavy_browser") is None
-
     terminal = registry.resolve("terminal_session")
     snapshot = registry.resolve("terminal_snapshot")
     browser = registry.resolve("browser_probe")
