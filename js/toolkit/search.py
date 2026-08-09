@@ -10,8 +10,10 @@ current shell cannot use without breaking registry assembly.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import shutil
+import subprocess
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -28,9 +30,10 @@ def _http_json(
     method: str = "GET",
     headers: dict[str, str] | None = None,
     payload: dict[str, Any] | None = None,
+    secrets: tuple[str, ...] = (),
     timeout: float,
-) -> Any:
-    """One JSON round-trip. Returns parsed JSON, or an ERROR string."""
+) -> dict[str, Any] | str:
+    """One JSON-object round-trip. Returns a mapping, or an ERROR string."""
     data = None
     all_headers = {"User-Agent": "js-agent/0.1", **(headers or {})}
     if payload is not None:
@@ -46,13 +49,36 @@ def _http_json(
             detail = exc.read().decode("utf-8", errors="replace")[:200]
         except Exception:  # noqa: BLE001
             pass
+        for secret in secrets:
+            if secret:
+                detail = detail.replace(secret, "[REDACTED]")
         return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail}"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
     try:
-        return json.loads(body)
+        parsed = json.loads(body)
     except ValueError:
         return f"ERROR: non-JSON response from {urllib.parse.urlparse(url).netloc}"
+    if not isinstance(parsed, dict):
+        host = urllib.parse.urlparse(url).netloc
+        return f"ERROR: expected a JSON object from {host}, got {_json_kind(parsed)}"
+    return parsed
+
+
+def _json_kind(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
 
 
 def _key(name: str) -> str | None:
@@ -68,9 +94,22 @@ def _cap(text: str, context: ToolContext) -> str:
     return encoded[:limit].decode("utf-8", errors="ignore") + "\n[truncated]"
 
 
-def _numbered(results: list[dict], *, url_key: str, body_key: str) -> str:
+def _bounded_int(raw: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
+    if isinstance(raw, float) and not raw.is_integer():
+        value = default
+    else:
+        value = int_or_default(raw, default)
+    value = max(minimum, value)
+    return min(maximum, value) if maximum is not None else value
+
+
+def _numbered(results: Any, *, url_key: str, body_key: str) -> str:
+    if not isinstance(results, list):
+        return f"ERROR: expected search results to be an array, got {_json_kind(results)}"
     lines: list[str] = []
     for i, hit in enumerate(results, 1):
+        if not isinstance(hit, dict):
+            return f"ERROR: expected search result {i} to be an object, got {_json_kind(hit)}"
         title = str(hit.get("title") or "").strip()
         url = str(hit.get(url_key) or "").strip()
         body = str(hit.get(body_key) or "").strip()
@@ -84,7 +123,7 @@ def serper_search(
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
-    query = text_or_default(query)
+    query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
     key = _key("SERPER_API_KEY")
@@ -94,18 +133,28 @@ def serper_search(
         "https://google.serper.dev/search",
         method="POST",
         headers={"X-API-KEY": key},
-        payload={"q": query, "num": int_or_default(num, 8, minimum=1)},
+        payload={"q": query, "num": _bounded_int(num, 8, minimum=1, maximum=100)},
+        secrets=(key,),
         timeout=context.fetch_timeout_s,
     )
     if isinstance(reply, str):
         return reply
-    organic = reply.get("organic") or []
-    box = reply.get("answerBox") or {}
-    parts = []
+    organic = reply.get("organic")
+    if organic is None:
+        organic = []
+    numbered = _numbered(organic, url_key="link", body_key="snippet")
+    if numbered.startswith("ERROR: "):
+        return numbered
+    box = reply.get("answerBox")
+    if box is None:
+        box = {}
+    if not isinstance(box, dict):
+        return f"ERROR: expected answerBox to be an object, got {_json_kind(box)}"
+    parts: list[str] = []
     answer = str(box.get("answer") or box.get("snippet") or "").strip()
     if answer:
         parts.append(f"answer box: {answer}")
-    parts.append(_numbered(organic, url_key="link", body_key="snippet"))
+    parts.append(numbered)
     return _cap("\n\n".join(parts), context)
 
 
@@ -115,7 +164,7 @@ def tavily_search(
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
-    query = text_or_default(query)
+    query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
     key = _key("TAVILY_API_KEY")
@@ -127,18 +176,25 @@ def tavily_search(
         headers={"Authorization": f"Bearer {key}"},
         payload={
             "query": query,
-            "max_results": int_or_default(max_results, 8, minimum=1),
+            "max_results": _bounded_int(max_results, 8, minimum=1, maximum=20),
             "include_answer": True,
         },
+        secrets=(key,),
         timeout=context.fetch_timeout_s,
     )
     if isinstance(reply, str):
         return reply
-    parts = []
+    results = reply.get("results")
+    if results is None:
+        results = []
+    numbered = _numbered(results, url_key="url", body_key="content")
+    if numbered.startswith("ERROR: "):
+        return numbered
+    parts: list[str] = []
     answer = str(reply.get("answer") or "").strip()
     if answer:
         parts.append(f"answer: {answer}")
-    parts.append(_numbered(reply.get("results") or [], url_key="url", body_key="content"))
+    parts.append(numbered)
     return _cap("\n\n".join(parts), context)
 
 
@@ -149,7 +205,7 @@ def exa_search(
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
-    query = text_or_default(query)
+    query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
     key = _key("EXA_API_KEY")
@@ -161,15 +217,19 @@ def exa_search(
         headers={"x-api-key": key},
         payload={
             "query": query,
-            "numResults": int_or_default(num, 8, minimum=1),
+            "numResults": _bounded_int(num, 8, minimum=1, maximum=100),
             "type": "auto",
-            "contents": {"text": {"maxCharacters": int_or_default(text_chars, 1500, minimum=100)}},
+            "contents": {"text": {"maxCharacters": _bounded_int(text_chars, 1500, minimum=100)}},
         },
+        secrets=(key,),
         timeout=context.fetch_timeout_s,
     )
     if isinstance(reply, str):
         return reply
-    return _cap(_numbered(reply.get("results") or [], url_key="url", body_key="text"), context)
+    results = reply.get("results")
+    if results is None:
+        results = []
+    return _cap(_numbered(results, url_key="url", body_key="text"), context)
 
 
 def docs_search(
@@ -179,7 +239,7 @@ def docs_search(
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
-    library = text_or_default(library)
+    library = text_or_default(library).strip()
     if not library:
         return "ERROR: library is required"
     headers: dict[str, str] = {}
@@ -190,20 +250,27 @@ def docs_search(
     found = _http_json(
         "https://context7.com/api/v1/search?query=" + urllib.parse.quote(library),
         headers=headers,
+        secrets=(key,) if key is not None else (),
         timeout=context.fetch_timeout_s,
     )
     if isinstance(found, str):
         return found
-    results = found.get("results") or []
+    results = found.get("results")
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        return f"ERROR: expected search results to be an array, got {_json_kind(results)}"
     if not results:
         return f"no library on context7 matches {library!r}"
     best = results[0]
+    if not isinstance(best, dict):
+        return f"ERROR: expected search result 1 to be an object, got {_json_kind(best)}"
     library_id = str(best.get("id") or "").strip()
     if not library_id:
         return f"no library on context7 matches {library!r}"
 
-    params = {"type": "txt", "tokens": str(int_or_default(tokens, 4000, minimum=500))}
-    topic = text_or_default(topic)
+    params = {"type": "txt", "tokens": str(_bounded_int(tokens, 4000, minimum=500))}
+    topic = text_or_default(topic).strip()
     if topic:
         params["topic"] = topic
     doc_url = f"https://context7.com/api/v1{library_id}?" + urllib.parse.urlencode(params)
@@ -215,11 +282,43 @@ def docs_search(
         return f"ERROR: HTTP {exc.code} fetching context7 docs for {library_id}"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
+    if not text.strip():
+        suffix = f", topic: {topic}" if topic else ""
+        return f"ERROR: context7 returned empty docs for {library_id}{suffix}"
     header = f"[context7 {library_id}" + (f", topic: {topic}" if topic else "") + "]\n"
     return _cap(header + text, context)
 
 
-_PRIVATE_HOSTS = ("localhost", "127.", "0.0.0.0", "10.", "192.168.", "172.16.", "[::1]")
+def _is_private_ip_literal(url: str) -> bool:
+    host = urllib.parse.urlsplit(url).hostname
+    if host is None:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def _redacted_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    return urllib.parse.urlunsplit(parsed._replace(netloc=host, query="", fragment=""))
+
+
+def _fit_truncation_marker(text: str, cap: int) -> str:
+    cap = max(0, cap)
+    if cap == 0:
+        return ""
+    marker = truncation_marker(cap, "limits.max_tool_result_bytes")
+    marker_bytes = marker.encode("utf-8")
+    if len(marker_bytes) >= cap:
+        return marker_bytes[:cap].decode("utf-8", errors="ignore")
+    content_cap = cap - len(marker_bytes) - 1
+    content = text.encode("utf-8")[:content_cap].decode("utf-8", errors="ignore")
+    return f"{content}\n{marker}" if content else marker
 
 
 def browse(
@@ -228,27 +327,30 @@ def browse(
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
-    url = text_or_default(url)
+    url = text_or_default(url).strip()
     if not url:
         return "ERROR: url is required"
     binary = shutil.which("obscura")
     if binary is None:
         return "ERROR: obscura is not installed (expected on PATH)"
-    dump = text_or_default(dump, "markdown") or "markdown"
+    dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
     if dump not in ("markdown", "text", "html", "links"):
         return "ERROR: dump must be one of markdown, text, html, links"
-    argv = [binary, "fetch", "--dump", dump]
-    host = urllib.parse.urlparse(url).netloc.split("@")[-1].lower()
-    if any(host.startswith(prefix) for prefix in _PRIVATE_HOSTS):
+    process_timeout = int(context.fetch_timeout_s)
+    obscura_timeout = max(1, process_timeout - 1)
+    argv = [binary, "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    if _is_private_ip_literal(url):
         argv.append("--allow-private-network")
     argv.append(url)
     try:
         result = _run_capped(
             argv,
-            timeout=int(context.fetch_timeout_s),
+            timeout=process_timeout,
             cwd=str(context.cwd),
             cap=context.max_tool_result_bytes,
         )
+    except subprocess.TimeoutExpired:
+        return f"ERROR: browse timed out after {process_timeout} seconds fetching {_redacted_url(url)}"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
     if isinstance(result, CappedProcessResult):
@@ -262,7 +364,7 @@ def browse(
     if code != 0:
         return f"ERROR: obscura exited {code}: {stderr[-300:] or stdout[-300:]}"
     if out_truncated:
-        stdout = f"{stdout}\n{truncation_marker(context.max_tool_result_bytes)}"
+        stdout = _fit_truncation_marker(stdout, context.max_tool_result_bytes)
     return stdout or "(empty page)"
 
 
