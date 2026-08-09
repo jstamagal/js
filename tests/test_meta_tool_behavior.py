@@ -6,41 +6,6 @@ from js.toolkit import meta
 from js.toolkit.registry import select
 
 
-def test_followup_returns_followup_required_stop_marker_with_bare_question():
-    # js/toolkit/meta.py:48 — no options: just the marker line then the question.
-    result = meta.followup("Which file should I edit?")
-
-    assert result == "FOLLOWUP_REQUIRED\nWhich file should I edit?"
-    assert result.splitlines()[0] == "FOLLOWUP_REQUIRED"
-
-
-def test_followup_single_choice_numbers_only_truthy_options():
-    # js/toolkit/meta.py:58-63 — falsy/None options are dropped, kept ones numbered.
-    result = meta.followup(
-        "Pick a color",
-        option1="red",
-        option2="",       # falsy: dropped
-        option3="blue",
-    )
-
-    assert result == (
-        "FOLLOWUP_REQUIRED\n"
-        "Pick a color\n"
-        "select one:\n"
-        "1. red\n"
-        "2. blue"
-    )
-
-
-def test_followup_multiple_flag_switches_choice_kind_line():
-    # js/toolkit/meta.py:61 — multiple=True flips "select one" to "select one or more".
-    result = meta.followup("Pick toppings", multiple=True, option1="cheese", option2="ham")
-
-    assert "select one or more:" in result
-    assert "select one:" not in result
-    assert result.endswith("1. cheese\n2. ham")
-
-
 def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):
     # js/toolkit/meta.py:67-75 — writes ./plans/<name>-<version>.md relative to cwd.
     context = ToolContext(cwd=tmp_path)

@@ -59,9 +59,6 @@ DEFAULT_COMPACT_MIN_SAVINGS_TOKENS = 400
 DEFAULT_COMPACT_CHARS_PER_TOKEN = 4.0
 DEFAULT_COMPACT_MODEL = "same"
 DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 8192
-DEFAULT_ARTIFACT_DIR = "/srv/artifacts"
-DEFAULT_ARTIFACT_URL = "http://localhost"
-DEFAULT_ARTIFACT_BIN = "artifact"
 
 
 CONFIG_PRECEDENCE_LAYERS = (
@@ -283,10 +280,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("sampling.presence_penalty", "float", None,
                 "Provider-default presence penalty; unset = do not send.",
                 empty=EMPTY_UNSET),
-    # --- artifact ---
-    SettingSpec("artifact.dir", "str", None, "Artifact library directory (default /srv/artifacts; ARTIFACT_DIR env also honored).", empty=EMPTY_NONE),
-    SettingSpec("artifact.url", "str", None, "Artifact HTTP base URL (default http://localhost; ARTIFACT_URL env also honored).", empty=EMPTY_NONE),
-    SettingSpec("artifact.bin", "str", None, "Artifact CLI binary (default artifact; ARTIFACT_BIN env also honored).", empty=EMPTY_NONE),
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
@@ -301,7 +294,6 @@ SECTION_ORDER: tuple[str, ...] = (
     "tools",
     "mcp",
     "sampling",
-    "artifact",
 )
 
 
@@ -645,7 +637,6 @@ _SECTION_INTRO: dict[str, list[str]] = {
         "# Server values may contain credentials; /set and /show mask mcp.servers.",
     ],
     "sampling": ["# Per-turn sampling overrides. Default display is <unset>; provider/model defaults win."],
-    "artifact": ["# Artifact system defaults."],
 }
 
 

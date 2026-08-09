@@ -43,8 +43,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 2. process/network tools
 3. meta tools
 4. wiki tools
-5. artifact tools
-6. generated agent tools from layered prompt roots
+5. generated agent tools from layered prompt roots
 
 The registry stores canonical names and lowercased aliases. Current aliases are
 only used for provider-facing name transforms; old user-facing aliases are not
@@ -78,7 +77,7 @@ Model-facing descriptions live in:
 js/toolkit/tool_descriptions/<tool>.md
 ```
 
-The filename must match the registered tool name for core/wiki/artifact tools.
+The filename must match the registered tool name for core/wiki tools.
 Generated agent tools build descriptions at runtime.
 
 These descriptions are not comments. They are model-facing contract text. The
@@ -95,14 +94,12 @@ surface.
 read
 write
 fs_search
-sem_search
 remove
 patch
 multi_patch
 undo
 shell
 fetch
-followup
 plan
 skill
 todo_write
@@ -150,7 +147,6 @@ Dispatch rules:
 - tool result content is capped
 - repeated tool errors get retry metadata
 - a repeated-error limit appends a final assistant error
-- `FOLLOWUP_REQUIRED` stops the loop and returns control to the caller
 
 Inside the `task` tool, multiple task strings also run concurrently.
 
@@ -220,9 +216,6 @@ Edit operations snapshot prior state for `undo`:
 - head limit and offset
 - multiline matching
 
-`sem_search` is local term-ranked search. It does not call embeddings, a vector
-database, or a network service.
-
 ## Shell
 
 `shell` uses the environment shell:
@@ -244,15 +237,14 @@ The tool output includes:
 
 ANSI is stripped unless `keep_ansi=true`.
 
-## Wiki And Artifact Tools
+## Wiki Tools
 
-Wiki and artifact tools live in default registry even when active prompt
-does not select them. Built-in modes select the full registry and rely on their
-mode prompts to steer behavior.
+Wiki tools live in the default registry even when the active prompt does not
+select them. Built-in modes select the full registry and rely on their mode
+prompts to steer behavior.
 
-Defaultagent does not select `wiki_*` or `artifact_*` by default. To let a
-normal prompt or subagent use those tools, add selectors to that prompt's
-frontmatter.
+Defaultagent does not select `wiki_*` by default. To let a normal prompt or
+subagent use those tools, add selectors to that prompt's frontmatter.
 
 ## Generated Agent Tools
 

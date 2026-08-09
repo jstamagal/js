@@ -34,7 +34,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     assert cfg.prompt_roots[0].name == "prompts"
 
 
-def test_default_fetch_timeout_and_template_cover_compact_and_artifact(tmp_path):
+def test_default_fetch_timeout_and_template_cover_limits_and_compact(tmp_path):
     out = settings.collect_settings(config_paths=[], env={})
     assert out["limits"]["fetch_timeout_s"] == settings.DEFAULT_FETCH_TIMEOUT_S
     assert out["limits"]["inline_code_timeout_s"] == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
@@ -50,7 +50,6 @@ def test_default_fetch_timeout_and_template_cover_compact_and_artifact(tmp_path)
         "limits.inline_code_timeout_s",
         "compact.context_window",
         "compact.tail_tokens",
-        "artifact.dir",
     } <= template_keys
 
 

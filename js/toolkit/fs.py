@@ -5,7 +5,6 @@ from __future__ import annotations
 import difflib
 import hashlib
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -14,7 +13,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from .core import Tool, ToolContext
-from .sanitize import int_or_default, text_or_default
+from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description
 
@@ -104,12 +103,6 @@ def _trash_target(target: Path, context: ToolContext) -> str | None:
 
 
 
-
-_STOP_WORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from",
-    "how", "in", "into", "is", "it", "of", "on", "or", "that", "the", "this",
-    "to", "use", "with", "where", "who", "why",
-}
 
 def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
@@ -723,156 +716,6 @@ def list_dir(path: str, recursive: bool = False, context: ToolContext | None = N
 
 
 
-def _camel_parts(value: str) -> str:
-    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
-
-
-def _search_terms(*parts: str) -> list[str]:
-    seen: set[str] = set()
-    terms: list[str] = []
-    for part in parts:
-        for raw in re.findall(r"[A-Za-z0-9_]+", _camel_parts(part).lower()):
-            token = raw.strip("_")
-            if len(token) < 2 or token in _STOP_WORDS or token in seen:
-                continue
-            seen.add(token)
-            terms.append(token)
-    return terms
-
-
-def _query_parts(item: dict | str) -> tuple[str, str, str | None, str | None, int]:
-    if isinstance(item, dict):
-        query = text_or_default(item.get("query") or item.get("text") or item.get("q"))
-        use_case = text_or_default(item.get("use_case") or item.get("useCase"))
-        path = text_or_default(item.get("path") or item.get("root"))
-        glob = text_or_default(item.get("glob") or item.get("file_pattern"))
-        limit = int_or_default(item.get("limit") or item.get("top_k") or item.get("topK"), 10, minimum=1)
-        return query, use_case, path or None, glob or None, max(1, min(limit, 50))
-    return text_or_default(item), "", None, None, 10
-
-
-def _line_score(line_lower: str, rel_lower: str, query_lower: str, use_case_lower: str, terms: list[str]) -> int:
-    score = 0
-    if query_lower and query_lower in line_lower:
-        score += 80
-    if use_case_lower and use_case_lower in line_lower:
-        score += 30
-    matched = 0
-    for term in terms:
-        count = line_lower.count(term)
-        if count:
-            matched += 1
-            score += min(count, 4) * 8
-            if re.search(rf"\b{re.escape(term)}\b", line_lower):
-                score += 6
-            if term in rel_lower:
-                score += 5
-    if matched:
-        score += matched * matched * 3
-        if matched == len(terms):
-            score += 25
-    if line_lower.lstrip().startswith(("def ", "class ", "function ", "const ", "let ", "type ", "interface ", "struct ", "enum ")):
-        score += 5
-    return score
-
-
-
-def sem_search(queries: list[dict] | list[str], context: ToolContext | None = None) -> str:
-    assert context is not None
-    if not queries:
-        return "ERROR: sem_search requires at least one query"
-
-    sections: list[str] = [
-        "Local semantic-ish search (term-ranked; no embeddings or external index):"
-    ]
-    output_bytes = sum(len(line.encode("utf-8")) + 1 for line in sections)
-    budget = context.max_tool_result_bytes
-
-    for query_index, item in enumerate(queries, 1):
-        query, use_case, raw_path, glob, limit = _query_parts(item)
-        terms = _search_terms(query, use_case)
-        title = query or use_case
-        if not terms:
-            sections.append(f"\nQuery {query_index}: {title!r} -> ERROR: no searchable terms")
-            continue
-
-        root = context.resolve_path(raw_path or ".")
-        if not root.exists():
-            sections.append(f"\nQuery {query_index}: {title!r} -> ERROR: path does not exist: {root}")
-            continue
-
-        query_lower = query.lower()
-        use_case_lower = use_case.lower()
-        scored: list[tuple[int, str, int, str]] = []
-        candidate_limit = max(limit * 20, 200)
-        for file in _iter_files(root):
-            if glob and not file.match(glob):
-                continue
-            if _is_binary(file):
-                continue
-            try:
-                if file.stat().st_size > context.max_file_bytes:
-                    continue
-                text = file.read_text(errors="replace")
-            except OSError:
-                continue
-            try:
-                rel = str(file.relative_to(context.cwd))
-            except ValueError:
-                rel = str(file)
-            rel_lower = rel.lower()
-            best_for_file = 0
-            for line_no, line in enumerate(text.splitlines(), 1):
-                line_lower = line.lower()
-                score = _line_score(line_lower, rel_lower, query_lower, use_case_lower, terms)
-                if score == 0:
-                    continue
-                best_for_file = max(best_for_file, score)
-                snippet = _truncate_line(line.strip(), min(context.max_line_chars, 240))
-                scored.append((score, rel, line_no, snippet))
-            if best_for_file:
-                for term in terms:
-                    if term in rel_lower:
-                        scored.append((best_for_file + 12, rel, 1, f"[path match] {rel}"))
-                        break
-            if len(scored) > candidate_limit * 4:
-                scored.sort(key=lambda row: (-row[0], row[1], row[2]))
-                del scored[candidate_limit:]
-
-        scored.sort(key=lambda row: (-row[0], row[1], row[2]))
-        sections.append(f"\nQuery {query_index}: {title!r}")
-        if use_case:
-            sections.append(f"Use case: {use_case}")
-        if raw_path or glob:
-            scope = f"path={raw_path or '.'}"
-            if glob:
-                scope += f", glob={glob}"
-            sections.append(f"Scope: {scope}")
-        if not scored:
-            sections.append("(no matches)")
-            continue
-
-        seen: set[tuple[str, int, str]] = set()
-        emitted = 0
-        for score, rel, line_no, snippet in scored:
-            key = (rel, line_no, snippet)
-            if key in seen:
-                continue
-            seen.add(key)
-            line = f"{rel}:{line_no}: {snippet}"
-            line_bytes = len(line.encode("utf-8")) + 1
-            if output_bytes + line_bytes > budget:
-                sections.append("[truncated: ToolContext max_tool_result_bytes reached]")
-                return "\n".join(sections)
-            sections.append(line)
-            output_bytes += line_bytes
-            emitted += 1
-            if emitted >= limit:
-                break
-
-    return "\n".join(sections)
-
-
 def tools() -> tuple[Tool, ...]:
     return (
         Tool(
@@ -925,13 +768,6 @@ def tools() -> tuple[Tool, ...]:
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
             },
             required=("pattern",),
-        ),
-        Tool(
-            "sem_search",
-            load_description("sem_search"),
-            sem_search,
-            {"queries": {"type": "array", "items": {"type": "object"}, "description": "Natural-language query strings or objects with query/use_case/path/glob/limit."}},
-            required=("queries",),
         ),
         Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after KING confirms permanent deletion."}}, required=("path",)),
         Tool(

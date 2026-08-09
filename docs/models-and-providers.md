@@ -387,7 +387,6 @@ export SHELL=/usr/bin/zsh
 The harness does not itself require `rg`, `fzf`, or `bat`. Current behavior:
 
 - `fs_search` is implemented in Python with `re`.
-- `sem_search` is a local term-ranked search, not embeddings.
 - `shell` can run `rg`, `fzf`, `bat`, or anything else on PATH when installed.
 
 If a future port wants closer Forge shell ergonomics, preserve `$SHELL` first

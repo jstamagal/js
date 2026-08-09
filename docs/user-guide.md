@@ -170,7 +170,7 @@ silenced.
 ## Working Directory And Config Scoping
 
 These flags bind where `js` runs and which config files it reads. They apply to
-every mode (`-p`, REPL, `--commit`, `--artifact`, ...):
+every mode (`-p`, REPL, `--commit`, ...):
 
 ```bash
 js -C /path/to/repo -p "summarize this repo"
@@ -274,20 +274,6 @@ wiki lint ~/wiki
 ```
 
 Native tools keep conversion, page schema/dedup, and ingest close-out deterministic.
-
-## Artifact Mode
-
-Artifact mode uses built-in prompts and native `artifact_*` tools around the
-external `artifact` CLI:
-
-```bash
-js --artifact=curate
-js --artifact=curate,digest
-js --artifact=query "find the handoff for the artifact work"
-js --artifact=lint
-```
-
-See [Artifact Mode](artifact.md).
 
 ## Prompt-Directory Agents
 

@@ -12,7 +12,7 @@ from js import tools as runtime_tools
 from js.config import from_env
 from js.runtime import Telemetry, run_turn
 from js.toolkit import ToolContext
-from js.toolkit.fs import fs_search, patch, read, sem_search, write
+from js.toolkit.fs import fs_search, patch, read, write
 from js.toolkit.meta import task
 
 
@@ -60,28 +60,6 @@ def test_toolkit_exercises_grounded_file_lifecycle_and_search(tmp_path):
     assert created.startswith(f"wrote 8 bytes to {tmp_path / 'created.txt'}")
 
 
-def test_sem_search_finds_ranked_local_code_without_external_index():
-    context = ToolContext(cwd=PROJECT_ROOT)
-
-    actual = sem_search(
-        [
-            {
-                "query": "task delegation backend",
-                "use_case": "find where delegated worker tasks are run",
-                "path": "js",
-                "glob": "*.py",
-                "limit": 6,
-            }
-        ],
-        context=context,
-    )
-
-    assert actual.startswith("Local semantic-ish search")
-    assert "js/toolkit/meta.py" in actual
-    assert "def task(" in actual or "js/toolkit/meta.py" in actual
-    assert "ERROR: sem_search requires a code index backend" not in actual
-
-
 @pytest.mark.ai_provider
 def test_task_backend_runs_real_child_turn_through_local_proxy():
     _require_provider()
@@ -101,7 +79,7 @@ def test_task_backend_runs_real_child_turn_through_local_proxy():
 
 @pytest.mark.ai_provider
 @pytest.mark.e2e
-def test_real_model_turn_uses_sem_search_and_task_end_to_end(monkeypatch):
+def test_real_model_turn_uses_fs_search_and_task_end_to_end(monkeypatch):
     _require_provider()
     monkeypatch.chdir(PROJECT_ROOT)
     runtime_tools.DEFAULT_CONTEXT = ToolContext(cwd=PROJECT_ROOT)
@@ -110,7 +88,7 @@ def test_real_model_turn_uses_sem_search_and_task_end_to_end(monkeypatch):
         {
             "role": "user",
             "content": (
-                "Use sem_search to find where task delegation is implemented in js, "
+                "Use fs_search to find where task delegation is implemented in js, "
                 "then use the task tool to delegate this exact task: Reply with exactly TASK_CHILD_OK. "
                 "Finally answer with exactly PARENT_OK if the delegated task succeeded."
             ),
@@ -134,7 +112,7 @@ def test_real_model_turn_uses_sem_search_and_task_end_to_end(monkeypatch):
         if message.get("role") == "assistant" and message.get("content")
     )
 
-    assert "sem_search" in tool_names
+    assert "fs_search" in tool_names
     assert "task" in tool_names
     assert any("TASK_CHILD_OK" in message.get("content", "") for message in messages if message.get("role") == "tool")
     assert "PARENT_OK" in final

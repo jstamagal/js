@@ -177,7 +177,7 @@ the registry. This is the whole payoff: every MCP server ever written becomes a
 `js` tool set without writing a line of tool code.
 
 **Phase B — `js` as MCP server.** The `js` toolkit (fs, terminal, search,
-browser, wiki, artifact) exposed over stdio so Claude Code or any other host can
+browser, wiki) exposed over stdio so Claude Code or any other host can
 drive it. Small once Phase A exists, and worth doing, but it delivers nothing to
 the owner's own harness.
 
