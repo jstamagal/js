@@ -177,7 +177,7 @@ def test_configured_hosts_run_over_both_real_transports_and_reload_session(monke
         memory.append_message(cfg.session_file, messages[0])
         emitted: list[list[dict]] = []
         scripted = iter([
-            _result("tool_discovery", {"query": "mcp"}),
+            _result("tool_discovery", {"kind": "mcp"}),
             _result("tool_discovery", {"load": "mcp:local_pipe__alpha"}),
             _result("local_pipe__alpha", {"text": "stdio hello"}),
             _result("tool_discovery", {"load": "mcp:loopback_http__inspect"}),

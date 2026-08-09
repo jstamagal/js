@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import ai
 import ai.types.messages
 import ai.types.usage
-import pytest
 
 from js import context_budget, runtime
 from js.config import Config
+from js.mcp.host import MCPHost
+from js.mcp_config import MCPConfiguration, MCPPolicy
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -189,7 +191,56 @@ def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path
     assert loaded["instructions"] == "Updated body.\n", "instructions must load from disk on demand"
 
 
-def test_skill_catalog_rejects_repeated_requirements(tmp_path):
+def test_explicit_skill_kind_is_not_hijacked_by_mcp_query_word(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "mcp.md").write_text(
+        "---\ndescription: Work with MCP-related project notes\n---\nInstructions.\n",
+        encoding="utf-8",
+    )
+    host = MCPHost(MCPConfiguration((), MCPPolicy()))
+    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path, mcp_host=host)
+
+    results = json.loads(
+        asyncio.run(surface.discover_async(kind="skill", query="mcp"))
+    )["results"]
+
+    assert [item["id"] for item in results] == ["skill:mcp"]
+    assert {item["kind"] for item in results} == {"skill"}
+
+
+def test_discovery_loaded_state_is_kind_aware_for_native_skill_and_mcp(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "terminal_session.md").write_text(
+        "---\ndescription: Skill sharing a native name\n---\nInstructions.\n",
+        encoding="utf-8",
+    )
+    host = MCPHost(MCPConfiguration((), MCPPolicy()))
+    surface = build_default_registry().select(
+        ["skill", "terminal_session"]
+    ).lazy_surface(tmp_path, mcp_host=host)
+
+    surface.discover(load="native:terminal_session")
+    by_id = {
+        item["id"]: item
+        for item in json.loads(surface.discover(query="terminal_session"))["results"]
+    }
+    assert by_id["native:terminal_session"]["loaded"] is True
+    assert by_id["skill:terminal_session"]["loaded"] is False
+
+    surface.discover(load="skill:terminal_session")
+    skill = json.loads(surface.discover(kind="skill"))["results"][0]
+    assert skill["id"] == "skill:terminal_session"
+    assert skill["loaded"] is True
+
+    surface.discover(load="mcp:mcp_resource_list")
+    control = json.loads(surface.discover(query="mcp_resource_list"))["results"][0]
+    assert control["id"] == "mcp:mcp_resource_list"
+    assert control["loaded"] is True
+
+
+def test_repeated_skill_requirements_warn_without_breaking_valid_discovery(tmp_path, capsys):
     skills = tmp_path / "skills"
     skills.mkdir()
     (skills / "inspect.md").write_text(
@@ -197,9 +248,20 @@ def test_skill_catalog_rejects_repeated_requirements(tmp_path):
         "Inspect the requested target.\n",
         encoding="utf-8",
     )
+    (skills / "valid.md").write_text(
+        "---\ndescription: Valid neighboring skill\n---\nUse valid instructions.\n",
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="contains duplicate 'read'"):
-        build_default_registry().select(["skill", "read", "browser_probe"]).lazy_surface(tmp_path)
+    surface = build_default_registry().select(
+        ["skill", "read", "browser_probe"]
+    ).lazy_surface(tmp_path)
+
+    results = json.loads(surface.discover(kind="skill"))["results"]
+    assert [item["id"] for item in results] == ["skill:valid"]
+    warning = capsys.readouterr().err
+    assert str(skills / "inspect.md") in warning
+    assert "contains duplicate 'read'" in warning
 
 
 def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch, tmp_path):

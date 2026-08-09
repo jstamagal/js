@@ -6,7 +6,7 @@ import pytest
 
 from js.mcp.client import MCPClient, MCPClientError, NotInitializedError, ProtocolVersionError
 from js.mcp.protocol import JSONRPCError, JSONRPCPeer, PeerClosedError, REQUEST_CANCELLED
-from js.mcp.types import LATEST_PROTOCOL_VERSION
+from js.mcp.types import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 
 class FakeTransport:
@@ -182,6 +182,33 @@ def test_initialize_rejects_unsupported_version_and_invalid_capabilities():
         }
         await attempt({**base, "protocolVersion": "2099-01-01"}, ProtocolVersionError)
         await attempt({**base, "capabilities": {"tools": True}}, ValueError)
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("version", ("2024-11-05", "2025-03-26", "2025-06-18"))
+def test_initialize_accepts_each_supported_protocol_version(version):
+    assert version in SUPPORTED_PROTOCOL_VERSIONS
+    async def drive():
+        transport = FakeTransport()
+        client = MCPClient(lambda: transport)
+        task = asyncio.create_task(client.initialize())
+        request = await transport.next_sent()
+        await transport.server_send({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {
+                "protocolVersion": version,
+                "capabilities": {},
+                "serverInfo": {"name": "compatible", "version": "1"},
+            },
+        })
+
+        result = await task
+
+        assert result.protocol_version == version
+        assert client.initialized
+        await client.close()
 
     asyncio.run(drive())
 

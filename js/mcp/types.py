@@ -10,7 +10,11 @@ from dataclasses import dataclass, field
 from typing import Any, NotRequired, TypedDict
 
 LATEST_PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({LATEST_PROTOCOL_VERSION})
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({
+    "2024-11-05",
+    "2025-03-26",
+    LATEST_PROTOCOL_VERSION,
+})
 
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 JSONRPCId = int | str

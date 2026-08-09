@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from js.skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 
 
@@ -143,27 +141,44 @@ def test_metadata_is_derived_and_bounded(tmp_path):
     assert len(metadata.description) == 500
 
 
-def test_catalog_rejects_malformed_manifests_names_tools_and_duplicates(tmp_path):
+def test_catalog_skips_each_malformed_skill_and_warns_with_its_path(tmp_path, capsys):
     package = tmp_path / "package"
     project = tmp_path / "project"
     global_dir = tmp_path / "global"
-    cases = [
-        ("bad-yaml.md", "---\nname: [\n---\nbody", "invalid YAML"),
-        ("bad-map.md", "---\n- nope\n---\nbody", "must be a mapping"),
-        ("bad-name.md", "---\nname: ../escape\n---\nbody", "unsafe skill name"),
-        ("bad-tools.md", "---\ntools: shell\n---\nbody", "must be a list"),
-        ("bad-tool.md", "---\ntools: ['../shell']\n---\nbody", "safe non-empty"),
-    ]
-    for filename, text, error in cases:
-        path = _write(package / filename, text)
-        with pytest.raises(ValueError, match=error):
-            _catalog(project, package, global_dir)
-        path.unlink()
+    malformed = {
+        "bad-yaml.md": "---\nname: [\n---\nbody",
+        "bad-name.md": "---\nname: has space\n---\nbody",
+        "no-close.md": "---\nname: never-closed\nbody",
+        "duplicate-tools.md": "---\ntools: [ok, ok]\n---\nbody",
+        "duplicate-second.md": "---\nname: duplicate\n---\ntwo",
+    }
+    _write(package / "valid.md", "---\ndescription: Still indexed\n---\nvalid body")
+    _write(package / "duplicate-first.md", "---\nname: duplicate\n---\none")
+    for filename, text in malformed.items():
+        _write(package / filename, text)
 
-    _write(package / "first.md", "---\nname: duplicate\n---\none")
-    _write(package / "second.md", "---\nname: DUPLICATE\n---\ntwo")
-    with pytest.raises(ValueError, match="duplicate skill name"):
-        _catalog(project, package, global_dir)
+    catalog = _catalog(project, package, global_dir)
+
+    assert {skill.name for skill in catalog.skills} == {"duplicate", "valid"}
+    warnings = capsys.readouterr().err
+    for filename in malformed:
+        assert str(package / filename) in warnings
+    assert warnings.count("WARNING: skipping malformed skill") == len(malformed)
+
+
+def test_frontmatter_closing_delimiter_is_found_beyond_metadata_prefix(tmp_path):
+    package = tmp_path / "package"
+    filler = "# padding beyond the former prefix\n" * 3_000
+    path = _write(
+        package / "big.md",
+        "---\nname: big\ndescription: Large valid manifest\n" + filler + "---\nbody\n",
+    )
+    assert path.stat().st_size > 64 * 1024
+
+    metadata = _catalog(tmp_path / "project", package, tmp_path / "global").lookup("big")
+
+    assert metadata is not None
+    assert metadata.description == "Large valid manifest"
 
 
 def test_search_is_case_insensitive_term_based_and_deterministic(tmp_path):
