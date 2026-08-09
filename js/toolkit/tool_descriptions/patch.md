@@ -1,4 +1,4 @@
-Perform an exact string replacement in one file.
+Perform exact string replacements in one file.
 
 Use this for normal edits to existing files. It changes only the exact text you
 name and returns a focused diff.
@@ -18,7 +18,29 @@ Required preparation:
 - The read-before-edit guard is path-based; read the same path you intend to
   edit after resolution.
 
-Matching rules:
+One replacement (the common case):
+- `file_path`: target file path.
+- `old_string`: exact text to replace.
+- `new_string`: replacement text.
+- `replace_all`: optional; change every occurrence instead of one unique match.
+
+Several replacements in the same file:
+- Pass `edits` instead: an ordered list of `{old_string, new_string}` objects,
+  each optionally carrying its own `replace_all`.
+- Prefer one call with `edits` over repeated single-replacement calls.
+- Edits apply in the order given, and each one sees the result of the previous
+  one.
+- Passing `edits` together with `old_string`, `new_string`, or `replace_all` is
+  an error. Use one form or the other.
+
+Atomicity:
+- All edits are validated and applied in memory before anything is written.
+- If any edit fails to match, is ambiguous, or is a no-op, the file is left
+  untouched and the error names the offending edit by its position in the list.
+- A successful call writes once and takes one snapshot, so a single undo
+  restores the file as it was before the whole call.
+
+Matching rules (each edit):
 - `old_string` must match the file exactly, including whitespace and
   indentation.
 - `new_string` must be different from `old_string`.
@@ -45,14 +67,12 @@ Working from prior file text:
   `new_string`.
 {{/unless}}
 
+Planning a multi-edit call:
+- Use enough surrounding context to make each `old_string` unique.
+- Avoid edits whose replacement text a later edit then tries to match.
+- Do not leave the file in a broken intermediate state.
+
 When not to use:
-{{#if multi_patch}}
-- Use `multi_patch` for several replacements in the same file.
-{{/if}}
-{{#unless multi_patch}}
-- For several replacements in the same file, make each exact replacement
-  deliberately; this surface has no batch-patch tool.
-{{/unless}}
 {{#if write}}
 - Use `write` only when creating a new file or intentionally replacing the
   complete file.

@@ -46,7 +46,7 @@ tests/test_memory.py tests/test_runtime_offline_integration.py
 
 On a successful read, record a ToolContext-scoped observation:
 resolved path, SHA-256, size, mtime-ns, and device/inode where
-available. Before patch, multi_patch, overwrite, undo and remove,
+available. Before patch, overwrite, undo and remove,
 re-read and reject when the target changed. Distinguish symlink path
 identity from the resolved target so a swapped symlink is caught.
 Refresh observations after a successful mutation. Observations never
