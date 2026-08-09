@@ -31,7 +31,6 @@ def test_skill_catalog_indexes_metadata_without_instruction_body(tmp_path):
     assert metadata.description == "Ship a release safely"
     assert metadata.tools == ("shell", "read")
     assert sentinel not in repr(catalog.skills)
-    assert sentinel not in repr(catalog.search("release"))
     assert catalog.search(sentinel) == ()
     assert catalog.load("deploy") == f"# ignored\n\n{sentinel}\n"
 

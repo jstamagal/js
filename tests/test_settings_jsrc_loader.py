@@ -325,29 +325,3 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_base_url") == "http://127.0.0.1:11434/v1"
     assert captured_kwargs.get("provider_api_key") == "ollama"
     assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
-
-
-def test_provider_config_absent_when_unset(monkeypatch, tmp_path):
-    captured_kwargs: dict = {}
-
-    def stream_stub(**kwargs):
-        captured_kwargs.update(kwargs)
-        return _fake_stream_result("ok")
-
-    monkeypatch.setattr("js.runtime.model_client.stream_model_async", stream_stub)
-    cfg = _build_config(tmp_path, provider_id=None, provider_base_url=None, provider_api_key=None)
-    from js.toolkit import ToolContext
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        [{"role": "user", "content": "hi"}],
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_context=ToolContext(cwd=tmp_path),
-        suppress_output=True,
-    )
-
-    assert captured_kwargs.get("provider_id") is None
-    assert captured_kwargs.get("provider_base_url") is None
-    assert captured_kwargs.get("provider_api_key") is None

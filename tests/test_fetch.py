@@ -59,7 +59,6 @@ def test_file_url_binary_returns_descriptor_instead_of_bytes(tmp_path):
     result = process_net.fetch(blob.as_uri(), context=ToolContext(cwd=tmp_path))
 
     assert result == "BINARY_RESPONSE content-type=application/octet-stream size=5 bytes"
-    assert "\x00" not in result
 
 
 def test_file_url_download_writes_to_resolved_path(tmp_path):
