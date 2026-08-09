@@ -168,6 +168,7 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
 
 
 MAX_PUBLIC_TOOL_NAME = 64
+DEFAULT_REQUEST_TIMEOUT = 10.0
 
 
 def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TOOL_NAME) -> str:
@@ -185,6 +186,12 @@ def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TO
     prefix = server[: max(1, min(len(server), limit // 3))]
     room = limit - len(prefix) - len(digest) - 3  # two underscores plus one
     return f"{prefix}__{component[: max(1, room)]}_{digest}"
+
+
+def _collision_public_name(server: str, component: str, remote: str, occurrence: int) -> str:
+    """Return a stable bounded alias for one normalization-colliding remote name."""
+    digest = hashlib.sha256(f"{remote}\0{occurrence}".encode()).hexdigest()[:6]
+    return _bounded_public_name(server, f"{component}_{digest}")
 
 
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
@@ -305,14 +312,20 @@ class MCPHost:
         client_factory: Callable[..., MCPClient] = MCPClient,
         telemetry: Any = None,
         event_sink: Callable[..., Any] | None = None,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
     ) -> None:
+        if request_timeout <= 0:
+            raise ValueError("MCP request timeout must be positive")
         self.config = config
         self._client_factory = client_factory
         self.telemetry = telemetry
         self.event_sink = event_sink
+        self.request_timeout = float(request_timeout)
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
+        self._server_errors: dict[str, str] = {}
+        self._server_collisions: dict[str, tuple[CatalogEntry, ...]] = {}
         self._dirty: dict[str, set[str]] = {}
         self._reserved_public_names: set[str] = set()
         self._reported_public_collisions: set[str] = set()
@@ -338,7 +351,7 @@ class MCPHost:
         return tuple(
             CatalogEntry(f"mcp:{name}", name, description, "mcp", "mcp")
             for name, description in self.CONTROL_TOOLS
-            if not self._public_name_reserved(name)
+            if self.config.allows_tool(name) and not self._public_name_reserved(name)
         )
 
     def is_server_source(self, source: str) -> bool:
@@ -371,10 +384,34 @@ class MCPHost:
             if matching:
                 servers = matching
         for server in servers:
-            await self._ensure_server(server)
+            try:
+                await self._ensure_server(server)
+                self._server_errors.pop(server.name, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._record_server_error(server, exc)
         await self.refresh()
         entries = list(self.initial_catalog())
+        for server_name, message in self._server_errors.items():
+            server = next(
+                (item for item in self.config.servers if item.name == server_name),
+                None,
+            )
+            if server is None or not self.config.policy.allows_server(server.name):
+                continue
+            entries.append(CatalogEntry(
+                f"mcp:server-error:{server.normalized_name}",
+                server.name,
+                f"MCP server error: {message}"[:240],
+                "mcp",
+                server.name,
+            ))
+        for collision_entries in self._server_collisions.values():
+            entries.extend(collision_entries)
         for server_name, client in self.clients.items():
+            if not getattr(client, "initialized", False):
+                continue
             capabilities = getattr(client, "server_capabilities", None)
             advertised = (
                 sorted(name for name in ("tools", "resources", "prompts") if capabilities.supports(name))
@@ -407,11 +444,17 @@ class MCPHost:
             result.append(entry)
         return tuple(result)
 
+    def _record_server_error(self, server: MCPServer, exc: Exception) -> None:
+        message = str(exc).strip() or type(exc).__name__
+        message = _redact_text(message, _secret_values(server))
+        self._server_errors[server.name] = message
+        self._event("mcp_server_error", server=server.name, error=message)
+
     async def _ensure_server(self, server: MCPServer) -> MCPClient:
         client = self.clients.get(server.name)
         if client is not None:
             if not client.initialized:
-                await client.initialize()
+                await client.initialize(timeout=self.request_timeout)
             return client
 
         def changed(feature: str, name: str = server.name) -> None:
@@ -444,7 +487,7 @@ class MCPHost:
             redactor=(lambda text: _redact_text(text, secrets)),
         )
         self.clients[server.name] = client
-        await client.initialize()
+        await client.initialize(timeout=self.request_timeout)
         capabilities = getattr(client, "server_capabilities", None)
         features = {
             name for name in ("tools", "resources", "prompts")
@@ -470,10 +513,19 @@ class MCPHost:
             capabilities = getattr(client, "server_capabilities", None)
             if capabilities is not None and not capabilities.supports("tools"):
                 continue
-            tools = await client.list_tools()
-            replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
-            collisions: set[str] = set()
             server = next(s for s in self.config.servers if s.name == server_name)
+            try:
+                tools = await client.list_tools(timeout=self.request_timeout)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._record_server_error(server, exc)
+                self._dirty.setdefault(server_name, set()).add("tools")
+                continue
+            replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
+            grouped_tools: dict[
+                str, list[tuple[str, dict[str, Any], str]]
+            ] = {}
             secrets = _secret_values(server)
             for raw in tools:
                 remote = raw.get("name")
@@ -482,20 +534,58 @@ class MCPHost:
                 safe_raw = _redact_value(dict(raw), secrets)
                 component = normalize_tool_name(safe_raw["name"])
                 public = _bounded_public_name(server.normalized_name, component)
-                if (
-                    not component
-                    or not self.config.allows_tool(public)
-                    or public in collisions
-                    or self._public_name_reserved(public)
-                ):
+                if not component:
                     continue
-                if public in replacement:
-                    replacement.pop(public, None)
-                    collisions.add(public)
+                grouped_tools.setdefault(public, []).append((remote, safe_raw, component))
+            collision_entries: list[CatalogEntry] = []
+            for public, candidates in grouped_tools.items():
+                if len(candidates) == 1:
+                    remote, safe_raw, _component = candidates[0]
+                    if (
+                        self.config.allows_tool(public)
+                        and not self._public_name_reserved(public)
+                    ):
+                        replacement[public] = (server_name, remote, safe_raw)
                     continue
-                replacement[public] = (server_name, remote, safe_raw)
-            for public in collisions:
-                self._event("mcp_catalog_collision", tool=public)
+                self._event(
+                    "mcp_catalog_collision",
+                    tool=public,
+                    server=server_name,
+                    remote_names=[remote for remote, _safe, _component in candidates],
+                )
+                exposed: list[tuple[str, str]] = []
+                occurrences: dict[str, int] = {}
+                for remote, safe_raw, component in candidates:
+                    occurrence = occurrences.get(remote, 0)
+                    occurrences[remote] = occurrence + 1
+                    disambiguated = _collision_public_name(
+                        server.normalized_name, component, remote, occurrence
+                    )
+                    if (
+                        not self.config.allows_tool(disambiguated)
+                        or self._public_name_reserved(disambiguated)
+                    ):
+                        continue
+                    replacement[disambiguated] = (server_name, remote, safe_raw)
+                    exposed.append((str(safe_raw["name"]), disambiguated))
+                if exposed:
+                    digest = hashlib.sha256(
+                        f"{server.name}\0{public}".encode()
+                    ).hexdigest()[:6]
+                    names = ", ".join(name for name, _alias in exposed)
+                    aliases = ", ".join(alias for _name, alias in exposed)
+                    collision_entries.append(CatalogEntry(
+                        f"mcp:collision:{server.normalized_name}:{digest}",
+                        public,
+                        (
+                            f"MCP tool names {names} normalize to the same public name; "
+                            f"exposed with disambiguated names: {aliases}"
+                        )[:240],
+                        "mcp",
+                        server.name,
+                    ))
+            self._server_errors.pop(server_name, None)
+            self._server_collisions[server_name] = tuple(collision_entries)
             self._server_tools[server_name] = replacement
 
         grouped: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
@@ -504,6 +594,8 @@ class MCPHost:
                 grouped.setdefault(public, []).append(value)
         self.remote_tools = {}
         for public, candidates in grouped.items():
+            if self._public_name_reserved(public):
+                continue
             if len(candidates) == 1:
                 self.remote_tools[public] = candidates[0]
             else:
@@ -515,7 +607,7 @@ class MCPHost:
     def load(self, item_id: str) -> list[str] | None:
         """Validate one catalog id; the caller owns the turn-scoped loaded set."""
         name = item_id.removeprefix("mcp:")
-        if self._public_name_reserved(name):
+        if not self.config.allows_tool(name) or self._public_name_reserved(name):
             return None
         if name in dict(self.CONTROL_TOOLS) or name in self.remote_tools:
             return [name]
@@ -524,7 +616,7 @@ class MCPHost:
     def tools(self, loaded: set[str] | tuple[str, ...] = ()) -> tuple[Tool, ...]:
         available = {
             name for name in set(dict(self.CONTROL_TOOLS)) | set(self.remote_tools)
-            if not self._public_name_reserved(name)
+            if self.config.allows_tool(name) and not self._public_name_reserved(name)
         }
         return tuple(self._make_tool(name) for name in sorted(set(loaded) & available))
 
@@ -549,17 +641,24 @@ class MCPHost:
                 client = self.clients[current[0]]
                 server_config = next(item for item in self.config.servers if item.name == current[0])
                 return mcp_tool_result(
-                    await client.call_tool(current[1], kwargs),
+                    await client.call_tool(
+                        current[1], kwargs, timeout=self.request_timeout
+                    ),
                     _secret_values(server_config),
                 )
 
+            valid_input_schema = (
+                isinstance(raw.get("inputSchema"), dict)
+                and schema.get("type") == "object"
+                and isinstance(schema.get("properties"), dict)
+            )
             return Tool(
                 name,
                 str(raw.get("description") or "MCP tool"),
                 call,
                 properties,
                 tuple(required),
-                input_schema=dict(schema),
+                input_schema=dict(schema) if valid_input_schema else None,
             )
         return self._control_tool(name)
 
@@ -577,20 +676,27 @@ class MCPHost:
 
         if name == "mcp_resource_list":
             async def handler(server: str, context=None):
-                value = await self._server(server).list_resources()
+                value = await self._server(server).list_resources(
+                    timeout=self.request_timeout
+                )
                 return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         elif name == "mcp_resource_templates":
             async def handler(server: str, context=None):
-                value = await self._server(server).list_resource_templates()
+                value = await self._server(server).list_resource_templates(
+                    timeout=self.request_timeout
+                )
                 return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         elif name == "mcp_resource_read":
             async def handler(server: str, uri: str, context=None):
                 return resource_result(
-                    await self._server(server).read_resource(uri), secrets(server)
+                    await self._server(server).read_resource(
+                        uri, timeout=self.request_timeout
+                    ),
+                    secrets(server),
                 )
             params = {"server": {"type": "string"}, "uri": {"type": "string"}}
             required = ("server", "uri")
@@ -598,19 +704,23 @@ class MCPHost:
             async def handler(server: str, uri: str, context=None):
                 client = self._server(server)
                 method = client.subscribe_resource if name.endswith("subscribe") and not name.endswith("unsubscribe") else client.unsubscribe_resource
-                await method(uri)
+                await method(uri, timeout=self.request_timeout)
                 return compact_json({"server": server, "uri": uri, "subscribed": method == client.subscribe_resource})
             params = {"server": {"type": "string"}, "uri": {"type": "string"}}
             required = ("server", "uri")
         elif name == "mcp_prompt_list":
             async def handler(server: str, context=None):
-                value = await self._server(server).list_prompts()
+                value = await self._server(server).list_prompts(
+                    timeout=self.request_timeout
+                )
                 return compact_json(_redact_value(value, secrets(server)))
             params = {"server": {"type": "string"}}
             required = ("server",)
         else:
             async def handler(server: str, name: str, arguments: dict | None = None, context=None):
-                result = await self._server(server).get_prompt(name, arguments or None)
+                result = await self._server(server).get_prompt(
+                    name, arguments or None, timeout=self.request_timeout
+                )
                 return prompt_result(result, secrets(server))
             params = {
                 "server": {"type": "string"}, "name": {"type": "string"},

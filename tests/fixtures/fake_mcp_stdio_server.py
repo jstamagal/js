@@ -53,6 +53,8 @@ def main() -> None:
     tool_lists = 0
     for raw in sys.stdin:
         message = json.loads(raw)
+        if args.mode == "silent":
+            continue
         method = message.get("method")
         params = message.get("params", {})
         request_id = message.get("id")
