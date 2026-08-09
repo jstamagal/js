@@ -158,7 +158,6 @@ class Config:
     max_tool_results_per_turn_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
     subagent_max_workers: int = _settings.DEFAULT_SUBAGENT_MAX_WORKERS
-    wiki_vault_lock_timeout_s: int = _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S
     allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
@@ -300,9 +299,6 @@ def from_env(
     config_paths: list[Path] = []
     if not ignore_global_config:
         config_file_path = _paths.global_config_file()
-        # RULING J: write the first-run template BEFORE it's read below, so a
-        # fresh box's stock wiki.aliases (creative/general) are live on run 1
-        # instead of only from run 2 onward.
         _settings.write_default_template(config_file_path)
         config_paths.append(config_file_path)
     if not ignore_local_config:
@@ -389,7 +385,6 @@ def from_env(
     max_tool_results_per_turn_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_results_per_turn_bytes"), _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES)
     task_max_depth = _numeric_setting(js_root_settings, ("limits", "task_max_depth"), _settings.DEFAULT_TASK_MAX_DEPTH)
     subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
-    wiki_vault_lock_timeout_s = _numeric_setting(js_root_settings, ("limits", "wiki_vault_lock_timeout_s"), _settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S)
     runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
     debug_autolog = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug_autolog"), True))
@@ -463,7 +458,6 @@ def from_env(
         max_tool_results_per_turn_bytes=max_tool_results_per_turn_bytes,
         task_max_depth=task_max_depth,
         subagent_max_workers=subagent_max_workers,
-        wiki_vault_lock_timeout_s=wiki_vault_lock_timeout_s,
         allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,

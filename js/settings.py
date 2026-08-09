@@ -46,7 +46,6 @@ DEFAULT_MAX_READ_BYTES = 256 * 1024
 DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
 DEFAULT_TASK_MAX_DEPTH = 2
 DEFAULT_SUBAGENT_MAX_WORKERS = 8
-DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
 DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
@@ -180,8 +179,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum recursive task/subagent depth."),
     SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,
                 "Maximum concurrent subagent workers per task call; minimum 1."),
-    SettingSpec("limits.wiki_vault_lock_timeout_s", "int", DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S,
-                "Wiki vault lock timeout in seconds."),
     # --- runtime ---
     SettingSpec("runtime.debug", "bool", False,
                 "Append per-event records to state/<agent>/debug.log.",
@@ -286,10 +283,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("sampling.presence_penalty", "float", None,
                 "Provider-default presence penalty; unset = do not send.",
                 empty=EMPTY_UNSET),
-    # --- wiki ---
-    SettingSpec("wiki.aliases", "map", {},
-                "Vault alias map; set sub-keys, e.g. `set wiki.aliases.creative /path`.",
-                empty=EMPTY_NONE),
     # --- artifact ---
     SettingSpec("artifact.dir", "str", None, "Artifact library directory (default /srv/artifacts; ARTIFACT_DIR env also honored).", empty=EMPTY_NONE),
     SettingSpec("artifact.url", "str", None, "Artifact HTTP base URL (default http://localhost; ARTIFACT_URL env also honored).", empty=EMPTY_NONE),
@@ -308,7 +301,6 @@ SECTION_ORDER: tuple[str, ...] = (
     "tools",
     "mcp",
     "sampling",
-    "wiki",
     "artifact",
 )
 
@@ -653,7 +645,6 @@ _SECTION_INTRO: dict[str, list[str]] = {
         "# Server values may contain credentials; /set and /show mask mcp.servers.",
     ],
     "sampling": ["# Per-turn sampling overrides. Default display is <unset>; provider/model defaults win."],
-    "wiki": ["# Wiki vault aliases, e.g. `set wiki.aliases.creative /path/to/wiki`."],
     "artifact": ["# Artifact system defaults."],
 }
 
@@ -682,8 +673,6 @@ def _template_lines() -> list[str]:
         "",
         "# --- stock defaults (active lines; edit or delete) ---",
         f"set model.id {DEFAULT_MODEL}",
-        "set wiki.aliases.creative ~/wiki-creative",
-        "set wiki.aliases.general ~/wiki-general",
         "",
     ]
     by_section: dict[str, list[SettingSpec]] = {}

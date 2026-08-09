@@ -348,111 +348,22 @@ Tasks inside one call run concurrently. Results are returned in input order.
 
 ## Wiki Tools
 
-### `wiki_purpose`
-
-Loads vault purpose, section counts, inbox count, and orphan hints.
-
-Parameters:
-
-- `vault`
-
-### `wiki_inbox`
-
-Lists top-level inbox units.
-
-Parameters:
-
-- `vault`
+Installed wiki agents use three deterministic native operations:
 
 ### `wiki_convert`
 
-Converts a source file into text or an Obsidian media embed.
-
-Parameters:
-
-- `path`
-- `vault`
-
-Uses text reads, `pdftotext`, `pandoc`, `soffice`, `tesseract`, `ffprobe`, and
-`file` depending on extension and available local tools.
+Converts text, structured documents, PDFs, office files, images, and media into
+model-readable text or a vault asset embed.
 
 ### `wiki_write`
 
-Writes or upserts a wiki page with frontmatter.
-
-Parameters:
-
-- `vault`
-- `kind`: `source`, `entity`, `concept`, `synthesis`
-- `body`
-- `slug`
-- `title`
-- `tags`
-- `source`
-- `confidence`
-- `source_count`
-- `overwrite`
-
-Mode gates:
-
-- ingest mode only writes `source`
-- synthesize mode refuses `source`
-
-Entity/concept writes include near-match duplicate protection.
-
-### `wiki_search`
-
-Searches a vault through `qmd query`.
-
-Parameters:
-
-- `vault`
-- `query`
-
-### `wiki_archive`
-
-Moves a top-level inbox unit to `Clippings/`, or validates and skips movement
-when `JS_WIKI_NO_ARCHIVE` is set.
-
-Parameters:
-
-- `vault`
-- `unit`
-
-### `wiki_log`
-
-Appends a dated log entry to `log.md`.
-
-Parameters:
-
-- `vault`
-- `op`
-- `title`
-- `note`
+Writes a source, entity, concept, or synthesis page with normalized frontmatter,
+exact-slug overwrite protection, near-match dedup guards, and vault locking.
 
 ### `wiki_finish_ingest`
 
-Atomic ingest closeout: archive, log, and maybe commit.
-
-Parameters:
-
-- `vault`
-- `unit`
-- `title`
-- `note`
-
-If archive fails, logging and commit are skipped.
-
-### `wiki_commit`
-
-Stages and commits a vault if it is a git repo.
-
-Parameters:
-
-- `vault`
-- `message`
-
-No-op on non-repo vaults and empty commits.
+Closes one top-level inbox unit in order: archive into `Clippings/`, append
+`log.md`, then commit when vault is a git repository.
 
 ## Artifact Tools
 

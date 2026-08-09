@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from ..core import ToolContext
 from .helpers import run, read_text, resolve_vault, find_vault, copy_to_assets
@@ -51,11 +52,11 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
         rc, out, err = run(["pandoc", str(p), "-t", "markdown"], context)
         return out[:cap] if rc == 0 else f"ERROR pandoc: {err}"
     if ext in SOFFICE_EXT:
-        txt = Path("/tmp") / (p.stem + ".txt")
-        txt.unlink(missing_ok=True)   # a stale same-stem output would masquerade as this conversion
-        rc, out, err = run(["soffice", "--headless", "--convert-to", "txt", "--outdir", "/tmp", str(p)], context)
-        if rc == 0 and txt.is_file():
-            return read_text(txt, cap)
+        with TemporaryDirectory(prefix="js-wiki-") as tmp:
+            rc, out, err = run(["soffice", "--headless", "--convert-to", "txt", "--outdir", tmp, str(p)], context)
+            txt = Path(tmp) / f"{p.stem}.txt"
+            if rc == 0 and txt.is_file():
+                return read_text(txt, cap)
         return f"ERROR soffice: {err or out}"
 
     # media → copy to vault assets, return an Obsidian embed

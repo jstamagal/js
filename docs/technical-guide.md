@@ -9,7 +9,6 @@ This is the architecture guide for contributors and agents working on `js`.
 ```toml
 [project.scripts]
 js = "js.cli:main"
-js-drain = "js.drain:main"
 ```
 
 `js/__main__.py` delegates to the same CLI path.
@@ -34,20 +33,19 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
-| `js/cli.py` | argument parser, REPL, prompt/pipe mode, wiki/artifact/commit orchestration |
+| `js/cli.py` | argument parser, REPL, prompt/pipe mode, artifact/commit orchestration |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/persona.py` | prompt-directory concatenation and `tools:` frontmatter |
-| `js/drain.py` | wiki inbox/folder drain planner, TUI, sequential job executor |
 | `js/tools.py` | compatibility import of the default registry/context |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly and selector matching |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/process_net.py` | shell and fetch tools |
 | `js/toolkit/meta.py` | todo/followup/plan/skill/task and generated agent tools |
-| `js/toolkit/wiki/` | wiki tools, helpers, mode prompts |
+| `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 | `js/toolkit/artifact/` | artifact tools and mode prompts |
 
 ## Prompt Loading
@@ -176,7 +174,7 @@ Image result shape:
 
 ## Built-In Modes
 
-`--wiki` and `--artifact` do not require prompt dirs. They build system prompts
+`--artifact` does not require a prompt dir. It builds its system prompt
 from code constants and select the full registry. If `--agent` is provided,
 that agent's persona is prepended to the built-in prompt.
 

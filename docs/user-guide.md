@@ -17,7 +17,6 @@ The package exposes two scripts:
 
 ```bash
 js
-js-drain
 ```
 
 `python -m js` also runs the CLI.
@@ -171,7 +170,7 @@ silenced.
 ## Working Directory And Config Scoping
 
 These flags bind where `js` runs and which config files it reads. They apply to
-every mode (`-p`, REPL, `--commit`, `--wiki`, ...):
+every mode (`-p`, REPL, `--commit`, `--artifact`, ...):
 
 ```bash
 js -C /path/to/repo -p "summarize this repo"
@@ -262,29 +261,19 @@ The commit agent prompt tells the model to inspect the target repo, group
 changes into logical commits, avoid junk, write missing README/CHANGELOG only
 when needed, and not push.
 
-## Wiki Mode
+## Wiki Agents
 
-Wiki mode uses built-in prompts and native `wiki_*` tools:
+Installed `wiki-*` prompt-directory agents own wiki workflows. Friendly wrapper:
 
 ```bash
-js --wiki=ingest --vault=creative ~/notes/source.md
-js --wiki=ingest,synthesize --vault=general ~/papers/paper.pdf
-js --wiki=query --vault=creative "what does the wiki know about X?"
-js --wiki=lint --vault=general
+wiki create ~/wiki "research notes"
+wiki ingest ~/wiki --unit ~/wiki/inbox/source.md
+wiki flow ~/wiki "ingest inbox"
+wiki query ~/wiki "what supports this claim?"
+wiki lint ~/wiki
 ```
 
-Modes can be comma-separated. Each mode runs as a separate kickoff turn in one
-shared session so `ingest,synthesize` does not collapse into one overloaded
-prompt.
-
-Vault aliases:
-
-```text
-creative -> ~/wiki-creative
-general  -> ~/wiki-general
-```
-
-See [Wiki Mode](wiki.md).
+Native tools keep conversion, page schema/dedup, and ingest close-out deterministic.
 
 ## Artifact Mode
 
@@ -299,22 +288,6 @@ js --artifact=lint
 ```
 
 See [Artifact Mode](artifact.md).
-
-## Drain
-
-`js-drain` runs sequential wiki ingest jobs over a vault inbox or arbitrary
-folder. It packs small files, splits large files, and can archive originals
-after successful jobs.
-
-```bash
-js-drain creative
-js-drain creative -a
-js-drain creative -f ~/dump
-js-drain creative -n
-js-drain creative -l 3
-```
-
-See [Drain](drain.md).
 
 ## Prompt-Directory Agents
 
@@ -370,8 +343,7 @@ Saved sessions live under the platform data directory:
 <data-dir>/sessions/<agent_id>/<session>.jsonl
 ```
 
-Each agent id has isolated session state. A `wiki` session is not a
-`defaultagent` session. Use `--session` to continue a specific saved session.
+Each agent id has isolated session state. A `wiki-*` agent session is not a `defaultagent` session. Use `--session` to continue a specific saved session.
 
 The memory layer is append-only JSONL plus control marks:
 

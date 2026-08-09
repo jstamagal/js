@@ -6,15 +6,8 @@ from js.toolkit import ToolContext
 from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.wiki import convert as wiki_convert_module
-from js.toolkit.wiki import ops as wiki_ops
 from js.toolkit.wiki.convert import wiki_convert
-from js.toolkit.wiki.ops import (
-    wiki_archive,
-    wiki_finish_ingest,
-    wiki_inbox,
-    wiki_purpose,
-    wiki_search,
-)
+from js.toolkit.wiki.ops import wiki_finish_ingest
 from js.toolkit.wiki.pages import wiki_write
 
 
@@ -26,63 +19,6 @@ def _vault(tmp_path: Path) -> Path:
     vault = tmp_path / "wiki-test"
     vault.mkdir()
     return vault
-
-
-def test_wiki_purpose_reports_counts_inbox_and_orphaned_source_pages(tmp_path):
-    vault = _vault(tmp_path)
-    (vault / "PURPOSE.md").write_text("Purpose line\n", encoding="utf-8")
-    for name in ("sources", "entities", "concepts", "synthesis", "inbox"):
-        (vault / name).mkdir()
-    (vault / "inbox" / "raw.txt").write_text("raw\n", encoding="utf-8")
-    (vault / "inbox" / ".hidden").write_text("hidden\n", encoding="utf-8")
-    (vault / "inbox" / "_skipped").mkdir()
-    (vault / "sources" / "raw-summary.md").write_text(
-        '---\nsource: "inbox/raw.txt"\n---\n# Raw\n',
-        encoding="utf-8",
-    )
-    (vault / "entities" / "person.md").write_text("# Person\n", encoding="utf-8")
-    (vault / "concepts" / "idea.md").write_text("# Idea\n", encoding="utf-8")
-
-    actual = wiki_purpose(str(vault), context=_ctx(tmp_path))
-
-    assert f"# Vault: {vault}" in actual
-    assert "Purpose line" in actual
-    assert "- sources: 1" in actual
-    assert "- entities: 1" in actual
-    assert "- concepts: 1" in actual
-    assert "- synthesis: 0" in actual
-    assert "- inbox units waiting: 1" in actual
-    assert "ORPHANS" in actual
-    assert 'inbox/raw.txt' in actual
-    assert 'call wiki_archive(vault, "raw.txt")' in actual
-
-
-def test_wiki_purpose_skips_orphan_scan_in_leave_in_place_mode(tmp_path, monkeypatch):
-    """The same source/inbox pairing that reports ORPHANS in normal (archiving)
-    mode must NOT be flagged when leave-in-place is active — otherwise every
-    successfully-ingested unit is a permanent false orphan (js-drain default)."""
-    vault = _vault(tmp_path)
-    for name in ("sources", "entities", "concepts", "synthesis", "inbox"):
-        (vault / name).mkdir()
-    (vault / "inbox" / "raw.txt").write_text("raw\n", encoding="utf-8")
-    (vault / "sources" / "raw-summary.md").write_text(
-        '---\nsource: "inbox/raw.txt"\n---\n# Raw\n',
-        encoding="utf-8",
-    )
-
-    monkeypatch.setenv("JS_WIKI_NO_ARCHIVE", "1")
-    via_env = wiki_purpose(str(vault), context=_ctx(tmp_path))
-    monkeypatch.delenv("JS_WIKI_NO_ARCHIVE", raising=False)
-
-    context = _ctx(tmp_path)
-    context.wiki_no_archive = True
-    via_context_flag = wiki_purpose(str(vault), context=context)
-
-    normal_mode = wiki_purpose(str(vault), context=_ctx(tmp_path))
-
-    assert "ORPHANS" not in via_env
-    assert "ORPHANS" not in via_context_flag
-    assert "ORPHANS" in normal_mode  # sanity: guard only fires in leave-in-place mode
 
 
 def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
@@ -134,27 +70,7 @@ def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_pa
     assert (vault / "entities" / "dayton-dcs165-4-specs.md").exists()
 
 
-def test_wiki_inbox_lists_only_processable_units(tmp_path):
-    vault = _vault(tmp_path)
-    inbox = vault / "inbox"
-    inbox.mkdir()
-    (inbox / ".hidden").write_text("hidden\n", encoding="utf-8")
-    (inbox / "_skipped").mkdir()
-    (inbox / "project").mkdir()
-    (inbox / "standalone.md").write_text("body\n", encoding="utf-8")
-
-    actual = wiki_inbox(str(vault), context=_ctx(tmp_path))
-
-    expected = (
-        f"2 unit(s) in {inbox} -- process ONE per cycle:\n"
-        "  project  -- PROJECT (folder)\n"
-        "  standalone.md  -- standalone file"
-    )
-    assert actual == expected
-
-
-def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path, monkeypatch):
-    monkeypatch.delenv("JS_WIKI_MODE", raising=False)
+def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path):
     vault = _vault(tmp_path)
     context = _ctx(tmp_path)
 
@@ -181,6 +97,7 @@ def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path, monkeypatch
         context=context,
     )
     after_blocked = page.read_text(encoding="utf-8")
+    context.remember_read(page, "test")
     upserted = wiki_write(
         str(vault),
         "concept",
@@ -197,22 +114,22 @@ def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path, monkeypatch
     assert "(type: concept)" in first
     assert page.exists()
     assert "type: concept" in before
-    assert "tags: [wiki/concept, reasoning, prompts]" in before
-    assert "confidence: medium" in before
+    assert 'tags: ["wiki/concept", "reasoning", "prompts"]' in before
+    assert 'confidence: "medium"' in before
     assert "source_count: 2" in before
     assert "# Chain of Draft" in before
     assert "Initial body" in before
     assert blocked.startswith("EXISTS:")
     assert after_blocked == before
+    assert wiki_write(str(vault), "concept", "unsafe", slug="Chain of Draft Prompting", overwrite=True, context=_ctx(tmp_path)).startswith("ERROR: You must read")
     assert "(type: concept)" in upserted
-    assert "confidence: high" in after_upsert
+    assert 'confidence: "high"' in after_upsert
     assert "source_count: 3" in after_upsert
     assert "Merged body" in after_upsert
     assert "Initial body" not in after_upsert
 
 
-def test_wiki_write_sanitizes_boolean_metadata_inputs(tmp_path, monkeypatch):
-    monkeypatch.delenv("JS_WIKI_MODE", raising=False)
+def test_wiki_write_sanitizes_boolean_metadata_inputs(tmp_path):
     vault = _vault(tmp_path)
     context = _ctx(tmp_path)
 
@@ -231,13 +148,12 @@ def test_wiki_write_sanitizes_boolean_metadata_inputs(tmp_path, monkeypatch):
     content = page.read_text(encoding="utf-8")
 
     assert actual.startswith("wrote ")
-    assert "tags: [wiki/concept]" in content
+    assert 'tags: ["wiki/concept"]' in content
     assert "source_count: 1" in content
     assert "True" not in content
 
 
-def test_wiki_write_near_match_guard_for_shared_entity_and_concept_pages(tmp_path, monkeypatch):
-    monkeypatch.delenv("JS_WIKI_MODE", raising=False)
+def test_wiki_write_near_match_guard_for_shared_entity_and_concept_pages(tmp_path):
     vault = _vault(tmp_path)
     context = _ctx(tmp_path)
     wiki_write(
@@ -274,97 +190,20 @@ def test_wiki_write_near_match_guard_for_shared_entity_and_concept_pages(tmp_pat
     assert (vault / "entities" / "dayton-dcs165-4-specs.md").exists()
 
 
-def test_wiki_archive_leave_mode_and_finish_ingest_closeout(tmp_path, monkeypatch):
+def test_wiki_finish_ingest_archives_logs_and_rejects_traversal(tmp_path):
     vault = _vault(tmp_path)
-    inbox = vault / "inbox"
-    inbox.mkdir()
-    (inbox / "raw.txt").write_text("raw\n", encoding="utf-8")
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox").mkdir()
+    (vault / "inbox" / "unit.md").write_text("raw\n")
 
-    monkeypatch.setenv("JS_WIKI_NO_ARCHIVE", "1")
-    skipped = wiki_archive(str(vault), "raw.txt", context=_ctx(tmp_path))
-    monkeypatch.delenv("JS_WIKI_NO_ARCHIVE", raising=False)
-    monkeypatch.setenv("JS_WIKI_MODE", "ingest")
+    result = wiki_finish_ingest(str(vault), "unit.md", "Unit", "one source", context=_ctx(tmp_path))
 
-    closed = wiki_finish_ingest(
-        str(vault),
-        "raw.txt",
-        "Raw Title",
-        "closeout note",
-        context=_ctx(tmp_path),
-    )
-    log_text = (vault / "log.md").read_text(encoding="utf-8")
-    missing = wiki_finish_ingest(
-        str(vault),
-        "missing.txt",
-        "Missing Title",
-        context=_ctx(tmp_path),
-    )
+    assert "archived:" in result
+    assert not (vault / "inbox" / "unit.md").exists()
+    assert (vault / "Clippings" / "unit.md").read_text() == "raw\n"
+    assert "one source" in (vault / "log.md").read_text()
+    assert wiki_finish_ingest(str(vault), "../escape", "Bad", context=_ctx(tmp_path)).startswith("ERROR")
 
-    assert skipped == "archive skipped (leave-in-place): inbox/raw.txt kept"
-    assert closed.startswith("archived: inbox/raw.txt -> Clippings/raw.txt")
-    assert "logged:" in closed
-    assert "git: deferred" in closed
-    assert not (inbox / "raw.txt").exists()
-    assert (vault / "Clippings" / "raw.txt").read_text(encoding="utf-8") == "raw\n"
-    assert "Raw Title" in log_text
-    assert "closeout note" in log_text
-    assert "Archived: raw.txt -> Clippings/raw.txt" in log_text
-    assert missing.startswith("NOT logging")
-    assert "archive failed: ERROR: no inbox unit:" in missing
-    assert "Missing Title" not in log_text
-
-
-def test_wiki_finish_ingest_leave_mode_validates_unit_and_logs_left_in_place(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    inbox = vault / "inbox"
-    inbox.mkdir()
-    (inbox / "raw.txt").write_text("raw\n", encoding="utf-8")
-    monkeypatch.setenv("JS_WIKI_NO_ARCHIVE", "1")
-    monkeypatch.delenv("JS_WIKI_MODE", raising=False)
-
-    closed = wiki_finish_ingest(str(vault), "raw.txt", "Raw Title", "done note", context=_ctx(tmp_path))
-    missing = wiki_finish_ingest(str(vault), "missing.txt", "Missing Title", context=_ctx(tmp_path))
-    log_text = (vault / "log.md").read_text(encoding="utf-8")
-
-    assert closed.startswith("archive skipped (leave-in-place): inbox/raw.txt kept")
-    assert (inbox / "raw.txt").read_text(encoding="utf-8") == "raw\n"
-    assert "Left in place: inbox/raw.txt" in log_text
-    assert "Archived: raw.txt -> Clippings/raw.txt" not in log_text
-    assert missing.startswith("NOT logging")
-    assert "archive failed: ERROR: no inbox unit:" in missing
-    assert "Missing Title" not in log_text
-
-
-def test_wiki_search_constructs_qmd_collection_query(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    calls: list[list[str]] = []
-
-    def run_stub(cmd, context):
-        calls.append(cmd)
-        return 0, "result one\n", ""
-
-    monkeypatch.setattr(wiki_ops, "run", run_stub)
-
-    actual = wiki_search(str(vault), "needle", context=_ctx(tmp_path))
-
-    assert actual == "result one"
-    assert calls == [["qmd", "query", "needle", "-c", "wiki-test"]]
-
-
-def test_wiki_search_sanitizes_boolean_query(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    calls: list[list[str]] = []
-
-    def run_stub(cmd, context):
-        calls.append(cmd)
-        return 0, "found\n", ""
-
-    monkeypatch.setattr(wiki_ops, "run", run_stub)
-
-    actual = wiki_search(str(vault), True, context=_ctx(tmp_path))
-
-    assert actual == "found"
-    assert calls == [["qmd", "query", "", "-c", "wiki-test"]]
 
 def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_path, monkeypatch):
     vault = _vault(tmp_path)

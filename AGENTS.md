@@ -9,7 +9,7 @@ to this file — one set of instruction, every agent read the same thing.
 
 `js` = personal terminal LLM harness, Python, one silverback (the owner), one box.
 no customer, no prod, no other dev. interactive chat, one-shot `-p`, pipe
-workflows, local hacking tools, parallel subagents, wiki/artifact/drain modes,
+workflows, local hacking tools, parallel subagents, wiki agents, artifact mode,
 commit-agent — all over the Vercel AI Python SDK (`ai`). bias = low friction,
 many knob. when owner say remove, it GONE — deleted, no rename, no compat alias,
 no hide.
@@ -61,7 +61,7 @@ just build           # uv build -> sdist + wheel
 
 focused suites exist too — `just test-tools`, `test-wiki`, `test-runtime`,
 `test-subagents`, `test-memory`, `test-cli`, `test-vision`. `just` alone list
-the rest (`format`, `install`, `lock`, `upgrade`, `clean`, `drain`).
+the rest (`format`, `install`, `lock`, `upgrade`, `clean`).
 
 run one test directly when 🦍 need a single node:
 `uv run --extra test --extra browser pytest -q tests/test_foo.py::test_bar`
@@ -71,8 +71,7 @@ run one test directly when 🦍 need a single node:
 local OpenAI-compatible / vision endpoint — `just test` skips them on purpose.
 `just test-live` run them. markers defined in `pyproject.toml`.
 
-**ruff exclude:** `js/toolkit/wiki/prompts.py` (giant prompt-template builder,
-linting it pure noise). **mypy was tried and DROPPED** — ~115 unactionable
+**mypy was tried and DROPPED** — ~115 unactionable
 errors on a dynamic codebase (ToolContext dynamic attrs, `**kwargs` splat,
 implicit optionals). this repo run with no type gate; re-add it when owner say.
 
@@ -98,7 +97,7 @@ need reading many files to see:
     `meta.py` todo/plan/skill/task/subagents.
   - `tool_descriptions/*.md` — model-facing tool contracts, shipped as
     package-data. the WORDS the model read about each tool live here, not in code.
-  - `wiki/`, `artifact/` — built-in mode tools + their prompt builders.
+  - `wiki/` — deterministic tools for installed wiki agents. `artifact/` — built-in mode tools and prompts.
 - **`js/persona.py` + `prompts/` — agents are PROMPT DIRECTORIES.** a dir of
   numbered `NN-*.md` files concatenated into the system prompt. layered:
   repo `prompts/` < global `agents/` (platform config dir) < project
@@ -122,8 +121,8 @@ need reading many files to see:
   one isolated state per agent. **compaction APPENDS marks and leave history
   intact** (`/compact [focus]`, `/compact up to here`, `js --compact <session>`).
 - **`js/cli.py` — arg parse + mode dispatch** (REPL / `-p` / `--commit` /
-  `--wiki` / `--artifact` / `--compact` / `--tui` / `--nonblocking` /
-  `--login`/`--logout` / `--bench`). `js/drain.py` is the `js-drain` entry.
+  `--artifact` / `--compact` / `--tui` / `--nonblocking` /
+  `--login`/`--logout` / `--bench`).
 
 ## prefer computed context over manual probing
 
@@ -152,5 +151,5 @@ deep dives live in `docs/` — `technical-guide.md` (internals), `tool-system.md
 `tools-reference.md` (the canonical tool names), `subagents.md`,
 `inline-directives.md`, `configuration-and-sessions.md`,
 `models-and-providers.md`, `testing-and-development.md`, `user-guide.md`,
-`wiki.md`, `artifact.md`, `drain.md`, `nonblocking-windows.md`, `ircii/`.
+`artifact.md`, `nonblocking-windows.md`, `ircii/`.
 `CHANGELOG.md` track what moved.

@@ -120,13 +120,9 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         max_bash_output_bytes=parent.max_bash_output_bytes,
         fetch_timeout_s=parent.fetch_timeout_s,
         task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
-        wiki_vault_lock_timeout_s=getattr(parent, "wiki_vault_lock_timeout_s", 30),
-        wiki_mode=getattr(parent, "wiki_mode", ""),
-        wiki_no_archive=getattr(parent, "wiki_no_archive", False),
         artifact_dir=getattr(parent, "artifact_dir", None),
         artifact_url=getattr(parent, "artifact_url", None),
         artifact_bin=getattr(parent, "artifact_bin", None),
-        vault_aliases=getattr(parent, "vault_aliases", {}) or {},
     )
     child.tool_registry = registry
     child.agent_id = agent

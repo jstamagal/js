@@ -119,7 +119,6 @@ set limits.max_read_lines true
 set limits.max_line_chars true
 set limits.max_file_bytes true
 set limits.task_max_depth true
-set limits.wiki_vault_lock_timeout_s true
 """,
         encoding="utf-8",
     )
@@ -136,7 +135,6 @@ set limits.wiki_vault_lock_timeout_s true
     assert actual.max_line_chars == settings.DEFAULT_MAX_LINE_CHARS
     assert actual.max_file_bytes == settings.DEFAULT_MAX_FILE_BYTES
     assert actual.task_max_depth == settings.DEFAULT_TASK_MAX_DEPTH
-    assert actual.wiki_vault_lock_timeout_s == settings.DEFAULT_WIKI_VAULT_LOCK_TIMEOUT_S
 
 def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))

@@ -1478,7 +1478,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
-    active_context.wiki_vault_lock_timeout_s = getattr(cfg, "wiki_vault_lock_timeout_s", getattr(active_context, "wiki_vault_lock_timeout_s", 30))
     active_context.artifact_dir = getattr(cfg, "artifact_dir", None)
     active_context.artifact_url = getattr(cfg, "artifact_url", None)
     active_context.artifact_bin = getattr(cfg, "artifact_bin", None)
@@ -1495,9 +1494,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     else:
         token_state.chars_per_token = chars_per_token
     active_context.context_budget_state = token_state
-    _wiki_cfg = (getattr(cfg, "settings", {}) or {}).get("wiki")
-    _aliases = _wiki_cfg.get("aliases") if isinstance(_wiki_cfg, dict) else None
-    active_context.vault_aliases = _aliases if isinstance(_aliases, dict) else {}
     active_context.vision_enabled = vision_enabled_for_model(model)
 
     def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
