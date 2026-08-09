@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from functools import cache
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 import sys
@@ -351,11 +352,45 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
             continue
         for agent_dir in sorted(path for path in root.iterdir() if path.is_dir()):
             agent_id = agent_dir.name
-            if agent_id in reserved or not any(agent_dir.glob("*.md")):
+            if not any(agent_dir.glob("*.md")):
+                continue
+            if agent_id in reserved:
+                # A builtin tool owns this name, so the agent can never be selected.
+                # Silently skipping looked identical to "the directory isn't there",
+                # which is a long afternoon of debugging for whoever named an agent
+                # `read` or `task`.
+                print(
+                    f"js: agent {agent_id!r} in {root} shadows a builtin tool name; "
+                    "not exposed as a tool (rename the directory)",
+                    file=sys.stderr,
+                )
                 continue
             # Later roots are more specific and shadow earlier prompt dirs.
             by_id[agent_id] = agent_dir
     return tuple(meta.named_agent_tool(agent_id) for agent_id in sorted(by_id))
+
+
+@cache
+def _cached_registry(prompt_roots: tuple[Path, ...], flags: tuple[str, ...]) -> ToolRegistry:
+    return build_default_registry(prompt_roots or None, flags=flags)
+
+
+def registry_for_roots(
+    prompt_roots: Sequence[Path] | None, flags: tuple[str, ...] = ("model_override",)
+) -> ToolRegistry:
+    """Registry for one config's prompt roots, built once per distinct root set.
+
+    Every caller must go through here rather than through a module-level singleton.
+    A registry built with no roots falls back to the js REPO's own prompts/ dir, which
+    holds two agents; the operator's agents live in ~/.config/js/agents and .js/agents,
+    which only reach the registry via cfg.prompt_roots. The singleton in cli.py meant
+    every one of those agents was invisible as a tool, and selecting one printed
+    "tool selector 'reviewer' matched no tool; ignoring".
+
+    Building is not free — it walks every root and reads every description file — so
+    results are cached on the exact inputs that determine them.
+    """
+    return _cached_registry(tuple(prompt_roots or ()), tuple(flags))
 
 
 def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, flags: tuple[str, ...] = ("model_override",)) -> ToolRegistry:
