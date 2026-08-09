@@ -55,9 +55,6 @@ When not to use:
 - When this surface has no file-search tool, use `shell` with `fd` to find files
   and `rg` to search their contents.
 {{/if}}
-{{#if sem_search}}
-- Use `sem_search` for intent-based exploration across unfamiliar code.
-{{/if}}
 
 Batching:
 - When several specific files may be relevant, request them in the same

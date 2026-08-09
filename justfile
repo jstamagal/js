@@ -171,7 +171,7 @@ test-cli:
 test-memory:
     uv run {{ browser-extra }} --extra test pytest -q tests/test_memory_config_harness.py
 test-wiki:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py
 
 # ── quality ─────────────────────────────────────────────────────────────────
 # ruff lives in the dev dependency-group, so `uv sync` installs it and it's on

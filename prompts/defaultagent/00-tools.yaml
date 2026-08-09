@@ -2,7 +2,6 @@ tools:
   - read
   - write
   - fs_search
-  - sem_search
   - remove
   - patch
   - multi_patch
@@ -10,8 +9,6 @@ tools:
   - shell
   - fetch
   - todo_*
-  - artifact_*
-  - followup
   - plan
   - skill
   - task

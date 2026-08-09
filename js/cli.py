@@ -50,7 +50,6 @@ from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
-from .toolkit.artifact import build_artifact_system
 from .toolkit.registry import build_default_registry
 from .toolkit import ToolContext
 
@@ -393,13 +392,6 @@ _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 )
 
 
-_LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("artifact_dir", ("artifact", "dir")),
-    ("artifact_url", ("artifact", "url")),
-    ("artifact_bin", ("artifact", "bin")),
-)
-
-
 _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("trace", ("runtime", "trace")),
     ("prefer_inherit", ("subagents", "prefer_inherit")),
@@ -687,8 +679,6 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
         live_settings,
         active.reasoning_effort,
     )
-    for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
-        updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_BOOL_FIELDS:
         updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
     return replace(active, **updates)
@@ -1875,7 +1865,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         # Plain -p has no resume_prefix; the session lives under
                         # sessions/<agent>, so a non-default agent MUST be echoed or
                         # the resume looks in the wrong dir and 404s the .jsonl.
-                        # (wiki/artifact/commit already fold the agent into resume_prefix.)
+                        # (wiki/commit already fold the agent into resume_prefix.)
                         if resume_prefix is None and agent:
                             cont += f" --agent {shlex.quote(agent)}"
                         if model:
@@ -2042,85 +2032,6 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     if not stats_json and not stats_csv:
         print(json.dumps(payload, indent=2, default=str))
     return 130 if interrupted else 0
-
-
-def _artifact_kickoff(mode: str, target_desc: str, resuming: bool) -> str:
-    if resuming:
-        return (f"RESUME artifact mode: {mode}. target={target_desc}. "
-                f"You were interrupted mid-task. Start with artifact_overview(), inspect current "
-                f"manifest/curation state, then finish the {mode} flow without duplicating pages.")
-    if mode == "curate":
-        return (f"Artifact mode: curate. target={target_desc}. "
-                f"Begin: call artifact_overview() first, then classify recent/unassigned artifacts, "
-                f"install curation assignments/refs, and stop.")
-    if mode == "digest":
-        return (f"Artifact mode: digest. target={target_desc}. "
-                f"Begin: call artifact_overview() first, then write or update a concise artifact digest.")
-    if mode == "query":
-        return (f"Artifact mode: query. question={target_desc}. "
-                f"Begin: call artifact_overview() first, then search/read artifacts and answer with stable URLs.")
-    return (f"Artifact mode: lint. target={target_desc}. "
-            f"Begin: call artifact_overview() first, then health-check curation, refs, duplicates, "
-            f"and uncategorized artifacts.")
-
-
-def _run_artifact(artifact_arg: str, target: str | None,
-                  model: str | None = None, debug: bool = False, debug_file: str | None = None,
-                  agent: str | None = None, session: str | None = None, save: bool = True,
-                  reasoning: str | None = None, maxout: int | None = None,
-                  extras: list[str] | None = None,
-                  ignore_local_config: bool = False, ignore_global_config: bool = False,
-                  presets: list[str] | None = None) -> int:
-    valid = {"curate", "digest", "query", "lint"}
-    modes = [m.strip().lower() for m in artifact_arg.split(",") if m.strip()]
-    bad = [m for m in modes if m not in valid]
-    if not modes or bad:
-        print(f"{C.ORANGE}error: --artifact expects a comma list of {sorted(valid)} (got {artifact_arg!r}){C.RESET}", file=sys.stderr)
-        return 2
-
-    eff_agent = agent or "artifact"
-    persona = ""
-    if agent:
-        try:
-            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
-                                       ignore_local_config=ignore_local_config,
-                                       ignore_global_config=ignore_global_config, presets=presets)
-            persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
-        except (ValueError, FileNotFoundError) as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-            return 2
-
-    active_session = session
-    if save and active_session is None:
-        try:
-            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
-                                       ignore_local_config=ignore_local_config,
-                                       ignore_global_config=ignore_global_config, presets=presets)
-        except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-            return 2
-        active_session = _session_hint_arg(cfg)
-
-    modes_arg = ",".join(modes)
-    resume_prefix = f"js --artifact={modes_arg}"
-    if agent:
-        resume_prefix += f" --agent {agent}"
-    target_desc = target if target else "the artifact library"
-
-    rc = 0
-    for idx, mode in enumerate(modes):
-        system = persona + build_artifact_system([mode])
-        prompt = _artifact_kickoff(mode, target_desc, resuming=(session is not None and idx == 0))
-        rc = _run_prompt(prompt, model=model, debug=debug, agent=eff_agent,
-                         debug_file=debug_file, session=active_session, save=save, system_override=system,
-                         resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
-                         tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
-                         extras=extras,
-                         ignore_local_config=ignore_local_config,
-                         ignore_global_config=ignore_global_config, presets=presets)
-        if rc != 0:
-            break
-    return rc
 
 
 def _commit_backup_root() -> Path:
@@ -2852,7 +2763,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
     parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
     parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
-    parser.add_argument("--artifact", metavar="MODES", help="artifact mode: comma list of curate,digest,query,lint (e.g. --artifact=digest). Built-in artifact prompting; ignores defaultagent unless --agent is also given.")
     parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
@@ -2866,7 +2776,7 @@ def main(argv: list[str] | None = None) -> int:
                              "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
                              ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
                              "Never errors — unknown letters/unwritable paths degrade with a warning.")
-    parser.add_argument("target", nargs="?", help="target path for built-in artifact or commit mode")
+    parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
@@ -2943,7 +2853,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if (
             args.prompt is None
-            and args.artifact is None
             and not args.commit
             and args.compact is None
             and args.target is None
@@ -2972,9 +2881,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.printonly is not None:
         return _printonly_run(args, cli_agent, presets)
 
-    selected_modes = [name for name, enabled in (("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
+    selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
-        print(f"{C.ORANGE}error: choose only one built-in mode: --artifact, --commit, or --compact{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}error: choose only one built-in mode: --commit or --compact{C.RESET}", file=sys.stderr)
         return 2
     if args.files and selected_modes:
         print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
@@ -2995,15 +2904,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
-
-    if args.artifact:
-        return _run_artifact(args.artifact, args.target, model=args.model,
-                             debug=args.debug, debug_file=args.debug_file, agent=args.agent,
-                             session=args.session, save=not args.no_save,
-                             reasoning=args.reasoning, maxout=args.max_out,
-                             extras=args.extras,
-                             ignore_local_config=args.ignore_local,
-                             ignore_global_config=args.ignore_global, presets=presets)
 
     if args.migrate_config:
         return _run_migrate_config()

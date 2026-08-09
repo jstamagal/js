@@ -12,14 +12,12 @@ CORE_TOOL_NAMES = {
     "read",
     "write",
     "fs_search",
-    "sem_search",
     "remove",
     "patch",
     "multi_patch",
     "undo",
     "shell",
     "fetch",
-    "followup",
     "plan",
     "skill",
     "todo_write",
@@ -75,7 +73,6 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("task").name == "task"
     assert registry.resolve("Task").name == "task"
     assert registry.resolve("fs_search").name == "fs_search"
-    assert registry.resolve("sem_search").name == "sem_search"
     assert registry.resolve("remove").name == "remove"
     assert registry.resolve("patch").name == "patch"
     assert registry.resolve("multi_patch").name == "multi_patch"
@@ -119,11 +116,11 @@ def test_named_agent_tools_are_generated_from_prompt_dirs():
     assert [tool.name for tool in registry.select(prompt_agents).tools] == prompt_agents
 
 
-def test_wiki_and_artifact_tool_params_have_descriptions():
+def test_wiki_tool_params_have_descriptions():
     registry = build_default_registry()
 
     for tool in registry.tools:
-        if not (tool.name.startswith("wiki_") or tool.name.startswith("artifact_")):
+        if not tool.name.startswith("wiki_"):
             continue
         for name, schema in tool.params.items():
             assert schema.get("description", "").strip(), f"{tool.name}.{name}"
@@ -147,15 +144,15 @@ def test_if_block_kept_only_when_any_of_its_tools_present():
 
 
 def test_multiple_names_unless_emits_only_when_none_present():
-    text = "{{#unless fs_search sem_search}}doctrine{{/unless}}"
+    text = "{{#unless fs_search read}}doctrine{{/unless}}"
     assert R(text, {"shell"}) == "doctrine"
-    assert R(text, {"sem_search"}) == ""
+    assert R(text, {"read"}) == ""
     assert R(text, {"fs_search"}) == ""
 
 
 def test_multiple_names_if_emits_when_any_present():
-    text = "{{#if fs_search sem_search}}search doctrine{{/if}}"
-    assert R(text, {"sem_search"}) == "search doctrine"
+    text = "{{#if fs_search read}}search doctrine{{/if}}"
+    assert R(text, {"read"}) == "search doctrine"
     assert R(text, set()) == ""
 
 
@@ -235,8 +232,8 @@ def test_registry_surface_composition_shell_only_vs_with_fs_search():
 def test_openai_specs_never_leak_raw_markers_on_any_surface():
     full = build_default_registry()
     surfaces = [
-        ["shell"], ["read"], ["fs_search"], ["sem_search"], ["shell", "read"],
-        ["read", "fs_search", "sem_search", "patch", "write", "task"], None,
+        ["shell"], ["read"], ["fs_search"], ["shell", "read"],
+        ["read", "fs_search", "patch", "write", "task"], None,
     ]
     for sel in surfaces:
         registry = full if sel is None else full.select(sel)
@@ -256,13 +253,12 @@ def test_rendered_surfaces_never_mention_unavailable_core_tools():
         ["patch"],
         ["remove"],
         ["fs_search"],
-        ["sem_search"],
         ["task"],
         ["read", "write", "fs_search", "patch", "undo", "shell"],  # commit agent
         [
-            "read", "write", "fs_search", "sem_search", "remove", "patch",
+            "read", "write", "fs_search", "remove", "patch",
             "multi_patch", "undo", "shell", "fetch", "todo_read", "todo_write",
-            "followup", "plan", "skill", "task",
+            "plan", "skill", "task",
         ],
         None,
     ]

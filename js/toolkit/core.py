@@ -119,9 +119,6 @@ class ToolContext:
     fetch_timeout_s: int = 15
     task_max_depth: int = 2
     subagent_max_workers: int = 8
-    artifact_dir: Path | None = None
-    artifact_url: str | None = None
-    artifact_bin: str | None = None
     vision_enabled: bool = False
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)

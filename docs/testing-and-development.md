@@ -1,7 +1,7 @@
 # Testing And Development
 
 The test suite is designed to exercise public harness behavior: CLI dispatch,
-runtime tool loops, registry surfaces, subagent isolation, memory, wiki/artifact tools, and live proxy paths.
+runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, and live proxy paths.
 
 ## Install Test Dependencies
 
@@ -63,10 +63,10 @@ Memory/config:
 pytest -q tests/test_memory_config_harness.py
 ```
 
-Wiki/artifact:
+Wiki:
 
 ```bash
-pytest -q tests/test_wiki_native_tools.py tests/test_artifact_native_tools.py
+pytest -q tests/test_wiki_native_tools.py
 ```
 
 ## Live Tests

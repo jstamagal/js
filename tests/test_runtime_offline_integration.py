@@ -992,7 +992,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
     assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after missing_tool")
 
 
-def test_run_turn_streams_tool_call_dispatches_real_sem_search_then_final_text(monkeypatch, tmp_path):
+def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeypatch, tmp_path):
     target = tmp_path / "worker.py"
     target.write_text("def task_backend():\n    return 'ready'\n", encoding="utf-8")
     runtime_tools.DEFAULT_CONTEXT = ToolContext(cwd=tmp_path)
@@ -1000,13 +1000,13 @@ def test_run_turn_streams_tool_call_dispatches_real_sem_search_then_final_text(m
 
     def stream_stub(**kwargs):
         calls.append(kwargs)
-        assert any(spec.name == "sem_search" for spec in kwargs["tools"])
+        assert any(spec.name == "read" for spec in kwargs["tools"])
         if len(calls) == 1:
             return model_tool_call_result(
-                "sem_search",
+                "read",
                 [
-                    '{"queries":[{"query":"task backend",',
-                    '"path":".","glob":"*.py","limit":3}]}',
+                    '{"file_path":"worker.py",',
+                    '"show_line_numbers":false}',
                 ],
             )
         return model_text_result("FOUND")
@@ -1038,10 +1038,10 @@ def test_run_turn_streams_tool_call_dispatches_real_sem_search_then_final_text(m
 
     assert len(calls) == 2
     assert messages[1]["role"] == "assistant"
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "sem_search"
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "read"
     assert messages[2]["role"] == "tool"
-    assert messages[2]["name"] == "sem_search"
-    assert "worker.py" in messages[2]["content"]
+    assert messages[2]["name"] == "read"
+    assert "task_backend" in messages[2]["content"]
     assert messages[-1] == {"role": "assistant", "content": "FOUND"}
 
 

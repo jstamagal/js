@@ -66,8 +66,8 @@ tests/test_subagent_isolation.py tests/test_runtime_offline_integration.py
 
 Immutable per-tool metadata for parallel safety and side-effect
 scope; every existing tool defaults to exclusive. Mark only proven
-read-only operations parallel-safe to start: read, fs_search,
-sem_search. Leave fetch exclusive until its save and write behavior
+read-only operations parallel-safe to start: read and fs_search.
+Leave fetch exclusive until its save and write behavior
 is split. Add a shared/exclusive admission gate: safe calls may
 overlap, an exclusive call waits for active readers, runs alone, and
 blocks later readers. Preserve the model's call order in appended

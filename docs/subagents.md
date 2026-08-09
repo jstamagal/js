@@ -128,8 +128,8 @@ What exists today:
   `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`.
 - generated direct tools for prompt directories.
 - bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
-- built-in CLI modes: artifact/commit, but only commit is exposed as
-  a prompt-directory agent and `js --commit` wrapper.
+- built-in CLI mode: commit, exposed as a prompt-directory agent and a
+  `js --commit` wrapper.
 
 ## No Monitor/Stop Handles Yet
 

@@ -11,7 +11,7 @@ import sys
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import artifact, browser, discovery, fs, meta, process_net, search, terminal, wiki
+from . import browser, discovery, fs, meta, process_net, search, terminal, wiki
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,6 @@ _LAZY_SUITES = {
     **{tool.name: "browser" for tool in browser.tools()},
     **{tool.name: "terminal" for tool in terminal.tools()},
     **{tool.name: "wiki" for tool in wiki.tools()},
-    **{tool.name: "artifact" for tool in artifact.tools()},
 }
 
 
@@ -367,7 +366,6 @@ def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, fl
         + browser.tools()
         + meta.tools(flags)
         + wiki.tools()
-        + artifact.tools()
     )
     reserved = {tool.name for tool in base_tools}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)

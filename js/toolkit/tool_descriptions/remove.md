@@ -27,11 +27,5 @@ Before removing:
 {{/if}}
 - Do not delete generated-looking, user-created, or unrelated files just to clean
   up a workspace.
-{{#if followup}}
-- If the operator did not ask for deletion and the need is not obvious, ask with
-  `followup`.
-{{/if}}
-{{#unless followup}}
 - If the operator did not ask for deletion and the need is not obvious, stop and
   ask in plain text before deleting.
-{{/unless}}
