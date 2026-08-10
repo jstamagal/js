@@ -174,7 +174,7 @@ def test_fs_search_explicit_fifo_path_refuses_without_hanging(tmp_path):
 def test_fs_search_missing_rg_binary_degrades_cleanly(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
-    monkeypatch.setattr(fs.shutil, "which", lambda _cmd: None)
+    monkeypatch.setattr(fs, "resolve_binary", lambda _cmd: None)
 
     actual = fs_search("needle", path=".", context=context)
 

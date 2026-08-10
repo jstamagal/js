@@ -43,7 +43,7 @@ def _responses(monkeypatch: pytest.MonkeyPatch, *bodies: bytes) -> list[tuple[An
 
 
 def _browse_stub(monkeypatch: pytest.MonkeyPatch, run: Callable[..., CappedProcessResult]) -> None:
-    monkeypatch.setattr(search.shutil, "which", lambda _name: "/test/bin/obscura")
+    monkeypatch.setattr(search, "resolve_binary", lambda _name: "/test/bin/obscura")
     monkeypatch.setattr(search, "_run_capped", run)
 
 
