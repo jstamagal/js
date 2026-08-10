@@ -188,9 +188,18 @@ def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TO
     return f"{prefix}__{component[: max(1, room)]}_{digest}"
 
 
-def _collision_public_name(server: str, component: str, remote: str, occurrence: int) -> str:
+def _collision_public_name(
+    server: str,
+    component: str,
+    remote: str,
+    occurrence: int,
+    *,
+    scope: str = "",
+) -> str:
     """Return a stable bounded alias for one normalization-colliding remote name."""
-    digest = hashlib.sha256(f"{remote}\0{occurrence}".encode()).hexdigest()[:6]
+    digest = hashlib.sha256(
+        f"{scope}\0{remote}\0{occurrence}".encode()
+    ).hexdigest()[:6]
     return _bounded_public_name(server, f"{component}_{digest}")
 
 
@@ -292,17 +301,31 @@ def prompt_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     return ToolResult(blocks=blocks)
 
 
+_MCP_CONTROL_SETUP = (
+    " Before using this control, run tool_discovery with kind=\"mcp\" (and "
+    "optionally source) to connect servers, then pass the exact server name from "
+    "a mcp:server:* status result."
+)
+_MCP_RESOURCE_URI = (
+    " First call mcp_resource_list or mcp_resource_templates and copy an exact "
+    "returned URI."
+)
+_MCP_PROMPT_NAME = (
+    " First call mcp_prompt_list and copy an exact returned prompt name."
+)
+
+
 class MCPHost:
     """Own clients and lazy remote metadata for one js session."""
 
     CONTROL_TOOLS = (
-        ("mcp_resource_list", "List resources from an initialized MCP server."),
-        ("mcp_resource_templates", "List resource templates from an initialized MCP server."),
-        ("mcp_resource_read", "Read an MCP resource by URI."),
-        ("mcp_resource_subscribe", "Subscribe to updates for an MCP resource."),
-        ("mcp_resource_unsubscribe", "Unsubscribe from updates for an MCP resource."),
-        ("mcp_prompt_list", "List prompts from an initialized MCP server."),
-        ("mcp_prompt_get", "Get an MCP prompt and its messages."),
+        ("mcp_resource_list", "List resources from an MCP server." + _MCP_CONTROL_SETUP),
+        ("mcp_resource_templates", "List resource templates from an MCP server." + _MCP_CONTROL_SETUP),
+        ("mcp_resource_read", "Read an MCP resource by URI." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_resource_subscribe", "Subscribe to updates for an MCP resource." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_resource_unsubscribe", "Unsubscribe from updates for an MCP resource." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_prompt_list", "List prompts from an MCP server." + _MCP_CONTROL_SETUP),
+        ("mcp_prompt_get", "Get an MCP prompt and its messages." + _MCP_CONTROL_SETUP + _MCP_PROMPT_NAME),
     )
 
     def __init__(
@@ -326,6 +349,7 @@ class MCPHost:
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
         self._server_errors: dict[str, str] = {}
         self._server_collisions: dict[str, tuple[CatalogEntry, ...]] = {}
+        self._cross_server_collisions: tuple[CatalogEntry, ...] = ()
         self._dirty: dict[str, set[str]] = {}
         self._reserved_public_names: set[str] = set()
         self._reported_public_collisions: set[str] = set()
@@ -406,9 +430,11 @@ class MCPHost:
                 f"MCP server error: {message}"[:240],
                 "mcp",
                 server.name,
+                loadable=False,
             ))
         for collision_entries in self._server_collisions.values():
             entries.extend(collision_entries)
+        entries.extend(self._cross_server_collisions)
         for server_name, client in self.clients.items():
             if not getattr(client, "initialized", False):
                 continue
@@ -425,6 +451,7 @@ class MCPHost:
                 f"Connected MCP server ({detail}); use this exact server name with MCP controls.",
                 "mcp",
                 server_name,
+                loadable=False,
             ))
         for public, (server_name, _remote, raw) in self.remote_tools.items():
             description = str(raw.get("description") or raw.get("title") or "MCP tool")[:240]
@@ -583,6 +610,7 @@ class MCPHost:
                         )[:240],
                         "mcp",
                         server.name,
+                        loadable=False,
                     ))
             self._server_errors.pop(server_name, None)
             self._server_collisions[server_name] = tuple(collision_entries)
@@ -593,13 +621,74 @@ class MCPHost:
             for public, value in catalog.items():
                 grouped.setdefault(public, []).append(value)
         self.remote_tools = {}
+        claimed_public_names = set(grouped)
+        cross_server_collisions: list[CatalogEntry] = []
         for public, candidates in grouped.items():
             if self._public_name_reserved(public):
                 continue
             if len(candidates) == 1:
                 self.remote_tools[public] = candidates[0]
             else:
-                self._event("mcp_catalog_collision", tool=public)
+                self._event(
+                    "mcp_catalog_collision",
+                    tool=public,
+                    servers=[server for server, _remote, _raw in candidates],
+                )
+                exposed: list[tuple[str, str, str]] = []
+                occurrences: dict[tuple[str, str], int] = {}
+                for server_name, remote, raw in candidates:
+                    server = next(
+                        item for item in self.config.servers
+                        if item.name == server_name
+                    )
+                    component = normalize_tool_name(str(raw.get("name") or remote))
+                    occurrence_key = (server_name, remote)
+                    occurrence = occurrences.get(occurrence_key, 0)
+                    occurrences[occurrence_key] = occurrence + 1
+                    while True:
+                        alias = _collision_public_name(
+                            server.normalized_name,
+                            component,
+                            remote,
+                            occurrence,
+                            scope=server.name,
+                        )
+                        if (
+                            alias not in claimed_public_names
+                            and alias not in self.remote_tools
+                        ):
+                            break
+                        occurrence += 1
+                    if (
+                        not self.config.allows_tool(alias)
+                        or self._public_name_reserved(alias)
+                    ):
+                        continue
+                    self.remote_tools[alias] = (server_name, remote, raw)
+                    exposed.append((server_name, remote, alias))
+                digest = hashlib.sha256(
+                    (public + "\0" + "\0".join(
+                        f"{server}/{remote}" for server, remote, _raw in candidates
+                    )).encode()
+                ).hexdigest()[:6]
+                mappings = ", ".join(
+                    f"{server}/{remote} as mcp:{alias}"
+                    for server, remote, alias in exposed
+                )
+                if not mappings:
+                    mappings = "no disambiguated ID is allowed by current tool policy"
+                cross_server_collisions.append(CatalogEntry(
+                    f"mcp:collision:cross:{digest}",
+                    public,
+                    (
+                        f"MCP tools from multiple servers collide as {public}; "
+                        f"use disambiguated IDs {mappings}."
+                    ),
+                    "mcp",
+                    "mcp",
+                    loadable=False,
+                ))
+        self._cross_server_collisions = tuple(cross_server_collisions)
     async def before_model_call(self) -> None:
         if self._dirty:
             await self.refresh()

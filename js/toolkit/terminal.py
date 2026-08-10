@@ -162,9 +162,12 @@ def _observe(
         payload["signal_status"] = child.signalstatus
     payload["reading"] = (
         "lines is the rendered terminal screen. nonblank_lines=0 means the user sees "
-        "nothing. screen_responded=false means the last input did not change any "
-        "displayed line. still_running is normal for a TUI and suspicious for a "
-        "one-shot command. Use terminal_snapshot to inspect layout and colour."
+        "nothing. lines_changed and screen_responded compare this screen with the "
+        "most recent observation: for send they describe change after the sent keys; "
+        "for look they describe passive change since the prior observation. "
+        "terminal_snapshot updates that comparison baseline before a later send. "
+        "still_running is normal for a TUI and suspicious for a one-shot command. "
+        "Use terminal_snapshot to inspect layout and colour."
     )
     return _report(payload, context)
 
@@ -422,14 +425,14 @@ def tools() -> tuple[Tool, ...]:
             load_description("terminal_session"),
             terminal_session,
             {
-                "action": {"type": "string"},
+                "action": {"type": "string", "enum": ["start", "send", "look", "stop", "list"]},
                 "session": {"type": "string", "default": "main"},
                 "command": {"type": "string"},
                 "keys": {"type": "string"},
                 "cwd": {"type": "string"},
-                "wait_ms": {"type": "integer", "default": 700},
-                "cols": {"type": "integer"},
-                "rows": {"type": "integer"},
+                "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10_000, "default": 700},
+                "cols": {"type": "integer", "minimum": 1, "maximum": 400},
+                "rows": {"type": "integer", "minimum": 1, "maximum": 200},
             },
             required=("action",),
         ),
@@ -440,7 +443,7 @@ def tools() -> tuple[Tool, ...]:
             {
                 "session": {"type": "string", "default": "main"},
                 "output_path": {"type": "string"},
-                "wait_ms": {"type": "integer", "default": 100},
+                "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10_000, "default": 100},
             },
         ),
     )

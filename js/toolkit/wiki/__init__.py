@@ -26,7 +26,7 @@ def tools() -> tuple[Tool, ...]:
             wiki_write,
             {
                 "vault": {"type": "string", "description": "Vault path."},
-                "kind": {"type": "string", "description": "Page kind: source, entity, concept, or synthesis."},
+                "kind": {"type": "string", "enum": ["source", "entity", "concept", "synthesis"], "description": "Page kind: source, entity, concept, or synthesis."},
                 "body": {"type": "string", "description": "Markdown body without frontmatter or H1."},
                 "slug": {"type": "string", "description": "Optional filename slug."},
                 "title": {"type": "string", "description": "Page title."},
