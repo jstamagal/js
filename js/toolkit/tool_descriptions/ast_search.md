@@ -32,7 +32,7 @@ Worked examples (captured from this repository):
    `pattern="context.snapshot($TARGET)", path="js/toolkit/fs.py", lang="Python", max_results=1`
 
    ```text
-   /home/ronald_rump/oldinbox/wt-astgrep/js/toolkit/fs.py:84
+   /repo/js/toolkit/fs.py:84
    84:aa|    context.snapshot(target)
    ```
 
@@ -41,9 +41,9 @@ Worked examples (captured from this repository):
    `pattern="fs_search($$$ARGS)", path="tests/test_fs_search.py", lang="Python", max_results=2`
 
    ```text
-   /home/ronald_rump/oldinbox/wt-astgrep/tests/test_fs_search.py:47
+   /repo/tests/test_fs_search.py:47
    47e0|    actual = fs_search("TaskRunner", path=".", output_mode="content", context=context)
-   /home/ronald_rump/oldinbox/wt-astgrep/tests/test_fs_search.py:58
+   /repo/tests/test_fs_search.py:58
    58cc|    actual = fs_search("needle", path=".", context=context)
    ```
 
@@ -53,8 +53,8 @@ Worked examples (captured from this repository):
 
    ```text
    DRY RUN: no files changed. Pass apply=true to apply.
-   --- /home/ronald_rump/oldinbox/wt-astgrep/js/toolkit/sanitize.py
-   +++ /home/ronald_rump/oldinbox/wt-astgrep/js/toolkit/sanitize.py
+   --- /repo/js/toolkit/sanitize.py
+   +++ /repo/js/toolkit/sanitize.py
    @@ -15,7 +15,7 @@
         if raw is None or isinstance(raw, bool):
             return default
