@@ -135,16 +135,53 @@ def test_platform_error_names_required_and_detected_platform(monkeypatch) -> Non
         tool_binaries._require_supported_platform()
 
 
-def test_manual_obscura_copy_is_verified_and_executable(tmp_path: Path, monkeypatch) -> None:
-    source = tmp_path / "owner-obscura"
-    source.write_bytes(b"pinned manual obscura")
-    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+def test_obscura_is_pinned_to_the_stealth_release_asset() -> None:
+    """The stealth build is the one that does TLS impersonation; browse depends
+    on it, so the plain asset is not an acceptable substitute."""
+    spec = next(tool for tool in tool_binaries.DOWNLOAD_TOOLS if tool.name == "obscura")
+
+    assert spec.asset == "obscura-x86_64-linux-stealth.tar.gz"
+    assert spec.url.startswith("https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.0/")
+    assert spec.executable_sha256 == (
+        "bde140f54b90bf064335a017780ae1d3bd33f69ccdbc7f954a63b5f43db7c723"
+    )
+
+
+def test_obscura_installs_the_worker_it_cannot_run_without(tmp_path: Path) -> None:
+    """obscura spawns obscura-worker from its own directory. Installing the one
+    binary leaves a js/tools/obscura that resolve_binary returns and that then
+    fails at render time."""
+    import io
+    import tarfile
+
+    spec = next(tool for tool in tool_binaries.DOWNLOAD_TOOLS if tool.name == "obscura")
+    main, worker = b"obscura-main", b"obscura-worker-body"
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+        for name, payload in (("obscura", main), ("obscura-worker", worker)):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            bundle.addfile(info, io.BytesIO(payload))
+    archive_bytes = buffer.getvalue()
+
+    def fake_download(_url: str, destination: Path) -> None:
+        destination.write_bytes(archive_bytes)
+
     tools_dir = tmp_path / "tools"
-    monkeypatch.setattr(tool_binaries, "OBSCURA_SHA256", checksum)
+    archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+    spec = replace(
+        spec,
+        asset_sha256=archive_sha,
+        executable_sha256=hashlib.sha256(main).hexdigest(),
+        companions=(
+            ("obscura-worker", "obscura-worker", hashlib.sha256(worker).hexdigest()),
+        ),
+    )
 
-    state = tool_binaries.install_obscura(tools_dir=tools_dir, source=source)
-    installed = tools_dir / "obscura"
+    state = tool_binaries.install_download(spec, tools_dir=tools_dir, downloader=fake_download)
 
-    assert state == "copied"
-    assert installed.read_bytes() == b"pinned manual obscura"
-    assert installed.stat().st_mode & stat.S_IXUSR == stat.S_IXUSR
+    assert state == "installed"
+    assert (tools_dir / "obscura").read_bytes() == main
+    assert (tools_dir / "obscura-worker").read_bytes() == worker
+    assert (tools_dir / "obscura-worker").stat().st_mode & stat.S_IXUSR == stat.S_IXUSR
