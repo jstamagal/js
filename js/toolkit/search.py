@@ -9,7 +9,6 @@ current shell cannot use without breaking registry assembly.
 
 from __future__ import annotations
 
-import base64
 import json
 import ipaddress
 import os
@@ -343,60 +342,55 @@ def _absolutize(markdown: str, base_url: str) -> str:
     return _MD_LINK.sub(_fix, markdown)
 
 
-# obscura 0.2.0's own default UA, measured by pointing it at a local echo
-# server. The status probe and the render must present the same
-# identity: bot-detection edges (Cloudflare, Datadome, PerimeterX, plain UA
-# gates) answer 403/429 to a non-browser UA and 200 to Chromium, so a probe
-# calling itself js-agent/0.1 labelled successfully-rendered pages
-# "ERROR: HTTP 403" -- and three of those in a turn trip the runtime's
-# tool_error_limit. Pinning one string for both requests keeps the two
-# verdicts identical whatever obscura's default drifts to.
-_BROWSE_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-)
-_BROWSE_HEADERS = {
-    "User-Agent": _BROWSE_USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+def _obscura_status(binary: str, url: str, timeout: float) -> int | None:
+    """The HTTP status browse is about to render, asked with the same identity
+    that will render it.
 
+    obscura reports no status on the render path -- it exits 0 on a 404 and
+    hands back the error page's body as ordinary content, so a model asking
+    browse to read a page got "404 page / error body" and no signal. Its batch
+    mode does report it: `fetch --file -` prints one JSON line per URL carrying
+    the real status.
 
-def _http_status(url: str, timeout: float) -> int | None:
-    """The HTTP status browse is about to render, or None if it cannot be learned.
+    Asking obscura rather than urllib is the whole point of this function. The
+    pinned build is the `stealth` release asset, which does TLS impersonation on
+    top of a browser fingerprint. A urllib probe presented a Python TLS
+    handshake and a js-agent user agent while Chromium rendered the page -- two
+    identities, and a bot-detection edge (Cloudflare, Datadome, PerimeterX)
+    answers them differently. That is how a page that rendered perfectly got
+    stamped ERROR: HTTP 403. Same binary and same flags means both requests
+    carry obscura's fingerprint, never js's.
 
-    obscura reports no status anywhere -- it exits 0 on a 404, prints
-    `Page loaded`, and hands back the error page's body as ordinary content
-    (measured against a local server returning 404 and 500). So a model asking
-    browse to read a page gets "404 page / This is the error body" and no signal
-    that it is reading an error page rather than the document.
+    The two obscura paths are still not byte-identical: measured against a local
+    server, the raw batch fetch sends an X11/Linux Chrome UA and the render
+    sends a Windows Chrome UA of the same major version. Both are real browser
+    identities with the stealth TLS profile behind them, which is the property
+    that decides the verdict.
 
-    One extra request is the price of that signal. It is deliberately cheap: no
-    body is read, and any failure here is non-fatal -- the render still happens
-    and the caller reports the status as unknown rather than blocking on it.
+    Non-fatal by construction: any failure returns None, the render still
+    happens, and the caller reports the status as unknown.
     """
-    parsed = urllib.parse.urlsplit(url)
-    headers = dict(_BROWSE_HEADERS)
-    # urllib does not read userinfo out of the netloc -- it tries to resolve
-    # "user:pass@host" as a hostname and fails, which silently cost the status
-    # signal on every credentialed URL. Move it to the header urllib expects.
-    if parsed.username is not None:
-        host = parsed.hostname or ""
-        if ":" in host:
-            host = f"[{host}]"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        raw = f"{parsed.username}:{parsed.password or ''}".encode()
-        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
-        url = urllib.parse.urlunsplit(parsed._replace(netloc=host))
-    request = urllib.request.Request(url, headers=headers)
+    argv = [binary, "--stealth"]
+    if _is_private_ip_literal(url):
+        argv.append("--allow-private-network")
+    argv += ["fetch", "--file", "-", "--timeout", str(max(1, int(timeout)))]
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return int(response.status)
-    except urllib.error.HTTPError as exc:
-        return int(exc.code)
-    except Exception:  # noqa: BLE001 -- DNS, TLS, refused, redirect loop, anything
+        proc = subprocess.run(
+            argv, input=f"{url}\n", capture_output=True, text=True, timeout=timeout + 5
+        )
+    except Exception:  # noqa: BLE001 -- missing binary, timeout, anything
         return None
+    for line in reversed(proc.stdout.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("status"), int):
+            return int(record["status"])
+    return None
 
 
 def browse(
@@ -417,10 +411,12 @@ def browse(
         return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"
     process_timeout = int(context.browse_timeout_s)
     obscura_timeout = max(1, process_timeout - 1)
-    # --user-agent is global, so it goes before the subcommand. Same string the
-    # status probe sends, so both requests get one bot-detection verdict.
-    argv = [binary, "--user-agent", _BROWSE_USER_AGENT,
-            "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    # --stealth is global, so it goes before the subcommand. js never names
+    # itself to a site: obscura owns the identity, and on the stealth build that
+    # is a coherent browser fingerprint plus TLS impersonation. Overriding its
+    # user agent from here would contradict the TLS handshake it presents, which
+    # is precisely the mismatch bot detection looks for.
+    argv = [binary, "--stealth", "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
     shot_path: Path | None = None
     screenshot = text_or_default(screenshot, "").strip()
     if screenshot:
@@ -435,7 +431,11 @@ def browse(
     argv.append(url)
     # Learn the status before rendering. Skipped for a screenshot-only call,
     # which returns no page text for a status to qualify.
-    status = None if shot_path is not None else _http_status(url, min(10.0, float(process_timeout)))
+    status = (
+        None
+        if shot_path is not None
+        else _obscura_status(binary, url, min(10.0, float(process_timeout)))
+    )
     try:
         result = _run_capped(
             argv,
