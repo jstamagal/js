@@ -374,6 +374,8 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
     ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
     ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
+    ("browse_timeout_s", ("limits", "browse_timeout_s")),
+    ("download_timeout_s", ("limits", "download_timeout_s")),
     ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
     ("max_read_lines", ("limits", "max_read_lines")),
     ("max_line_chars", ("limits", "max_line_chars")),

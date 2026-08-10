@@ -388,7 +388,10 @@ def fetch(
             method=method_name,
         )
         limit = _DOWNLOAD_MAX_BYTES if save_target else context.max_tool_result_bytes
-        with urllib.request.urlopen(req, timeout=context.fetch_timeout_s) as resp:
+        # A download is bounded by _DOWNLOAD_MAX_BYTES, not by page-load latency;
+        # sharing fetch_timeout_s silently demanded ~2 MB/s to move anything large.
+        timeout_s = context.download_timeout_s if save_target else context.fetch_timeout_s
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             content_type = _header_value(resp.headers, "content-type")
             payload, truncated = _read_response(resp, limit)
         if truncated and save_target is not None:

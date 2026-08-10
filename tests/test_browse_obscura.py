@@ -76,9 +76,42 @@ def test_screenshot_writes_a_png_and_says_the_dump_is_unavailable(tmp_path):
     assert "never both" in out
 
 
-def test_a_screenshot_path_must_be_a_png(tmp_path):
+@requires_obscura
+def test_a_screenshot_path_is_written_whatever_it_is_called(tmp_path):
+    """obscura always writes PNG bytes, and js identifies images by magic bytes.
+    Rejecting a non-.png name would cost the model a turn for nothing."""
     context = ToolContext(cwd=tmp_path)
     out = browse("https://example.com", screenshot="shot.jpg", context=context)
-    assert out.startswith("ERROR:")
-    assert ".png" in out
-    assert not (tmp_path / "shot.jpg").exists()
+    assert not out.startswith("ERROR:"), out
+    shot = tmp_path / "shot.jpg"
+    assert shot.exists()
+    assert shot.read_bytes()[:4] == b"\x89PNG"
+
+
+@requires_obscura
+def test_a_screenshot_into_a_missing_directory_creates_it(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    out = browse("https://example.com", screenshot="shots/nested/page.png", context=context)
+    assert not out.startswith("ERROR:"), out
+    assert (tmp_path / "shots" / "nested" / "page.png").exists()
+
+
+def test_browse_uses_the_browser_budget_not_the_plain_fetch_one(tmp_path, monkeypatch):
+    """browse drives a browser engine; 15s is a plain-HTTP number. Pin that the
+    process budget comes from browse_timeout_s and that obscura is told to give
+    up one second earlier, so its graceful path runs before the hard kill."""
+    seen: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["timeout"] = kwargs.get("timeout")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr("js.toolkit.search._run_capped", fake_run)
+    context = ToolContext(cwd=tmp_path, fetch_timeout_s=15, browse_timeout_s=90)
+    browse("https://example.com", context=context)
+
+    assert seen["timeout"] == 90
+    argv = seen["argv"]
+    assert "--timeout" in argv
+    assert argv[argv.index("--timeout") + 1] == "89"
