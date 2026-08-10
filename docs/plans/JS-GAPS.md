@@ -7,19 +7,49 @@ Compaction is NOT covered here — see `COMPACTION-GAPS.md` for that subsystem.
 
 DRAFT SKELETON — reference columns being filled in.
 
+> **Status refresh, 2026-08-10.** Sections 1 and 5 were audited against the
+> current `integration` branch and corrected: several things this document
+> called ABSENT now exist, and the tool inventory named four tools that have
+> since been deleted. Lines marked **[DONE]** are shipped; everything else in
+> the ABSENT lists was re-verified as still missing. Sections 2, 3 and 4 have
+> NOT been re-audited — treat their ABSENT lists as of the original write-up.
+
 ## 1. Tool System
 
 ### What js does today
 
 - Tools are frozen dataclasses with an OpenAI-shape schema and a sync handler taking a shared mutable `ToolContext` (`js/toolkit/core.py:24`, `js/toolkit/core.py:58`).
-- Registry: fs (read/write/patch/fs_search/sem_search/remove/undo), process_net (shell/fetch), meta (todo_write/todo_read/followup/plan/skill/task), wiki, artifact, plus one auto-generated named-agent tool per prompt directory (`js/toolkit/registry.py:142`, `js/toolkit/registry.py:121`).
+- Registry: fs (read/write/patch/fs_search/ast_search/remove/undo), process_net
+  (shell/fetch), search (serper/tavily/exa/docs_search/browse), terminal
+  (terminal_session/terminal_snapshot), browser (browser_probe), meta
+  (todo_write/todo_read/plan/skill/task), wiki, kernel + toolbox for the
+  two-tool mode, plus one auto-generated named-agent tool per prompt directory
+  (`js/toolkit/registry.py`).
+  `sem_search`, `followup`, `multi_patch` and the whole `artifact` suite were
+  DELETED; `multi_patch`'s batch form is now `patch`'s `edits` parameter.
 - Per-agent tool surface picked by `tools:` selectors with glob support and typo warnings (`js/toolkit/registry.py:87`).
 - Model-facing alias profiles rewrite tool names per model match (`js/runtime.py:48`, `js/runtime.py:91`).
 - Dispatch: `task` calls from one assistant batch run in a ThreadPoolExecutor; all other tools run sequentially in-order (`js/runtime.py:440`). Under the non-blocking supervisor, fan-out calls are awaited on-loop, leaf calls in one executor thread (`js/runtime.py:549`).
 - Tool results are byte-capped with an explicit marker (`js/runtime.py:378`); shell output capped separately by `_run_capped` (`js/toolkit/process_net.py:56`); per-tool error counter aborts the turn at 3 consecutive errors per tool (`js/runtime.py:349`).
 - Malformed tool-call args are repaired (`js/runtime.py:304`, `js/tool_args.py`).
 - Safety rails: read-before-write hash tracking (`js/toolkit/core.py:96`), in-process undo snapshots (`js/toolkit/core.py:105`, `js/toolkit/fs.py:376`), remove-to-trash with 512MiB cap (`js/toolkit/fs.py:354`), shell env allowlist (`js/toolkit/process_net.py:26`).
-- ABSENT: any permission/approval model, sandboxing, MCP client, background/PTY shell sessions, LSP integration, streaming tool output to the UI mid-execution, web search, notebook tools, image generation, plan-mode gating, tool-level timeout kill UI.
+- **[DONE]** MCP client — full host with stdio and streamable-HTTP transports,
+  per-agent allow/deny policy, control tools, lazy publication (`js/mcp/`).
+- **[DONE]** Background/PTY shell sessions — `terminal_session` (start/send/
+  look/stop/list) over a real PTY with a pyte screen, plus `terminal_snapshot`
+  for a PNG of the screen (`js/toolkit/terminal.py`).
+- **[DONE]** Web search — serper, tavily, exa, context7 docs, and `browse`
+  driving obscura for JavaScript-rendered pages (`js/toolkit/search.py`).
+- **[DONE]** Tool-level timeout kill — `_run_capped` kills the process tree and
+  hands back what was captured before the kill; `fs_search`'s rg deadline is a
+  watchdog that kills the process group.
+- **[DONE]** A real extension surface for tools, in the two-tool sense: `kernel`
+  plus `toolbox` let an agent write and persist its own tools across sessions
+  without editing js source. This is NOT the general extension model section 6
+  asks for — it has no hooks, no slash commands, no plugin loading.
+- ABSENT: any permission/approval model, sandboxing, LSP integration, streaming
+  tool output to the UI mid-execution, notebook tools, image generation,
+  plan-mode gating.
 
 ## 2. Session / History
 
@@ -71,7 +101,16 @@ DRAFT SKELETON — reference columns being filled in.
 - Inline prompt directives: `{{VAR}}`, `!{sh ...}`, fenced ```!lang blocks, single-pass injection guard (`js/promptexpand.py`).
 - The only shell hook in the harness is `compact.pre_hook` (`js/settings.py:212`).
 - Subagents: task fan-out + named-agent tools from prompt dirs; depth limit, worker cap, model-lock policy (`js/toolkit/meta.py:445`).
-- ABSENT: a real extension model — no way to add a TOOL without editing js source; no lifecycle hooks that run user code (pre/post tool, session start/end, user-prompt-submit); no custom slash commands; no event handlers that execute shell or send input; no plugin loading; no per-project custom tools directory; no SDK.
+- **[DONE, partially]** Adding a TOOL without editing js source is now possible
+  two ways, neither of which is the general extension model: an MCP server
+  (`js/mcp/`) publishes remote tools onto an agent's surface under policy, and
+  the two-tool mode's `kernel` + `toolbox` let the agent write its own Python
+  tools and persist them across sessions with provenance. Both are additive
+  surfaces, not lifecycle integration.
+- ABSENT: a real extension model — no lifecycle hooks that run user code
+  (pre/post tool, session start/end, user-prompt-submit); no custom slash
+  commands; no event handlers that execute shell or send input; no plugin
+  loading; no per-project custom tools directory for NATIVE tools; no SDK.
 
 ## Ranked Gaps
 

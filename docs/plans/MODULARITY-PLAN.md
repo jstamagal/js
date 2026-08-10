@@ -4,6 +4,12 @@ North star: js becomes the owner's langchain-done-right — every part independe
 bolt together what you want — modeled on pi's shape: a stupid-minimal substrate
 plus ONE extension contract that everything workflow-shaped hangs off.
 
+> **Status refresh, 2026-08-10.** Step 3 (artifact out) is struck: artifact was
+> deleted outright rather than extracted, so its moves, its verification file
+> and its row in the extension table are all gone. Everything else below is as
+> originally written and has NOT been re-audited — in particular the line
+> numbers in section 1 predate the tool-audit merge and will have drifted.
+
 Ground truth used here: the js tree at this worktree (branch
 `textual-repl-nonblocking`, ~36 modules in `js/`, ~18.9k lines incl. `js/toolkit/`)
 and pi as actually installed at
@@ -230,7 +236,7 @@ Everything workflow-shaped, exactly like pi's exclusion list:
 | extension | today's smear (why it must move) |
 |---|---|
 | **wiki** | `js/toolkit/wiki/` (5 modules), `cli.py:1917-2077` (+ `--wiki`/`--vault` flags), `config.py:156`, `toolkit/core.py:71-74`, `fs.py:19`, `drain.py` — one feature across 7+ core files |
-| **artifact** | `js/toolkit/artifact/`, `cli.py:2078-2156`, `config.py:160-162`, `toolkit/core.py:75-77` |
+| ~~**artifact**~~ | DELETED 2026-08-09, not extracted — nothing left to move (see struck step 3) |
 | **drain** | `js/drain.py` + the `js-drain` entry point (`pyproject.toml [project.scripts]`) — already subprocess-driven |
 | **commit agent** | `js/commit_helper.py`, `cli.py:2157-2300`, `prompts/commit/` |
 | **subagents** (task tool + named-agent tools) | `toolkit/meta.py:191-556` + `registry.py:121-139`; pi core says "No sub-agents" (`PKG/README.md:495`), little-coder ships it as `subagent/index.ts` |
@@ -375,12 +381,16 @@ depends on `resolve_vault` (`drain.py:48`), and `fs.py` history. Do it right
 after step 1 while the seam is fresh — it validates every API surface at once
 (tools + command + flag + config + state).
 
-### Step 3 — artifact out (the cheap repeat)
-**Moves:** `js/toolkit/artifact/` → `extensions/artifact/`; `cli.py:2078-2156`;
-`Config.artifact_*` (`config.py:160-162`) and `ToolContext.artifact_*`
-(`core.py:75-77`) → ext config/state.
-**Verify:** `test_artifact_native_tools.py`, suite.
-**Risk:** low — smaller copy of step 2.
+### ~~Step 3 — artifact out (the cheap repeat)~~ — MOOT, 2026-08-10
+The artifact feature was **deleted**, not extracted: `js/toolkit/artifact/`,
+its cli mode, `Config.artifact_*`, `ToolContext.artifact_*`, `docs/artifact.md`
+and `test_artifact_native_tools.py` are all gone. There is nothing left to move.
+
+This step still cost the plan nothing, because deleting it achieved the same
+decoupling the step existed to prove: the cli, config and ToolContext smears it
+listed no longer exist. Substitute a different cheap repeat if you want a second
+proof after step 2 — `commit agent` (`js/commit_helper.py` + `cli.py:2157-2300`
++ `prompts/commit/`) is the closest match in size and shape.
 
 ### Step 4 — subagents out; dissolve the meta↔runtime knot
 **Moves:** `task` + fan-out machinery + `named_agent_tool` + prompt-dir agent
@@ -463,8 +473,8 @@ comparison on a golden `-p` run.
 
 ### Leverage order, if only some of this happens
 1 (seam) > 2 (wiki proves it) > 4 (subagents, kills the worst knot) >
-6 (SDK boundary, kills the leak) > 5 (cli diet) > 3 (artifact) > 7 (events) —
-step 0 is free and immediate.
+6 (SDK boundary, kills the leak) > 5 (cli diet) > 7 (events) —
+step 0 is free and immediate. Step 3 is struck: artifact was deleted outright.
 
 ---
 
@@ -487,7 +497,7 @@ the biggest modules, today:
 | `toolkit/process_net` (427) | with fs pack | fs + capped_process + core | lifts with the tool pack |
 | `toolkit/meta` (639) | **NO** | deferred runtime/supervisor/config imports (:221-225), dynamic `context.config` (:306) | step 4 rebuilds it on `api.run_agent` |
 | `runtime` (1257) | **NO** as standalone — but it's the core loop, its test is "usable with ONLY core parts" | `ai` (:22), `tools` facade (:26), colors, model_metadata | steps 0d + 6; compaction split into `compaction.py` makes both halves smaller than 700 lines |
-| `wiki` / `artifact` packages | **NO** | ToolContext fields, cli wiring, colors | steps 2-3 make them the first true extensions — the proof of the whole plan |
+| `wiki` package | **NO** | ToolContext fields, cli wiring, colors | step 2 makes it the first true extension — the proof of the whole plan. `artifact` was deleted rather than extracted |
 | `drain` (459) | **almost** — drives js by subprocess (:248) | 3 imports (:44-48) | step 5; could be lifted today with ~20 lines of vendored helpers |
 | `tui` (449) | one edge away | `cli._sampling_for_turn` (:305) | step 0c, fully clean after step 7 |
 | `cli` (3336) | **NO — the anti-part** | it is the couplings | steps 2/3/5 shrink it; it never lifts, it dissolves |
