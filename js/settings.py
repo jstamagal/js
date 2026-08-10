@@ -36,6 +36,12 @@ DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000
 DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES = 51_200
 DEFAULT_MAX_TOOL_RESULT_BYTES = 256 * 1024
 DEFAULT_FETCH_TIMEOUT_S = 15
+# browse drives a real browser engine: navigation, a JS event loop, and an
+# adaptive settle wait. 15s is a plain-HTTP number and kills SPAs mid-render.
+DEFAULT_BROWSE_TIMEOUT_S = 60
+# A download is bounded by _DOWNLOAD_MAX_BYTES (32 MiB), not by page-load time.
+# At 15s that silently demanded ~2 MB/s to fetch anything large.
+DEFAULT_DOWNLOAD_TIMEOUT_S = 300
 DEFAULT_INLINE_CODE_TIMEOUT_S = 300
 DEFAULT_TRACE = True
 DEFAULT_MAX_READ_LINES = 2_000
@@ -152,8 +158,18 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Hard cap on any tool result string.",
                 env="JS_MAX_TOOL_RESULT_BYTES"),
     SettingSpec("limits.fetch_timeout_s", "int", DEFAULT_FETCH_TIMEOUT_S,
-                "fetch() per-request timeout in seconds.",
+                "fetch() per-request timeout in seconds, and the timeout for the "
+                "web-search backends' JSON calls.",
                 env="JS_FETCH_TIMEOUT"),
+    SettingSpec("limits.browse_timeout_s", "int", DEFAULT_BROWSE_TIMEOUT_S,
+                "browse() page budget in seconds. obscura is told to give up one "
+                "second earlier so its own graceful navigation-timeout path runs "
+                "and partial content survives.",
+                env="JS_BROWSE_TIMEOUT"),
+    SettingSpec("limits.download_timeout_s", "int", DEFAULT_DOWNLOAD_TIMEOUT_S,
+                "fetch() timeout in seconds when save= is set. Downloads are bounded "
+                "by size, not by how fast a page renders.",
+                env="JS_DOWNLOAD_TIMEOUT"),
     SettingSpec("limits.inline_code_timeout_s", "int", DEFAULT_INLINE_CODE_TIMEOUT_S,
                 "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",
                 env="JS_INLINE_CODE_TIMEOUT"),

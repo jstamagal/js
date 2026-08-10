@@ -358,15 +358,16 @@ def browse(
     dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
     if dump not in _BROWSE_DUMPS:
         return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"
-    process_timeout = int(context.fetch_timeout_s)
+    process_timeout = int(context.browse_timeout_s)
     obscura_timeout = max(1, process_timeout - 1)
     argv = [binary, "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
     shot_path: Path | None = None
     screenshot = text_or_default(screenshot, "").strip()
     if screenshot:
+        # No extension check: obscura always writes PNG whatever the file is
+        # called, and js detects images by magic bytes, not by suffix. Rejecting
+        # `shot.jpg` would cost a turn and buy nothing.
         shot_path = context.resolve_path(screenshot)
-        if shot_path.suffix.lower() != ".png":
-            return "ERROR: screenshot path must end in .png"
         shot_path.parent.mkdir(parents=True, exist_ok=True)
         argv += ["--screenshot", str(shot_path)]
     if _is_private_ip_literal(url):

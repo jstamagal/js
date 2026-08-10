@@ -106,6 +106,8 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         max_bash_output_ceiling=getattr(parent, "max_bash_output_ceiling", 150_000),
         max_bash_output_bytes=parent.max_bash_output_bytes,
         fetch_timeout_s=parent.fetch_timeout_s,
+        browse_timeout_s=getattr(parent, "browse_timeout_s", 60),
+        download_timeout_s=getattr(parent, "download_timeout_s", 300),
         task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
     )
     child.tool_registry = registry
