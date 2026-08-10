@@ -16,16 +16,16 @@ Path and range rules:
 - `show_line_numbers=false` returns plain selected text.
 
 Text output format:
-- Text files return anchored lines as `12ab|content`.
-- `12` is the 1-based line number.
-- `ab` is a short hash of the displayed line, useful for stable references after
+- Text files return anchored lines as `12:ab|content`.
+- `12` before `:` is the 1-based line number.
+- `ab` between `:` and `|` is a short hash of the displayed line, useful for stable references after
   truncation.
 {{#if patch}}
-- Do not include the `12ab|` prefix when passing exact text to `patch`; only the
+- Do not include the `12:ab|` prefix when passing exact text to `patch`; only the
   content after `|` belongs to the file.
 {{/if}}
 {{#unless patch}}
-- Do not include the `12ab|` prefix if you later edit the file another way; only
+- Do not include the `12:ab|` prefix if you later edit the file another way; only
   the content after `|` belongs to the file.
 {{/unless}}
 

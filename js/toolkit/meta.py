@@ -59,15 +59,25 @@ def todo_read(context: ToolContext | None = None) -> str:
     return "\n".join(f"- [{todo.status}] {todo.content}" for todo in context.todos.values())
 
 
-def plan(plan_name: str, version: str, content: str, context: ToolContext | None = None) -> str:
+def plan(
+    plan_name: str,
+    version: str,
+    content: str,
+    overwrite: bool = False,
+    context: ToolContext | None = None,
+) -> str:
     assert context is not None
     safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in plan_name).strip("-.") or "plan"
     safe_version = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in version).strip("-.") or "v1"
     target = context.resolve_path(Path("plans") / f"{safe_name}-{safe_version}.md")
+    existed = target.exists()
+    if existed and not overwrite:
+        return f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"
     context.snapshot(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
-    return f"plan written to {target}"
+    action = "overwritten" if existed else "written"
+    return f"plan {action} at {target}" if existed else f"plan written to {target}"
 
 
 def skill(name: str, context: ToolContext | None = None) -> str:
@@ -622,7 +632,7 @@ def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
             required=("todos",),
         ),
         Tool("todo_read", load_description("todo_read"), todo_read, {}),
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}}, required=("plan_name", "version", "content")),
+        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}, "overwrite": {"type": "boolean", "default": False, "description": "Replace an existing plan with the same name and version."}}, required=("plan_name", "version", "content")),
         Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",)),
         Tool(
             "task",
