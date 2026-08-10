@@ -20,5 +20,6 @@ When not to use:
   it is faster and does not spin up a browser.
 {{/if}}
 
-Requires the `obscura` binary on PATH; the tool reports a plain ERROR when it
-is missing.
+Uses the managed `js/tools/obscura` binary installed by `just install`. Before
+installation it falls back to `obscura` on PATH and reports a plain ERROR when
+neither exists.
