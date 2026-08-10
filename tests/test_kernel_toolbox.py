@@ -525,3 +525,24 @@ def test_the_toolbox_load_probe_reports_json_the_kernel_actually_produced(ctx):
     assert loaded == ["alpha"]
     assert problems == []
     assert json.loads(json.dumps(loaded)) == ["alpha"]
+
+
+def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shadows_it(ctx):
+    """discover() lets project shadow global; save must not trust that view."""
+    cwd = Path(ctx.cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g1'\n",
+                         model="qwen", scope="global")
+    tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'p1'\n",
+                         model="fable", scope="project")
+
+    report = tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g2'\n",
+                                  model="opus", scope="global")
+
+    archived = global_dir / ".history" / "summarise.r1.py"
+    assert report.startswith("refined summarise r2 [global]")
+    assert "authors: qwen -> opus" in report
+    assert archived.is_file()
+    assert "return 'g1'" in archived.read_text(encoding="utf-8")
+    assert "return 'g2'" in (global_dir / "summarise.py").read_text(encoding="utf-8")
+    assert "return 'p1'" in (project_dir / "summarise.py").read_text(encoding="utf-8")

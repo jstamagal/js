@@ -272,18 +272,31 @@ def write_revision(
         return f"ERROR: could not create {directory}: {exc}"
     target = directory / f"{name}.py"
 
-    existing = discover(cwd).get(name)
+    # Read the file we are about to write, not discover()'s view of it. discover()
+    # lets project scope shadow global by name, so saving to global while a project
+    # copy exists used to return the project record, fail the path comparison, skip
+    # the archive, and truncate the global file with a fresh r1 header -- the exact
+    # promote-a-local-fix-back-to-global workflow this tool exists for.
     revision = 1
     history: list[dict] = []
-    if existing is not None and existing.path == target:
-        revision = existing.revision + 1
-        history = list(existing.history)
-        archive = directory / ".history" / f"{name}.r{existing.revision}.py"
+    previous = ""
+    if target.is_file():
+        try:
+            previous = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            return f"ERROR: could not read {target}: {exc}"
+    if previous:
+        prior_meta = _parse_header(previous)
+        prior = int_or_default(prior_meta.get("revision"), 1, minimum=1)
+        raw_history = prior_meta.get("history")
+        revision = prior + 1
+        history = list(raw_history) if isinstance(raw_history, list) else []
+        archive = directory / ".history" / f"{name}.r{prior}.py"
         try:
             archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+            archive.write_text(previous, encoding="utf-8")
         except OSError as exc:
-            return f"ERROR: could not archive revision {existing.revision}: {exc}"
+            return f"ERROR: could not archive revision {prior}: {exc}"
 
     when = time.strftime("%Y-%m-%d", time.localtime(stamp if stamp is not None else time.time()))
     history.append({"revision": revision, "model": model or "unknown",

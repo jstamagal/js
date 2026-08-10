@@ -28,7 +28,7 @@ from ..tool_binaries import (
 )
 from .core import Tool, ToolContext
 from .descriptions import load_description
-from .fs import _detect_visual_mime, _image_marker
+from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
 
@@ -38,7 +38,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
 _HREF_RE = re.compile(
-    r"(?is)\bhref\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))"
+    r"(?is)(?:^|\s)href\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))"
 )
 
 
@@ -446,12 +446,23 @@ def _fetch_file_url(
         if save_target is not None:
             if size > _DOWNLOAD_MAX_BYTES:
                 return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
-            data = path.read_bytes()
+            data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
+            if len(data) > _DOWNLOAD_MAX_BYTES:
+                return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
             content_type = _guess_file_content_type(path, data)
             return _write_download(save_target, data, content_type, context)
 
-        data = path.read_bytes()
-        truncated = size > context.max_tool_result_bytes
+        # Read the whole file, not just cap+1: an oversized text response is
+        # spilled in full below, and the spill is only honest if the tail was
+        # actually read. _DOWNLOAD_MAX_BYTES bounds that so a multi-GB log does
+        # not land in RAM, and _read_regular_bytes refuses devices/FIFOs whose
+        # st_size is 0 and whose read never reaches EOF.
+        if size > _DOWNLOAD_MAX_BYTES:
+            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+        data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
+        if len(data) > _DOWNLOAD_MAX_BYTES:
+            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+        truncated = len(data) > context.max_tool_result_bytes
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
     content_type = _guess_file_content_type(path, data)

@@ -343,6 +343,25 @@ def _absolutize(markdown: str, base_url: str) -> str:
     return _MD_LINK.sub(_fix, markdown)
 
 
+# obscura 0.2.0's own default UA, measured by pointing it at a local echo
+# server. The status probe and the render must present the same
+# identity: bot-detection edges (Cloudflare, Datadome, PerimeterX, plain UA
+# gates) answer 403/429 to a non-browser UA and 200 to Chromium, so a probe
+# calling itself js-agent/0.1 labelled successfully-rendered pages
+# "ERROR: HTTP 403" -- and three of those in a turn trip the runtime's
+# tool_error_limit. Pinning one string for both requests keeps the two
+# verdicts identical whatever obscura's default drifts to.
+_BROWSE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+)
+_BROWSE_HEADERS = {
+    "User-Agent": _BROWSE_USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def _http_status(url: str, timeout: float) -> int | None:
     """The HTTP status browse is about to render, or None if it cannot be learned.
 
@@ -357,7 +376,7 @@ def _http_status(url: str, timeout: float) -> int | None:
     and the caller reports the status as unknown rather than blocking on it.
     """
     parsed = urllib.parse.urlsplit(url)
-    headers = {"User-Agent": "js-agent/0.1"}
+    headers = dict(_BROWSE_HEADERS)
     # urllib does not read userinfo out of the netloc -- it tries to resolve
     # "user:pass@host" as a hostname and fails, which silently cost the status
     # signal on every credentialed URL. Move it to the header urllib expects.
@@ -398,7 +417,10 @@ def browse(
         return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"
     process_timeout = int(context.browse_timeout_s)
     obscura_timeout = max(1, process_timeout - 1)
-    argv = [binary, "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    # --user-agent is global, so it goes before the subcommand. Same string the
+    # status probe sends, so both requests get one bot-detection verdict.
+    argv = [binary, "--user-agent", _BROWSE_USER_AGENT,
+            "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
     shot_path: Path | None = None
     screenshot = text_or_default(screenshot, "").strip()
     if screenshot:

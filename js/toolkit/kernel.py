@@ -396,7 +396,15 @@ def _collect(session: KernelSession, msg_id: str, timeout: int) -> tuple[list[di
                 try:
                     msg = session.client.get_iopub_msg(timeout=0.3)
                 except queue.Empty:
-                    break
+                    # Keep polling to the grace deadline. A CPU-bound C
+                    # extension only checks signals periodically, so the first
+                    # poll after SIGINT routinely returns nothing; breaking here
+                    # collapsed the 10s window to 300ms and dropped the
+                    # KeyboardInterrupt traceback the caller is waiting for.
+                    if not session.alive():
+                        died = True
+                        break
+                    continue
                 if msg.get("parent_header", {}).get("msg_id") != msg_id:
                     continue
                 out.append(msg)

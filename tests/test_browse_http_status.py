@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from js.toolkit import ToolContext
+from js.toolkit import search as search_mod
 from js.toolkit.search import browse
 
 
@@ -22,8 +23,12 @@ requires_obscura = pytest.mark.skipif(
 )
 
 
+SEEN_AGENTS: list[str] = []
+
+
 class _StatusHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
+        SEEN_AGENTS.append(self.headers.get("User-Agent") or "")
         code = int(self.path.strip("/") or 200)
         body = (
             f"<html><title>Server Says {code}</title><body>"
@@ -41,6 +46,7 @@ class _StatusHandler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server():
+    SEEN_AGENTS.clear()
     socketserver.TCPServer.allow_reuse_address = True
     httpd = socketserver.TCPServer(("127.0.0.1", 0), _StatusHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -83,3 +89,14 @@ def test_credentials_in_the_url_do_not_reach_the_error_line(server, tmp_path):
     assert result.startswith("ERROR:")
     assert "hunter2" not in result
     assert "admin" not in result
+
+
+@requires_obscura
+def test_the_status_probe_and_the_render_present_the_same_user_agent(server, tmp_path):
+    """A probe UA that differs from the browser's gets a different bot-detection
+    verdict, which labelled successfully-rendered pages as ERROR."""
+    browse(f"{server}/200", context=ToolContext(cwd=tmp_path))
+
+    assert len(SEEN_AGENTS) >= 2
+    assert set(SEEN_AGENTS) == {search_mod._BROWSE_USER_AGENT}
+    assert "js-agent" not in search_mod._BROWSE_USER_AGENT
