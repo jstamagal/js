@@ -1,0 +1,13 @@
+# The two-tool mode: a kernel that remembers, a toolbox that remembers longer,
+# and a shell. Nothing else. This is the opposite side of js from the curated
+# 16-20 tool surface — it does not replace it, and the two never mix.
+#
+#   js --agent twotool
+#
+# Needs jupyter_client and ipykernel, which are base dependencies — `just sync`
+# installs them. If an env somehow lacks them the kernel tool returns one clear
+# ERROR naming the package and shell still works.
+tools:
+  - kernel
+  - toolbox
+  - shell

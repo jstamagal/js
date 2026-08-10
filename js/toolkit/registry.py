@@ -12,7 +12,7 @@ import sys
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import browser, discovery, fs, meta, process_net, search, terminal, wiki
+from . import browser, discovery, fs, kernel, meta, process_net, search, terminal, toolbox, wiki
 
 
 @dataclass(frozen=True)
@@ -406,6 +406,8 @@ def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, fl
         + browser.tools()
         + meta.tools(flags)
         + wiki.tools()
+        + kernel.tools()
+        + toolbox.tools()
     )
     reserved = {tool.name for tool in base_tools}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)

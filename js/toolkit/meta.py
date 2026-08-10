@@ -109,6 +109,12 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         browse_timeout_s=getattr(parent, "browse_timeout_s", 60),
         download_timeout_s=getattr(parent, "download_timeout_s", 300),
         task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
+        # A subagent gets its own kernel (kernel_session stays None here) but
+        # inherits how loudly it renders — the operator watching one terminal
+        # wants one verbosity, not one per agent.
+        kernel_verbosity=getattr(parent, "kernel_verbosity", "normal"),
+        kernel_render_max_lines=getattr(parent, "kernel_render_max_lines", 24),
+        model=getattr(parent, "model", ""),
     )
     child.tool_registry = registry
     child.agent_id = agent

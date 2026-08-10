@@ -340,6 +340,104 @@ Parameters:
 
 Tasks inside one call run concurrently. Results are returned in input order.
 
+## Persistent Kernel Tools
+
+`kernel` and `toolbox` are the other side of js from the curated tool surface:
+instead of handing an agent forty fixed tools, hand it a stateful Python REPL and
+let it build its own. They do not replace the hardened tools, do not wrap them,
+and do not import their rails. The shipped `twotool` agent
+(`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
+
+Both need `jupyter_client` and `ipykernel`, which are base dependencies —
+`just sync` installs them. Without them the tools return one ERROR naming the
+missing package instead of a traceback, and the rest of js is unaffected.
+
+### `kernel`
+
+Executes Python in a persistent IPython kernel. One kernel per ToolContext, held
+for the life of the session, so a function defined in call 3 is callable in call
+30.
+
+Parameters:
+
+- `code`: the Python to run. Empty `code` reports the namespace and runs nothing.
+- `timeout`: seconds, default 120.
+- `restart`: kill and restart, destroying every definition.
+- `verbosity`: `quiet`, `normal`, or `verbose` for this call's terminal render.
+
+Every result carries a `NAMESPACE` line naming the callables live in the kernel
+*right now*, re-derived from the kernel on every call rather than remembered.
+That is what makes the tool survive compaction: the transcript that defined
+`parse_log` may be gone, the listing is not. New definitions also get a `DEFINED`
+line, deletions a `GONE` line.
+
+A cell that exceeds `timeout` is interrupted with SIGINT, exactly like Ctrl-C in
+a notebook — never restarted. The cell dies, the namespace lives. A kernel that
+actually dies is reported as such, naming the cell, instead of blocking until the
+deadline. Image output (matplotlib and friends) is written under `.js/kernel/`
+and reported as `IMAGE <path>`; the kernel process's own stderr goes to
+`.js/kernel/kernel.log`, never the terminal. The result string is capped by
+`limits.max_tool_result_bytes` with the standard truncation marker.
+
+This tool has no opinion about persistence. It does not save, load, or version
+anything, and it does not import `toolbox`.
+
+### `toolbox`
+
+Tools that outlive the session, so a tool written by a weak local model on Monday
+is loadable, refinable, and re-saveable by a stronger model on Tuesday.
+
+Parameters:
+
+- `action` (required): `list`, `load`, `save`, `history`, `restore`.
+- `name`: the tool name — a plain Python identifier matching the definition.
+- `note`: for `save`, what changed and why. This is the message the next model
+  reads.
+- `scope`: `global` (platform config dir `toolbox/`) or `project`
+  (`.js/toolbox/`). Project shadows global, mirroring agent precedence.
+- `revision`: for `restore`.
+- `source`: an explicit definition, for saving without a live kernel.
+- `verbosity`: as for `kernel`.
+
+Each tool is one file with a machine-readable provenance header:
+
+```text
+# js-toolbox: {"history":[{"date":"2026-08-10","model":"qwen","note":"first cut","revision":1}],"name":"summarise","revision":1}
+```
+
+`save` reads the definition out of the live kernel, resolves the free names it
+references against the kernel namespace, and prepends the `import` lines it needs
+so the saved file stands alone. Names it cannot resolve to a module (a sibling
+function, a module-level constant) come back as a `WARNING` naming them — a tool
+saved without them would `NameError` on the next session's `load`.
+
+`save` never overwrites: revision N is archived to `.history/<name>.rN.py` and
+N+1 is written. `restore` rolls back by writing the old body as a *new* revision,
+so history is append-only and nothing is ever lost.
+
+`load` execs every healthy tool file into the kernel, each inside its own
+try/except. One broken tool file costs that tool and reports it by name; the rest
+of the box loads.
+
+### Rendering and verbosity
+
+`kernel` and `toolbox` render what happened to *your terminal* on stderr with
+rich — code, output, elapsed, the namespace, save/load activity. stderr so
+`js -p '...' | jq` still works.
+
+- `quiet` — errors and interrupts only.
+- `normal` — code, merged output, elapsed, namespace, defined/gone.
+- `verbose` — stdout/stderr/display split apart, plus kernel lifecycle events.
+
+Set the baseline with `set kernel.verbosity <level>` (or `JS_KERNEL_VERBOSITY`);
+override one call with the tool's `verbosity` parameter. `set
+kernel.render_max_lines <n>` (default 24) caps each rendered section so a
+4000-line cell cannot scroll the screen away; the hidden count is always shown.
+
+Verbosity governs the terminal render only. The model always receives the full,
+identically-shaped result — a display knob that could silently delete the
+`NAMESPACE` line would break the property the whole tool rests on.
+
 ## Wiki Tools
 
 Installed wiki agents use three deterministic native operations:
@@ -405,6 +503,7 @@ wins over global, which wins over repo. Current generated tool names include:
 - `defaultagent`
 - `autocoder`
 - `commit`
+- `twotool`
 
 Direct agent tools take:
 
