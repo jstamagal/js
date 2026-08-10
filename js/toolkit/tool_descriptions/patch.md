@@ -33,12 +33,13 @@ Several replacements in the same file:
 - Passing `edits` together with `old_string`, `new_string`, or `replace_all` is
   an error. Use one form or the other.
 
-Atomicity:
+Batch validation and writing:
 - All edits are validated and applied in memory before anything is written.
 - If any edit fails to match, is ambiguous, or is a no-op, the file is left
   untouched and the error names the offending edit by its position in the list.
 - A successful call writes once and takes one snapshot, so a single undo
   restores the file as it was before the whole call.
+- The final filesystem write itself is not crash-atomic.
 
 Matching rules (each edit):
 - `old_string` must match the file exactly, including whitespace and
@@ -50,9 +51,9 @@ Matching rules (each edit):
 - Use `replace_all` only when every occurrence is intended to change, such as a
   safe rename within one file.
 
-Aliases:
-- `search` is accepted as an alias for `old_string`.
-- `content` is accepted as an alias for `new_string`.
+Model-facing names:
+- Use the schema names `old_string` and `new_string`. Do not send `search` or
+  `content`; they are not part of the model-facing tool contract.
 
 {{#if read}}
 Working from `read` output:

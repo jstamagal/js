@@ -65,6 +65,7 @@ class CatalogEntry:
     description: str
     kind: str
     source: str
+    loadable: bool = True
 
 
 @dataclass(frozen=True)

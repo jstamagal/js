@@ -16,7 +16,7 @@ from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.toolkit.core import Tool, ToolContext, ToolResult
-from js.toolkit.registry import ToolRegistry
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 
 class FakeClient:
@@ -1010,6 +1010,71 @@ def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
         warning = next(entry for entry in found if entry.id.startswith("mcp:collision:"))
         assert "normalize to the same public name" in warning.description
         assert all(name in warning.description for name in ("My-Tool", "my_tool", "MY TOOL"))
+
+    asyncio.run(drive())
+
+
+def test_cross_server_collisions_expose_loadable_aliases_and_status(tmp_path):
+    class CrossServerClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.server_name = factory()._name
+            self.tools = [{
+                "name": "shared",
+                "description": f"shared tool from {self.server_name}",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]
+
+        async def call_tool(self, name, arguments, *, timeout=None):
+            self.calls.append((name, arguments))
+            return CallToolResult(content=[{
+                "type": "text",
+                "text": f"called {self.server_name}/{name}",
+            }])
+
+    async def drive():
+        CrossServerClient.instances.clear()
+        first = MCPServer("Server A", "same", "stdio", command="first")
+        second = MCPServer("Server B", "same", "stdio", command="second")
+        host = MCPHost(
+            MCPConfiguration((first, second), MCPPolicy()),
+            client_factory=CrossServerClient,
+        )
+        surface = build_default_registry().select([]).lazy_surface(
+            tmp_path,
+            mcp_host=host,
+        )
+
+        results = json.loads(
+            await surface.discover_async(kind="mcp")
+        )["results"]
+        collision = next(
+            item for item in results
+            if item["id"].startswith("mcp:collision:cross:")
+        )
+        aliases = sorted(host.remote_tools)
+
+        assert len(aliases) == 2
+        assert len(set(aliases)) == 2
+        assert collision["loadable"] is False
+        assert all(isinstance(item["loadable"], bool) for item in results)
+        assert {item["loadable"] for item in results} == {True, False}
+        for alias, (server, remote, _raw) in sorted(host.remote_tools.items()):
+            assert remote == "shared"
+            assert f"{server}/shared as mcp:{alias}" in collision["description"]
+            assert json.loads(surface.discover(load=f"mcp:{alias}"))["loaded"] == [alias]
+
+        loaded_tools = {
+            tool.name: tool for tool in host.tools(set(aliases))
+        }
+        replies = {
+            alias: (await loaded_tools[alias].handler()).dehydrated()
+            for alias in aliases
+        }
+        assert {reply.split("called ", 1)[1] for reply in replies.values()} == {
+            "Server A/shared",
+            "Server B/shared",
+        }
 
     asyncio.run(drive())
 

@@ -20,9 +20,14 @@ Parameters:
   screen dimensions for `start` only. Passing either with another action is an
   error.
 
-The result includes the rendered terminal lines, cursor position, process
-state, and whether displayed lines changed after input. A running process is
-normal for a TUI; stop sessions when finished.
+The result includes the rendered terminal lines, cursor position, and process
+state. `lines_changed` and `screen_responded` compare this screen with the most
+recent observation. For `send`, they indicate change after the sent keys; for
+`look`, they indicate passive change since the prior observation.
+{{#if terminal_snapshot}}
+`terminal_snapshot` also updates the comparison baseline before a later `send`.
+{{/if}}
+A running process is normal for a TUI; stop sessions when finished.
 
 {{#if terminal_snapshot}}
 Use `terminal_snapshot` when text is not enough to judge spacing, colour,
