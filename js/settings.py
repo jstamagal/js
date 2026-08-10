@@ -43,6 +43,7 @@ DEFAULT_BROWSE_TIMEOUT_S = 60
 # A download is bounded by _DOWNLOAD_MAX_BYTES (32 MiB), not by page-load time.
 # At 15s that silently demanded ~2 MB/s to fetch anything large.
 DEFAULT_DOWNLOAD_TIMEOUT_S = 300
+DEFAULT_MAX_DOWNLOAD_BYTES = 0        # 0 = unlimited; a download streams to disk
 DEFAULT_INLINE_CODE_TIMEOUT_S = 300
 DEFAULT_TRACE = True
 DEFAULT_MAX_READ_LINES = 2_000
@@ -178,6 +179,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "fetch() responses. Downloads are bounded by size, not by how fast a "
                 "page renders.",
                 env="JS_DOWNLOAD_TIMEOUT"),
+    SettingSpec("limits.max_download_bytes", "int", DEFAULT_MAX_DOWNLOAD_BYTES,
+                "Size ceiling for fetch(save=...) in bytes. 0 = unlimited, which is "
+                "the default: a save streams to disk and never lands in memory, so "
+                "an ISO or a model weight is a normal download. Set a number only to "
+                "impose a quota.",
+                env="JS_MAX_DOWNLOAD_BYTES"),
     SettingSpec("limits.inline_code_timeout_s", "int", DEFAULT_INLINE_CODE_TIMEOUT_S,
                 "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",
                 env="JS_INLINE_CODE_TIMEOUT"),

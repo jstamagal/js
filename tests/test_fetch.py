@@ -91,12 +91,13 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
     )
 
 
-def test_file_url_download_is_guarded_by_download_cap(tmp_path, monkeypatch):
+def test_file_url_download_is_guarded_by_the_configured_quota(tmp_path):
+    """The ceiling is limits.max_download_bytes, not a compiled-in constant."""
     source = tmp_path / "too-big.bin"
     source.write_bytes(b"1234")
-    monkeypatch.setattr(process_net, "_DOWNLOAD_MAX_BYTES", 3)
+    context = ToolContext(cwd=tmp_path, max_download_bytes=3)
 
-    result = process_net.fetch(source.as_uri(), save="out.bin", context=ToolContext(cwd=tmp_path))
+    result = process_net.fetch(source.as_uri(), save="out.bin", context=context)
 
     assert result == "ERROR: response exceeds 3 byte download limit"
     assert not (tmp_path / "out.bin").exists()
@@ -366,3 +367,60 @@ def test_file_url_refuses_a_file_past_the_hard_read_ceiling(tmp_path, monkeypatc
     result = process_net.fetch(source.as_uri(), context=context)
 
     assert result == "ERROR: file exceeds 100 byte read limit; use save= or fs_read"
+
+
+def test_a_save_streams_and_is_unlimited_by_default(tmp_path):
+    """A download is bounded by disk, not by what fits in memory."""
+    source = tmp_path / "big.bin"
+    source.write_bytes(b"z" * (3 * 1024 * 1024))
+    context = ToolContext(cwd=tmp_path)
+
+    assert context.max_download_bytes == 0
+    result = process_net.fetch(source.as_uri(), save="copy.bin", context=context)
+
+    assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'copy.bin'} size={3 * 1024 * 1024} ")
+    assert (tmp_path / "copy.bin").stat().st_size == 3 * 1024 * 1024
+
+
+def test_a_configured_download_quota_is_enforced_and_leaves_no_partial(tmp_path):
+    source = tmp_path / "big.bin"
+    source.write_bytes(b"z" * (3 * 1024 * 1024))
+    context = ToolContext(cwd=tmp_path, max_download_bytes=1024)
+
+    result = process_net.fetch(source.as_uri(), save="copy.bin", context=context)
+
+    assert result == "ERROR: response exceeds 1024 byte download limit"
+    assert not (tmp_path / "copy.bin").exists()
+    assert list(tmp_path.glob(".*js-partial")) == []
+
+
+class StreamingResponse(FakeResponse):
+    """A response that advances like a socket, so a buffered read is visible."""
+
+    def __init__(self, data: bytes, headers=None):
+        super().__init__(data, headers)
+        self.offset = 0
+        self.reads = 0
+
+    def read(self, size: int = -1) -> bytes:
+        self.reads += 1
+        if size is None or size < 0:
+            size = len(self._data) - self.offset
+        chunk = self._data[self.offset : self.offset + size]
+        self.offset += len(chunk)
+        return chunk
+
+
+def test_an_http_save_streams_to_disk_instead_of_reading_the_body(monkeypatch, tmp_path):
+    body = b"w" * (2 * 1024 * 1024)
+    response = StreamingResponse(body, {"Content-Type": "application/octet-stream"})
+    monkeypatch.setattr(
+        process_net.urllib.request, "urlopen", lambda _req, timeout: response
+    )
+    context = ToolContext(cwd=tmp_path)
+
+    result = process_net.fetch("https://example.test/blob", save="blob.bin", context=context)
+
+    assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'blob.bin'} size={len(body)} ")
+    assert (tmp_path / "blob.bin").read_bytes() == body
+    assert response.reads > 1, "a stream reads in chunks; one read means it buffered"

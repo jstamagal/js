@@ -331,14 +331,15 @@ def test_fetch_download_cap_stops_transfer_before_publishing(
     transfer_server, monkeypatch, tmp_path: Path
 ) -> None:
     base_url, _state = transfer_server
-    monkeypatch.setattr(process_net, "_DOWNLOAD_MAX_BYTES", 1024 * 1024)
     target = tmp_path / "capped.bin"
     target.write_bytes(b"known-complete-file")
 
     result = process_net.fetch(
         f"{base_url}/file",
         save=target.name,
-        context=ToolContext(cwd=tmp_path, download_timeout_s=10),
+        context=ToolContext(
+            cwd=tmp_path, download_timeout_s=10, max_download_bytes=1024 * 1024
+        ),
     )
 
     assert result == "ERROR: response exceeds 1048576 byte download limit"
