@@ -9,6 +9,7 @@ current shell cannot use without breaking registry assembly.
 
 from __future__ import annotations
 
+import base64
 import json
 import ipaddress
 import os
@@ -342,6 +343,43 @@ def _absolutize(markdown: str, base_url: str) -> str:
     return _MD_LINK.sub(_fix, markdown)
 
 
+def _http_status(url: str, timeout: float) -> int | None:
+    """The HTTP status browse is about to render, or None if it cannot be learned.
+
+    obscura reports no status anywhere -- it exits 0 on a 404, prints
+    `Page loaded`, and hands back the error page's body as ordinary content
+    (measured against a local server returning 404 and 500). So a model asking
+    browse to read a page gets "404 page / This is the error body" and no signal
+    that it is reading an error page rather than the document.
+
+    One extra request is the price of that signal. It is deliberately cheap: no
+    body is read, and any failure here is non-fatal -- the render still happens
+    and the caller reports the status as unknown rather than blocking on it.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    headers = {"User-Agent": "js-agent/0.1"}
+    # urllib does not read userinfo out of the netloc -- it tries to resolve
+    # "user:pass@host" as a hostname and fails, which silently cost the status
+    # signal on every credentialed URL. Move it to the header urllib expects.
+    if parsed.username is not None:
+        host = parsed.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        raw = f"{parsed.username}:{parsed.password or ''}".encode()
+        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+        url = urllib.parse.urlunsplit(parsed._replace(netloc=host))
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except Exception:  # noqa: BLE001 -- DNS, TLS, refused, redirect loop, anything
+        return None
+
+
 def browse(
     url: str,
     dump: str | None = "markdown",
@@ -373,6 +411,9 @@ def browse(
     if _is_private_ip_literal(url):
         argv.append("--allow-private-network")
     argv.append(url)
+    # Learn the status before rendering. Skipped for a screenshot-only call,
+    # which returns no page text for a status to qualify.
+    status = None if shot_path is not None else _http_status(url, min(10.0, float(process_timeout)))
     try:
         result = _run_capped(
             argv,
@@ -410,7 +451,13 @@ def browse(
         stdout = _absolutize(stdout, url)
     if out_truncated:
         stdout = _fit_truncation_marker(stdout, context.max_tool_result_bytes)
-    return stdout or "(empty page)"
+    body = stdout or "(empty page)"
+    if status is not None and status >= 400:
+        # The body is kept: a 404 page sometimes IS what the caller wanted to
+        # read. But it leads with ERROR so the runtime marks the result as an
+        # error and the model cannot mistake an error page for the document.
+        return f"ERROR: HTTP {status} from {_redacted_url(url)}; the page below is the error response\n{body}"
+    return body
 
 
 def tools() -> tuple[Tool, ...]:
