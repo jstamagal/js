@@ -45,7 +45,11 @@ Filtering:
 - `path` may be a file or directory and defaults to the current working
   directory. Results are absolute paths.
 - `glob` filters by ripgrep glob such as `*.py` or `**/*.tsx`.
-- `file_type` filters by extension without the dot, such as `py`, `js`, or `rs`.
+- `file_type` (alias `type`) takes a ripgrep type name such as `rust`, `py`, or
+  `js`, which covers every extension in that type. A bare extension ripgrep has
+  no type for, such as `gdshader`, is matched as `*.gdshader` instead.
+- The short ripgrep spellings are accepted for the flags below: `-B`, `-A`, `-C`,
+  `-n`, `-i`. Either spelling works; the short one wins if both are sent.
 
 Output modes:
 - `files_with_matches` returns only paths and is the default.

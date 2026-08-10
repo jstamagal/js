@@ -52,6 +52,9 @@ def shell(
     safe_env = {key: os.environ[key] for key in allowed if key in os.environ}
     shell_path = _default_shell()
     shell_arg = "/C" if sys.platform == "win32" else "-c"
+    # A command can create/edit/delete anything, so memoized fs_search results are
+    # no longer trustworthy once one has run.
+    context.invalidate_search_cache()
     try:
         result = _run_capped(
             [shell_path, shell_arg, command],

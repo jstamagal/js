@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import ipaddress
 import os
+import re
 import shutil
 import subprocess
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
@@ -321,9 +323,29 @@ def _fit_truncation_marker(text: str, cap: int) -> str:
     return f"{content}\n{marker}" if content else marker
 
 
+_BROWSE_DUMPS = ("markdown", "text", "html", "links", "original", "assets", "cookies")
+
+# obscura emits hrefs exactly as the page authored them, so `[Login](/login)` reaches
+# the model with nothing to resolve against. Rewriting them against the fetched URL is
+# what makes the link list actionable instead of decorative. In-page anchors are left
+# alone on purpose — they carry a "same page" signal that a full URL destroys.
+_MD_LINK = re.compile(r"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
+
+
+def _absolutize(markdown: str, base_url: str) -> str:
+    def _fix(match: re.Match[str]) -> str:
+        label, target, title = match.group(1), match.group(2), match.group(3)
+        if target.startswith("#") or "://" in target or target.startswith(("mailto:", "tel:", "data:")):
+            return match.group(0)
+        return f"{label}({urllib.parse.urljoin(base_url, target)}{title})"
+
+    return _MD_LINK.sub(_fix, markdown)
+
+
 def browse(
     url: str,
     dump: str | None = "markdown",
+    screenshot: str | None = None,
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
@@ -334,11 +356,19 @@ def browse(
     if binary is None:
         return "ERROR: obscura is not installed (expected on PATH)"
     dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
-    if dump not in ("markdown", "text", "html", "links"):
-        return "ERROR: dump must be one of markdown, text, html, links"
+    if dump not in _BROWSE_DUMPS:
+        return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"
     process_timeout = int(context.fetch_timeout_s)
     obscura_timeout = max(1, process_timeout - 1)
     argv = [binary, "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    shot_path: Path | None = None
+    screenshot = text_or_default(screenshot, "").strip()
+    if screenshot:
+        shot_path = context.resolve_path(screenshot)
+        if shot_path.suffix.lower() != ".png":
+            return "ERROR: screenshot path must end in .png"
+        shot_path.parent.mkdir(parents=True, exist_ok=True)
+        argv += ["--screenshot", str(shot_path)]
     if _is_private_ip_literal(url):
         argv.append("--allow-private-network")
     argv.append(url)
@@ -363,6 +393,20 @@ def browse(
     stderr = raw_err.decode("utf-8", errors="replace").strip()
     if code != 0:
         return f"ERROR: obscura exited {code}: {stderr[-300:] or stdout[-300:]}"
+    if shot_path is not None:
+        # obscura's --screenshot short-circuits the dump: it writes the PNG and emits
+        # nothing on stdout, and -o writes no file either (measured on obscura 0.2.0).
+        # Say so, rather than returning a bare path and letting the caller read the
+        # missing page text as "this page is empty".
+        if not shot_path.exists():
+            return f"ERROR: obscura exited 0 but wrote no screenshot at {shot_path}"
+        return (
+            f"SCREENSHOT path={shot_path} size={shot_path.stat().st_size} bytes\n"
+            "obscura returns either a picture or a dump, never both. "
+            "Call browse again without screenshot to read this page's content."
+        )
+    if dump == "markdown":
+        stdout = _absolutize(stdout, url)
     if out_truncated:
         stdout = _fit_truncation_marker(stdout, context.max_tool_result_bytes)
     return stdout or "(empty page)"
@@ -417,8 +461,20 @@ def tools() -> tuple[Tool, ...]:
             load_description("browse"),
             browse,
             {
-                "url": {"type": "string"},
-                "dump": {"type": "string", "default": "markdown"},
+                "url": {"type": "string", "description": "Page to read."},
+                "dump": {
+                    "type": "string",
+                    "enum": list(_BROWSE_DUMPS),
+                    "default": "markdown",
+                    "description": (
+                        "What to return: readable markdown, plain text, rendered HTML, the link "
+                        "list, the raw response body, the sub-resource URLs, or the cookie jar."
+                    ),
+                },
+                "screenshot": {
+                    "type": "string",
+                    "description": "Optional .png path to save a picture of the settled page.",
+                },
             },
             required=("url",),
         ),

@@ -8,7 +8,8 @@ import os
 import shutil
 import stat
 import subprocess
-import time
+import threading
+from functools import lru_cache
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -318,14 +319,20 @@ def fs_read(
     if total == 0:
         return f"{target} is empty (hash {content_hash})"
 
-    start = max(1, int_or_default(start_line, 1, minimum=1))
-    end = min(total, int_or_default(end_line, min(total, context.max_read_lines), minimum=1))
+    # Resolve the window the way forge's resolve_range does: a reversed range is
+    # swapped, an oversized one is clamped to max_read_lines, and an omitted
+    # end_line means "one page starting at start_line" — NOT "one page starting at
+    # line 1", which used to make the tool's own
+    # `read ... with start_line=N to continue` hint fail with an invalid-range error.
+    raw_start = int_or_default(start_line, 1, minimum=1)
+    raw_end = int_or_default(end_line, 0, minimum=1)
+    if raw_end and raw_end < raw_start:
+        raw_start, raw_end = raw_end, raw_start
+    start = max(1, raw_start)
     if start > total:
         return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash})"
-    if end < start:
-        return f"ERROR: invalid line range {start}-{end}"
-    if end - start + 1 > context.max_read_lines:
-        return f"ERROR: range exceeds maximum of {context.max_read_lines} lines"
+    page_end = start + context.max_read_lines - 1
+    end = min(total, page_end, raw_end or page_end)
 
     selected = all_lines[start - 1:end]
     # .jsonl rows are single-line records that routinely exceed the normal cap;
@@ -600,14 +607,33 @@ def _rg_env() -> dict[str, str]:
     return env
 
 
+@lru_cache(maxsize=1)
+def _rg_types(rg: str) -> frozenset[str]:
+    """Names rg accepts for `--type` (`rust`, `py`, `js`, ...), from `rg --type-list`."""
+    try:
+        proc = subprocess.run(
+            [rg, "--type-list"], capture_output=True, text=True, timeout=10, env=_rg_env()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    return frozenset(
+        line.split(":", 1)[0].strip() for line in proc.stdout.splitlines() if ":" in line
+    )
+
+
 def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int | None, str, bool]:
     """Run rg and collect at most *want* output lines, then stop it.
 
     Returns (lines, returncode, stderr, timed_out). returncode is None when rg
     was stopped early because enough lines were already gathered — the caller
     treats that as a successful match. Streaming with an early stop keeps memory
-    bounded (a pattern matching millions of lines never buffers them all) and,
-    with the wall-clock deadline, guarantees the turn cannot hang."""
+    bounded (a pattern matching millions of lines never buffers them all).
+
+    The deadline is enforced by a watchdog that kills rg, NOT by a check inside
+    the read loop: `for line in proc.stdout` blocks until rg emits something, so a
+    loop-side check can only fire while output is already flowing — exactly the
+    case that does not need a timeout. A long scan that matches nothing emits no
+    lines at all, and used to run unbounded."""
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -617,8 +643,15 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
         return [], 2, str(exc), False
     lines: list[str] = []
     stopped_early = False
-    timed_out = False
-    deadline = time.monotonic() + timeout
+    expired = threading.Event()
+
+    def _expire() -> None:
+        expired.set()
+        proc.kill()
+
+    watchdog = threading.Timer(timeout, _expire)
+    watchdog.daemon = True
+    watchdog.start()
     assert proc.stdout is not None
     try:
         for line in proc.stdout:
@@ -626,17 +659,16 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
             if len(lines) >= want:
                 stopped_early = True
                 break
-            if time.monotonic() > deadline:
-                timed_out = True
-                break
     finally:
-        if stopped_early or timed_out:
+        watchdog.cancel()
+        if stopped_early:
             proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+    timed_out = expired.is_set()
     stderr = proc.stderr.read() if proc.stderr is not None else ""
     for stream in (proc.stdout, proc.stderr):
         if stream is not None:
@@ -713,7 +745,16 @@ def fs_search(
     if glob:
         argv += ["--glob", str(glob)]
     if file_type:
-        argv += ["--glob", f"*.{str(file_type).lstrip('.')}"]
+        # Prefer rg's own type table so `type=rust` matches *.rs (and `py` also
+        # matches .pyi/.pyw), matching forge's `--type` behaviour. A bare extension
+        # rg has no type for ("gdshader") still works via an extension glob —
+        # previously EVERY value became `*.<value>`, so `type=rust` silently matched
+        # nothing at all.
+        name = str(file_type).strip().lstrip(".")
+        if name in _rg_types(rg):
+            argv += ["--type", name]
+        else:
+            argv += ["--glob", f"*.{name}"]
     argv += ["--regexp", pattern, "--", str(root)]
 
     lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
@@ -794,12 +835,22 @@ def tools() -> tuple[Tool, ...]:
                 "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
                 "glob": {"type": "string", "description": "Optional glob filter such as *.py or **/*.tsx."},
                 "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: matching lines, paths only, or per-file counts."},
-                "-B": {"type": "integer", "description": "Lines before each match when output_mode is content."},
-                "-A": {"type": "integer", "description": "Lines after each match when output_mode is content."},
-                "-C": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
-                "-n": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
-                "-i": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
-                "type": {"type": "string", "description": "File type or extension without dot, e.g. py or rs."},
+                # Both spellings are declared because the handler has always accepted
+                # both and the description teaches the readable ones: with only the
+                # rg-style keys declared under additionalProperties:false, a model
+                # following the prose emitted arguments its own schema rejected.
+                "-B": {"type": "integer", "description": "Lines before each match when output_mode is content (alias: before_context)."},
+                "before_context": {"type": "integer", "description": "Lines before each match when output_mode is content."},
+                "-A": {"type": "integer", "description": "Lines after each match when output_mode is content (alias: after_context)."},
+                "after_context": {"type": "integer", "description": "Lines after each match when output_mode is content."},
+                "-C": {"type": "integer", "description": "Lines before and after each match when output_mode is content (alias: context_lines)."},
+                "context_lines": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
+                "-n": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output (alias: show_line_numbers)."},
+                "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
+                "-i": {"type": "boolean", "default": False, "description": "Match without case sensitivity (alias: case_insensitive)."},
+                "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
+                "type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs (alias: file_type)."},
+                "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs."},
                 "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset."},
                 "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
