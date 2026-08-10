@@ -50,6 +50,7 @@ from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
+from .tool_binaries import resolve_binary
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
@@ -2326,10 +2327,13 @@ def _warn_missing_binaries() -> None:
     for name, why in _EXPECTED_BINARIES:
         if name in _warned_binaries:
             continue
-        if shutil.which(name) is None:
+        binary = resolve_binary(name) if name == "rg" else shutil.which(name)
+        if binary is None:
             _warned_binaries.add(name)
+            expected_location = "in js/tools or PATH" if name == "rg" else "on PATH"
             print(
-                f"{C.ORANGE}warning: {name} not found on PATH; {why} — run `just install` to provision it{C.RESET}",
+                f"{C.ORANGE}warning: {name} not found {expected_location}; {why} — "
+                f"run `just install` to provision it{C.RESET}",
                 file=sys.stderr,
             )
 

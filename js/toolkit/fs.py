@@ -15,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from collections.abc import Iterable
 
+from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .sanitize import int_or_default
 from .wiki.helpers import run
@@ -591,7 +592,7 @@ def _iter_files(root: Path) -> Iterable[Path]:
                 yield candidate
 
 
-_RG_MISSING = "ERROR: rg (ripgrep) not found on PATH; run `just install` to provision it."
+_RG_MISSING = "ERROR: rg (ripgrep) not found in js/tools or PATH; run `just install` to provision it."
 _RG_TIMEOUT_S = 120
 _AST_GREP_BINARY = "/home/ronald_rump/.local/bin/ast-grep"
 _AST_GREP_TIMEOUT_S = 120
@@ -604,7 +605,7 @@ _AST_GREP_LANGUAGES = (
 
 
 def _rg_binary() -> str | None:
-    return shutil.which("rg")
+    return resolve_binary("rg")
 
 
 def _rg_env() -> dict[str, str]:

@@ -1,4 +1,6 @@
 Search local text files with regular expressions, backed by ripgrep (`rg`).
+It uses `js/tools/rg` after `just install`, with PATH as the documented fallback
+when the managed download has not been run.
 
 This is the default tool for exact search tasks.
 {{#if shell}}

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Pinned tool-binary installer.** `just install` now downloads checksummed
+  ripgrep and ast-grep release assets into ignored `js/tools`, copies the
+  owner's checksum-pinned manual obscura binary, and reports that upstream
+  aria2 has no Linux x86_64 executable instead of building it from source.
+  `fs_search` and `browse` prefer these absolute managed paths, with PATH used
+  only as the documented pre-install fallback.
 - **Lazy MCP host integration.** Added configured stdio and streamable-HTTP servers, per-agent server/tool policy, canonical discovery/resource/prompt controls, namespaced remote tools, turn-scoped schema loading and refresh, reconnect-safe transport handling, credential redaction, and fully offline end-to-end and prompt-budget coverage.
 - **Persistent interactive terminal tools.** Added `terminal_session` for starting and driving isolated real PTYs across tool calls and `terminal_snapshot` for rendering their current screen as a PNG when layout, colour, wrapping, or clipping matters.
 - **Pixel-level browser probing.** Added `browser_probe` to serve local HTML or open HTTP(S) pages in Playwright Chromium, interact with visible controls, capture page or canvas frames, and report WebGL, visual-change, console, and page-error measurements.

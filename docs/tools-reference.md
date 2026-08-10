@@ -229,7 +229,8 @@ Parameters:
 - `dump`: `markdown`, `text`, `html`, or `links`; default `markdown`.
 
 Private and localhost URLs are allowed automatically. This tool cannot render
-WebGL or take screenshots. It requires the `obscura` binary on `PATH`.
+WebGL or take screenshots. `just install` copies the owner's verified manual
+`obscura` binary into `js/tools`; before that, the tool falls back to PATH.
 
 ## Interactive And Visual Tools
 

@@ -384,9 +384,11 @@ zsh-first, the tool is zsh-first:
 export SHELL=/usr/bin/zsh
 ```
 
-The harness does not itself require `rg`, `fzf`, or `bat`. Current behavior:
+Current behavior:
 
-- `fs_search` is implemented in Python with `re`.
+- `fs_search` invokes the pinned `js/tools/rg` installed by `just install`,
+  falling back to PATH only when the managed binary is absent.
+- `browse` likewise prefers the verified manual `js/tools/obscura` copy.
 - `shell` can run `rg`, `fzf`, `bat`, or anything else on PATH when installed.
 
 If a future port wants closer Forge shell ergonomics, preserve `$SHELL` first
