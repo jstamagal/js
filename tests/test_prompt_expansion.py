@@ -301,7 +301,17 @@ def test_fence_indented_up_to_three_spaces_still_runs():
     """Markdown allows a fence up to three spaces in; a list-nested fence must work."""
     actual = expand_prompt("  ```!sh\necho INDENTED\n```", allow_code=True)
 
-    assert actual.strip() == "INDENTED"
+    assert actual == "  INDENTED"
+
+
+def test_an_indented_fence_keeps_its_place_in_the_surrounding_list():
+    """Stripping the indent pulls the expansion out of the list it was written in,
+    which changes what the assembled prompt means."""
+    text = "- step one\n  ```!sh\necho STEP_TWO\n```\n- step three"
+
+    actual = expand_prompt(text, allow_code=True)
+
+    assert actual == "- step one\n  STEP_TWO\n- step three"
 
 
 def test_fence_indented_four_spaces_is_a_code_block_not_a_fence():
