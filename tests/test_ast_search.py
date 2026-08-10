@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from js.toolkit import ToolContext
@@ -12,8 +10,28 @@ from js.toolkit.fs import ast_search, undo
 
 
 requires_ast_grep = pytest.mark.skipif(
-    not Path(fs._AST_GREP_BINARY).is_file(), reason="ast-grep 0.45.1 not installed"
+    fs._ast_grep_binary() is None, reason="ast-grep 0.45.1 not installed"
 )
+
+
+def test_ast_search_resolves_the_managed_binary_and_reports_a_missing_one(tmp_path, monkeypatch):
+    """No absolute path may be baked in: js/tools first, PATH as the fallback."""
+    (tmp_path / "a.py").write_text("f(1)\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+    monkeypatch.setattr(fs, "_ast_grep_binary", lambda: None)
+
+    assert ast_search("f($A)", path=".", lang="Python", context=context) == fs._AST_GREP_MISSING
+
+    seen: list[str] = []
+    monkeypatch.setattr(fs, "_ast_grep_binary", lambda: "/managed/ast-grep")
+    monkeypatch.setattr(
+        fs,
+        "_rg_stream",
+        lambda argv, *a, **k: (seen.append(argv[0]), ([], 1, "", False))[1],
+    )
+    ast_search("f($A)", path=".", lang="Python", context=context)
+
+    assert seen == ["/managed/ast-grep"]
 
 
 @requires_ast_grep

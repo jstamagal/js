@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -313,3 +314,55 @@ def test_shell_uses_configured_environment_allowlist_and_explains_failure(
     assert "allowed=" in result
     assert "FORGECODE_TOKEN" in result
     assert "limits.shell_env_allow" in result
+
+
+def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):
+    page = tmp_path / "row.html"
+    page.write_text(
+        '<a class="row" data-href="/track?id=42" href="/articles/42">Read more</a>',
+        encoding="utf-8",
+    )
+    context = ToolContext(cwd=tmp_path)
+
+    assert "/articles/42" in process_net.fetch(page.as_uri(), context=context)
+    assert "/track?id=42" not in process_net.fetch(page.as_uri(), context=context)
+
+
+def test_file_url_refuses_a_non_regular_file_instead_of_reading_forever(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    context = ToolContext(cwd=tmp_path)
+
+    result = process_net.fetch(f"file://{fifo}", context=context)
+
+    assert result.startswith("ERROR: OSError")
+    assert "not a regular file" in result
+
+
+def test_file_url_read_is_bounded_by_the_hard_ceiling(tmp_path, monkeypatch):
+    source = tmp_path / "big.txt"
+    source.write_text("x" * 5000, encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    context = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
+    seen: list[int | None] = []
+    real = process_net._read_regular_bytes
+    monkeypatch.setattr(
+        process_net,
+        "_read_regular_bytes",
+        lambda path, limit=None: (seen.append(limit), real(path, limit))[1],
+    )
+
+    process_net.fetch(source.as_uri(), context=context)
+
+    assert seen == [process_net._DOWNLOAD_MAX_BYTES + 1]
+
+
+def test_file_url_refuses_a_file_past_the_hard_read_ceiling(tmp_path, monkeypatch):
+    source = tmp_path / "huge.txt"
+    source.write_text("y" * 500, encoding="utf-8")
+    monkeypatch.setattr(process_net, "_DOWNLOAD_MAX_BYTES", 100)
+    context = ToolContext(cwd=tmp_path)
+
+    result = process_net.fetch(source.as_uri(), context=context)
+
+    assert result == "ERROR: file exceeds 100 byte read limit; use save= or fs_read"

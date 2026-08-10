@@ -310,6 +310,8 @@ def test_browse_sets_obscura_timeout_below_process_backstop(monkeypatch: pytest.
     assert captured == {
         "argv": [
             "/test/bin/obscura",
+            "--user-agent",
+            search._BROWSE_USER_AGENT,
             "fetch",
             "--dump",
             "markdown",
@@ -342,7 +344,8 @@ def test_browse_truncation_marker_fits_result_cap(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.parametrize("dump", [" markdown ", "MARKDOWN", " Markdown\n"])
 def test_browse_normalizes_dump(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dump: str) -> None:
     def run(argv: list[str], **_kwargs: object) -> CappedProcessResult:
-        output = b"normalized markdown" if argv[3] == "markdown" else b"unnormalized dump"
+        dumped = argv[argv.index("--dump") + 1]
+        output = b"normalized markdown" if dumped == "markdown" else b"unnormalized dump"
         return CappedProcessResult(0, output, b"")
 
     _browse_stub(monkeypatch, run)

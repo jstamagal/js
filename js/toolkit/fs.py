@@ -699,7 +699,9 @@ def _iter_files(root: Path) -> Iterable[Path]:
 
 _RG_MISSING = "ERROR: rg (ripgrep) not found in js/tools or PATH; run `just install` to provision it."
 _RG_TIMEOUT_S = 120
-_AST_GREP_BINARY = "/home/ronald_rump/.local/bin/ast-grep"
+_AST_GREP_MISSING = (
+    "ERROR: ast-grep not found in js/tools or PATH; run `just install` to provision it."
+)
 _AST_GREP_TIMEOUT_S = 120
 _AST_GREP_LANGUAGES = (
     "Bash", "C", "Cpp", "CSharp", "Css", "Dart", "Elixir", "Go",
@@ -711,6 +713,10 @@ _AST_GREP_LANGUAGES = (
 
 def _rg_binary() -> str | None:
     return resolve_binary("rg")
+
+
+def _ast_grep_binary() -> str | None:
+    return resolve_binary("ast-grep")
 
 
 def _rg_env() -> dict[str, str]:
@@ -935,6 +941,7 @@ def _ast_language(raw: str | None) -> str | None:
 
 
 def _ast_argv(
+    binary: str,
     pattern: str,
     root: Path,
     lang: str | None,
@@ -942,7 +949,7 @@ def _ast_argv(
     stdin: bool = False,
 ) -> list[str]:
     argv = [
-        _AST_GREP_BINARY,
+        binary,
         "run",
         "--pattern",
         pattern,
@@ -962,6 +969,7 @@ def _ast_argv(
 
 
 def _ast_records(
+    binary: str,
     pattern: str,
     root: Path,
     lang: str | None,
@@ -969,7 +977,7 @@ def _ast_records(
     want: int,
 ) -> tuple[list[dict], int | None, str, bool, str | None, bool]:
     lines, rc, stderr, timed_out = _rg_stream(
-        _ast_argv(pattern, root, lang, rewrite), want, _AST_GREP_TIMEOUT_S
+        _ast_argv(binary, pattern, root, lang, rewrite), want, _AST_GREP_TIMEOUT_S
     )
 
     used_stdin = False
@@ -979,7 +987,7 @@ def _ast_records(
         except (OSError, UnicodeDecodeError) as exc:
             return [], rc, stderr, timed_out, str(exc), used_stdin
         lines, rc, stderr, timed_out = _rg_stream(
-            _ast_argv(pattern, root, lang, rewrite, stdin=True),
+            _ast_argv(binary, pattern, root, lang, rewrite, stdin=True),
             want,
             _AST_GREP_TIMEOUT_S,
             input_text=source,
@@ -1128,8 +1136,12 @@ def ast_search(
     if not apply and cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
+    binary = _ast_grep_binary()
+    if binary is None:
+        return _AST_GREP_MISSING
+
     records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
-        pattern, root, language, rewrite, limit + 1
+        binary, pattern, root, language, rewrite, limit + 1
     )
     if timed_out:
         return f"ERROR: search timed out after {_AST_GREP_TIMEOUT_S}s"
@@ -1179,7 +1191,7 @@ def ast_search(
                 apply_stderr = str(exc)
                 break
     else:
-        argv = _ast_argv(pattern, root, language, rewrite)
+        argv = _ast_argv(binary, pattern, root, language, rewrite)
         argv.remove("--json=stream")
         argv.insert(-2, "--update-all")
         rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
