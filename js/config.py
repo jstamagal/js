@@ -138,6 +138,7 @@ class Config:
     inline_code_timeout_s: int = _settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     browse_timeout_s: int = _settings.DEFAULT_BROWSE_TIMEOUT_S
     download_timeout_s: int = _settings.DEFAULT_DOWNLOAD_TIMEOUT_S
+    max_download_bytes: int = _settings.DEFAULT_MAX_DOWNLOAD_BYTES
     provider_headers: dict[str, str] = field(default_factory=dict)
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
@@ -389,6 +390,7 @@ def from_env(
     )
     browse_timeout_s = _numeric_setting(js_root_settings, ("limits", "browse_timeout_s"), _settings.DEFAULT_BROWSE_TIMEOUT_S)
     download_timeout_s = _numeric_setting(js_root_settings, ("limits", "download_timeout_s"), _settings.DEFAULT_DOWNLOAD_TIMEOUT_S)
+    max_download_bytes = _numeric_setting(js_root_settings, ("limits", "max_download_bytes"), _settings.DEFAULT_MAX_DOWNLOAD_BYTES)
     inline_code_timeout_s = _numeric_setting(js_root_settings, ("limits", "inline_code_timeout_s"), _settings.DEFAULT_INLINE_CODE_TIMEOUT_S)
     max_read_lines = _numeric_setting(js_root_settings, ("limits", "max_read_lines"), _settings.DEFAULT_MAX_READ_LINES)
     max_line_chars = _numeric_setting(js_root_settings, ("limits", "max_line_chars"), _settings.DEFAULT_MAX_LINE_CHARS)
@@ -455,6 +457,7 @@ def from_env(
         shell_env_allow=shell_env_allow,
         browse_timeout_s=browse_timeout_s,
         download_timeout_s=download_timeout_s,
+        max_download_bytes=max_download_bytes,
         inline_code_timeout_s=inline_code_timeout_s,
         debug_log=debug,
         trace=trace,

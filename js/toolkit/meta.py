@@ -118,6 +118,7 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         fetch_timeout_s=parent.fetch_timeout_s,
         browse_timeout_s=getattr(parent, "browse_timeout_s", 60),
         download_timeout_s=getattr(parent, "download_timeout_s", 300),
+        max_download_bytes=getattr(parent, "max_download_bytes", 0),
         task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
         # A subagent gets its own kernel (kernel_session stays None here) but
         # inherits how loudly it renders — the operator watching one terminal

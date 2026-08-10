@@ -165,7 +165,57 @@ def _html_to_text(raw: str, base_url: str) -> str:
     return "\n".join(compact).strip()
 
 
+# What may land in RAM for an INLINE result. A saved download is a different
+# question entirely: it streams to disk and is bounded by limits.max_download_bytes,
+# which defaults to unlimited. A 6GB ISO is a normal thing to fetch(save=...).
 _DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024
+_STREAM_CHUNK = 1024 * 1024
+
+
+def _download_limit(context: ToolContext) -> int | None:
+    """The configured save= ceiling, or None for unlimited (the default)."""
+    limit = int(getattr(context, "max_download_bytes", 0) or 0)
+    return limit if limit > 0 else None
+
+
+def _stream_download(
+    read_chunk: Any,
+    target: Path,
+    content_type: str,
+    context: ToolContext,
+    limit: int | None,
+) -> str:
+    """Move bytes to disk without ever holding the whole transfer in memory.
+
+    Writes to a hidden sibling and publishes with os.replace, so an interrupted
+    or over-limit transfer never leaves a half-file at the name the caller asked
+    for. This is what lets max_download_bytes default to unlimited.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.parent / f".{target.name}.js-partial"
+    written = 0
+    try:
+        with partial.open("wb") as out:
+            while True:
+                chunk = read_chunk(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if limit is not None and written > limit:
+                    raise DownloadError(f"response exceeds {limit} byte download limit")
+                out.write(chunk)
+    except DownloadError as exc:
+        partial.unlink(missing_ok=True)
+        return f"ERROR: {exc}"
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        return f"ERROR: {type(exc).__name__}: {exc}"
+    context.snapshot(target)
+    os.replace(partial, target)
+    return (
+        f"SAVED_RESPONSE path={target} size={written} bytes "
+        f"content-type={content_type or 'unknown'}"
+    )
 _DEFAULT_USER_AGENT = "js-agent/0.1"
 _TEXT_MEDIA_TYPES = {
     "application/csv",
@@ -444,13 +494,15 @@ def _fetch_file_url(
     try:
         size = path.stat().st_size
         if save_target is not None:
-            if size > _DOWNLOAD_MAX_BYTES:
-                return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
-            data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
-            if len(data) > _DOWNLOAD_MAX_BYTES:
-                return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
-            content_type = _guess_file_content_type(path, data)
-            return _write_download(save_target, data, content_type, context)
+            # Copying a local file to another path is a transfer, not a read: it
+            # streams, so the size of the thing is the caller's business. The
+            # head read doubles as the non-regular-file guard.
+            head = _read_regular_bytes(path, 4096)
+            content_type = _guess_file_content_type(path, head)
+            with path.open("rb") as source:
+                return _stream_download(
+                    source.read, save_target, content_type, context, _download_limit(context)
+                )
 
         # Read the whole file, not just cap+1: an oversized text response is
         # spilled in full below, and the spill is only honest if the tail was
@@ -515,7 +567,7 @@ def fetch(
                 save_target,
                 timeout_s=context.download_timeout_s,
                 headers=normalized_headers,
-                max_bytes=_DOWNLOAD_MAX_BYTES,
+                max_bytes=_download_limit(context),
                 before_publish=lambda: context.snapshot(save_target),
             )
             remaining = context.download_timeout_s - (time.monotonic() - download_started)
@@ -542,43 +594,41 @@ def fetch(
             headers=normalized_headers,
             method=method_name,
         )
-        limit = _DOWNLOAD_MAX_BYTES if save_target else context.max_tool_result_bytes
-        # A download is bounded by _DOWNLOAD_MAX_BYTES, not by page-load latency;
-        # sharing fetch_timeout_s silently demanded ~2 MB/s to move anything large.
+        limit = context.max_tool_result_bytes
+        # A download is bounded by size and by download_timeout_s, not by page-load
+        # latency; sharing fetch_timeout_s silently demanded ~2 MB/s to move anything large.
         timeout_s = context.download_timeout_s if save_target else context.fetch_timeout_s
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             content_type = _header_value(resp.headers, "content-type")
             if save_target is not None:
-                payload, truncated = _read_response(resp, limit)
-            else:
-                response_length = _content_length(resp.headers)
-                transfer_from_headers = aria2c is not None and (
-                    (bool(content_type) and not _is_text_response(content_type, b""))
-                    or (
-                        response_length is not None
-                        and response_length > min(limit, _DOWNLOAD_MAX_BYTES)
-                    )
+                # Stream: a save must not be bounded by what fits in memory.
+                return _stream_download(
+                    resp.read, save_target, content_type, context, _download_limit(context)
                 )
-                if transfer_from_headers:
-                    payload = b""
-                    truncated = True
-                elif aria2c is not None:
-                    payload, truncated = _read_response(
-                        resp, min(limit, _DOWNLOAD_MAX_BYTES)
-                    )
-                else:
-                    payload, too_large = _read_response(resp, _DOWNLOAD_MAX_BYTES)
-                    truncated = len(payload) > limit
-                    is_transfer = truncated or not _is_text_response(content_type, payload)
-                    if is_transfer:
-                        warn_urllib_fallback("fetch() response transfer")
-                    if too_large and is_transfer:
-                        return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
+            response_length = _content_length(resp.headers)
+            transfer_from_headers = aria2c is not None and (
+                (bool(content_type) and not _is_text_response(content_type, b""))
+                or (
+                    response_length is not None
+                    and response_length > min(limit, _DOWNLOAD_MAX_BYTES)
+                )
+            )
+            if transfer_from_headers:
+                payload = b""
+                truncated = True
+            elif aria2c is not None:
+                payload, truncated = _read_response(
+                    resp, min(limit, _DOWNLOAD_MAX_BYTES)
+                )
+            else:
+                payload, too_large = _read_response(resp, _DOWNLOAD_MAX_BYTES)
+                truncated = len(payload) > limit
+                is_transfer = truncated or not _is_text_response(content_type, payload)
+                if is_transfer:
+                    warn_urllib_fallback("fetch() response transfer")
+                if too_large and is_transfer:
+                    return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
             response_url = str(getattr(resp, "geturl", lambda: url)() or url)
-        if truncated and save_target is not None:
-            return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
-        if save_target is not None:
-            return _write_download(save_target, payload, content_type, context)
         if aria2c is not None and (
             transfer_from_headers
             or truncated

@@ -221,6 +221,7 @@ class ToolContext:
     fetch_timeout_s: int = 15
     browse_timeout_s: int = 60
     download_timeout_s: int = 300
+    max_download_bytes: int = 0           # 0 = unlimited; save= streams to disk
     task_max_depth: int = 2
     subagent_max_workers: int = 8
     vision_enabled: bool = False

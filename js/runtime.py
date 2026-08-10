@@ -1483,6 +1483,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
     active_context.browse_timeout_s = getattr(cfg, "browse_timeout_s", active_context.browse_timeout_s)
     active_context.download_timeout_s = getattr(cfg, "download_timeout_s", active_context.download_timeout_s)
+    active_context.max_download_bytes = getattr(cfg, "max_download_bytes", active_context.max_download_bytes)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
     active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
     active_context.max_tool_result_inline_bytes = getattr(cfg, "max_tool_result_inline_bytes", active_context.max_tool_result_inline_bytes)
