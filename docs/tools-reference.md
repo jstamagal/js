@@ -234,8 +234,11 @@ Parameters:
 - `dump`: `markdown`, `text`, `html`, or `links`; default `markdown`.
 
 Private and localhost URLs are allowed automatically. This tool cannot render
-WebGL or take screenshots. `just install` copies the owner's verified manual
-`obscura` binary into `js/tools`; before that, the tool falls back to PATH.
+WebGL or take screenshots. `just install` downloads the pinned `obscura`
+release asset into `js/tools` — the stealth build, which carries TLS
+impersonation alongside the browser fingerprint — together with the
+`obscura-worker` binary it spawns. Before that install, the tool falls back to
+PATH.
 
 ## Interactive And Visual Tools
 

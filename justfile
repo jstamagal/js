@@ -88,8 +88,7 @@ install:
     esac
 
 # Download js's pinned, checksummed subprocess binaries into js/tools. The
-# system aria2c performs release-asset transfers; obscura is copied from the
-# owner's manual local binary.
+# system aria2c performs the release-asset transfers.
 install-tool-binaries:
     uv run python -m js.tool_binaries
 
