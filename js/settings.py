@@ -46,6 +46,8 @@ DEFAULT_MAX_READ_BYTES = 256 * 1024
 DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
 DEFAULT_TASK_MAX_DEPTH = 2
 DEFAULT_SUBAGENT_MAX_WORKERS = 8
+DEFAULT_KERNEL_VERBOSITY = "normal"
+DEFAULT_KERNEL_RENDER_MAX_LINES = 24
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
 DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
@@ -176,6 +178,18 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum recursive task/subagent depth."),
     SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,
                 "Maximum concurrent subagent workers per task call; minimum 1."),
+    # --- kernel ---
+    SettingSpec("kernel.verbosity", "str", DEFAULT_KERNEL_VERBOSITY,
+                "How much of each kernel/toolbox call is rendered to your terminal: "
+                "quiet (errors and interrupts only), normal (code, output, timing, "
+                "namespace), verbose (stdout/stderr/display split out, plus kernel "
+                "lifecycle and toolbox activity). Affects only what you see; the model "
+                "always receives the full result.",
+                env="JS_KERNEL_VERBOSITY"),
+    SettingSpec("kernel.render_max_lines", "int", DEFAULT_KERNEL_RENDER_MAX_LINES,
+                "Line cap per section of that terminal render, so a 4000-line cell "
+                "cannot scroll the screen away. The hidden count is always shown, and "
+                "the model still gets the untrimmed output."),
     # --- runtime ---
     SettingSpec("runtime.debug", "bool", False,
                 "Append per-event records to state/<agent>/debug.log.",
@@ -288,6 +302,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "model",
     "provider",
     "limits",
+    "kernel",
     "runtime",
     "compact",
     "subagents",
@@ -628,6 +643,10 @@ _SECTION_INTRO: dict[str, list[str]] = {
         "# Leave unset to let ai-python route model ids natively.",
     ],
     "limits": ["# Per-call / per-turn caps."],
+    "kernel": [
+        "# How the persistent-kernel tools render to YOUR terminal.",
+        "# The model always receives the full result; these only change what you see.",
+    ],
     "runtime": ["# Live-runtime toggles."],
     "compact": ["# Cache-first context compaction knobs."],
     "subagents": ["# Subagent model-selection policy."],

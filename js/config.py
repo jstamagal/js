@@ -158,6 +158,8 @@ class Config:
     max_tool_results_per_turn_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES
     task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
     subagent_max_workers: int = _settings.DEFAULT_SUBAGENT_MAX_WORKERS
+    kernel_verbosity: str = _settings.DEFAULT_KERNEL_VERBOSITY
+    kernel_render_max_lines: int = _settings.DEFAULT_KERNEL_RENDER_MAX_LINES
     allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
@@ -382,6 +384,10 @@ def from_env(
     max_tool_results_per_turn_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_results_per_turn_bytes"), _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES)
     task_max_depth = _numeric_setting(js_root_settings, ("limits", "task_max_depth"), _settings.DEFAULT_TASK_MAX_DEPTH)
     subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
+    kernel_render_max_lines = _numeric_setting(js_root_settings, ("kernel", "render_max_lines"), _settings.DEFAULT_KERNEL_RENDER_MAX_LINES)
+    kernel_verbosity = str(_settings.get_dotted(js_root_settings, ("kernel", "verbosity"), _settings.DEFAULT_KERNEL_VERBOSITY) or _settings.DEFAULT_KERNEL_VERBOSITY).strip().lower()
+    if kernel_verbosity not in ("quiet", "normal", "verbose"):
+        kernel_verbosity = _settings.DEFAULT_KERNEL_VERBOSITY
     runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
     trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
     debug_autolog = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug_autolog"), True))
@@ -452,6 +458,8 @@ def from_env(
         max_tool_results_per_turn_bytes=max_tool_results_per_turn_bytes,
         task_max_depth=task_max_depth,
         subagent_max_workers=subagent_max_workers,
+        kernel_verbosity=kernel_verbosity,
+        kernel_render_max_lines=kernel_render_max_lines,
         allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
