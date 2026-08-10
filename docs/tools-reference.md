@@ -109,8 +109,9 @@ Skips common dependency/cache dirs and binary files.
 
 ### `ast_search`
 
-Structural search and optional rewrite over parsed source code, backed by the
-absolute ast-grep 0.45.1 binary path.
+Structural search and optional rewrite over parsed source code, backed by
+ast-grep 0.45.1 — the managed `js/tools/ast-grep` installed by `just install`,
+falling back to `ast-grep` on PATH before that.
 
 Parameters:
 
@@ -160,8 +161,9 @@ Parameters:
 - `save`: path to write the response body to instead of returning it inline
 
 HTML is converted to text unless `raw=true`. Inline output is capped by
-`max_tool_result_bytes`; downloads are capped at 32 MiB and return
-`SAVED_RESPONSE path=... size=...`.
+`max_tool_result_bytes`. A download streams to disk and returns
+`SAVED_RESPONSE path=... size=...`; it is bounded by
+`limits.max_download_bytes`, which defaults to `0`, meaning unlimited.
 
 Saved GET responses, binary responses, and bodies over the inline result budget
 are transferred through the system aria2c with segmentation, retry, resume,

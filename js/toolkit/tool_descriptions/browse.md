@@ -36,6 +36,15 @@ Choosing a dump:
 - Pulling a JSON API or downloading a file verbatim: `original`.
 - Auditing what a page loads, or replaying its resources yourself: `assets`.
 
+Status:
+- obscura reports no HTTP status of its own — it renders a 404 page as ordinary
+  content. So browse asks obscura for the status separately and, when it is 400
+  or above, leads the result with
+  `ERROR: HTTP <code> from <url>; the page below is the error response`
+  followed by the page. The body is kept, because an error page is sometimes
+  what you wanted to read. A page whose status could not be learned is returned
+  with no such line.
+
 Limits:
 - No POST, no request headers, no request body. Reads only.
 - WebGL and canvas pixel operations are not supported.

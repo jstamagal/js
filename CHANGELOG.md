@@ -9,9 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **Pinned tool-binary installer.** `just install` now downloads checksummed
-  ripgrep and ast-grep release assets into ignored `js/tools`, copies the
-  owner's checksum-pinned manual obscura binary, and reports the system aria2c
-  used for those release-asset transfers. `fs_search` and `browse` prefer these
+  ripgrep, ast-grep, and obscura release assets into ignored `js/tools`, and
+  reports the system aria2c used for those release-asset transfers. obscura is
+  pinned to the stealth build, which carries TLS impersonation alongside the
+  browser fingerprint, and installs the `obscura-worker` binary it spawns. `fs_search` and `browse` prefer these
   absolute managed paths, with PATH used only as the documented pre-install
   fallback.
 - **aria2c transfer engine.** GET downloads from `fetch`, including saved,
