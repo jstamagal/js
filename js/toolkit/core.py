@@ -120,6 +120,10 @@ class ToolContext:
     task_max_depth: int = 2
     subagent_max_workers: int = 8
     vision_enabled: bool = False
+    model: str = ""                       # model id, for toolbox revision provenance
+    kernel_verbosity: str = "normal"      # quiet | normal | verbose terminal render
+    kernel_render_max_lines: int = 24     # per-section line cap on that render
+    kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
     snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)

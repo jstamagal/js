@@ -1475,6 +1475,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
     active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
+    active_context.model = model
+    active_context.kernel_verbosity = getattr(cfg, "kernel_verbosity", active_context.kernel_verbosity)
+    active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
     active_context.last_incomplete_reason = None

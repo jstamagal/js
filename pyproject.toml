@@ -9,11 +9,20 @@ description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
     "ai[openai,anthropic]",
+    # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
+    # not an extra: one box, one user, and a mode that half-installs is a mode
+    # that fails at the worst moment. the tools still degrade to one clear ERROR
+    # naming the package if an env somehow lacks them.
+    "ipykernel>=6.29",
+    "jupyter_client>=8.0",
     "pexpect>=4.9.0",
     "Pillow>=10.0",
     "prompt_toolkit>=3.0",
     "pyte>=0.8.2",
     "PyYAML>=6.0",
+    # direct import in transcript.py, tui.py, and toolkit/kernel.py. was riding
+    # in transitively on textual; declared now because three modules import it.
+    "rich>=13.0",
     "textual>=0.85",
     "tomli_w>=1.0",
     "platformdirs>=4.0",
