@@ -31,6 +31,10 @@ _DEFAULT_SUBAGENT_MAX_WORKERS = 8
 def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
     assert context is not None
     before = [(todo.content, todo.status) for todo in context.todos.values()]
+    # Validate the whole batch BEFORE touching the list. Rejecting item 3 after
+    # items 1-2 were already applied left the model with an ERROR and a silently
+    # half-updated list.
+    validated: list[tuple[str, str]] = []
     for item in todos:
         content = str(item.get("content", "")).strip()
         status = str(item.get("status", "pending")).strip().lower()
@@ -38,6 +42,8 @@ def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
             return "ERROR: Todo content cannot be empty"
         if status not in _ALLOWED_STATUS:
             return f"ERROR: invalid todo status {status!r}; use pending, in_progress, completed, or cancelled"
+        validated.append((content, status))
+    for content, status in validated:
         if status == "cancelled":
             context.todos.pop(content, None)
         else:

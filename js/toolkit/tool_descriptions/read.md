@@ -47,10 +47,6 @@ When not to use:
 - This tool reads files only; it does not discover unknown paths or search across
   a tree.
 {{/unless}}
-{{#if shell}}
-- When this surface has no file-search tool, use `shell` with `fd` to find files
-  and `rg` to search their contents.
-{{/if}}
 
 Batching:
 - When several specific files may be relevant, request them in the same

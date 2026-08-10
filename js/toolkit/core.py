@@ -147,7 +147,19 @@ class ToolContext:
             return None
         return f"ERROR: You must read the file with the read tool before attempting to {action}."
 
+    def invalidate_search_cache(self) -> None:
+        """Drop memoized fs_search results after anything may have changed the tree.
+
+        The dedup cache is keyed only on the search arguments, so without this a
+        model that edits a file and re-runs the same search gets the PRE-EDIT hit
+        list back, labelled `[deduplicated repeated search]` — it looks like a
+        confirmation that nothing changed. Every mutating fs tool funnels through
+        `snapshot()`; `shell` clears it directly because a command can touch
+        anything."""
+        self.search_cache.clear()
+
     def snapshot(self, path: Path) -> None:
+        self.invalidate_search_cache()
         try:
             if path.is_dir():
                 entries: dict[str, bytes | None] = {}
