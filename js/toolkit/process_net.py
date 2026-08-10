@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
@@ -18,6 +19,13 @@ from typing import Any
 
 from .. import settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
+from ..tool_binaries import (
+    ARIA2_EXECUTABLE,
+    DownloadError,
+    download_with_aria2,
+    resolve_binary,
+    warn_urllib_fallback,
+)
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker
@@ -287,6 +295,71 @@ def _download_target(save: str | None, context: ToolContext) -> Path | None:
     return context.resolve_path(save) if save else None
 
 
+def _content_length(headers: Any) -> int | None:
+    value = _header_value(headers, "content-length")
+    try:
+        length = int(value)
+    except (TypeError, ValueError):
+        return None
+    return length if length >= 0 else None
+
+
+def _aria_eligible(method: str, data: bytes | None, scheme: str) -> bool:
+    # Requests with bodies are API round-trips even if their response is saved.
+    return method == "GET" and data is None and scheme in {"http", "https"}
+
+
+def _saved_content_type(
+    url: str,
+    target: Path,
+    headers: dict[str, str],
+    timeout_s: float,
+) -> str:
+    """Preserve the saved-response media type without making a second byte transfer."""
+    request = urllib.request.Request(url, headers=headers, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            content_type = _header_value(response.headers, "content-type")
+            if content_type:
+                return content_type
+    except Exception:  # noqa: BLE001 -- a HEAD probe must never invalidate a good download
+        pass
+    with target.open("rb") as stream:
+        sample = stream.read(4096)
+    return _guess_file_content_type(target, sample)
+
+
+def _aria_payload(
+    binary: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    content_type: str,
+    response_url: str,
+    raw: bool | None,
+    context: ToolContext,
+) -> str:
+    with tempfile.TemporaryDirectory(prefix="js-fetch-") as raw_temp:
+        destination = Path(raw_temp) / "response"
+        download_with_aria2(
+            binary,
+            url,
+            destination,
+            timeout_s=context.download_timeout_s,
+            headers=headers,
+            max_bytes=_DOWNLOAD_MAX_BYTES,
+        )
+        payload = destination.read_bytes()
+    return _format_payload(
+        data=payload,
+        content_type=content_type,
+        raw=raw,
+        context=context,
+        truncated=len(payload) > context.max_tool_result_bytes,
+        base_url=response_url,
+    )
+
+
 def _write_download(target: Path, data: bytes, content_type: str, context: ToolContext) -> str:
     context.snapshot(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -421,6 +494,37 @@ def fetch(
                 return "ERROR: file:// fetch only supports GET"
             return _fetch_file_url(url, raw=raw, save_target=save_target, context=context)
 
+        aria_eligible = _aria_eligible(method_name, data, parsed.scheme)
+        aria2c = resolve_binary(ARIA2_EXECUTABLE) if aria_eligible else None
+        if save_target is not None and aria2c is not None:
+            download_started = time.monotonic()
+            download_with_aria2(
+                aria2c,
+                url,
+                save_target,
+                timeout_s=context.download_timeout_s,
+                headers=normalized_headers,
+                max_bytes=_DOWNLOAD_MAX_BYTES,
+                before_publish=lambda: context.snapshot(save_target),
+            )
+            remaining = context.download_timeout_s - (time.monotonic() - download_started)
+            if remaining > 0:
+                content_type = _saved_content_type(
+                    url,
+                    save_target,
+                    normalized_headers,
+                    min(context.fetch_timeout_s, remaining),
+                )
+            else:
+                with save_target.open("rb") as stream:
+                    content_type = _guess_file_content_type(save_target, stream.read(4096))
+            return (
+                f"SAVED_RESPONSE path={save_target} size={save_target.stat().st_size} bytes "
+                f"content-type={content_type or 'unknown'}"
+            )
+        if save_target is not None and aria_eligible:
+            warn_urllib_fallback("fetch(save=...)")
+
         req = urllib.request.Request(
             url,
             data=data,
@@ -436,13 +540,50 @@ def fetch(
             if save_target is not None:
                 payload, truncated = _read_response(resp, limit)
             else:
-                payload = resp.read()
-                truncated = len(payload) > limit
+                response_length = _content_length(resp.headers)
+                transfer_from_headers = aria2c is not None and (
+                    (bool(content_type) and not _is_text_response(content_type, b""))
+                    or (
+                        response_length is not None
+                        and response_length > min(limit, _DOWNLOAD_MAX_BYTES)
+                    )
+                )
+                if transfer_from_headers:
+                    payload = b""
+                    truncated = True
+                elif aria2c is not None:
+                    payload, truncated = _read_response(
+                        resp, min(limit, _DOWNLOAD_MAX_BYTES)
+                    )
+                else:
+                    payload, too_large = _read_response(resp, _DOWNLOAD_MAX_BYTES)
+                    truncated = len(payload) > limit
+                    is_transfer = truncated or not _is_text_response(content_type, payload)
+                    if is_transfer:
+                        warn_urllib_fallback("fetch() response transfer")
+                    if too_large and is_transfer:
+                        return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
             response_url = str(getattr(resp, "geturl", lambda: url)() or url)
         if truncated and save_target is not None:
             return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
         if save_target is not None:
             return _write_download(save_target, payload, content_type, context)
+        if aria2c is not None and (
+            transfer_from_headers
+            or truncated
+            or not _is_text_response(content_type, payload)
+        ):
+            if response_length is not None and response_length > _DOWNLOAD_MAX_BYTES:
+                return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
+            return _aria_payload(
+                aria2c,
+                url,
+                headers=normalized_headers,
+                content_type=content_type,
+                response_url=response_url,
+                raw=raw,
+                context=context,
+            )
         return _format_payload(
             data=payload,
             content_type=content_type,
@@ -451,6 +592,8 @@ def fetch(
             truncated=truncated,
             base_url=response_url,
         )
+    except DownloadError as exc:
+        return f"ERROR: {exc}"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
 
