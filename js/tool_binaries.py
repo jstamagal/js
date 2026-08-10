@@ -29,9 +29,6 @@ from pathlib import Path
 
 
 TOOLS_DIR = Path(__file__).resolve().parent / "tools"
-MANUAL_OBSCURA_SOURCE = Path("/home/ronald_rump/.local/bin/obscura")
-
-
 class InstallError(RuntimeError):
     """A tool could not be installed without compromising reproducibility."""
 
@@ -46,6 +43,12 @@ class DownloadTool:
     asset_sha256: str
     archive_member: str
     executable_sha256: str
+    # Sidecar files the executable will not run without, as
+    # (archive member, installed name, sha256). obscura spawns obscura-worker
+    # from its own directory, so installing the one binary alone produces a
+    # js/tools/obscura that resolve_binary() happily returns and that then
+    # fails at render time.
+    companions: tuple[tuple[str, str, str], ...] = ()
 
 
 # Versions and asset names were read from each project's GitHub release page
@@ -79,12 +82,31 @@ DOWNLOAD_TOOLS = (
         archive_member="ast-grep",
         executable_sha256="6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea",
     ),
+    # The `stealth` asset, not the plain one: that build carries TLS
+    # impersonation on top of the browser fingerprint, which is what browse
+    # relies on to get one bot-detection verdict. The plain build would render
+    # the same pages and lose the handshake.
+    DownloadTool(
+        name="obscura",
+        executable="obscura",
+        version="0.2.0",
+        asset="obscura-x86_64-linux-stealth.tar.gz",
+        url=(
+            "https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.0/"
+            "obscura-x86_64-linux-stealth.tar.gz"
+        ),
+        asset_sha256="4b0fe0ff32a2e17e33b1e3d67bfb06e8f4d875bdffa86aa766277232422dfde7",
+        archive_member="obscura",
+        executable_sha256="bde140f54b90bf064335a017780ae1d3bd33f69ccdbc7f954a63b5f43db7c723",
+        companions=(
+            (
+                "obscura-worker",
+                "obscura-worker",
+                "4aa754d1d463a3fb8d3a192ec83f193c77ed31e6842cbac5478daaa2568c8d5f",
+            ),
+        ),
+    ),
 )
-
-# obscura has no fetchable GitHub release. This is the exact owner-provided
-# binary copied into js/tools after verification, rather than a network asset.
-OBSCURA_VERSION = "0.2.0"
-OBSCURA_SHA256 = "bde140f54b90bf064335a017780ae1d3bd33f69ccdbc7f954a63b5f43db7c723"
 
 ARIA2_VERSION = "1.37.0"
 ARIA2_EXECUTABLE = "aria2c"
@@ -287,14 +309,16 @@ def _download(url: str, destination: Path) -> None:
         shutil.copyfileobj(response, output)
 
 
-def _extract_member(spec: DownloadTool, archive: Path, destination: Path) -> None:
+def _extract_member(
+    spec: DownloadTool, archive: Path, destination: Path, member_name: str
+) -> None:
     if spec.asset.endswith(".zip"):
         with zipfile.ZipFile(archive) as bundle:
             try:
-                source = bundle.open(spec.archive_member)
+                source = bundle.open(member_name)
             except KeyError as exc:
                 raise InstallError(
-                    f"{spec.asset} did not contain pinned member {spec.archive_member}"
+                    f"{spec.asset} did not contain pinned member {member_name}"
                 ) from exc
             with source, destination.open("wb") as output:
                 shutil.copyfileobj(source, output)
@@ -302,14 +326,14 @@ def _extract_member(spec: DownloadTool, archive: Path, destination: Path) -> Non
     if spec.asset.endswith(".tar.gz"):
         with tarfile.open(archive, "r:gz") as bundle:
             try:
-                member = bundle.getmember(spec.archive_member)
+                member = bundle.getmember(member_name)
             except KeyError as exc:
                 raise InstallError(
-                    f"{spec.asset} did not contain pinned member {spec.archive_member}"
+                    f"{spec.asset} did not contain pinned member {member_name}"
                 ) from exc
             source = bundle.extractfile(member)
             if source is None:
-                raise InstallError(f"{spec.archive_member} in {spec.asset} is not a regular file")
+                raise InstallError(f"{member_name} in {spec.asset} is not a regular file")
             with source, destination.open("wb") as output:
                 shutil.copyfileobj(source, output)
         return
@@ -341,33 +365,17 @@ def install_download(
         extracted = temp / spec.executable
         downloader(spec.url, archive)
         _verify(archive, spec.asset_sha256, spec.asset)
-        _extract_member(spec, archive, extracted)
+        _extract_member(spec, archive, extracted, spec.archive_member)
         _verify(extracted, spec.executable_sha256, f"{spec.name} executable")
         extracted.chmod(0o755)
+        for member, installed_name, checksum in spec.companions:
+            companion = temp / installed_name
+            _extract_member(spec, archive, companion, member)
+            _verify(companion, checksum, f"{spec.name} companion {installed_name}")
+            companion.chmod(0o755)
+            os.replace(companion, tools_dir / installed_name)
         os.replace(extracted, target)
     return "installed"
-
-
-def install_obscura(
-    *,
-    tools_dir: Path = TOOLS_DIR,
-    source: Path = MANUAL_OBSCURA_SOURCE,
-) -> str:
-    """Copy the pinned owner-provided obscura binary, or report it unavailable."""
-    tools_dir.mkdir(parents=True, exist_ok=True)
-    target = tools_dir / "obscura"
-    if _is_current(target, OBSCURA_SHA256):
-        return "present"
-    if not source.is_file():
-        return "manual source unavailable"
-    _verify(source, OBSCURA_SHA256, f"manual obscura source {source}")
-    with tempfile.NamedTemporaryFile(prefix=".obscura-", dir=tools_dir, delete=False) as output:
-        temporary = Path(output.name)
-        with source.open("rb") as input_stream:
-            shutil.copyfileobj(input_stream, output)
-    temporary.chmod(0o755)
-    os.replace(temporary, target)
-    return "copied"
 
 
 def _require_supported_platform() -> None:
@@ -385,7 +393,10 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     print(f"js tool directory: {tools_dir}")
     for spec in DOWNLOAD_TOOLS:
         target = tools_dir / spec.executable
-        if _is_current(target, spec.executable_sha256):
+        if _is_current(target, spec.executable_sha256) and all(
+            _is_current(tools_dir / name, checksum)
+            for _member, name, checksum in spec.companions
+        ):
             print(
                 f"present: {spec.name} {spec.version} at {target} "
                 f"(sha256 {spec.executable_sha256})"
@@ -399,17 +410,6 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
             f"executable sha256 {spec.executable_sha256})"
         )
 
-    obscura_state = install_obscura(tools_dir=tools_dir)
-    if obscura_state == "manual source unavailable":
-        print(
-            f"manual: obscura {OBSCURA_VERSION} source is unavailable at "
-            f"{MANUAL_OBSCURA_SOURCE}; js/tools/obscura was not populated"
-        )
-    else:
-        print(
-            f"{obscura_state}: obscura {OBSCURA_VERSION} at {tools_dir / 'obscura'} "
-            f"from manual source {MANUAL_OBSCURA_SOURCE} (sha256 {OBSCURA_SHA256})"
-        )
     for executable, version in SYSTEM_TOOLS.items():
         binary = resolve_binary(executable)
         if binary is None:
