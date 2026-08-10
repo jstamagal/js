@@ -313,10 +313,10 @@ The `shell` tool uses the configured operating-system shell:
 - Windows: `COMSPEC /C`.
 
 If the environment starts with `SHELL=/usr/bin/zsh`, `shell` is zsh-first. The
-Python harness does not itself require `fzf` or `bat`, and `fs_search` is a
-Python regex implementation rather than a subprocess call to `rg`. Agents can
-still call `rg`, `fzf`, or `bat` through `shell` when those programs are
-installed and useful.
+Python harness does not itself require `fzf` or `bat`. `fs_search` DOES shell out
+to `rg`, and reports a plain ERROR when the binary is missing. Agents can still
+call `rg`, `fzf`, or `bat` through `shell` when those programs are installed and
+useful.
 
 Use the `cwd` argument to the `shell` tool instead of embedding `cd` in the
 command string.
