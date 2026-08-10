@@ -388,6 +388,14 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
+    ("kernel_render_max_lines", ("kernel", "render_max_lines")),
+)
+
+
+# `set kernel.verbosity verbose` mid-session has to take effect on the next
+# kernel call, so it rides the same live-settings path as the numeric knobs.
+_LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
+    ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
 )
 
 
@@ -686,6 +694,9 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     )
     for attr, path in _LIVE_BOOL_FIELDS:
         updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
+    for attr, path, allowed in _LIVE_STR_FIELDS:
+        raw = str(settings.get_dotted(live_settings, path, getattr(active, attr)) or "").strip().lower()
+        updates[attr] = raw if raw in allowed else getattr(active, attr)
     return replace(active, **updates)
 
 
