@@ -1,6 +1,6 @@
 # js Responses-first: what is left to build
 
-WHAT THAT WEIRD DIRECTORY IS: /home/ronald_rump/js-responses-first-beefup
+WHAT THAT WEIRD DIRECTORY IS: ~/js-responses-first-beefup
 is not a js branch or a fork. It is a build machine. It holds
 pipeline.py, which takes a spec file and produces a merged branch by
 running a planner, then parallel coder-plus-reviewer lanes in their own
@@ -14,12 +14,12 @@ all of it: main at f4b688c, which already contains full MCP client
 support, lazy tool discovery, and the metadata-only skill catalog.
 
 Long-form slice specs, if you ever want them:
-/home/ronald_rump/js-responses-first-beefup/slices
+~/js-responses-first-beefup/slices
 
 To run any of this through the pipeline:
 
-    cd /home/ronald_rump/js-responses-first-beefup
-    ./pipeline.py specs/NAME.md --name RUN --source-repo /home/ronald_rump/js
+    cd ~/js-responses-first-beefup
+    ./pipeline.py specs/NAME.md --name RUN --source-repo ~/js
 
 ## Wave A — nothing blocks these, they can run at once
 
