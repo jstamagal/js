@@ -12,13 +12,13 @@ from __future__ import annotations
 import json
 import ipaddress
 import os
-import shutil
 import subprocess
 import urllib.parse
 import urllib.request
 from typing import Any
 
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
+from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
@@ -330,9 +330,9 @@ def browse(
     url = text_or_default(url).strip()
     if not url:
         return "ERROR: url is required"
-    binary = shutil.which("obscura")
+    binary = resolve_binary("obscura")
     if binary is None:
-        return "ERROR: obscura is not installed (expected on PATH)"
+        return "ERROR: obscura is not installed (expected in js/tools or on PATH)"
     dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
     if dump not in ("markdown", "text", "html", "links"):
         return "ERROR: dump must be one of markdown, text, html, links"

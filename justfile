@@ -52,8 +52,9 @@ shell:
 
 # install `js` onto PATH as launchers shebanged to a managed venv,
 # editable so they track the working tree (no reinstall after a code edit). uv
-# puts the launchers in its tool bin dir — usually ~/.local/bin. Also provisions
-# the CLI binaries the tools lean on (ripgrep/fd/bat/fzf).
+# puts the launchers in its tool bin dir — usually ~/.local/bin. Also downloads
+# js's pinned CLI binaries into js/tools and provisions optional interactive
+# helpers (fd/bat/fzf).
 #   just install   then   js -p "hi"   from anywhere
 install:
     #!/usr/bin/env bash
@@ -61,6 +62,7 @@ install:
     uv tool install --force --editable "{{ browser-target }}"
     mkdir -p "$HOME/.local/bin"
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
+    just install-tool-binaries
     just ensure-tools
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
@@ -85,21 +87,25 @@ install:
             ;;
     esac
 
-# ensure the CLI binaries js leans on are present, installing any that are
-# missing via the detected package manager. fs_search shells out to `rg`; `fd`,
-# `bat`, and `fzf` back file-finding and interactive helpers. idempotent — a
-# no-op when all four are already on PATH; safe to run on its own.
+# Download js's pinned, checksummed subprocess binaries into js/tools. aria2c is
+# reported but omitted because upstream publishes no Linux x86_64 binary;
+# obscura is copied from the owner's manual local binary.
+install-tool-binaries:
+    uv run python -m js.tool_binaries
+
+# ensure optional interactive CLI helpers are present, installing any that are
+# missing via the detected package manager. fd, bat, and fzf back file-finding
+# and interactive helpers. idempotent and safe to run on its own.
 ensure-tools:
     #!/usr/bin/env bash
     set -euo pipefail
     have() { command -v "$1" >/dev/null 2>&1; }
     need=()
-    have rg  || need+=(rg)
     have fd  || have fdfind || need+=(fd)
     have bat || have batcat || need+=(bat)
     have fzf || need+=(fzf)
     if [ ${#need[@]} -eq 0 ]; then
-      echo "cli tools present: rg fd bat fzf"
+      echo "interactive cli tools present: fd bat fzf"
       exit 0
     fi
     echo "provisioning missing cli tools: ${need[*]}"
@@ -117,7 +123,6 @@ ensure-tools:
     pkgs=()
     for b in "${need[@]}"; do
       case "$b:$MGR" in
-        rg:*)        pkgs+=(ripgrep) ;;
         fd:apt|fd:dnf) pkgs+=(fd-find) ;;
         fd:*)        pkgs+=(fd) ;;
         bat:*)       pkgs+=(bat) ;;
