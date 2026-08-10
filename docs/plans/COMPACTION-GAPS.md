@@ -1,6 +1,6 @@
 # Context Compaction Completeness Audit
 
-Read-only audit target: `js` in `/home/ronald_rump/js`.
+Read-only audit target: `js` in `~/js`.
 Reference agents checked: `~/Repos/agents/codex`, `~/Repos/agents/crush`, `~/Repos/agents/claude-code`, with focused checks in `~/Repos/agents/opencode`.
 
 ## What `js` Does Today

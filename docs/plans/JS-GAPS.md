@@ -1,6 +1,6 @@
 # js Harness-Wide Completeness Audit
 
-Read-only audit target: `js` at `/home/ronald_rump/js` (worktree state, branch `textual-repl-nonblocking`).
+Read-only audit target: `js` at `~/js` (worktree state, branch `textual-repl-nonblocking`).
 Reference agents: `~/Repos/agents/codex` (Rust), `~/Repos/agents/crush` (Go/Bubbletea), `~/Repos/agents/claude-code` (TS/Ink), `~/Repos/agents/opencode` (TS), and the pi substrate (`~/Repos/agents/little-coder/node_modules/@earendil-works/pi-coding-agent` + `~/Repos/agents/little-coder/.pi/extensions/`, with the oh-my-pi fork source for readable TS).
 
 Compaction is NOT covered here — see `COMPACTION-GAPS.md` for that subsystem.

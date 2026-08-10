@@ -9,6 +9,8 @@ to the SDK ("unknown provider id").
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from js import cli, logins, providers
@@ -17,7 +19,7 @@ from js.logins import Login
 from js.routing import ProviderNotLoggedInError, resolve_model_route
 
 BASE_URL = "http://localhost:8050/v1"
-GGUF = "/home/ronald_rump/.cache/huggingface/models/ornith-1.0-35b-Q5_K_M.gguf"
+GGUF = str(Path.home() / ".cache/huggingface/models/ornith-1.0-35b-Q5_K_M.gguf")
 
 
 @pytest.fixture(autouse=True)
