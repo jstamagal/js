@@ -133,7 +133,11 @@ def expand_prompt(
             return m.group(0).replace("\\", "", 1)
         try:
             if m.group("fsub") is not None:
-                return _run_subsystem(
+                # Put the markdown indent back. The fence may sit up to three
+                # spaces in because it is nested in a list; dropping the indent
+                # pulls the expansion out of that list and changes the structure
+                # of the prompt the model reads.
+                return m.group("find") + _run_subsystem(
                     m.group("fsub"),
                     m.group("fbody"),
                     allow_code,

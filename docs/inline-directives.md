@@ -7,8 +7,9 @@ snippets.
 
 Expansion happens at the persona-load chokepoint
 (`js/persona.py:_expand_spec`), so it applies to the full assembled system
-prompt: every `*.md` file in the agent's prompt directory plus any stacked
-`AGENTS.md` / `AGENTS.local.md`. The implementation is `js/promptexpand.py`.
+prompt: every `*.md` file in the agent's prompt directory, the global
+`JS.md` / `JS.local.md`, and any stacked project `AGENTS.md` /
+`AGENTS.local.md`. The implementation is `js/promptexpand.py`.
 
 ## Syntax
 

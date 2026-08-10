@@ -578,6 +578,15 @@ def test_history_messages_can_be_roundtripped():
         {"role": "tool", "tool_call_id": "tc1", "name": "fs_search", "content": "42"},
     ]
     out = model_client.history_to_ai_messages("sys", msgs)
+
+    # Pin the conversion itself first. A pure round-trip proves only that every
+    # element is serializable, which an empty list satisfies perfectly.
+    roles = [m.role for m in out]
+    assert roles == ["system", "assistant", "tool"]
+    assert any("sys" in str(part) for part in out[0].parts)
+    assert any("hello" in str(part) for part in out[1].parts)
+    assert any("42" in str(part) for part in out[2].parts)
+
     # Messages should survive pydantic serialization (used internally by ai)
     serialized = [m.model_dump() for m in out]
     rebuilt = [ai.types.messages.Message.model_validate(dump) for dump in serialized]

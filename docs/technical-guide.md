@@ -242,13 +242,14 @@ This project intentionally does not preserve old tool aliases. The canonical
 surface is the contract:
 
 ```text
-<<<<<<< HEAD
-read write fs_search remove patch multi_patch undo shell fetch
-plan skill todo_write todo_read task
-=======
-read write fs_search sem_search remove patch undo shell fetch
-followup plan skill todo_write todo_read task
->>>>>>> fold-patch
+browse browser_probe commit defaultagent docs_search exa_search fetch
+fs_search patch plan read remove serper_search shell skill task
+tavily_search terminal_session terminal_snapshot todo_read todo_write
+undo wiki_convert wiki_finish_ingest wiki_write write
 ```
+
+`multi_patch`, `sem_search`, `followup` and the `artifact` suite were removed
+outright; `multi_patch`'s batch form now lives in `patch` as its `edits`
+parameter.
 
 Tests should protect current behavior, not old names.

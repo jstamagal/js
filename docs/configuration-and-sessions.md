@@ -259,8 +259,8 @@ Platform config directory:
   jsrc
   logins.toml
   models-cache.json
-  AGENTS.md
-  AGENTS.local.md
+  JS.md                  # always-on operator context, whatever dir js runs in
+  JS.local.md
   agents/<agent_id>/     # global agent prompts
   skills/
 ```
@@ -286,9 +286,19 @@ never leaves stray files.
 
 Agent prompts are discovered from repo `prompts/`, global `agents/` in the
 platform config dir, and project `.js/agents/`; project scope wins over global,
-which wins over repo. `AGENTS.md` and `AGENTS.local.md` from global then project
-scope are prepended to every main-agent and subagent system prompt, blank-line
-separated.
+which wins over repo.
+
+Two layers are prepended to every main-agent and subagent system prompt,
+blank-line separated:
+
+- `JS.md` and `JS.local.md` from the platform config dir. These are js's own
+  always-on operator context and load whatever directory js runs in. They are
+  deliberately NOT called `AGENTS.md`: that name is the per-repo convention a
+  dozen other tools also read, so a global one would silently apply
+  repo-shaped instructions everywhere.
+- `AGENTS.md` and `AGENTS.local.md` from the project, exactly the way any other
+  directory's project files load. A `~/.config/js/AGENTS.md` therefore applies
+  only when js is run from inside `~/.config/js`.
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
