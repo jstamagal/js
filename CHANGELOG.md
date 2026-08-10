@@ -10,10 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Pinned tool-binary installer.** `just install` now downloads checksummed
   ripgrep and ast-grep release assets into ignored `js/tools`, copies the
-  owner's checksum-pinned manual obscura binary, and reports that upstream
-  aria2 has no Linux x86_64 executable instead of building it from source.
-  `fs_search` and `browse` prefer these absolute managed paths, with PATH used
-  only as the documented pre-install fallback.
+  owner's checksum-pinned manual obscura binary, and reports the system aria2c
+  used for those release-asset transfers. `fs_search` and `browse` prefer these
+  absolute managed paths, with PATH used only as the documented pre-install
+  fallback.
+- **aria2c transfer engine.** GET downloads from `fetch`, including saved,
+  binary, and oversized responses, now use segmented, retrying, resumable
+  aria2c transfers with atomic publication and the existing size/time limits.
+  The pinned tool-binary installer uses the same engine. A missing aria2c emits
+  a visible warning and retains the urllib behavior.
 - **Two-tool mode: `kernel` and `toolbox`.** A second, separate side of js. `kernel` executes Python in a persistent IPython kernel — one per session, so a function defined in call 3 is callable in call 30 — and nothing else: it does not save, load, or version anything. Every result carries a `NAMESPACE` line re-derived from the live kernel, which is what keeps the agent's own tools visible after compaction has eaten the transcript that defined them. A cell over its timeout is interrupted with SIGINT, never restarted, so a runaway loop costs the cell and not the session. A kernel that dies is reported, naming the cell, instead of blocking until the deadline. Image output lands in `.js/kernel/` as artifact files and the kernel process's own stderr goes to `.js/kernel/kernel.log` rather than the operator's terminal.
 - **`toolbox`: tools that outlive the session.** The learning layer on top of `kernel`, so a tool a weak local model writes on Monday is loadable, refinable, and re-saveable by a stronger model on Tuesday. Each tool is one file with a machine-readable provenance header carrying a per-revision `{date, model, note, revision}` history. `save` never overwrites — revision N is archived to `.history/<name>.rN.py` — and `restore` rolls back by writing the old body as a *new* revision, so history is append-only. `save` also resolves the definition's free names against the live kernel and hoists the `import` lines it needs into the file, warning by name about anything it could not resolve; without that, a saved tool referencing a module imported in another cell `NameError`ed the moment its session ended. `load` execs each file in its own try/except, so one broken tool costs one tool.
 - **Rendering for the two-tool mode, at three verbosities.** Both tools render what happened to the terminal with rich, on stderr so piped output still works: `quiet` (errors and interrupts), `normal` (code, output, elapsed, namespace), `verbose` (streams split apart plus kernel lifecycle). `set kernel.verbosity` sets the baseline and each call's `verbosity` parameter overrides it; `set kernel.render_max_lines` (default 24) caps each rendered section with the hidden count shown. Verbosity governs the terminal only — the model always receives the full result, because a display knob able to delete the `NAMESPACE` line would break the feature.
