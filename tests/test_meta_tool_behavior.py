@@ -58,14 +58,32 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
     target = tmp_path / "plans" / "rollout-v1.md"
 
     meta.plan(plan_name="rollout", version="v1", content="first", context=context)
-    meta.plan(plan_name="rollout", version="v1", content="second", context=context)
+    result = meta.plan(
+        plan_name="rollout",
+        version="v1",
+        content="second",
+        overwrite=True,
+        context=context,
+    )
 
+    assert result == f"plan overwritten at {target}"
     assert target.read_text() == "second"
     snaps = context.snapshots.get(target)
     assert snaps is not None
     # Two writes -> two snapshots; the first recorded a nonexistent file (None).
     assert snaps[0] is None
     assert snaps[1] == b"first"
+
+
+def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    target = tmp_path / "plans" / "rollout-v1.md"
+    meta.plan(plan_name="rollout", version="v1", content="first", context=context)
+
+    result = meta.plan(plan_name="rollout", version="v1", content="second", context=context)
+
+    assert result == f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"
+    assert target.read_text(encoding="utf-8") == "first"
 
 
 def test_skill_loads_local_skill_markdown_from_skills_dir(tmp_path):

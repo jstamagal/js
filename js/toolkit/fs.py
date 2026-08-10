@@ -81,7 +81,7 @@ def _trash_command() -> str | None:
 
 def _snapshot_remove_target(context: ToolContext, target: Path) -> None:
     if target.is_symlink():
-        context.snapshots.setdefault(target, []).append({"kind": "symlink", "target": os.readlink(target)})
+        context.record_snapshot(target, {"kind": "symlink", "target": os.readlink(target)})
         return
     context.snapshot(target)
 
@@ -211,7 +211,7 @@ def _format_numbered_lines(lines: list[str], start_line: int, max_chars: int) ->
     out: list[str] = []
     for idx, line in enumerate(lines, start=start_line):
         truncated = _truncate_line(line, max_chars)
-        out.append(f"{idx}{_line_hash(truncated)}|{truncated}")
+        out.append(f"{idx}:{_line_hash(truncated)}|{truncated}")
     return "\n".join(out)
 
 
@@ -315,11 +315,11 @@ def fs_read(
         return f"ERROR: {exc}"
 
     content_hash = _hash_bytes(data)
-    context.remember_read(target, content_hash)
 
     all_lines = text.splitlines()
     total = len(all_lines)
     if total == 0:
+        context.remember_read(target, content_hash, total_lines=0, whole_file=True)
         return f"{target} is empty (hash {content_hash})"
 
     # Resolve the window the way forge's resolve_range does: a reversed range is
@@ -338,6 +338,14 @@ def fs_read(
     end = min(total, page_end, raw_end or page_end)
 
     selected = all_lines[start - 1:end]
+    context.remember_read(
+        target,
+        content_hash,
+        start_line=start,
+        end_line=end,
+        total_lines=total,
+        whole_file=start == 1 and end == total,
+    )
     # .jsonl rows are single-line records that routinely exceed the normal cap;
     # give them a dedicated (larger) per-line budget so they are not truncated.
     max_chars = context.jsonl_max_line_chars if target.suffix.lower() == ".jsonl" else context.max_line_chars
@@ -360,7 +368,11 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     if target.exists() and not overwrite:
         return "ERROR: Cannot overwrite existing file: overwrite flag not set."
     if target.exists() and overwrite:
-        guard = context.require_read(target, "overwrite it")
+        try:
+            current_hash = _hash_bytes(target.read_bytes())
+        except OSError as exc:
+            return f"ERROR: {exc}"
+        guard = context.require_read(target, "overwrite it", whole_file=True, content_hash=current_hash)
         if guard:
             return guard
     try:
@@ -386,7 +398,7 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
         if not permanent:
             error = _trash_target(target, context)
             if error:
-                context.snapshots.get(target, []).pop()
+                context.discard_snapshot(target)
                 return error
             return f"trashed {target}"
         _delete_target_no_follow(target)
@@ -404,11 +416,13 @@ def undo(path: str, context: ToolContext | None = None) -> str:
         no_follow = _resolve_path_no_follow(context, path)
         if context.snapshots.get(no_follow):
             target = no_follow
-    stack = context.snapshots.get(target) or []
-    if not stack:
+    found, previous = context.pop_snapshot(target)
+    if not found:
         return f"ERROR: no snapshot available for {target}"
-    previous = stack.pop()
     try:
+        if isinstance(previous, dict) and previous.get("kind") in {"corrupt", "unavailable"}:
+            reason = str(previous.get("reason", "snapshot data is unavailable"))
+            return f"ERROR: discarded unusable snapshot for {target}: {reason}; retry undo for an older entry"
         if isinstance(previous, dict) and previous.get("kind") == "symlink":
             if target.is_symlink() or target.is_file():
                 target.unlink()
@@ -467,19 +481,87 @@ def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
     return old, new, bool(raw.get("replace_all", False))
 
 
-def _apply_edit(text: str, old: str, new: str, replace_all: bool, label: str) -> tuple[str, int] | str:
+def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
+    start_line = text.count("\n", 0, start) + 1
+    end_line = text.count("\n", 0, end) + 1
+    total_lines = max(1, len(text.splitlines()))
+    return start_line, min(end_line, total_lines)
+
+
+def _transform_read_ranges(
+    ranges: list[tuple[int, int]],
+    start: int,
+    end: int,
+    line_delta: int,
+) -> list[tuple[int, int]]:
+    transformed: list[tuple[int, int]] = []
+    for seen_start, seen_end in ranges:
+        if seen_start < start:
+            transformed.append((seen_start, min(seen_end, start - 1)))
+        if seen_end > end:
+            transformed.append((max(seen_start, end + 1) + line_delta, seen_end + line_delta))
+    transformed.append((start, max(start, end + line_delta)))
+    transformed.sort()
+    merged: list[tuple[int, int]] = []
+    for seen_start, seen_end in transformed:
+        if seen_end < seen_start:
+            continue
+        if not merged or seen_start > merged[-1][1] + 1:
+            merged.append((seen_start, seen_end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], seen_end))
+    return merged
+
+
+def _apply_edit(
+    text: str,
+    old: str,
+    new: str,
+    replace_all: bool,
+    label: str,
+    *,
+    target: Path,
+    context: ToolContext,
+    seen_ranges: list[tuple[int, int]],
+) -> tuple[str, int, list[tuple[int, int]]] | str:
     """Apply one exact replacement to ``text`` in memory. Returns the updated text
     and its match count, or an ERROR string. Line endings are normalised per edit
     against the text as it stands *now*, so a later edit sees an earlier one's result."""
     line_ending = _detect_line_ending(text)
     old_norm = _normalize_line_endings(old, line_ending)
     new_norm = _normalize_line_endings(new, line_ending)
+    if not old_norm:
+        return f"ERROR: {label}old_string cannot be empty"
     count = text.count(old_norm)
     if count == 0:
         return f"ERROR: {label}Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
     if count > 1 and not replace_all:
         return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
-    return text.replace(old_norm, new_norm, -1 if replace_all else 1), count
+    positions: list[tuple[int, int]] = []
+    cursor = 0
+    wanted = count if replace_all else 1
+    for _index in range(wanted):
+        start = text.find(old_norm, cursor)
+        end = start + len(old_norm)
+        positions.append((start, end))
+        cursor = end
+    line_ranges = [_line_span(text, start, end) for start, end in positions]
+    guard = context.require_read(
+        target,
+        "edit it",
+        line_ranges=line_ranges,
+        seen_ranges=seen_ranges,
+    )
+    if guard:
+        return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
+    updated = text
+    transformed = seen_ranges
+    line_delta = new_norm.count("\n") - old_norm.count("\n")
+    for start, end in reversed(positions):
+        start_line, end_line = _line_span(updated, start, end)
+        updated = updated[:start] + new_norm + updated[end:]
+        transformed = _transform_read_ranges(transformed, start_line, end_line, line_delta)
+    return updated, count, transformed
 
 
 def patch(
@@ -545,28 +627,50 @@ def patch(
             pending.append(normalized)
 
     target = context.resolve_path(raw_path)
-    guard = context.require_read(target, "edit it")
-    if guard:
-        return guard
     try:
+        source_bytes = target.read_bytes()
         source = target.read_text()
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
+    source_hash = _hash_bytes(source_bytes)
+    guard = context.require_read(target, "edit it", content_hash=source_hash)
+    if guard:
+        return guard
 
     updated = source
+    seen_ranges = list(context.read_ranges.get(target, []))
+    was_whole = target in context.fully_read_paths
+    if was_whole:
+        total_lines = max(1, len(source.splitlines()))
+        seen_ranges = [(1, total_lines)]
     replacements = 0
     for index, (old_text, new_text, edit_replace_all) in enumerate(pending, start=1):
-        applied = _apply_edit(updated, old_text, new_text, edit_replace_all, f"edit {index}: " if batch else "")
+        applied = _apply_edit(
+            updated,
+            old_text,
+            new_text,
+            edit_replace_all,
+            f"edit {index}: " if batch else "",
+            target=target,
+            context=context,
+            seen_ranges=seen_ranges,
+        )
         if isinstance(applied, str):
             return applied
-        updated, count = applied
+        updated, count, seen_ranges = applied
         replacements += count if edit_replace_all else 1
 
     context.snapshot(target)
     target.write_text(updated)
     data = updated.encode("utf-8")
     content_hash = _hash_bytes(data)
-    context.file_hashes[target] = content_hash
+    context.replace_read_coverage(
+        target,
+        content_hash,
+        seen_ranges,
+        len(updated.splitlines()),
+        whole_file=was_whole,
+    )
     diff = "".join(difflib.unified_diff(source.splitlines(True), updated.splitlines(True), fromfile=str(target), tofile=str(target)))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"

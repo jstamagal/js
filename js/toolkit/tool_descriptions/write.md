@@ -14,8 +14,8 @@ has no narrower edit tool.
 Safety rules:
 - Existing files require `overwrite=true`.
 {{#if read}}
-- Existing files also require a prior `read` of the same resolved path in the
-  current process.
+- Existing files also require the whole file to have been shown by prior `read`
+  calls of the same resolved path in the current process.
 {{/if}}
 {{#unless read}}
 - Existing files also require a prior read snapshot in the current process; if no
@@ -23,7 +23,7 @@ Safety rules:
 {{/unless}}
 {{#if undo}}
 - The tool snapshots prior bytes before overwriting so `undo` can restore the
-  last in-process state.
+  latest state, including after restarting the same saved session.
 {{/if}}
 {{#unless undo}}
 - The tool snapshots prior bytes internally before overwriting, but this surface

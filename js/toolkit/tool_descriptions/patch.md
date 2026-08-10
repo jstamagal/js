@@ -15,8 +15,9 @@ Required preparation:
   surface has no read tool and the file is not already snapshotted, patching may
   be rejected.
 {{/unless}}
-- The read-before-edit guard is path-based; read the same path you intend to
-  edit after resolution.
+- The read-before-edit guard tracks the ranges actually shown. Every line
+  matched by `old_string` must be covered by the union of prior reads of the
+  same resolved path; read any missing range before editing it.
 
 One replacement (the common case):
 - `file_path`: target file path.
@@ -57,7 +58,7 @@ Model-facing names:
 
 {{#if read}}
 Working from `read` output:
-- Text lines are returned as `12ab|content`.
+- Text lines are returned as `12:ab|content`.
 - Preserve the exact indentation after the `|`.
 - Never include the line number/hash prefix in `old_string` or `new_string`.
 {{/if}}

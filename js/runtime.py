@@ -1464,6 +1464,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
+    active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
     active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
