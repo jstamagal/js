@@ -90,6 +90,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     write = registry.resolve("write")
     search = registry.resolve("fs_search")
     ast_search = registry.resolve("ast_search")
+    plan = registry.resolve("plan")
     task = registry.resolve("task")
 
     assert read.required == ("file_path",)
@@ -100,6 +101,8 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert ast_search.required == ("pattern",)
     assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
     assert tuple(ast_search.params["lang"]["enum"]) == fs._AST_GREP_LANGUAGES
+    assert plan.required == ("plan_name", "version", "content")
+    assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     assert task.required == ("tasks", "agent_id")
     assert set(task.params) == {"tasks", "agent_id", "session_id", "model"}
 

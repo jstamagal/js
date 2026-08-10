@@ -34,9 +34,9 @@ def test_ast_search_matches_calls_across_layout_but_only_parsed_code(tmp_path):
     actual = ast_search("foo($$$ARGS)", path="calls.txt", lang="Python", context=context)
 
     expected_source = ["foo(1)", "foo(", "    1,", "    2,", ")"]
-    expected = [f"{target}:1", f"1{fs._line_hash(expected_source[0])}|{expected_source[0]}", f"{target}:2"]
+    expected = [f"{target}:1", f"1:{fs._line_hash(expected_source[0])}|{expected_source[0]}", f"{target}:2"]
     expected.extend(
-        f"{line_number}{fs._line_hash(line)}|{line}"
+        f"{line_number}:{fs._line_hash(line)}|{line}"
         for line_number, line in enumerate(expected_source[1:], start=2)
     )
     assert actual.splitlines() == expected
@@ -51,7 +51,7 @@ def test_ast_search_limits_and_deduplicates_results(tmp_path):
     first = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
     second = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
 
-    assert first == f"{target}:1\n1{fs._line_hash('foo(1)')}|foo(1)"
+    assert first == f"{target}:1\n1:{fs._line_hash('foo(1)')}|foo(1)"
     assert second == first + "\n[deduplicated repeated search]"
 
 

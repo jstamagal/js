@@ -6,7 +6,9 @@ or strategy documents that should survive the current turn.
 Rules:
 - `plan_name` and `version` are sanitized into the filename.
 - `content` is written verbatim as markdown.
-- Existing plan files are snapshotted before overwrite.
+- An existing plan is left unchanged unless `overwrite=true` is explicit.
+- Explicit overwrites report that they replaced the plan and snapshot its prior
+  contents for `undo`.
 - This is for plans, not source-code edits.
 
 When to use:

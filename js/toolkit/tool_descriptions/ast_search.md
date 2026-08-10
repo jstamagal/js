@@ -33,7 +33,7 @@ Worked examples (captured from this repository):
 
    ```text
    /home/ronald_rump/oldinbox/wt-astgrep/js/toolkit/fs.py:84
-   84aa|    context.snapshot(target)
+   84:aa|    context.snapshot(target)
    ```
 
 2. A call with any argument count:
