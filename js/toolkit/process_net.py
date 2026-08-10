@@ -67,8 +67,23 @@ def shell(
             returncode, raw_stdout, raw_stderr = result.returncode, result.stdout, result.stderr
         else:
             returncode, raw_stdout, raw_stderr = result
-    except subprocess.TimeoutExpired:
-        return f"ERROR: command timed out after {timeout}s"
+    except subprocess.TimeoutExpired as expired:
+        # _run_capped attaches whatever the process had already written. Throwing
+        # it away told the model nothing about a build that printed 200 lines and
+        # then hung -- the last lines before the hang are the whole diagnosis.
+        parts = [f"ERROR: command timed out after {timeout}s"]
+        for label, raw in (("stdout", expired.output), ("stderr", expired.stderr)):
+            if not raw:
+                continue
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            if not keep_ansi:
+                text = _ANSI_RE.sub("", text)
+            text = text.strip()
+            if text:
+                parts.append(f"--- {label} before the timeout ---\n{text}")
+        if len(parts) == 1:
+            parts.append("(the command produced no output before it was killed)")
+        return "\n".join(parts)
     except OSError as exc:
         return f"ERROR: {exc}"
 
