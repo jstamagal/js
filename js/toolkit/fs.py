@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 import os
 import shutil
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 from collections.abc import Iterable
@@ -584,6 +586,14 @@ def _iter_files(root: Path) -> Iterable[Path]:
 
 _RG_MISSING = "ERROR: rg (ripgrep) not found on PATH; run `just install` to provision it."
 _RG_TIMEOUT_S = 120
+_AST_GREP_BINARY = "/home/ronald_rump/.local/bin/ast-grep"
+_AST_GREP_TIMEOUT_S = 120
+_AST_GREP_LANGUAGES = (
+    "Bash", "C", "Cpp", "CSharp", "Css", "Dart", "Elixir", "Go",
+    "Haskell", "Hcl", "Html", "Java", "JavaScript", "Json", "Kotlin",
+    "Lua", "Markdown", "Nix", "Php", "Python", "Ruby", "Rust", "Scala",
+    "Solidity", "Swift", "Tsx", "TypeScript", "Yaml",
+)
 
 
 def _rg_binary() -> str | None:
@@ -600,7 +610,9 @@ def _rg_env() -> dict[str, str]:
     return env
 
 
-def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int | None, str, bool]:
+def _rg_stream(
+    argv: list[str], want: int, timeout: int, input_text: str | None = None
+) -> tuple[list[str], int | None, str, bool]:
     """Run rg and collect at most *want* output lines, then stop it.
 
     Returns (lines, returncode, stderr, timed_out). returncode is None when rg
@@ -610,7 +622,8 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
     with the wall-clock deadline, guarantees the turn cannot hang."""
     try:
         proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            argv, stdin=subprocess.PIPE if input_text is not None else None,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=_rg_env(), text=True, encoding="utf-8", errors="replace",
         )
     except OSError as exc:
@@ -619,6 +632,19 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
     stopped_early = False
     timed_out = False
     deadline = time.monotonic() + timeout
+    writer: threading.Thread | None = None
+    if input_text is not None:
+        assert proc.stdin is not None
+
+        def write_stdin() -> None:
+            try:
+                proc.stdin.write(input_text)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+        writer = threading.Thread(target=write_stdin, daemon=True, name="search-stdin")
+        writer.start()
     assert proc.stdout is not None
     try:
         for line in proc.stdout:
@@ -643,6 +669,8 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
             stream.close()
     if not stopped_early and proc.poll() is None:
         proc.wait()
+    if writer is not None:
+        writer.join(timeout=1)
     rc = None if stopped_early else proc.returncode
     return lines, rc, stderr, timed_out
 
@@ -732,6 +760,283 @@ def fs_search(
     return out
 
 
+def _ast_language(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    folded = str(raw).strip().casefold()
+    return next((language for language in _AST_GREP_LANGUAGES if language.casefold() == folded), "")
+
+
+def _ast_argv(
+    pattern: str,
+    root: Path,
+    lang: str | None,
+    rewrite: str | None = None,
+    stdin: bool = False,
+) -> list[str]:
+    argv = [
+        _AST_GREP_BINARY,
+        "run",
+        "--pattern",
+        pattern,
+        "--json=stream",
+        "--color",
+        "never",
+    ]
+    if lang:
+        argv += ["--lang", lang]
+    if rewrite is not None:
+        argv += ["--rewrite", rewrite]
+    if stdin:
+        argv.append("--stdin")
+    else:
+        argv += ["--", str(root)]
+    return argv
+
+
+def _ast_records(
+    pattern: str,
+    root: Path,
+    lang: str | None,
+    rewrite: str | None,
+    want: int,
+) -> tuple[list[dict], int | None, str, bool, str | None, bool]:
+    lines, rc, stderr, timed_out = _rg_stream(
+        _ast_argv(pattern, root, lang, rewrite), want, _AST_GREP_TIMEOUT_S
+    )
+
+    used_stdin = False
+    if rc == 1 and not lines and lang and root.is_file():
+        try:
+            source = _read_regular_bytes(root).decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return [], rc, stderr, timed_out, str(exc), used_stdin
+        lines, rc, stderr, timed_out = _rg_stream(
+            _ast_argv(pattern, root, lang, rewrite, stdin=True),
+            want,
+            _AST_GREP_TIMEOUT_S,
+            input_text=source,
+        )
+        used_stdin = True
+
+    records: list[dict] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return [], rc, stderr, timed_out, f"invalid ast-grep JSON output: {exc.msg}", used_stdin
+        if not isinstance(record, dict):
+            return [], rc, stderr, timed_out, "invalid ast-grep JSON output: expected an object", used_stdin
+        if used_stdin and record.get("file") == "STDIN":
+            record["file"] = str(root)
+        records.append(record)
+    return records, rc, stderr, timed_out, None, used_stdin
+
+
+def _cap_ast_output(text: str, context: ToolContext) -> str:
+    cap = max(0, int(context.max_tool_result_bytes))
+    encoded = text.encode("utf-8")
+    if len(encoded) <= cap:
+        return text
+    marker = f"[truncated: limits.max_tool_result_bytes ({cap}) reached]"
+    marker_bytes = marker.encode("utf-8")
+    if len(marker_bytes) >= cap:
+        return marker_bytes[:cap].decode("utf-8", errors="ignore")
+    prefix = encoded[: cap - len(marker_bytes) - 1].decode("utf-8", errors="ignore")
+    return f"{prefix}\n{marker}"
+
+
+def _ast_match_output(records: list[dict], context: ToolContext) -> str:
+    blocks: list[str] = []
+    for record in records:
+        raw_file = record.get("file")
+        raw_range = record.get("range")
+        if not isinstance(raw_file, str) or not isinstance(raw_range, dict):
+            return "ERROR: invalid ast-grep JSON output: match has no file or range"
+        start = raw_range.get("start")
+        if not isinstance(start, dict) or not isinstance(start.get("line"), int):
+            return "ERROR: invalid ast-grep JSON output: match has no start line"
+        target = context.resolve_path(raw_file)
+        line_number = start["line"] + 1
+        source = record.get("lines", record.get("text", ""))
+        if not isinstance(source, str):
+            return "ERROR: invalid ast-grep JSON output: match has no source text"
+        source_lines = source.splitlines() or [""]
+        numbered = _format_numbered_lines(source_lines, line_number, context.max_line_chars)
+        blocks.append(f"{target}:{line_number}\n{numbered}")
+    return "\n".join(blocks) if blocks else "(no matches)"
+
+
+def _prepare_ast_rewrite(
+    records: list[dict], context: ToolContext
+) -> dict[Path, tuple[bytes, bytes]] | str:
+    edits_by_file: dict[Path, list[tuple[int, int, bytes, bytes]]] = {}
+    for record in records:
+        raw_file = record.get("file")
+        offsets = record.get("replacementOffsets")
+        replacement = record.get("replacement")
+        text = record.get("text")
+        if (
+            not isinstance(raw_file, str)
+            or not isinstance(offsets, dict)
+            or not isinstance(offsets.get("start"), int)
+            or not isinstance(offsets.get("end"), int)
+            or not isinstance(replacement, str)
+            or not isinstance(text, str)
+        ):
+            return "ERROR: invalid ast-grep JSON output: rewrite metadata is incomplete"
+        target = context.resolve_path(raw_file)
+        edits_by_file.setdefault(target, []).append(
+            (offsets["start"], offsets["end"], text.encode("utf-8"), replacement.encode("utf-8"))
+        )
+
+    prepared: dict[Path, tuple[bytes, bytes]] = {}
+    for target, edits in edits_by_file.items():
+        try:
+            source = target.read_bytes()
+        except OSError as exc:
+            return f"ERROR: {exc}"
+        previous_end = -1
+        for start, end, expected, _replacement in sorted(edits):
+            if start < previous_end:
+                return f"ERROR: ast-grep returned overlapping rewrites for {target}"
+            if start < 0 or end < start or source[start:end] != expected:
+                return f"ERROR: {target} changed while preparing the structural rewrite"
+            previous_end = end
+        updated = source
+        for start, end, _expected, replacement in sorted(edits, reverse=True):
+            updated = updated[:start] + replacement + updated[end:]
+        prepared[target] = (source, updated)
+    return prepared
+
+
+def _ast_rewrite_diff(prepared: dict[Path, tuple[bytes, bytes]]) -> str:
+    chunks: list[str] = []
+    for target, (source, updated) in prepared.items():
+        chunks.append(
+            "".join(
+                difflib.unified_diff(
+                    source.decode("utf-8", errors="replace").splitlines(keepends=True),
+                    updated.decode("utf-8", errors="replace").splitlines(keepends=True),
+                    fromfile=str(target),
+                    tofile=str(target),
+                )
+            )
+        )
+    return "".join(chunks).rstrip()
+
+
+def ast_search(
+    pattern: str,
+    path: str | None = None,
+    lang: str | None = None,
+    rewrite: str | None = None,
+    apply: bool = False,
+    max_results: int | None = None,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    if not isinstance(pattern, str) or not pattern.strip():
+        return "ERROR: pattern is required"
+    if rewrite is not None and not isinstance(rewrite, str):
+        return "ERROR: rewrite must be a string"
+    if apply and rewrite is None:
+        return "ERROR: apply=true requires rewrite"
+
+    language = _ast_language(lang)
+    if language == "":
+        return f"ERROR: unsupported ast-grep language: {lang}"
+    root = context.resolve_path(path or ".")
+    if not root.exists():
+        return f"ERROR: Path does not exist: {root}"
+    try:
+        root_stat = root.stat()
+    except OSError as exc:
+        return f"ERROR: {type(exc).__name__}: {exc}"
+    if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
+        return f"ERROR: not a regular file or directory: {root}"
+
+    limit = int_or_default(max_results, 100, minimum=1)
+    cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit))
+    if not apply and cache_key in context.search_cache:
+        return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
+
+    records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
+        pattern, root, language, rewrite, limit + 1
+    )
+    if timed_out:
+        return f"ERROR: search timed out after {_AST_GREP_TIMEOUT_S}s"
+    if parse_error:
+        return f"ERROR: {parse_error}"
+    if rc is not None and rc not in (0, 1):
+        detail = stderr.strip()
+        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
+        return f"ERROR: {first}"
+
+    overflow = len(records) > limit
+    visible = records[:limit]
+    if rewrite is None:
+        out = _ast_match_output(visible, context)
+        out = _cap_ast_output(out, context)
+        context.search_cache[cache_key] = out
+        return out
+
+    prepared = _prepare_ast_rewrite(visible, context)
+    if isinstance(prepared, str):
+        return prepared
+    diff = _ast_rewrite_diff(prepared) or "(no changes)"
+    if not apply:
+        suffix = "\n[additional matches omitted; increase max_results to preview them]" if overflow else ""
+        out = f"DRY RUN: no files changed. Pass apply=true to apply.\n{diff}{suffix}"
+        out = _cap_ast_output(out, context)
+        context.search_cache[cache_key] = out
+        return out
+    if overflow:
+        return (
+            f"ERROR: rewrite matched more than max_results={limit}; "
+            "narrow path or increase max_results before applying"
+        )
+    if not prepared or all(source == updated for source, updated in prepared.values()):
+        return "(no changes)"
+
+    for target in prepared:
+        context.snapshot(target)
+    apply_stderr = ""
+    if used_stdin:
+        rc = 0
+        for target, (_source, updated) in prepared.items():
+            try:
+                target.write_bytes(updated)
+            except OSError as exc:
+                rc = 1
+                apply_stderr = str(exc)
+                break
+    else:
+        argv = _ast_argv(pattern, root, language, rewrite)
+        argv.remove("--json=stream")
+        argv.insert(-2, "--update-all")
+        rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
+    context.search_cache.clear()
+    if rc != 0:
+        detail = apply_stderr.strip()
+        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
+        return f"ERROR: {first}; snapshots are available through undo"
+
+    changed = 0
+    for target, (source, _predicted) in prepared.items():
+        try:
+            updated = target.read_bytes()
+        except OSError as exc:
+            return f"ERROR: {exc}; snapshots are available through undo"
+        if updated != source:
+            changed += 1
+        context.file_hashes[target] = _hash_bytes(updated)
+        prepared[target] = (source, updated)
+    diff = _ast_rewrite_diff(prepared) or "(no changes)"
+    summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"
+    return _cap_ast_output(f"{summary}\n{diff}", context)
+
+
 def list_dir(path: str, recursive: bool = False, context: ToolContext | None = None) -> str:
     assert context is not None
     root = context.resolve_path(path)
@@ -803,6 +1108,20 @@ def tools() -> tuple[Tool, ...]:
                 "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset."},
                 "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
+            },
+            required=("pattern",),
+        ),
+        Tool(
+            "ast_search",
+            load_description("ast_search"),
+            ast_search,
+            {
+                "pattern": {"type": "string", "description": "ast-grep structural pattern with metavariables such as $NAME and $$$ARGS."},
+                "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
+                "lang": {"type": "string", "enum": list(_AST_GREP_LANGUAGES), "description": "Optional language override; source extensions are inferred when omitted."},
+                "rewrite": {"type": "string", "description": "Optional structural replacement. Supplying it produces a dry-run diff unless apply is true."},
+                "apply": {"type": "boolean", "default": False, "description": "Apply the rewrite to files. False is a non-mutating dry run."},
+                "max_results": {"type": "integer", "default": 100, "description": "Maximum matches returned or rewritten; an apply is refused when more matches exist."},
             },
             required=("pattern",),
         ),

@@ -107,6 +107,25 @@ Parameters:
 
 Skips common dependency/cache dirs and binary files.
 
+### `ast_search`
+
+Structural search and optional rewrite over parsed source code, backed by the
+absolute ast-grep 0.45.1 binary path.
+
+Parameters:
+
+- `pattern`: required ast-grep pattern; `$NAME` captures one node and
+  `$$$ARGS` captures zero or more nodes.
+- `path`: file or directory, default current working directory.
+- `lang`: optional parser override from ast-grep's supported language enum.
+- `rewrite`: optional structural replacement; dry-run diff by default.
+- `apply`: set true to apply a supplied rewrite, default false.
+- `max_results`: maximum matches returned or rewritten, default `100`.
+
+Search output uses absolute path headings and the same anchored source lines as
+`read`. Applying a rewrite snapshots every affected file for `undo`, clears the
+shared search cache, and refuses match sets larger than `max_results`.
+
 ## Process And Network
 
 ### `shell`
