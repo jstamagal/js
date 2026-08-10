@@ -26,8 +26,10 @@ Behavior:
   returns a capped preview and writes the full readable response to the standard
   `~/oldinbox/js-tool-results/result-<digest>.txt` spill location. The result
   includes that path so the rest remains readable instead of being discarded.
-- Downloads are capped at 32 MiB and return `SAVED_RESPONSE path=... size=...`
-  instead of the response body.
+- A download streams to disk and returns `SAVED_RESPONSE path=... size=...`
+  instead of the response body. It is not bounded by memory, so an ISO, a model
+  weight, or a multi-gigabyte archive is a normal thing to save. The size
+  ceiling is `limits.max_download_bytes`, which defaults to unlimited.
 - GET transfers use aria2c for eight-way segmented downloading, retries, and
   resume into a hidden partial file. The destination is replaced atomically
   only after a complete download. If aria2c is unavailable, fetch emits a
@@ -46,5 +48,6 @@ Behavior:
 When not to use:
 - Do not fetch when the needed information is already available in local files
   through the filesystem tools.
-- Do not use this as a general-purpose large artifact downloader; the download
-  guard is intentionally 32 MiB.
+- Do not read a large file inline when you only need part of it; an inline
+  response still has to fit the tool-result budget. Use `save` to move bytes,
+  and the filesystem tools to read them.
