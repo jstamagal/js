@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from js.toolkit import descriptions
+from js.toolkit import descriptions, fs
 from js.toolkit.registry import build_default_registry
 
 
@@ -12,6 +12,7 @@ CORE_TOOL_NAMES = {
     "read",
     "write",
     "fs_search",
+    "ast_search",
     "remove",
     "patch",
     "undo",
@@ -72,6 +73,7 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("task").name == "task"
     assert registry.resolve("Task").name == "task"
     assert registry.resolve("fs_search").name == "fs_search"
+    assert registry.resolve("ast_search").name == "ast_search"
     assert registry.resolve("remove").name == "remove"
     assert registry.resolve("patch").name == "patch"
     assert registry.resolve("undo").name == "undo"
@@ -87,6 +89,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     read = registry.resolve("read")
     write = registry.resolve("write")
     search = registry.resolve("fs_search")
+    ast_search = registry.resolve("ast_search")
     task = registry.resolve("task")
 
     assert read.required == ("file_path",)
@@ -94,6 +97,9 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert write.required == ("file_path", "content")
     assert set(write.params) == {"file_path", "content", "overwrite"}
     assert {"-A", "-B", "-C", "-i", "-n", "type"}.issubset(search.params)
+    assert ast_search.required == ("pattern",)
+    assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
+    assert tuple(ast_search.params["lang"]["enum"]) == fs._AST_GREP_LANGUAGES
     assert task.required == ("tasks", "agent_id")
     assert set(task.params) == {"tasks", "agent_id", "session_id", "model"}
 
