@@ -45,7 +45,7 @@ def test_toolkit_exercises_grounded_file_lifecycle_and_search(tmp_path):
     assert actual_unread == "ERROR: You must read the file with the read tool before attempting to edit it."
 
     actual_read = read("code.py", context=context)
-    assert re.search(r"^1[a-f0-9]{2}\|class TaskRunner:", actual_read, re.MULTILINE)
+    assert re.search(r"^1:[a-f0-9]{2}\|class TaskRunner:", actual_read, re.MULTILINE)
 
     actual_patch = patch("code.py", old_string="return 'old'", new_string="return 'new'", context=context)
     assert actual_patch.startswith(f"patched {target}")

@@ -15,7 +15,7 @@ from js.toolkit.core import ToolResult
 import ai
 
 
-ANCHOR_RE = re.compile(r"^1[a-f0-9]{2}\|alpha$", re.MULTILINE)
+ANCHOR_RE = re.compile(r"^1:[a-f0-9]{2}\|alpha$", re.MULTILINE)
 
 
 def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
@@ -37,6 +37,19 @@ def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     undo_result = fs.undo("sample.txt", context=context)
     assert undo_result.startswith(f"restored {target}")
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_read_prefix_separates_numeric_line_number_from_content_hash(tmp_path):
+    target = tmp_path / "numbered.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    rendered = fs.read("numbered.txt", context=context)
+
+    assert rendered.splitlines() == [
+        f"1:{fs._line_hash('alpha')}|alpha",
+        f"2:{fs._line_hash('beta')}|beta",
+    ]
 
 
 def _read_file(tmp_path, name: str, body: str) -> tuple:
@@ -183,6 +196,58 @@ def test_patch_edits_list_still_requires_a_prior_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "alpha\n"
 
 
+def test_patch_refuses_a_match_outside_the_ranges_actually_read(tmp_path):
+    target = tmp_path / "ranged.txt"
+    target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+    fs.read("ranged.txt", start_line=1, end_line=2, context=context)
+
+    blocked = fs.patch(
+        file_path="ranged.txt",
+        old_string="five",
+        new_string="FIVE",
+        context=context,
+    )
+
+    assert blocked == "ERROR: You must read the target line (5) before attempting to edit it."
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\nfour\nfive\nsix\n"
+
+
+def test_patch_accepts_target_covered_by_union_of_ranged_reads(tmp_path):
+    target = tmp_path / "pieces.txt"
+    target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+    fs.read("pieces.txt", start_line=1, end_line=2, context=context)
+    fs.read("pieces.txt", start_line=4, end_line=5, context=context)
+
+    result = fs.patch(
+        file_path="pieces.txt",
+        old_string="four\nfive",
+        new_string="FOUR\nFIVE",
+        context=context,
+    )
+
+    assert result.startswith(f"patched {target}")
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\nFOUR\nFIVE\nsix\n"
+
+
+def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
+    target = tmp_path / "paged.txt"
+    target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, max_read_lines=2)
+    fs.read("paged.txt", context=context)
+
+    result = fs.patch(
+        file_path="paged.txt",
+        old_string="four",
+        new_string="FOUR",
+        context=context,
+    )
+
+    assert result == "ERROR: You must read the target line (4) before attempting to edit it."
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\nfour\n"
+
+
 def test_undo_reverts_a_whole_multi_edit_patch_in_one_step(tmp_path):
     target, context = _read_file(tmp_path, "undoable.txt", "one\ntwo\nthree\n")
 
@@ -278,6 +343,21 @@ def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_pa
     write_result = fs.write("guarded.txt", "new\n", overwrite=True, context=context)
     assert write_result.startswith(f"wrote 4 bytes to {target}")
     assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_write_overwrite_requires_complete_read_coverage(tmp_path):
+    target = tmp_path / "partial.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+    fs.read("partial.txt", start_line=1, end_line=1, context=context)
+
+    blocked = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
+    fs.read("partial.txt", start_line=2, end_line=3, context=context)
+    written = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
+
+    assert blocked == "ERROR: You must read the whole file before attempting to overwrite it."
+    assert written.startswith(f"wrote 12 bytes to {target}")
+    assert target.read_text(encoding="utf-8") == "replacement\n"
 
 
 def test_undo_restores_created_file_to_nonexistent_state(tmp_path):
