@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import threading
@@ -633,11 +634,17 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
     the read loop: `for line in proc.stdout` blocks until rg emits something, so a
     loop-side check can only fire while output is already flowing — exactly the
     case that does not need a timeout. A long scan that matches nothing emits no
-    lines at all, and used to run unbounded."""
+    lines at all, and used to run unbounded.
+
+    The child gets its own session so the watchdog can signal the whole group.
+    Killing only the direct child leaves any grandchild holding the write end of
+    the pipe, and the read loop then blocks past the deadline anyway — the exact
+    hang the watchdog exists to prevent."""
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=_rg_env(), text=True, encoding="utf-8", errors="replace",
+            start_new_session=True,
         )
     except OSError as exc:
         return [], 2, str(exc), False
@@ -645,9 +652,15 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
     stopped_early = False
     expired = threading.Event()
 
+    def _kill_group() -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, AttributeError):
+            proc.kill()
+
     def _expire() -> None:
         expired.set()
-        proc.kill()
+        _kill_group()
 
     watchdog = threading.Timer(timeout, _expire)
     watchdog.daemon = True
@@ -666,7 +679,7 @@ def _rg_stream(argv: list[str], want: int, timeout: int) -> tuple[list[str], int
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_group()
                 proc.wait()
     timed_out = expired.is_set()
     stderr = proc.stderr.read() if proc.stderr is not None else ""
