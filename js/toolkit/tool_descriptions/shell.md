@@ -14,10 +14,10 @@ Critical directory rule:
 
 Do not use this for normal file operations:
 {{#if fs_search}}
-- File search: use `fs_search`, not `find`, `grep`, or `rg`.
+- Filename discovery: use `fs_search` with `output_mode="files"`.
 - Content search: use `fs_search` with regex, not `grep` or `rg`.
-- Directory shape: use `fs_search` or an explicit `shell` listing command when
-  directory traversal is the actual request.
+- Directory-only discovery: use `shell` with `fd --type d`; `fs_search` returns
+  files and does not report empty directories.
 {{/if}}
 {{#unless fs_search}}
 - Content search: use `rg` (ripgrep), not `grep`. `rg` is installed; it skips

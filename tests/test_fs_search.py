@@ -62,6 +62,24 @@ def test_fs_search_files_with_matches_is_default(tmp_path):
 
 
 @requires_rg
+def test_fs_search_files_mode_finds_a_filename_without_reading_its_contents(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    nested = tmp_path / "package"
+    nested.mkdir()
+    target = nested / "settings.py"
+    target.write_text("value = 42\n", encoding="utf-8")
+
+    actual = fs_search(
+        "settings.py",
+        path=".",
+        output_mode="files",
+        context=context,
+    )
+
+    assert actual == str(target)
+
+
+@requires_rg
 def test_fs_search_count_mode_reports_per_file_line_counts(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("hit\nhit\nmiss\n", encoding="utf-8")

@@ -228,6 +228,7 @@ class TurnToolSurface:
             return discovery.compact_result({"results": [
                 {"id": item.id, "kind": item.kind, "name": item.name,
                  "description": item.description, "source": item.source,
+                 "loadable": item.loadable,
                  "loaded": item.id in self._loaded_ids}
                 for item in entries
             ]})
@@ -257,6 +258,7 @@ class TurnToolSurface:
                 "name": item.name,
                 "description": item.description,
                 "source": item.source,
+                "loadable": item.loadable,
                 "loaded": item.id in self._loaded_ids,
             })
         return discovery.compact_result({"results": matches})

@@ -4,7 +4,9 @@ Use this to track progress during non-trivial coding sessions. It helps prevent
 missed requirements and makes multi-step work explicit.
 
 How it works:
-- Each item has `content` and `status`.
+- Each item requires non-empty `content`.
+- `status` is optional and defaults to `pending`; valid values are `pending`,
+  `in_progress`, `completed`, and `cancelled`.
 - `content` is the unique key.
 - Sending a new `content` adds a task.
 - Sending existing `content` updates that task's status.

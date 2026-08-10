@@ -602,7 +602,15 @@ def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
             "todo_write",
             load_description("todo_write"),
             todo_write,
-            {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": sorted(_ALLOWED_STATUS)}}}}},
+            {"todos": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "minLength": 1, "pattern": r"\S"},
+                    "status": {"type": "string", "enum": sorted(_ALLOWED_STATUS), "default": "pending"},
+                },
+                "required": ["content"],
+                "additionalProperties": False,
+            }}},
             required=("todos",),
         ),
         Tool("todo_read", load_description("todo_read"), todo_read, {}),

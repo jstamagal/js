@@ -77,6 +77,7 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
         "native:browser_probe",
         "native:terminal_session",
     ]
+    assert [item["loadable"] for item in results] == [True, True]
     assert json.loads(surface.discover(source="browser"))["results"][0]["name"] == "browser_probe"
     assert json.loads(surface.discover(query="terminal session"))["results"][0]["source"] == "terminal"
     assert surface.discover(load="native:wiki_search").startswith("ERROR: no allowed catalog entry")
@@ -147,6 +148,7 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
 
     skills_found = json.loads(surface.discover(kind="skill"))["results"]
     assert [item["id"] for item in skills_found] == ["skill:inspect"]
+    assert skills_found[0]["loadable"] is True
     loaded = json.loads(surface.discover(load="skill:inspect"))
     assert loaded["instructions"] == "Open the page and report visual defects.\n"
     assert loaded["loaded"] == ["browser_probe"]
