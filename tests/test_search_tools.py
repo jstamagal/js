@@ -310,8 +310,7 @@ def test_browse_sets_obscura_timeout_below_process_backstop(monkeypatch: pytest.
     assert captured == {
         "argv": [
             "/test/bin/obscura",
-            "--user-agent",
-            search._BROWSE_USER_AGENT,
+            "--stealth",
             "fetch",
             "--dump",
             "markdown",

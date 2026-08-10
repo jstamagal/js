@@ -92,11 +92,21 @@ def test_credentials_in_the_url_do_not_reach_the_error_line(server, tmp_path):
 
 
 @requires_obscura
-def test_the_status_probe_and_the_render_present_the_same_user_agent(server, tmp_path):
-    """A probe UA that differs from the browser's gets a different bot-detection
-    verdict, which labelled successfully-rendered pages as ERROR."""
+def test_neither_request_ever_names_js_to_the_site(server, tmp_path):
+    """js must not identify itself to a site. obscura owns the identity on both
+    the status probe and the render -- a js-agent probe got a different
+    bot-detection verdict than the browser and stamped ERROR on good pages."""
     browse(f"{server}/200", context=ToolContext(cwd=tmp_path))
 
     assert len(SEEN_AGENTS) >= 2
-    assert set(SEEN_AGENTS) == {search_mod._BROWSE_USER_AGENT}
-    assert "js-agent" not in search_mod._BROWSE_USER_AGENT
+    assert all("js-agent" not in agent for agent in SEEN_AGENTS)
+    assert all("Chrome/" in agent for agent in SEEN_AGENTS)
+
+
+@requires_obscura
+def test_the_status_comes_from_obscura_not_a_second_client(server, tmp_path):
+    status = search_mod._obscura_status(
+        shutil.which("obscura"), f"{server}/503", timeout=20
+    )
+
+    assert status == 503
