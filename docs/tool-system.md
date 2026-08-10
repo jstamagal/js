@@ -94,6 +94,7 @@ surface.
 read
 write
 fs_search
+ast_search
 remove
 patch
 undo
@@ -214,6 +215,10 @@ Edit operations snapshot prior state for `undo`:
 - file type/extension
 - head limit and offset
 - multiline matching
+
+`ast_search` is structural source search backed by ast-grep. It accepts parsed
+patterns with `$NAME` and `$$$ARGS` metavariables, emits read-compatible line
+anchors, and supports snapshot-backed structural rewrite previews and applies.
 
 ## Shell
 

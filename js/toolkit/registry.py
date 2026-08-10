@@ -397,6 +397,8 @@ def registry_for_roots(
 
 def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, flags: tuple[str, ...] = ("model_override",)) -> ToolRegistry:
     base_tools = (
+        # Local search primitives (fs_search and ast_search) stay eager: they
+        # have no startup work and are useful on the first repository probe.
         fs.tools()
         + process_net.tools()
         + search.tools()
