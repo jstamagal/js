@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import re
+from pathlib import Path
+
 from js.toolkit import ToolContext
 from js.toolkit import fs, process_net
 
@@ -42,14 +46,18 @@ def test_file_url_html_defaults_to_readable_text_and_raw_can_keep_source(tmp_pat
     assert "<p>Hello" in process_net.fetch(page.as_uri(), raw=True, context=context)
 
 
-def test_file_url_text_response_truncates_at_tool_result_limit(tmp_path):
+def test_file_url_text_response_spills_full_text_at_tool_result_limit(tmp_path, monkeypatch):
     source = tmp_path / "long.txt"
     source.write_text("abcdef", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=4)
 
     result = process_net.fetch(source.as_uri(), context=context)
 
-    assert result == "abcd\n[truncated]"
+    pointer = re.search(r"the full text is at (.+) — read it", result)
+    assert pointer is not None
+    assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
+    assert "limits.max_tool_result_bytes (4)" in result
 
 
 def test_file_url_binary_returns_descriptor_instead_of_bytes(tmp_path):
@@ -157,6 +165,57 @@ def test_http_request_accepts_header_list_and_raw_body(monkeypatch, tmp_path):
     assert req.get_header("User-agent") == "js-agent/0.1"
 
 
+def test_http_html_preserves_actionable_markdown_links_and_plain_pages(monkeypatch, tmp_path):
+    pages = iter(
+        [
+            FakeResponse(
+                b'<p>Read <a href="../docs/start?mode=full&amp;lang=en">the docs</a> '
+                b'and <a href="https://other.test/reference">reference</a>.</p>',
+                {"Content-Type": "text/html; charset=utf-8"},
+            ),
+            FakeResponse(
+                b"<p>A page with ordinary text.<br>Second line.</p>",
+                {"Content-Type": "text/html"},
+            ),
+        ]
+    )
+    monkeypatch.setattr(process_net.urllib.request, "urlopen", lambda _req, timeout: next(pages))
+    context = ToolContext(cwd=tmp_path)
+
+    linked = process_net.fetch("https://example.test/guides/chapter/", context=context)
+    plain = process_net.fetch("https://example.test/plain", context=context)
+
+    assert linked == (
+        "Read [the docs](https://example.test/guides/docs/start?mode=full&lang=en) "
+        "and [reference](https://other.test/reference)."
+    )
+    assert plain == "A page with ordinary text.\nSecond line."
+
+
+def test_http_text_over_cap_spills_full_response_using_standard_convention(
+    monkeypatch, tmp_path
+):
+    body = "line of recoverable content\n" * 200
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        process_net.urllib.request,
+        "urlopen",
+        lambda _req, timeout: FakeResponse(body.encode(), {"Content-Type": "text/plain"}),
+    )
+    context = ToolContext(cwd=tmp_path, max_tool_result_bytes=1024)
+
+    result = process_net.fetch("https://example.test/long", context=context)
+
+    digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+    expected_path = tmp_path / "oldinbox" / "js-tool-results" / f"result-{digest}.txt"
+    pointer = re.search(r"the full text is at (.+) — read it", result)
+    assert pointer is not None
+    assert Path(pointer.group(1)) == expected_path
+    assert expected_path.read_text(encoding="utf-8") == body
+    assert result.startswith(body[:512])
+    assert "limits.max_tool_result_bytes (1024)" in result
+
+
 def test_http_binary_response_returns_descriptor(monkeypatch, tmp_path):
     def fake_urlopen(req, timeout):
         return FakeResponse(b"\x00BIN", {"Content-Type": "application/octet-stream"})
@@ -173,11 +232,15 @@ def test_http_text_response_truncates_at_tool_result_limit(monkeypatch, tmp_path
         return FakeResponse(b"abcdef", {"Content-Type": "text/plain"})
 
     monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=4)
 
     result = process_net.fetch("https://example.test/text", context=context)
 
-    assert result == "abcd\n[truncated]"
+    pointer = re.search(r"the full text is at (.+) — read it", result)
+    assert pointer is not None
+    assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
+    assert "limits.max_tool_result_bytes (4)" in result
 
 
 def test_fetch_errors_return_error_strings_without_raising(monkeypatch, tmp_path):
@@ -218,3 +281,28 @@ def test_shell_tool_schema_exposes_timeout_param():
     tool = next(tool for tool in process_net.tools() if tool.name == "shell")
 
     assert tool.params["timeout"] == {"type": "integer", "default": 300}
+
+
+def test_shell_uses_configured_environment_allowlist_and_explains_failure(
+    monkeypatch, tmp_path
+):
+    seen = {}
+
+    def run_stub(cmd, **kwargs):
+        seen["env"] = kwargs["env"]
+        return 7, b"", b"token lookup failed"
+
+    monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
+    monkeypatch.setattr(process_net, "_run_capped", run_stub)
+    monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
+    context = ToolContext(cwd=tmp_path)
+    context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")
+
+    result = process_net.shell("use-token", context=context)
+
+    assert seen["env"]["FORGECODE_TOKEN"] == "operator-secret"
+    assert "exit=7" in result
+    assert "environment=filtered" in result
+    assert "allowed=" in result
+    assert "FORGECODE_TOKEN" in result
+    assert "limits.shell_env_allow" in result

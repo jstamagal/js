@@ -7,7 +7,7 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import runtime, settings
+from js import cli, runtime, settings
 from js.config import Config, from_env
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext, build_default_registry
@@ -82,6 +82,63 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
     cfg = from_env(save_session=False)
 
     assert cfg.subagent_max_workers == 3
+
+
+def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
+    monkeypatch, tmp_path
+):
+    assert settings.DEFAULT_SHELL_ENV_ALLOW == (
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "PWD",
+        "SHELL",
+    )
+    config_dir = _isolated_config_home(monkeypatch, tmp_path)
+    config_dir.mkdir(parents=True)
+    (config_dir / "jsrc").write_text(
+        'set model.id offline-test-model\n'
+        'set limits.shell_env_allow ["PATH","FORGECODE_TOKEN"]\n',
+        encoding="utf-8",
+    )
+
+    cfg = from_env(save_session=False)
+
+    assert cfg.shell_env_allow == ("PATH", "FORGECODE_TOKEN")
+
+
+def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runtime.model_client,
+        "stream_model_async",
+        lambda **_kwargs: _fake_stream_result("ok"),
+    )
+    cfg = replace(_config(tmp_path), shell_env_allow=("PATH",))
+    live_settings = settings.seed_defaults()
+    settings.set_dotted(
+        live_settings,
+        ("limits", "shell_env_allow"),
+        ["PATH", "FORGECODE_TOKEN"],
+    )
+    live_cfg = cli._cfg_for_live_state(cfg, {"settings": live_settings})
+    context = ToolContext(cwd=tmp_path)
+
+    runtime.run_turn(
+        live_cfg,
+        "system",
+        [{"role": "user", "content": "hi"}],
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=build_default_registry().select([]),
+        tool_context=context,
+        suppress_output=True,
+    )
+
+    assert live_cfg.shell_env_allow == ("PATH", "FORGECODE_TOKEN")
+    assert context.shell_env_allow == ("PATH", "FORGECODE_TOKEN")
 
 
 def test_run_turn_copies_subagent_worker_limit_to_tool_context(monkeypatch, tmp_path):

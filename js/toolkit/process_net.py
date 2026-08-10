@@ -16,16 +16,22 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .. import settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker
 from .sanitize import int_or_default, text_or_default
+from .search import _absolutize
 
 
-_ENV_ALLOW = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL"}
+_ENV_ALLOW = _settings.DEFAULT_SHELL_ENV_ALLOW
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TAG_RE = re.compile(r"<[^>]+>")
+_ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
+_HREF_RE = re.compile(
+    r"(?is)\bhref\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))"
+)
 
 
 
@@ -48,7 +54,10 @@ def shell(
     command = text_or_default(command)
     timeout = int_or_default(timeout, 300, minimum=1)
     workdir = context.resolve_path(cwd) if cwd else context.cwd
-    allowed = set(env or []) | _ENV_ALLOW
+    configured_allow = getattr(context, "shell_env_allow", _ENV_ALLOW)
+    if not isinstance(configured_allow, (list, tuple, set, frozenset)):
+        configured_allow = _ENV_ALLOW
+    allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
     safe_env = {key: os.environ[key] for key in allowed if key in os.environ}
     shell_path = _default_shell()
     shell_arg = "/C" if sys.platform == "win32" else "-c"
@@ -101,6 +110,14 @@ def shell(
     parts = [f"shell={shell_path}", f"exit={returncode}"]
     if description:
         parts.append(f"description={description}")
+    if returncode:
+        allowed_names = ",".join(sorted(allowed)) or "<none>"
+        present_names = ",".join(sorted(safe_env)) or "<none>"
+        parts.append(
+            "environment=filtered "
+            f"allowed={allowed_names} present={present_names}; "
+            "names not allowed by limits.shell_env_allow or the env parameter are unset"
+        )
     if stdout:
         parts.append(f"--- stdout ---\n{stdout}")
     if stderr:
@@ -110,12 +127,22 @@ def shell(
     return "\n".join(parts)
 
 
-def _html_to_text(raw: str) -> str:
+def _html_to_text(raw: str, base_url: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", raw)
+
+    def _anchor_to_markdown(match: re.Match[str]) -> str:
+        href_match = _HREF_RE.search(match.group("attrs"))
+        if href_match is None:
+            return match.group("label")
+        href = next(value for value in href_match.group("double", "single", "bare") if value is not None)
+        return f"[{match.group('label')}]({href})"
+
+    text = _ANCHOR_RE.sub(_anchor_to_markdown, text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p>", "\n\n", text)
     text = _TAG_RE.sub("", text)
     text = html.unescape(text)
+    text = _absolutize(text, base_url)
     lines = [line.strip() for line in text.splitlines()]
     compact: list[str] = []
     blank = False
@@ -288,6 +315,7 @@ def _format_payload(
     truncated: bool = False,
     source_path: Path | None = None,
     total_size: int | None = None,
+    base_url: str = "",
 ) -> str:
     size = len(data) if total_size is None else total_size
     image_mime = _image_mime(source_path, content_type, data)
@@ -300,15 +328,27 @@ def _format_payload(
     if not _is_text_response(content_type, data):
         return _descriptor("BINARY_RESPONSE", content_type, size, truncated)
 
-    payload = data[: context.max_tool_result_bytes]
-    text = payload.decode("utf-8", errors="replace")
+    text = data.decode("utf-8", errors="replace")
     if not raw and "html" in _media_type(content_type):
-        text = _html_to_text(text)
-    if len(text) > context.max_tool_result_bytes:
-        text = text[: context.max_tool_result_bytes]
-        truncated = True
+        text = _html_to_text(text, base_url)
     if truncated:
-        text += "\n[truncated]"
+        # Fetch must retain the tail itself: the generic runtime spill happens
+        # after the handler returns, which is too late if only cap+1 bytes were
+        # read. Reuse that spill function so fetch has the same directory,
+        # content-addressed name, preview, and pointer as every other large tool
+        # result. Prefer the ordinary inline cap when it is the tighter bound;
+        # this also prevents the runtime from spilling the pointer a second time.
+        from ..runtime import spill_oversized_result
+
+        hard_cap = max(0, int(context.max_tool_result_bytes))
+        inline_cap = max(0, int(getattr(context, "max_tool_result_inline_bytes", 0) or 0))
+        spill_cap = inline_cap if inline_cap and (not hard_cap or inline_cap < hard_cap) else hard_cap
+        limit_name = (
+            "limits.max_tool_result_inline_bytes"
+            if spill_cap == inline_cap and inline_cap
+            else "limits.max_tool_result_bytes"
+        )
+        return spill_oversized_result(text, spill_cap, limit_name=limit_name, force=True)
     return text
 
 
@@ -337,9 +377,8 @@ def _fetch_file_url(
             content_type = _guess_file_content_type(path, data)
             return _write_download(save_target, data, content_type, context)
 
-        with path.open("rb") as handle:
-            data = handle.read(context.max_tool_result_bytes + 1)
-        truncated = len(data) > context.max_tool_result_bytes
+        data = path.read_bytes()
+        truncated = size > context.max_tool_result_bytes
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
     content_type = _guess_file_content_type(path, data)
@@ -351,6 +390,7 @@ def _fetch_file_url(
         truncated=truncated,
         source_path=path,
         total_size=size,
+        base_url=url,
     )
 
 
@@ -393,7 +433,12 @@ def fetch(
         timeout_s = context.download_timeout_s if save_target else context.fetch_timeout_s
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             content_type = _header_value(resp.headers, "content-type")
-            payload, truncated = _read_response(resp, limit)
+            if save_target is not None:
+                payload, truncated = _read_response(resp, limit)
+            else:
+                payload = resp.read()
+                truncated = len(payload) > limit
+            response_url = str(getattr(resp, "geturl", lambda: url)() or url)
         if truncated and save_target is not None:
             return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
         if save_target is not None:
@@ -404,6 +449,7 @@ def fetch(
             raw=raw,
             context=context,
             truncated=truncated,
+            base_url=response_url,
         )
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"

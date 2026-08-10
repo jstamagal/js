@@ -36,6 +36,7 @@ DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000
 DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES = 51_200
 DEFAULT_MAX_TOOL_RESULT_BYTES = 256 * 1024
 DEFAULT_FETCH_TIMEOUT_S = 15
+DEFAULT_SHELL_ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL")
 # browse drives a real browser engine: navigation, a JS event loop, and an
 # adaptive settle wait. 15s is a plain-HTTP number and kills SPAs mid-render.
 DEFAULT_BROWSE_TIMEOUT_S = 60
@@ -163,6 +164,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "fetch() per-request timeout in seconds, and the timeout for the "
                 "web-search backends' JSON calls.",
                 env="JS_FETCH_TIMEOUT"),
+    SettingSpec("limits.shell_env_allow", "json", list(DEFAULT_SHELL_ENV_ALLOW),
+                "Environment-variable names inherited by shell() without naming "
+                "them per call in env. The default is the eight-variable safe set; "
+                "use a JSON string list to widen or narrow it."),
     SettingSpec("limits.browse_timeout_s", "int", DEFAULT_BROWSE_TIMEOUT_S,
                 "browse() page budget in seconds. obscura is told to give up one "
                 "second earlier so its own graceful navigation-timeout path runs "
@@ -419,6 +424,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
+        if spec.key == "limits.shell_env_allow":
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                return None, "expected a JSON list of non-empty environment-variable names"
         if spec.key in {"mcp.servers", "mcp.agents"}:
             from . import mcp_config
 

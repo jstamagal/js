@@ -398,6 +398,10 @@ _LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
     ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
 )
 
+_LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("shell_env_allow", ("limits", "shell_env_allow")),
+)
+
 
 _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_output_tokens", ("model", "max_output_tokens")),
@@ -697,6 +701,14 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     for attr, path, allowed in _LIVE_STR_FIELDS:
         raw = str(settings.get_dotted(live_settings, path, getattr(active, attr)) or "").strip().lower()
         updates[attr] = raw if raw in allowed else getattr(active, attr)
+    for attr, path in _LIVE_STR_LIST_FIELDS:
+        raw = settings.get_dotted(live_settings, path, getattr(active, attr))
+        updates[attr] = (
+            tuple(raw)
+            if isinstance(raw, (list, tuple))
+            and all(isinstance(item, str) and item.strip() for item in raw)
+            else getattr(active, attr)
+        )
     return replace(active, **updates)
 
 
