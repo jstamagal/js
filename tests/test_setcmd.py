@@ -12,6 +12,11 @@ from js import setcmd, settings
     [
         ("model.id", "local-model", "local-model"),
         ("limits.fetch_timeout_s", "20", 20),
+        (
+            "limits.shell_env_allow",
+            '["PATH","HOME","FORGECODE_TOKEN"]',
+            ["PATH", "HOME", "FORGECODE_TOKEN"],
+        ),
         ("limits.inline_code_timeout_s", "300", 300),
         ("compact.notify_threshold", "0.75", 0.75),
         ("runtime.trace", "off", False),
@@ -37,6 +42,18 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     assert shown.error is None
     assert shown.lines[0] == f"{key} = {setcmd.render_value(spec, expected)}"
     assert shown.lines[1].strip() == spec.doc
+
+
+@pytest.mark.parametrize("raw", ['"PATH"', '["PATH",""]', '["PATH",7]'])
+def test_shell_env_allow_rejects_values_that_are_not_variable_name_lists(raw):
+    live_settings = settings.seed_defaults()
+
+    result = setcmd.run_repl_command(live_settings, f"/set limits.shell_env_allow {raw}")
+
+    assert result.error == (
+        "limits.shell_env_allow: expected a JSON list of non-empty "
+        "environment-variable names"
+    )
 
 
 def test_tools_alias_profiles_rejects_non_list_json():

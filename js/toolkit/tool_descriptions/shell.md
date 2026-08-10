@@ -71,7 +71,11 @@ Command construction:
 - Always quote paths containing spaces.
 - Add a concise `description` when the purpose is not obvious.
 - Use `env` only for environment variable names that should be passed through.
-- **Default child env is restricted to PATH, HOME, USER, LANG, LC_ALL, TERM, PWD, and SHELL.** Any other variable (API keys, tokens, custom vars) must be explicitly named in `env` to pass through.
+- **Default child env is restricted to PATH, HOME, USER, LANG, LC_ALL, TERM,
+  PWD, and SHELL.** The operator can change this persistent allowlist with
+  `limits.shell_env_allow` (a JSON list of names); `env` adds names for one call.
+  A nonzero result reports the allowed and actually present names, so an omitted
+  variable is distinguishable from a broken command.
 - `timeout` (default `300` seconds): raise it for long builds/tests that legitimately run past 5 minutes.
 - Use `keep_ansi=true` only when color/control output matters.
 

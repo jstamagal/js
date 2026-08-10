@@ -25,6 +25,7 @@ import ai
 from . import colors as C
 from . import context_budget
 from . import model_metadata
+from . import settings as _settings
 from . import tools as T
 from . import tool_args
 from . import routing
@@ -669,14 +670,21 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     return result
 
 
-def spill_oversized_result(result: str, inline_cap: int, *, spill_dir: Path | None = None) -> str:
+def spill_oversized_result(
+    result: str,
+    inline_cap: int,
+    *,
+    spill_dir: Path | None = None,
+    limit_name: str = "limits.max_tool_result_inline_bytes",
+    force: bool = False,
+) -> str:
     """Write an oversized result to disk and return a preview plus the path.
 
     Clipping throws the tail away — the model cannot get it back and often
     does not know it existed. Spilling keeps every byte addressable: the model
     reads the file with an offset if it needs the rest. 0 or less disables.
     """
-    if inline_cap <= 0 or len(result) <= inline_cap:
+    if inline_cap <= 0 or (not force and len(result) <= inline_cap):
         return result
     target_dir = spill_dir or (Path(os.path.expanduser("~")) / "oldinbox" / "js-tool-results")
     try:
@@ -690,7 +698,7 @@ def spill_oversized_result(result: str, inline_cap: int, *, spill_dir: Path | No
     head = result[: max(0, inline_cap // 2)]
     return (
         f"{head}\n\n[result was {len(result)} bytes, over "
-        f"limits.max_tool_result_inline_bytes ({inline_cap}); the full text is at "
+        f"{limit_name} ({inline_cap}); the full text is at "
         f"{path} — read it with start_line/end_line for the rest]"
     )
 
@@ -1467,6 +1475,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
     active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
+    active_context.shell_env_allow = getattr(
+        cfg,
+        "shell_env_allow",
+        getattr(active_context, "shell_env_allow", _settings.DEFAULT_SHELL_ENV_ALLOW),
+    )
     active_context.browse_timeout_s = getattr(cfg, "browse_timeout_s", active_context.browse_timeout_s)
     active_context.download_timeout_s = getattr(cfg, "download_timeout_s", active_context.download_timeout_s)
     active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
