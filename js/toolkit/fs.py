@@ -504,10 +504,11 @@ def patch(
 
     Both forms are ONE code path: same read-before-edit guard, same match rules
     (must exist, must be unique unless replace_all, must differ from new_string),
-    one snapshot, one write. The batch is atomic — every edit is validated and
-    applied in memory first, so a miss, an ambiguity or a no-op anywhere in the
-    list writes nothing and names the offending edit. Mixing the two forms is an
-    error, never a silent precedence rule.
+    one snapshot, one write. Batch validation is all-or-nothing: every edit is
+    validated and applied in memory first, so a miss, an ambiguity or a no-op
+    anywhere in the list writes nothing and names the offending edit. The final
+    filesystem write is not crash-atomic. Mixing the two forms is an error, never
+    a silent precedence rule.
     """
     assert context is not None
     raw_path = file_path or path
@@ -740,23 +741,28 @@ def fs_search(
     after = int_or_default(context_lines if context_lines is not None else after_context, 0, minimum=0)
 
     argv = [rg, "--color=never", "--no-messages"]
-    if mode == "files_with_matches":
+    if mode == "files":
+        argv.append("--files")
+    elif mode == "files_with_matches":
         argv.append("--files-with-matches")
     elif mode == "count":
         argv.append("--count")
-    else:  # content
+    elif mode == "content":
         argv += ["--no-heading", "--with-filename"]
         argv.append("--line-number" if show_line_numbers else "--no-line-number")
         if before:
             argv += ["--before-context", str(before)]
         if after:
             argv += ["--after-context", str(after)]
-    if case_insensitive:
+    else:
+        return "ERROR: output_mode must be one of files, files_with_matches, content, count"
+    if case_insensitive and mode != "files":
         argv.append("--ignore-case")
     if multiline:
         argv += ["--multiline", "--multiline-dotall"]
+    glob_flag = "--iglob" if case_insensitive and mode == "files" else "--glob"
     if glob:
-        argv += ["--glob", str(glob)]
+        argv += [glob_flag, str(glob)]
     if file_type:
         # Prefer rg's own type table so `type=rust` matches *.rs (and `py` also
         # matches .pyi/.pyw), matching forge's `--type` behaviour. A bare extension
@@ -768,7 +774,10 @@ def fs_search(
             argv += ["--type", name]
         else:
             argv += ["--glob", f"*.{name}"]
-    argv += ["--regexp", pattern, "--", str(root)]
+    if mode == "files":
+        argv += [glob_flag, pattern, "--", str(root)]
+    else:
+        argv += ["--regexp", pattern, "--", str(root)]
 
     lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
     if timed_out:
@@ -844,10 +853,10 @@ def tools() -> tuple[Tool, ...]:
             load_description("fs_search"),
             fs_search,
             {
-                "pattern": {"type": "string", "description": "Regular expression to match."},
+                "pattern": {"type": "string", "description": "Content regular expression, or filename glob when output_mode is files."},
                 "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
                 "glob": {"type": "string", "description": "Optional glob filter such as *.py or **/*.tsx."},
-                "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: matching lines, paths only, or per-file counts."},
+                "output_mode": {"type": "string", "enum": ["files", "content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: filename-glob paths, content-matching lines, paths whose contents match, or per-file content-match counts."},
                 # Both spellings are declared because the handler has always accepted
                 # both and the description teaches the readable ones: with only the
                 # rg-style keys declared under additionalProperties:false, a model
@@ -892,10 +901,48 @@ def tools() -> tuple[Tool, ...]:
                         "required": ["old_string", "new_string"],
                         "additionalProperties": False,
                     },
-                    "description": "Several replacements applied in order, atomically. Use instead of old_string/new_string, never alongside them.",
+                    "description": "Several replacements validated and applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
                 },
             },
-            required=("file_path",),
+            input_schema={
+                "type": "object",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "File path to edit."},
+                            "old_string": {"type": "string", "description": "Exact text to replace."},
+                            "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                            "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
+                        },
+                        "required": ["file_path", "old_string", "new_string"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "File path to edit."},
+                            "edits": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "old_string": {"type": "string", "description": "Exact text to replace."},
+                                        "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                                        "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
+                                    },
+                                    "required": ["old_string", "new_string"],
+                                    "additionalProperties": False,
+                                },
+                                "description": "Several replacements validated and applied in order before one final write.",
+                            },
+                        },
+                        "required": ["file_path", "edits"],
+                        "additionalProperties": False,
+                    },
+                ],
+            },
         ),
         Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest in-process snapshot should be restored."}}, required=("path",)),
     )

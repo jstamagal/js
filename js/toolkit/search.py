@@ -420,7 +420,7 @@ def tools() -> tuple[Tool, ...]:
             serper_search,
             {
                 "query": {"type": "string"},
-                "num": {"type": "integer", "default": 8},
+                "num": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
             },
             required=("query",),
         ),
@@ -430,7 +430,7 @@ def tools() -> tuple[Tool, ...]:
             tavily_search,
             {
                 "query": {"type": "string"},
-                "max_results": {"type": "integer", "default": 8},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
             },
             required=("query",),
         ),
@@ -440,8 +440,8 @@ def tools() -> tuple[Tool, ...]:
             exa_search,
             {
                 "query": {"type": "string"},
-                "num": {"type": "integer", "default": 8},
-                "text_chars": {"type": "integer", "default": 1500},
+                "num": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
+                "text_chars": {"type": "integer", "minimum": 100, "default": 1500},
             },
             required=("query",),
         ),
@@ -452,7 +452,7 @@ def tools() -> tuple[Tool, ...]:
             {
                 "library": {"type": "string"},
                 "topic": {"type": "string"},
-                "tokens": {"type": "integer", "default": 4000},
+                "tokens": {"type": "integer", "minimum": 500, "default": 4000},
             },
             required=("library",),
         ),

@@ -92,6 +92,8 @@ def test_terminal_sessions_are_real_persistent_ptys_and_accept_keys(tmp_path):
         )
         assert any("got:hello" in line for line in sent["lines"])
         assert sent["screen_responded"] is True
+        assert "for look they describe passive change since the prior observation" in sent["reading"]
+        assert "terminal_snapshot updates that comparison baseline" in sent["reading"]
 
         listed = _payload(terminal_session(action="list", context=context))
         assert listed["sessions"][0]["session"] == "demo"

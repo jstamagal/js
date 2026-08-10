@@ -11,8 +11,8 @@ Path and range rules:
   `ToolContext.max_read_lines`.
 - Use `range.start_line` and `range.end_line` for long files. Prefer reading a
   useful large section over many tiny reads.
-- Lines longer than `ToolContext.max_line_chars` are truncated in the returned
-  output.
+- Ordinary text lines longer than `ToolContext.max_line_chars` are truncated.
+  `.jsonl` records use the larger `ToolContext.jsonl_max_line_chars` limit.
 - `show_line_numbers=false` returns plain selected text.
 
 Text output format:
@@ -40,7 +40,7 @@ Visual and binary handling:
 
 When not to use:
 {{#if fs_search}}
-- This tool reads files only. Use `fs_search` for directory discovery, exact
+- This tool reads files only. Use `fs_search` for filename discovery, exact
   string search, regex, or broad content discovery.
 {{/if}}
 {{#unless fs_search}}
