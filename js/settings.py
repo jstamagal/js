@@ -174,8 +174,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "and partial content survives.",
                 env="JS_BROWSE_TIMEOUT"),
     SettingSpec("limits.download_timeout_s", "int", DEFAULT_DOWNLOAD_TIMEOUT_S,
-                "fetch() timeout in seconds when save= is set. Downloads are bounded "
-                "by size, not by how fast a page renders.",
+                "aria2c transfer timeout in seconds for saved, binary, and oversized "
+                "fetch() responses. Downloads are bounded by size, not by how fast a "
+                "page renders.",
                 env="JS_DOWNLOAD_TIMEOUT"),
     SettingSpec("limits.inline_code_timeout_s", "int", DEFAULT_INLINE_CODE_TIMEOUT_S,
                 "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",

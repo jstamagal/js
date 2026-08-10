@@ -4,11 +4,18 @@ import hashlib
 import re
 from pathlib import Path
 
+import pytest
+
 from js.toolkit import ToolContext
 from js.toolkit import fs, process_net
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtiny"
+
+
+@pytest.fixture(autouse=True)
+def _use_urllib_fallback(monkeypatch):
+    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
 
 
 class CaseInsensitiveHeaders(dict):

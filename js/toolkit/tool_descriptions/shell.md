@@ -59,8 +59,11 @@ When shell is the only tool for file work, use real Unix tools carefully:
   instruction.
 {{/unless}}
 {{#unless fetch}}
-- Download with Python `urllib.request` or `curl -L --fail --output PATH URL` only
-  when network fetch is truly needed; write to an explicit path and verify size.
+- Download with `aria2c --continue=true --split=8
+  --max-connection-per-server=8 --min-split-size=1M --max-tries=5
+  --retry-wait=1 --file-allocation=none --auto-file-renaming=false --dir=DIR
+  --out=NAME URL` when network transfer is truly needed; write to an explicit
+  path and verify size.
 {{/unless}}
 
 Before commands that create files or directories:
