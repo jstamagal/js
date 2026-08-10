@@ -35,6 +35,7 @@ def seen(monkeypatch):
         return _FakeResponse()
 
     monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
     return box
 
 
