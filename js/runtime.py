@@ -29,7 +29,7 @@ from . import settings as _settings
 from . import tools as T
 from . import tool_args
 from . import routing
-from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+from . import compaction
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .toolkit.core import ToolContext, ToolResult, call_tool, call_tool_async
@@ -144,20 +144,6 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
     return _PendingToolCall(id=pc.id, name=name, arg_chunks=list(pc.arg_chunks))
 
 
-def _resolve_max_output(model: str, provider_id: str | None) -> int | None:
-    """Per-model output cap from server cache or models.dev metadata, else unset."""
-    cached = model_metadata.cached_server_limits(model, provider_id)
-    if cached is not None and cached.max_output_tokens is not None:
-        return cached.max_output_tokens
-    return model_metadata.max_output_tokens(model, provider_id)
-
-
-def _provider_extra_params(cfg: Config) -> dict[str, Any] | None:
-    provider_cfg = (getattr(cfg, "settings", {}) or {}).get("provider")
-    extra = provider_cfg.get("extra") if isinstance(provider_cfg, dict) else None
-    return dict(extra) if isinstance(extra, dict) else None
-
-
 _CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
 
 
@@ -202,7 +188,7 @@ def install_context_window_overrides(cfg: Config) -> None:
     model.max_output_tokens, and wins — it names the model actually running.
     compact.context_window_overrides is the multi-model map.
     """
-    overrides = dict(_compact_setting(cfg, "context_window_overrides", None) or {})
+    overrides = dict(compaction.get(cfg, "context_window_overrides", None) or {})
     explicit = getattr(cfg, "model_context_window", None)
     if explicit:
         key = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model
@@ -269,150 +255,6 @@ def _is_retriable(exc: BaseException) -> bool:
     if isinstance(exc, ai.ProviderAPIError):
         return bool(exc.is_retryable)
     return False
-
-
-_CONTEXT_OVERFLOW_NEEDLES = (
-    "context_length_exceeded",
-    "context window",
-    "context limit",
-    "context length",
-    "maximum context",
-    "max context",
-    "prompt too long",
-    "prompt is too long",
-    "input is too long",
-    "input too long",
-    "too many tokens",
-    "token limit",
-    "tokens exceed",
-    "reduce the length",
-    "request too large",
-)
-
-
-# How many times the summarizer may drop its oldest half and retry when the
-# summarize call itself overflows.
-_SUMMARY_PEEL_RETRIES = 3
-
-# How many rounds of recovery a single turn may attempt after the provider
-# rejects the request for size. One was never enough: the first compaction
-# targets whatever window we *believe* we have, and if that belief is wrong
-# the retry lands on the wall again.
-_OVERFLOW_RECOVERY_ROUNDS = 3
-
-MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
-
-# After a summary compaction the model knows it edited a file but not what is
-# in it, so its next move is to re-read everything it was just working on —
-# one turn wasted, and the summary rarely carries enough detail to edit from.
-# Re-attach the files it touched most recently, newest first, under a budget.
-POST_COMPACT_MAX_FILES = 5
-POST_COMPACT_TOKEN_BUDGET = 50_000
-POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
-
-
-def _post_compact_rehydration(
-    context: Any,
-    *,
-    chars_per_token: float = 4.0,
-    max_files: int = POST_COMPACT_MAX_FILES,
-    token_budget: int = POST_COMPACT_TOKEN_BUDGET,
-    per_file_tokens: int = POST_COMPACT_MAX_TOKENS_PER_FILE,
-) -> dict | None:
-    """Build one user message re-attaching recently read files, or None.
-
-    Reads from disk rather than replaying the pre-compaction text, so the
-    content is current — the model may have edited the file since. Files that
-    vanished or grew past the per-file budget are named but not inlined, which
-    is still useful: it tells the model the file exists and must be re-read.
-    """
-    paths = list(getattr(context, "read_paths", []) or [])
-    if not paths:
-        return None
-    # read_paths is a set; order by mtime so "recent" means recent.
-    def _mtime(p):
-        try:
-            return p.stat().st_mtime
-        except OSError:
-            return 0.0
-    paths.sort(key=_mtime, reverse=True)
-
-    sections: list[str] = []
-    spent = 0
-    for path in paths[:max_files]:
-        try:
-            body = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        est = max(1, int(len(body) / max(1.0, chars_per_token)))
-        if est > per_file_tokens or spent + est > token_budget:
-            sections.append(f"### {path}\n(too large to re-attach; read it if you need it)")
-            continue
-        spent += est
-        sections.append(f"### {path}\n{body}")
-    if not sections:
-        return None
-    return {
-        "role": "user",
-        "content": (
-            "<post-compaction-files>\n"
-            "Current contents of the files that were open before the summary "
-            "above. These are read fresh from disk, so they already include "
-            "your edits. Do not re-read them unless you change them.\n\n"
-            + "\n\n".join(sections)
-            + "\n</post-compaction-files>"
-        ),
-    }
-
-# Tool results are the bulk of a long session and the cheapest thing to drop:
-# the assistant's own reasoning about them survives in its messages, and the
-# file can always be read again. Clearing them needs no model call, so unlike a
-# summary it cannot fail at the exact moment the context is too big to send.
-def microcompact(
-    messages: list[dict],
-    *,
-    keep_recent: int = 20,
-    min_chars: int = 400,
-) -> tuple[int, int]:
-    """Blank the bodies of old tool results in place.
-
-    Leaves the newest ``keep_recent`` tool results untouched (the model is
-    usually still working with those) and ignores results already small enough
-    that clearing them buys nothing. Returns (results_cleared, chars_reclaimed).
-    """
-    indexes = [
-        i for i, m in enumerate(messages)
-        if isinstance(m, dict)
-        and m.get("role") == "tool"
-        and isinstance(m.get("content"), str)
-        and m["content"] != MICROCOMPACT_CLEARED_MESSAGE
-    ]
-    if keep_recent > 0:
-        indexes = indexes[:-keep_recent] if keep_recent < len(indexes) else []
-    cleared = 0
-    reclaimed = 0
-    for i in indexes:
-        body = messages[i]["content"]
-        if len(body) < min_chars:
-            continue
-        messages[i] = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
-        cleared += 1
-        reclaimed += len(body) - len(MICROCOMPACT_CLEARED_MESSAGE)
-    return cleared, reclaimed
-
-
-def _is_context_overflow_error(exc: BaseException) -> bool:
-    if not isinstance(exc, ai.ProviderAPIError):
-        return False
-    fields: list[str] = [str(exc)]
-    for attr in ("code", "error_type", "status_code", "body"):
-        value = getattr(exc, attr, None)
-        if value is not None:
-            fields.append(str(value))
-    haystack = " ".join(fields).lower()
-    if "413" in haystack:
-        return True
-    return any(needle in haystack for needle in _CONTEXT_OVERFLOW_NEEDLES)
 
 
 def _backoff(attempt: int) -> float:
@@ -1068,362 +910,12 @@ async def _dispatch_batch(
 # Turn loop
 # --------------------------------------------------------------------------
 
-_COMPACTION_HEADINGS = (
-    "Goal",
-    "Decisions and rationale",
-    "Files and code",
-    "Commands and outcomes",
-    "Errors and fixes",
-    "Pending and next step",
-)
-
-
-def _compact_setting(cfg: Config, key: str, default: Any = None) -> Any:
-    settings = getattr(cfg, "settings", {}) or {}
-    cursor: Any = settings.get("compact", {}) if isinstance(settings, dict) else {}
-    return cursor.get(key, default) if isinstance(cursor, dict) else default
-
-
-def _message_text_for_estimate(message: dict) -> str:
-    return json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str)
-
-
-def _compact_int_setting(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
-    raw = _compact_setting(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if value <= 0:
-        return default
-    if max_value is not None:
-        return min(value, max_value)
-    return value
-
-
-def _compact_nonnegative_int_setting(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
-    raw = _compact_setting(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if value < 0:
-        return default
-    if max_value is not None:
-        return min(value, max_value)
-    return value
-
-
-def _compact_float_setting(cfg: Config, key: str, default: float) -> float:
-    raw = _compact_setting(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
-
-
-def _compact_model_setting(cfg: Config) -> str:
-    raw = _compact_setting(cfg, "model", "same")
-    if not isinstance(raw, str):
-        return cfg.model
-    model = raw.strip()
-    if not model or model.lower() == "same":
-        return cfg.model
-    return model
-
-
-def _compact_pre_hook_setting(cfg: Config) -> str:
-    raw = _compact_setting(cfg, "pre_hook")
-    if not isinstance(raw, str):
-        return ""
-    return raw.strip()
-
-
-def estimate_messages_tokens(messages: list[dict], chars_per_token: float = 4.0) -> int:
-    ratio = chars_per_token if chars_per_token and chars_per_token > 0 else 4.0
-    return int(sum(len(_message_text_for_estimate(m)) for m in messages) / ratio)
-
-
 def _last_user_message_index(messages: list[dict]) -> int | None:
     for idx in range(len(messages) - 1, -1, -1):
         if messages[idx].get("role") == "user":
             return idx
     return None
 
-
-def _compaction_summary_message(summary: str) -> dict:
-    return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
-
-
-def _safe_tail_start(messages: list[dict], tail_tokens: int, chars_per_token: float = 4.0) -> int:
-    if not messages:
-        return 0
-    ratio = chars_per_token if chars_per_token and chars_per_token > 0 else 4.0
-    budget_chars = int(tail_tokens * ratio)
-    total = 0
-    start = len(messages)
-    for idx in range(len(messages) - 1, -1, -1):
-        total += len(_message_text_for_estimate(messages[idx]))
-        start = idx
-        if total >= budget_chars:
-            break
-    # Back up so an assistant tool_calls message is never separated from the
-    # tool result messages that immediately answer it.
-    while start > 0:
-        prev = messages[start - 1]
-        if prev.get("role") == "assistant" and prev.get("tool_calls"):
-            start -= 1
-            continue
-        if messages[start].get("role") == "tool":
-            start -= 1
-            continue
-        break
-    return max(0, start)
-
-
-def _run_compact_pre_hook(cfg: Config) -> str:
-    hook = _compact_pre_hook_setting(cfg)
-    if not hook:
-        return ""
-    shell_path = (
-        os.environ.get("COMSPEC", "cmd.exe")
-        if sys.platform == "win32"
-        else os.environ.get("SHELL", "/bin/sh")
-    )
-    shell_arg = "/C" if sys.platform == "win32" else "-c"
-    cap = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
-    ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
-    if ceiling > 0:
-        cap = min(cap, ceiling)
-    try:
-        result = _run_capped(
-            [shell_path, shell_arg, hook],
-            timeout=30,
-            cwd=str(getattr(cfg, "project_dir", Path.cwd())),
-            env=None,
-            cap=cap,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return f"WARNING: compact pre_hook failed: {type(exc).__name__}: {exc}"
-    if not isinstance(result, CappedProcessResult):
-        result = CappedProcessResult(result[0], result[1], result[2])
-    stdout = result.stdout.decode("utf-8", errors="replace")
-    stderr = result.stderr.decode("utf-8", errors="replace")
-    if result.stdout_truncated:
-        stdout = stdout.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
-    if result.stderr_truncated:
-        stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
-    if result.returncode != 0:
-        return f"WARNING: compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}"
-    return stdout.strip()
-
-
-def _summary_prompt(messages: list[dict], focus: str, guidance: str) -> str:
-    headings = "\n".join(f"## {h}" for h in _COMPACTION_HEADINGS)
-    payload = json.dumps(messages, ensure_ascii=False, indent=2, default=str)
-    extra = ""
-    if focus:
-        extra += f"\nFocus: {focus.strip()}\n"
-    if guidance:
-        extra += f"\nPre-hook guidance/stdout:\n{guidance}\n"
-    return (
-        "Summarize this js session for loss-minimized context compaction. "
-        "Use exactly these six markdown headings and keep concrete file paths, commands, decisions, errors, and next steps.\n\n"
-        f"{headings}\n{extra}\nSession messages JSON:\n{payload}"
-    )
-
-
-def _summarize_for_compaction(cfg: Config, model: str, messages: list[dict], focus: str, guidance: str) -> str:
-    prompt = _summary_prompt(messages, focus, guidance)
-    route = routing.resolve_model_route(
-        model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", None),
-        explicit_model=True,
-    )
-    result = model_client.stream_model(
-        model_id=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        messages=[ai.user_message(prompt)],
-        tools=None,
-        max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
-        reasoning_effort=None,
-        on_text=lambda _t: None,
-        provider_headers=route.headers,
-        provider_extra=_provider_extra_params(cfg),
-    )
-    text = result.text.strip()
-    if not text:
-        text = "\n".join(f"## {h}\n(Not captured.)" for h in _COMPACTION_HEADINGS)
-    return text
-
-
-async def _summarize_for_compaction_async(
-    cfg: Config,
-    model: str,
-    messages: list[dict],
-    focus: str,
-    guidance: str,
-) -> str:
-    route = routing.resolve_model_route(
-        model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", None),
-        explicit_model=True,
-    )
-    # The thing being summarized is, by construction, the part of the history
-    # that would not fit — so the summarize call can overflow too. Peel the
-    # oldest half and retry rather than failing at the exact moment the only
-    # way out of the wall is a summary. Matches the PTL retry loop in Claude
-    # Code (compact.ts, MAX_PTL_RETRIES).
-    head = list(messages)
-    result = None
-    for peel in range(_SUMMARY_PEEL_RETRIES + 1):
-        try:
-            result = await model_client.stream_model_async(
-                model_id=route.model,
-                provider_id=route.provider_id,
-                provider_base_url=route.base_url,
-                provider_api_key=route.api_key,
-                messages=[ai.user_message(_summary_prompt(head, focus, guidance))],
-                tools=None,
-                max_output_tokens=_compact_int_setting(cfg, "summary_max_tokens", 4096, max_value=8192),
-                reasoning_effort=None,
-                on_text=lambda _t: None,
-                provider_headers=route.headers,
-                provider_extra=_provider_extra_params(cfg),
-            )
-            break
-        except ai.ProviderAPIError as exc:
-            if not _is_context_overflow_error(exc) or peel >= _SUMMARY_PEEL_RETRIES or len(head) <= 2:
-                raise
-            dropped = len(head) // 2
-            head = head[dropped:]
-            print(
-                f"  {C.ORANGE}(summary too large; dropped the oldest {dropped} messages "
-                f"and retrying, {peel + 1}/{_SUMMARY_PEEL_RETRIES}){C.RESET}",
-                flush=True,
-            )
-    assert result is not None
-    text = result.text.strip()
-    if not text:
-        text = "\n".join(f"## {h}\n(Not captured.)" for h in _COMPACTION_HEADINGS)
-    return text
-
-
-def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict]) -> float:
-    """Configured chars_per_token, corrected against real provider counts.
-
-    tail_tokens and min_savings_tokens used the raw 4.0 estimate while the
-    trigger that called them used provider tokens. On a tool-heavy session the
-    estimator drifts far enough that "keep 16k of tail" kept something quite
-    different from 16k.
-    """
-    configured = _compact_float_setting(cfg, "chars_per_token", 4.0)
-    try:
-        # The tracker lives on the tool context (set in run_turn_async), not in
-        # module scope — reading a global here would silently always miss.
-        tracker = getattr(T.DEFAULT_CONTEXT, "context_budget_state", None)
-        if not hasattr(tracker, "calibrated_chars_per_token"):
-            return configured
-        return tracker.calibrated_chars_per_token(messages=messages, system=system)
-    except Exception:  # noqa: BLE001 - calibration must never break compaction
-        return configured
-
-
-def compact_messages(
-    cfg: Config,
-    system: str,
-    messages: list[dict],
-    *,
-    focus: str = "",
-    forced: bool = False,
-    preserve_from: int | None = None,
-) -> str:
-    from . import memory as M
-
-    chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
-    tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
-    min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
-    original_len = len(messages)
-    keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
-    if preserve_from is not None:
-        try:
-            keep_from = min(keep_from, max(0, int(preserve_from)))
-        except (TypeError, ValueError):
-            pass
-    original_est = estimate_messages_tokens(messages, chars_per_token)
-    tail_est = estimate_messages_tokens(messages[keep_from:], chars_per_token)
-    if not forced and original_est - tail_est < min_savings:
-        return f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
-    guidance = _run_compact_pre_hook(cfg)
-    compact_model = _compact_model_setting(cfg)
-    summary = _summarize_for_compaction(cfg, compact_model, messages[:keep_from], focus, guidance)
-    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
-    rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
-    messages[:] = [
-        _compaction_summary_message(summary),
-        *([rehydrated] if rehydrated else []),
-        *messages[keep_from:],
-    ]
-    return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
-
-
-async def _compact_messages_async(
-    cfg: Config,
-    system: str,
-    messages: list[dict],
-    *,
-    focus: str = "",
-    forced: bool = False,
-    preserve_from: int | None = None,
-) -> str:
-    from . import memory as M
-
-    chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
-    tail_tokens = _compact_int_setting(cfg, "tail_tokens", 16384)
-    min_savings = _compact_int_setting(cfg, "min_savings_tokens", 400)
-    original_len = len(messages)
-    keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
-    if preserve_from is not None:
-        try:
-            keep_from = min(keep_from, max(0, int(preserve_from)))
-        except (TypeError, ValueError):
-            pass
-    original_est = estimate_messages_tokens(messages, chars_per_token)
-    tail_est = estimate_messages_tokens(messages[keep_from:], chars_per_token)
-    if not forced and original_est - tail_est < min_savings:
-        return f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
-    guidance = _run_compact_pre_hook(cfg)
-    compact_model = _compact_model_setting(cfg)
-    summary = await _summarize_for_compaction_async(
-        cfg,
-        compact_model,
-        messages[:keep_from],
-        focus,
-        guidance,
-    )
-    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
-    rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
-    messages[:] = [
-        _compaction_summary_message(summary),
-        *([rehydrated] if rehydrated else []),
-        *messages[keep_from:],
-    ]
-    return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
 
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
@@ -1456,7 +948,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     effort = cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override
     max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
     if max_out is None:
-        max_out = _resolve_max_output(model, provider_id)
+        max_out = model_metadata.resolve_max_output(model, provider_id)
     ai_convo = model_client.history_to_ai_messages(system, messages)
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T._REGISTRY
@@ -1503,7 +995,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.compacted_during_turn = False
     active_context.context_tokens = 0
     active_context.tokens_until_compaction = None
-    chars_per_token = _compact_float_setting(cfg, "chars_per_token", 4.0)
+    chars_per_token = compaction.get_float(cfg, "chars_per_token", 4.0)
     token_state = getattr(active_context, "context_budget_state", None)
     if not isinstance(token_state, context_budget.TokenState):
         token_state = context_budget.TokenState(chars_per_token=chars_per_token)
@@ -1630,17 +1122,17 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     def _budget_context_window() -> int:
         inferred = _resolve_context_window(model, provider_id, provider_base_url)
-        window = _compact_int_setting(active_compact_cfg, "context_window", inferred or 0)
+        window = compaction.get_int(active_compact_cfg, "context_window", inferred or 0)
         if window > 0:
             return window
         # Nothing known about this model. context_window is an override that
         # applies to every model at once, so pinning it to cover one unknown
         # model throws away the real window of every model that IS known;
         # context_window_fallback only lands here, where there is no metadata.
-        return _compact_int_setting(active_compact_cfg, "context_window_fallback", 0)
+        return compaction.get_int(active_compact_cfg, "context_window_fallback", 0)
 
     def _budget_buffer_tokens() -> int:
-        return _compact_nonnegative_int_setting(active_compact_cfg, "buffer_tokens", 4096)
+        return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens", 4096)
 
     def _active_preserve_from() -> int | None:
         return _last_user_message_index(messages)
@@ -1652,7 +1144,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         force: bool = False,
     ) -> bool:
         nonlocal ai_convo
-        if not force and not bool(_compact_setting(active_compact_cfg, "auto", True)):
+        if not force and not bool(compaction.get(active_compact_cfg, "auto", True)):
             return False
         context_window = _budget_context_window()
         if context_window <= 0 and not force:
@@ -1684,7 +1176,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             telemetry.event("context_compaction_skipped", phase=phase, reason="no_compactable_prefix")
             return False
         try:
-            result = await _compact_messages_async(
+            result = await compaction.compact_now(
                 active_compact_cfg,
                 system,
                 messages,
@@ -1755,7 +1247,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         reasoning_effort=effort,
                         on_text=_emit_text,
                         provider_headers=getattr(cfg, "provider_headers", None),
-                        provider_extra=_provider_extra_params(cfg),
+                        provider_extra=routing.provider_extra_params(cfg),
                         sampling=sampling,
                         trace_request=_trace_sink is not None,
                         trace_sink=_trace_sink,
@@ -1835,9 +1327,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     # concatenate onto the truncated first attempt with color still open.
                     _close_text()
                     if (
-                        _is_context_overflow_error(e)
+                        compaction.is_context_overflow_error(e)
                         and not durable_side_effects_started
-                        and overflow_recovered < _OVERFLOW_RECOVERY_ROUNDS
+                        and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS
                     ):
                         overflow_recovered += 1
                         telemetry.event(
@@ -1847,14 +1339,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             attempt=attempt,
                             round=overflow_recovered,
                         )
-                        # Round 1 clears old tool bodies — no model call, so it
-                        # cannot fail the way a summary can. Only if that is not
-                        # enough do we pay for a summary, and each later round
-                        # keeps fewer recent results.
-                        cleared, reclaimed = microcompact(
-                            messages, keep_recent=max(0, 20 // overflow_recovered)
+                        # Escalation policy lives in compaction: clear first
+                        # (no model call, cannot fail), summarize when empty.
+                        action, cleared, reclaimed = compaction.recover_overflow(
+                            messages, overflow_recovered
                         )
-                        if cleared:
+                        if action == "cleared":
                             print(f"  {C.ORANGE}(context overflow; cleared {cleared} old tool "
                                   f"results, ~{reclaimed // 1000}k chars){C.RESET}", flush=True)
                             token_state.reset()

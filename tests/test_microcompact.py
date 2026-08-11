@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from js import runtime
+from js import compaction, runtime
 
 
 def _history(n_tools: int, body_chars: int = 5_000) -> list[dict]:
@@ -15,27 +15,27 @@ def _history(n_tools: int, body_chars: int = 5_000) -> list[dict]:
 
 def test_microcompact_clears_old_tool_bodies_and_keeps_recent_ones():
     msgs = _history(30)
-    cleared, reclaimed = runtime.microcompact(msgs, keep_recent=20)
+    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=20)
 
     assert cleared == 10
     assert reclaimed > 40_000
     tools = [m for m in msgs if m["role"] == "tool"]
-    assert all(t["content"] == runtime.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
-    assert all(t["content"] != runtime.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
+    assert all(t["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
+    assert all(t["content"] != compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
     # Assistant reasoning about those results is untouched.
     assert all(m["content"].startswith("thinking") for m in msgs if m["role"] == "assistant")
 
 
 def test_microcompact_leaves_small_results_alone():
     msgs = _history(30, body_chars=10)
-    cleared, reclaimed = runtime.microcompact(msgs, keep_recent=0, min_chars=400)
+    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=0, min_chars=400)
     assert (cleared, reclaimed) == (0, 0)
 
 
 def test_microcompact_is_idempotent():
     msgs = _history(30)
-    first = runtime.microcompact(msgs, keep_recent=0)
-    second = runtime.microcompact(msgs, keep_recent=0)
+    first = compaction.microcompact(msgs, keep_recent=0)
+    second = compaction.microcompact(msgs, keep_recent=0)
     assert first[0] == 30
     assert second == (0, 0)
 
@@ -43,7 +43,7 @@ def test_microcompact_is_idempotent():
 def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
     # A tool message orphaned from its call id breaks the next request.
     msgs = _history(5)
-    runtime.microcompact(msgs, keep_recent=0)
+    compaction.microcompact(msgs, keep_recent=0)
     tools = [m for m in msgs if m["role"] == "tool"]
     assert [t["tool_call_id"] for t in tools] == [f"c{i}" for i in range(5)]
     assert all(t["name"] == "read" for t in tools)
@@ -51,7 +51,7 @@ def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
 
 def test_microcompact_keep_recent_larger_than_history_clears_nothing():
     msgs = _history(3)
-    assert runtime.microcompact(msgs, keep_recent=20) == (0, 0)
+    assert compaction.microcompact(msgs, keep_recent=20) == (0, 0)
 
 
 def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
@@ -83,7 +83,7 @@ def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
     class Ctx:
         read_paths = {a, b}
 
-    msg = runtime._post_compact_rehydration(Ctx())
+    msg = compaction._post_compact_rehydration(Ctx())
     assert msg["role"] == "user"
     assert "print('a')" in msg["content"]
     assert "print('b')" in msg["content"]
@@ -97,7 +97,7 @@ def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
     class Ctx:
         read_paths = {big}
 
-    msg = runtime._post_compact_rehydration(Ctx(), per_file_tokens=1_000)
+    msg = compaction._post_compact_rehydration(Ctx(), per_file_tokens=1_000)
     assert "too large to re-attach" in msg["content"]
     assert "qqqq" not in msg["content"]
 
@@ -106,4 +106,4 @@ def test_post_compact_rehydration_is_none_without_reads():
     class Ctx:
         read_paths = set()
 
-    assert runtime._post_compact_rehydration(Ctx()) is None
+    assert compaction._post_compact_rehydration(Ctx()) is None

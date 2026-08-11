@@ -7,7 +7,7 @@ import ai
 import pytest
 import ai.types.usage
 
-from js import cli, logins, persona, runtime
+from js import cli, logins, model_metadata, persona, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
@@ -123,7 +123,7 @@ def _capture_single_task_route(
         return _fake_stream_result("CHILD_OK")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
-    monkeypatch.setattr(runtime, "_resolve_max_output", lambda _model, _provider_id: None)
+    monkeypatch.setattr(model_metadata, "resolve_max_output", lambda _model, _provider_id: None)
 
     context = ToolContext(cwd=tmp_path)
     context.config = cfg

@@ -547,3 +547,11 @@ def max_output_tokens(model_id: str, provider_id: str | None = None) -> int | No
     ensure_fresh_catalog()
     limits = lookup_limits(model_id, provider_id)
     return None if limits is None else limits.max_output_tokens
+
+
+def resolve_max_output(model_id: str, provider_id: str | None = None) -> int | None:
+    """Per-model output cap from server cache or models.dev metadata, else unset."""
+    cached = cached_server_limits(model_id, provider_id)
+    if cached is not None and cached.max_output_tokens is not None:
+        return cached.max_output_tokens
+    return max_output_tokens(model_id, provider_id)

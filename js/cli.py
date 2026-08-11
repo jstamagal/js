@@ -30,6 +30,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from . import supervisor
 
 from . import attach, codex_auth, colors as C
+from . import compaction
 from . import events
 from . import logins
 from . import memory as M
@@ -193,138 +194,6 @@ def _read_stdin_attachment_if_piped() -> bytes:
     if buffer is not None:
         return buffer.read()
     return sys.stdin.read().encode("utf-8")
-
-
-
-
-def _compact_cfg(cfg: Config, key: str, default):
-    settings = getattr(cfg, "settings", {}) or {}
-    compact = settings.get("compact", {}) if isinstance(settings, dict) else {}
-    return compact.get(key, default) if isinstance(compact, dict) else default
-
-
-def _compact_bool(cfg: Config, key: str, default: bool) -> bool:
-    value = _compact_cfg(cfg, key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-def _compact_int(cfg: Config, key: str, default: int) -> int:
-    raw = _compact_cfg(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
-
-
-def _compact_float(cfg: Config, key: str, default: float) -> float:
-    raw = _compact_cfg(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if 0.0 < value <= 1.0 else default
-
-
-def _compact_nonnegative_int(cfg: Config, key: str, default: int) -> int:
-    """Like _compact_int but 0 is a legal value, not a request for the default —
-    a buffer of 0 is a real choice."""
-    raw = _compact_cfg(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if value >= 0 else default
-
-
-def _estimated_prompt_tokens(cfg: Config, state: dict) -> int:
-    """Local estimate of what the next request will cost, in tokens.
-
-    Only used when the provider reported nothing — which is exactly the case
-    after a turn that failed for being too large. Without this the trigger
-    reads 0, does nothing, and the history that caused the failure survives
-    into the next attempt unchanged.
-    """
-    try:
-        from .context_budget import estimate_messages_tokens, estimate_system_tokens
-    except ImportError:
-        return 0
-    cpt = _compact_float_cfg(cfg, "chars_per_token", 4.0)
-    messages = state.get("messages") or []
-    system = state.get("system") or ""
-    try:
-        return (
-            estimate_messages_tokens(messages, chars_per_token=cpt)
-            + estimate_system_tokens(system, chars_per_token=cpt)
-        )
-    except Exception:  # noqa: BLE001 - an estimate must never break the turn
-        return 0
-
-
-def _compact_float_cfg(cfg: Config, key: str, default: float) -> float:
-    """chars_per_token is a ratio, not a fraction — _compact_float rejects
-    anything above 1.0, which would silently turn 4.0 into the default."""
-    raw = _compact_cfg(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
-
-
-def _effective_context_window(cfg: Config, context_window: int) -> int:
-    """Window minus the room the next turn already owes: one full reply plus the
-    compaction buffer. This mirrors runtime._maybe_compact_request_for_budget so
-    both triggers agree on what 'full' means. A fraction of the raw window does
-    not survive a small model — 0.8 of 32k leaves 6.4k, less than a single
-    max-length reply, so compaction would arm only after the turn it needed to
-    prevent."""
-    if context_window <= 0:
-        return 0
-    max_out = cfg.max_output_tokens
-    if max_out is None:
-        max_out = runtime._resolve_max_output(cfg.model, cfg.provider_id)
-    # Reserve what a reply plausibly costs, NOT what the model is willing to
-    # emit. gpt-5.6-sol declares max_output 128000; holding all of that back
-    # would hand a third of a 370k window to an outcome that essentially never
-    # happens. Cap it the way Claude Code does (min(max_output, 20k)).
-    reserve = min(
-        max(0, int(max_out or 0)),
-        _compact_nonnegative_int(cfg, "summary_reserve_tokens", 20_000),
-    )
-    buffer_tokens = _compact_nonnegative_int(cfg, "buffer_tokens", 4096)
-    # Never let the reserve eat the whole window on a model with a huge declared
-    # output cap; keep at least half the window addressable for input.
-    return max(context_window // 2, context_window - reserve - buffer_tokens)
-
-
-def _compact_thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = _compact_float(cfg, "notify_threshold", 0.50)
-    trigger_at = _compact_float(cfg, "trigger_threshold", 0.80)
-    force_at = _compact_float(cfg, "force_threshold", 0.90)
-    if not (notify_at <= trigger_at <= force_at):
-        return 0.50, 0.80, 0.90
-    return notify_at, trigger_at, force_at
-
-
-def _is_max_output_incomplete(reason: object) -> bool:
-    text = str(reason or "").lower()
-    return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text
 
 
 def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
@@ -1055,82 +924,31 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 
 
 def _maybe_auto_compact(cfg: Config, state: dict) -> None:
-    if not _compact_bool(cfg, "auto", True):
-        return
-    output_limited = _is_max_output_incomplete(
-        getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
-    )
-    if output_limited:
-        state["compact_incomplete_consecutive"] = int(
-            state.get("compact_incomplete_consecutive", 0) or 0
-        ) + 1
-    else:
-        state["compact_incomplete_consecutive"] = 0
-    incomplete_forced = state.get("compact_incomplete_consecutive", 0) >= 2
-    prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
-    if prompt_tokens <= 0:
-        # No provider usage: the last turn errored, or the provider does not
-        # report it. Returning here disabled auto-compaction exactly when it
-        # was needed most — a turn that fails for size reports no usage, so the
-        # counter stays 0 and nothing ever shrinks the history that caused it.
-        # Fall back to the local estimate so the trigger still fires blind.
-        prompt_tokens = _estimated_prompt_tokens(cfg, state)
-    if prompt_tokens <= 0 and not incomplete_forced:
+    """The REPL's between-turn trigger: the policy lives in compaction, the
+    printing lives here."""
+    if not compaction.get_bool(cfg, "auto", True):
         return
     active_cfg = _cfg_for_active_model(cfg, state)
-    inferred_window = runtime._resolve_context_window(
-        active_cfg.model,
-        active_cfg.provider_id,
-        active_cfg.provider_base_url,
+    outcome = compaction.maybe_auto_compact(
+        active_cfg,
+        state.setdefault("auto_compact", compaction.AutoCompactState()),
+        runtime.T.DEFAULT_CONTEXT,
+        state.get("system") or "",
+        state.get("messages") or [],
+        lambda: runtime._resolve_context_window(
+            active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
+        ),
     )
-    context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
-    if context_window <= 0:
-        context_window = _compact_int(active_cfg, "context_window_fallback", 0)
-    # Fullness is measured against the window we can actually put INPUT in, not
-    # the raw window: the next reply needs max_output_tokens of room and the
-    # summary call needs compact.buffer_tokens on top. Measuring against the raw
-    # window made these thresholds mean something different from the in-turn
-    # budget check in runtime._maybe_compact_request_for_budget, which has always
-    # subtracted both — so the cruder trigger fired first and the exact one
-    # rarely ran. Same denominator now, both places.
-    effective_window = _effective_context_window(active_cfg, context_window)
-    if effective_window <= 0:
-        fullness = 0.0
-    else:
-        fullness = prompt_tokens / effective_window
-    notify_at, trigger_at, force_at = _compact_thresholds(cfg)
-    if fullness < trigger_at and not incomplete_forced:
-        state["compact_consecutive"] = 0
-        state["compact_paused"] = False
-        if fullness < notify_at:
-            state["compact_notified"] = False
-        elif not state.get("compact_notified"):
-            print(f"{C.ORANGE}(context {fullness:.0%} full; auto-compaction armed){C.RESET}")
-            state["compact_notified"] = True
-        return
-    if state.get("compact_paused"):
-        return
-    if fullness >= notify_at and not state.get("compact_notified"):
-        print(f"{C.ORANGE}(context {fullness:.0%} full; auto-compaction armed){C.RESET}")
-        state["compact_notified"] = True
-    if incomplete_forced:
-        print(f"{C.ORANGE}(response incomplete from max output tokens twice; auto-compacting){C.RESET}")
-    forced = fullness >= force_at or incomplete_forced
-    compact_cfg = _cfg_for_active_model(cfg, state)
-    result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], forced=forced)
-    print(f"{C.GREY}({result}){C.RESET}")
-    if incomplete_forced:
-        state["compact_incomplete_consecutive"] = 0
-    state["compact_consecutive"] = int(state.get("compact_consecutive", 0) or 0) + 1
-    if state["compact_consecutive"] >= 2:
-        state["compact_paused"] = True
-        print(f"{C.ORANGE}(auto-compaction paused after two consecutive turns; resumes when context drops below trigger){C.RESET}")
+    for notice in outcome.notices:
+        print(f"{C.ORANGE}{notice}{C.RESET}")
+    if outcome.result is not None:
+        print(f"{C.GREY}({outcome.result}){C.RESET}")
 
 
 def _post_auto_compact_needs_executor() -> bool:
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
     incomplete_reason = getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
-    return prompt_tokens > 0 or _is_max_output_incomplete(incomplete_reason)
+    return prompt_tokens > 0 or compaction.is_max_output_incomplete(incomplete_reason)
 
 
 
@@ -1625,7 +1443,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
             focus = ""
         try:
             compact_cfg = _cfg_for_live_state(cfg, state)
-            result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
+            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
         else:
@@ -2212,7 +2030,7 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
-        result = runtime.compact_messages(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
+        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
     except Exception as e:  # noqa: BLE001
         print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
         return 1
