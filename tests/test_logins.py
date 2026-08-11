@@ -246,7 +246,7 @@ def test_runtime_resolves_server_cached_metadata_before_catalog(monkeypatch, tmp
     monkeypatch.setattr(model_metadata, "max_output_tokens", lambda _model, _provider: 1234)
 
     assert runtime._resolve_context_window("served-model", "vllm") == 32768
-    assert runtime._resolve_max_output("served-model", "vllm") == 4096
+    assert model_metadata.resolve_max_output("served-model", "vllm") == 4096
     assert runtime._resolve_context_window("train-only", "vllm") == 262144
 
 

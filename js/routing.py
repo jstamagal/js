@@ -93,6 +93,13 @@ def _saved_login(provider_id: str | None):
     return login
 
 
+def provider_extra_params(cfg) -> dict | None:
+    """The operator's ``provider.extra`` settings table, as a plain dict."""
+    provider_cfg = (getattr(cfg, "settings", {}) or {}).get("provider")
+    extra = provider_cfg.get("extra") if isinstance(provider_cfg, dict) else None
+    return dict(extra) if isinstance(extra, dict) else None
+
+
 def resolve_model_route(
     requested_model: str,
     *,

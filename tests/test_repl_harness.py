@@ -848,7 +848,7 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
     monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "_resolve_max_output", lambda _model, _provider_id: None)
+    monkeypatch.setattr(cli.model_metadata, "resolve_max_output", lambda _model, _provider_id: None)
     monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)

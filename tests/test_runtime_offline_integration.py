@@ -7,7 +7,7 @@ import ai.types.messages
 import ai.types.usage
 import pytest
 
-from js import events, runtime, setcmd, settings, tools as runtime_tools
+from js import compaction, events, runtime, setcmd, settings, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
@@ -316,7 +316,7 @@ def test_preflight_compacts_before_dispatch_when_request_would_overflow(monkeypa
         calls.append(list(kwargs["messages"]))
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=220)
     messages = [
@@ -367,7 +367,7 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
         order.append("second_stream")
         return model_text_result("DONE")
 
-    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=800)
     messages = [
@@ -415,7 +415,7 @@ def test_context_overflow_error_forces_compaction_and_retries_once(monkeypatch, 
         order.append("retry")
         return model_text_result("RECOVERED")
 
-    monkeypatch.setattr(runtime, "_summarize_for_compaction_async", summarize_stub)
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=100_000)
     messages = [

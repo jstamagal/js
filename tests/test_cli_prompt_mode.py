@@ -146,7 +146,7 @@ def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, c
         return "compacted"
 
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
 
     actual = cli.main(["--model", "flag-model"])
 
@@ -774,7 +774,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
         return "compacted"
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
 
     actual = cli.main(["--model", "flag-model", "-p", "hi"])
@@ -913,7 +913,7 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, 
         seen.append(cfg.model)
         return "compacted"
 
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
 
     actual = cli.main(["--compact", "compact-session", "--model", "compact-model"])
 
@@ -1119,22 +1119,19 @@ def _auto_state() -> dict:
     return {
         "system": "SYSTEM",
         "messages": [{"role": "user", "content": "hi"}],
-        "compact_notified": False,
-        "compact_consecutive": 0,
-        "compact_incomplete_consecutive": 0,
-        "compact_paused": False,
+        "auto_compact": cli.compaction.AutoCompactState(),
     }
 
 
 def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
 
     disabled = _auto_compact_cfg(tmp_path, compact={"auto": False})
     cli._maybe_auto_compact(disabled, _auto_state())
     paused_state = _auto_state()
-    paused_state["compact_paused"] = True
+    paused_state["auto_compact"].paused = True
     cli._maybe_auto_compact(_auto_compact_cfg(tmp_path), paused_state)
 
     assert calls == []
@@ -1143,7 +1140,7 @@ def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsy
 
 def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
@@ -1162,7 +1159,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
 
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 40, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["compact_notified"] is False
+    assert state["auto_compact"].notified is False
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert "50% full" in capsys.readouterr().out
@@ -1176,7 +1173,7 @@ def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
         return "compacted"
 
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
     state["model"] = "active-model"
@@ -1193,7 +1190,7 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
         calls.append({"forced": forced, "system": system, "messages": messages})
         return "compacted"
 
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
     cfg = _auto_compact_cfg(tmp_path)
 
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
@@ -1211,7 +1208,7 @@ def test_auto_compact_triggers_after_repeated_max_output_incomplete(monkeypatch,
         calls.append({"forced": forced, "system": system, "messages": messages})
         return "compacted"
 
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 10, raising=False)
     monkeypatch.setattr(
         cli.runtime.T.DEFAULT_CONTEXT,
@@ -1224,36 +1221,36 @@ def test_auto_compact_triggers_after_repeated_max_output_incomplete(monkeypatch,
 
     cli._maybe_auto_compact(cfg, state)
     assert calls == []
-    assert state["compact_incomplete_consecutive"] == 1
+    assert state["auto_compact"].incomplete_consecutive == 1
 
     cli._maybe_auto_compact(cfg, state)
 
     assert [call["forced"] for call in calls] == [True]
-    assert state["compact_incomplete_consecutive"] == 0
+    assert state["auto_compact"].incomplete_consecutive == 0
     assert "response incomplete from max output tokens twice" in capsys.readouterr().out
 
 
 def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigger(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["compact_consecutive"] == 1
-    assert state["compact_paused"] is False
+    assert state["auto_compact"].consecutive == 1
+    assert state["auto_compact"].paused is False
     cli._maybe_auto_compact(cfg, state)
-    assert state["compact_consecutive"] == 2
-    assert state["compact_paused"] is True
+    assert state["auto_compact"].consecutive == 2
+    assert state["auto_compact"].paused is True
     assert "auto-compaction paused" in capsys.readouterr().out
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 2
 
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 79, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["compact_consecutive"] == 0
-    assert state["compact_paused"] is False
+    assert state["auto_compact"].consecutive == 0
+    assert state["auto_compact"].paused is False
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 3
@@ -1261,7 +1258,7 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
 
 def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
 
     for compact in (
         {
@@ -1289,7 +1286,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
 
 def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
@@ -1310,7 +1307,7 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
 def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
 
     for raw in ("false", "0", "off", "no"):
         cli._maybe_auto_compact(_auto_compact_cfg(tmp_path, compact={"auto": raw}), _auto_state())
@@ -1361,7 +1358,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     # this, the between-turn trigger measured against the raw window and
     # disagreed with the in-turn budget check.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 100_000, "buffer_tokens": 4_000},
@@ -1381,7 +1378,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     # negative budget; the floor keeps half the window addressable instead of
     # compacting on every single turn.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 32_000, "buffer_tokens": 4_000},
@@ -1401,7 +1398,7 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
     # reserve is capped at compact.summary_reserve_tokens (20k default), so
     # 345,904 is addressable and 260k reads as 75%, under the trigger.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 370_000, "buffer_tokens": 4_096},
@@ -1417,7 +1414,7 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
 
 def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
@@ -1438,7 +1435,7 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
 def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypatch, tmp_path, capsys):
     # Known model: metadata wins, the fallback is ignored entirely.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **kw: calls.append(kw) or "compacted")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: 1_050_000)
     cfg = _auto_compact_cfg(
         tmp_path,

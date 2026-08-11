@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js import memory, persona, runtime, settings
+from js import compaction, memory, persona, settings
 from js.capped_process import CappedProcessResult
 from js.config import Config, from_env
 from js.toolkit.registry import build_default_registry
@@ -165,9 +165,12 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
         {"role": "user", "content": "old"},
         {"role": "assistant", "content": "done"},
     ]
-    monkeypatch.setattr(runtime, "_summarize_for_compaction", lambda *a, **kw: "Summary")
+    async def summarize_stub(*a, **kw):
+        return "Summary"
 
-    result = runtime.compact_messages(cfg, "SYSTEM", messages, forced=True)
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert result.startswith("compacted:")
     assert messages[0]["content"] == "<compaction-summary>\nSummary\n</compaction-summary>"
@@ -177,18 +180,18 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
 def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     captured: list[int | None] = []
 
-    def stream_stub(**kwargs):
+    async def stream_stub(**kwargs):
         captured.append(kwargs["max_output_tokens"])
         return SimpleNamespace(text="Summary")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model", stream_stub)
+    monkeypatch.setattr(compaction.model_client, "stream_model_async", stream_stub)
     cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": "bad-max"})
     messages = [
         {"role": "user", "content": "old"},
         {"role": "assistant", "content": "done"},
     ]
 
-    result = runtime.compact_messages(cfg, "SYSTEM", messages, forced=True)
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert result.startswith("compacted:")
     assert captured == [4096]
@@ -201,11 +204,11 @@ def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_pa
         calls.append(cmd)
         raise AssertionError(f"pre_hook should not run for malformed value: {cmd!r}")
 
-    monkeypatch.setattr(runtime, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction, "_run_capped", run_stub)
 
     for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
         cfg = _compact_test_cfg(tmp_path, {"pre_hook": raw})
-        assert runtime._run_compact_pre_hook(cfg) == ""
+        assert compaction._run_pre_hook(cfg) == ""
 
     assert calls == []
 
@@ -218,10 +221,10 @@ def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
         captured.update(kwargs)
         return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
 
-    monkeypatch.setattr(runtime, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction, "_run_capped", run_stub)
     cfg = _compact_test_cfg(tmp_path, {"pre_hook": "  echo guidance  "})
 
-    assert runtime._run_compact_pre_hook(cfg) == "hook guidance"
+    assert compaction._run_pre_hook(cfg) == "hook guidance"
     assert captured["cmd"][-2:] == ["-c", "echo guidance"]
     assert captured["timeout"] == 30
 
@@ -236,11 +239,11 @@ def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
             stdout_truncated=True,
         )
 
-    monkeypatch.setattr(runtime, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction, "_run_capped", run_stub)
     cfg = _compact_test_cfg(tmp_path, {"pre_hook": "yes"})
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
 
-    actual = runtime._run_compact_pre_hook(cfg)
+    actual = compaction._run_pre_hook(cfg)
 
     assert actual.startswith("x" * 128)
     assert "[truncated: limits.max_bash_output_bytes (128) reached]" in actual
@@ -248,15 +251,15 @@ def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):
     seen_models: list[str] = []
 
-    def summarize_stub(cfg, model, messages, focus, guidance):
+    async def summarize_stub(cfg, model, messages, focus, guidance):
         seen_models.append(model)
         return f"Summary from {model}"
 
-    monkeypatch.setattr(runtime, "_summarize_for_compaction", summarize_stub)
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
 
     for raw in (" SAME ", "same", 123):
         cfg = _compact_test_cfg(tmp_path, {"model": raw})
         messages = [{"role": "user", "content": "old"}]
-        runtime.compact_messages(cfg, "SYSTEM", messages, forced=True)
+        compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert seen_models == ["offline-test-model", "offline-test-model", "offline-test-model"]

@@ -40,7 +40,7 @@ def test_compact_auto_toggles_setting_and_does_not_compact(tmp_path, monkeypatch
     cfg = make_cfg(tmp_path)
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     compacted: list[int] = []
-    monkeypatch.setattr(cli.runtime, "compact_messages", lambda *a, **k: compacted.append(1) or "nope")
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: compacted.append(1) or "nope")
 
     assert cli._handle_command("/compact-auto off", state, cfg) is True
     assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
@@ -57,7 +57,7 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     seen_focus: list[str] = []
     monkeypatch.setattr(cli, "_cfg_for_active_model", lambda cfg, state: cfg)
     monkeypatch.setattr(
-        cli.runtime, "compact_messages",
+        cli.compaction, "compact_now_sync",
         lambda cfg, system, messages, *, focus="", forced=False: seen_focus.append(focus) or "ok",
     )
     # plain /compact still runs a compaction with a clean focus (not "-auto on")
@@ -74,7 +74,7 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
         seen_models.append(settings.get_dotted(compact_cfg.settings, ("compact", "model")))
         return "ok"
 
-    monkeypatch.setattr(cli.runtime, "compact_messages", compact_stub)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
 
     assert cli._handle_command("/set compact.model compact-live-model", state, cfg) is True
     assert cli._handle_command("/compact", state, cfg) is True
