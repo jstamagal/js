@@ -153,3 +153,20 @@ deep dives live in `docs/` — `technical-guide.md` (internals), `tool-system.md
 `models-and-providers.md`, `testing-and-development.md`, `user-guide.md`,
 `nonblocking-windows.md`, `ircii/`.
 `CHANGELOG.md` track what moved.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature>/` in this repo. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary — the five canonical roles, label strings unchanged. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
