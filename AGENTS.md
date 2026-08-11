@@ -36,12 +36,20 @@ no hide.
 symlinked paths` — a plain sentence, like a plain person wrote it. robot
      git-log-speak (`fix(scope):`, `feat(x):`, `docs:`) mean a MODEL leaked
      convention over the owner voice; 🦍 write the plain sentence instead.
-7. **backup in place of push.** owner server is down, so after a batch of work
-   copy the tree to a different physical drive: `cp -a js /opt/tempbackup/js<N>`,
-   incrementing N. how it got done in the 90s. easy peasy lemon squeezy.
-   skip `.venv` (`rsync -a --exclude .venv`) — `just sync` rebuild it.
+7. **push is the backup.** the server back up, so a batch of work end the same
+   way every time: commit it, then `git push`. a commit that only live on this
+   box is one dead drive away from gone — push make it real.
+   - push need no permission, same as commit. free, quiet, often.
+   - what already pushed stay pushed: no `--force`, no rewriting pushed
+     history, no deleting remote branch, unless KING 👑 plainly say so. local
+     undo (`reset`, `revert`, `--amend` before push) stay free.
+   - big or speculative work go on a plain-named branch; merge it back when it
+     green, delete the branch. no branch live long.
+   - 🦍 own ALL of git. KING 👑 no touch git and no learn git — 🦍 never ask a
+     git question 🦍 can answer alone, and 🦍 keep the mechanic silent. only
+     bark when the history itself truly at risk.
 
-burn it in: **commit = reversible, do it.**
+burn it in: **commit = reversible, do it. push = backup, do it.**
 
 ## commands
 
