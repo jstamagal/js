@@ -2780,6 +2780,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.prompt is not None or (not sys.stdin.isatty() and not args.tui):
+        os.environ["JS_MODE"] = "headless"
         stdin_attachment = None
         if "-" in args.files:
             if args.prompt in {None, "-"}:
@@ -2809,6 +2810,7 @@ def main(argv: list[str] | None = None) -> int:
                            presets=presets,
                            stats_json=args.stats_json, stats_csv=args.stats_csv)
 
+    os.environ["JS_MODE"] = "repl"
     try:
         cfg = _cfg_from_env_compat(
             args.session,

@@ -611,9 +611,12 @@ int main(void) {
   extern char **environ;
   for (char **e = environ; *e; e++)
     envn++;
-  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s\n",
+  const char *jsmode = getenv("JS_MODE");
+  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s%s%s\n",
          getenv("USER") ? getenv("USER") : "?", sh ? sh : "?",
-         term ? term : "-", pkgmgr(), pathdirs + 1, envn, venv ? " venv=" : "",
+         term ? term : "-", pkgmgr(), pathdirs + 1, envn,
+         jsmode ? " mode=" : "", jsmode ? jsmode : "",
+         venv ? " venv=" : "",
          venv ? tilde(venv, b2, sizeof b2) : "",
          isfile("/.dockerenv") ? " container=docker" : "", wsl ? " wsl=1" : "",
          getenv("SSH_CONNECTION") ? " ssh=1" : "");
