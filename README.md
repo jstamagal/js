@@ -108,13 +108,13 @@ names are adapted for Claude; session history stays canonical lowercase.
 Offline suite:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision"
+python -m pytest -m "not ai_provider and not vision and not e2e"
 ```
 
 In this agent environment, the verified command was:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision" -p no:cacheprovider
+python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
 ```
 
 Live tests marked `ai_provider`, `e2e`, or `vision` need configured provider
