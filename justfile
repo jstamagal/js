@@ -33,9 +33,10 @@ run *args:
 
 # Commit workflow is deliberately plain: run `js --commit` from repo root.
 # Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
-# This recipe exists only as a no-arg convenience and rejects arguments.
+# No-arg convenience only. (Extra words after `just commit` are not forwarded —
+# just parses them as more recipes to run.)
 commit:
-    uv run js --commit
+    uv run {{ browser-extra }} js --commit
 
 # ── env / deps ───────────────────────────────────────────────────────────────
 
@@ -54,11 +55,21 @@ shell:
 # editable so they track the working tree (no reinstall after a code edit). uv
 # puts the launchers in its tool bin dir — usually ~/.local/bin. Also downloads
 # js's pinned CLI binaries into js/tools and provisions optional interactive
-# helpers (fd/bat/fzf).
+# helpers (fd/bat/fzf). NOTE: the tool venv is resolved from pyproject
+# constraints, not uv.lock, so its dep versions can drift from `just run`'s
+# env until the next `just install`.
 #   just install   then   js -p "hi"   from anywhere
 install:
     #!/usr/bin/env bash
     set -euo pipefail
+    # refuse to install from a linked worktree: the editable install and the
+    # wiki symlink would point at a tree that vanishes when the worktree is
+    # cleaned up, leaving `js` and `wiki` broken everywhere.
+    if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+        echo "!! this is a linked git worktree — run 'just install' from the main checkout:" >&2
+        echo "!!   $(dirname "$(git rev-parse --git-common-dir)")" >&2
+        exit 1
+    fi
     uv tool install --force --editable "{{ browser-target }}"
     mkdir -p "$HOME/.local/bin"
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
@@ -66,7 +77,7 @@ install:
     just ensure-tools
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
-    repo="$(pwd)"
+    repo="$(pwd -P)"
     shim="$(command -v js || true)"
     if [ -z "$shim" ]; then
         echo "!! js not on PATH after install — run: uv tool update-shell" >&2
@@ -90,7 +101,7 @@ install:
 # Download js's pinned, checksummed subprocess binaries into js/tools. The
 # system aria2c performs the release-asset transfers.
 install-tool-binaries:
-    uv run python -m js.tool_binaries
+    uv run {{ browser-extra }} python -m js.tool_binaries
 
 # ensure optional interactive CLI helpers are present, installing any that are
 # missing via the detected package manager. fd, bat, and fzf back file-finding
@@ -134,16 +145,18 @@ ensure-tools:
       exit 0
     }
 
-# remove the installed js launchers.
+# remove the installed js launchers and the wiki symlink `just install` made.
 uninstall:
     uv tool uninstall js
+    rm -f "$HOME/.local/bin/wiki"
 
 # ── testing ─────────────────────────────────────────────────────────────────
 
 # offline suite — the verified command from docs/testing-and-development.md.
-# skips ai_provider (needs live creds) and vision (needs a local vision model).
+# skips ai_provider (needs live creds), vision (needs a local vision model),
+# and e2e (live end-to-end paths).
 test:
-    uv run {{ browser-extra }} --extra test pytest -m "not ai_provider and not vision" -p no:cacheprovider
+    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:
@@ -221,7 +234,7 @@ upgrade:
 
 # remove all generated/local build state (all of it is gitignored).
 clean:
-    -rm -rf build dist .coverage coverage.xml htmlcov .pytest_cache .ruff_cache .mypy_cache
+    -rm -rf build dist .coverage coverage.xml htmlcov .pytest_cache .ruff_cache
     -find . -type d -name __pycache__ -prune -exec rm -rf {} +
     -find . -type d -name '*.egg-info' -exec rm -rf {} +
     @echo "cleaned."
