@@ -22,13 +22,13 @@ uv run pytest --version
 ## Main Offline Suite
 
 ```bash
-python -m pytest -m "not ai_provider and not vision"
+python -m pytest -m "not ai_provider and not vision and not e2e"
 ```
 
 Verified in this environment:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision" -p no:cacheprovider
+python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
 ```
 
 ## Focused Suites
