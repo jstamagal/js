@@ -546,6 +546,8 @@ int main(void) {
   const char *initsys = isdir("/run/systemd/system") ? "systemd"
                         : isdir("/run/runit")        ? "runit"
                         : isfile("/sbin/openrc")     ? "openrc"
+                        : isdir("/etc/svc/volatile") ? "smf"
+                        : isfile("/etc/inittab")     ? "sysvinit"
                                                      : "?";
   printf("os=%s%s%s arch=%s kern=%s init=%s\n", osname[0] ? osname : un.sysname,
          osver[0] ? " " : "", osver, un.machine, un.release, initsys);
