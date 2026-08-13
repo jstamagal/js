@@ -1,180 +1,58 @@
 # AGENTS.md
 
 Guidance for coding agents working in this repository. `CLAUDE.md` is a symlink
-to this file — one set of instruction, every agent read the same thing.
+to this file — one set of instructions, every agent reads the same thing.
 
-🦍 read this first. then 🦍 work.
+## What `js` is
 
-## what `js` is
+A personal terminal LLM harness in Python: one owner, one machine, no
+customers, no production, no other developers. Interactive chat, one-shot
+`-p`, pipe workflows, parallel subagents, wiki agents, commit-agent — built on
+the Vercel AI Python SDK (`ai`). Bias: low friction, many knobs. When the
+owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 
-`js` = personal terminal LLM harness, Python, one silverback (the owner), one box.
-no customer, no prod, no other dev. interactive chat, one-shot `-p`, pipe
-workflows, local hacking tools, parallel subagents, wiki agents,
-commit-agent — all over the Vercel AI Python SDK (`ai`). bias = low friction,
-many knob. when owner say remove, it GONE — deleted, no rename, no compat alias,
-no hide.
+## Workflow
 
-## WORKFLOW — read this, the order matter
+1. **`just` is the entry point.** `just` alone lists every recipe. uv owns the
+   venv — `uv.lock` is the truth, so package changes go through uv; a
+   `pip install` into `.venv` gets erased by the next `just sync`. Run js
+   through `just run`, not `.venv/bin/js` (which goes stale).
+2. **Env feels broken? → `just sync`.** It is the real fix.
+3. **Make the change.**
+4. **Run the tests that cover it.** Green before done.
+5. **`just lint`** before calling it clean. ruff is the gate.
+6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
 
-1. **`just` is the one entry point.** `just` with no arg list every recipe.
-   uv own what live IN the venv — `uv.lock` is the truth, so package change go
-   through uv and `pip install` into `.venv` get erased by the next `just sync`.
-   `.venv/bin/js` go stale whenever the pkg no reinstalled, so run js through
-   `just run` (or `uv run`). activating the venv to poke around is fine.
-2. **env feel broken? → `just sync`.** that rebuild the env from `uv.lock`. it
-   the real fix.
-3. **make the change.**
-4. **run the test that cover it** (see below). 🦍 run it, 🦍 read the output,
-   then 🦍 say done. green before done.
-5. **`just lint`** before 🦍 call it clean. ruff is the gate.
-6. **commit regularly with plain git and a plain-English message.** commit is
-   LOCAL and trivially undone (`git reset`, `git revert`, `--amend`), so it need
-   no permission — commit free, quiet, often. 🦍 keep the git mechanic silent
-   (hash, staging, "let me commit") — that noise the owner hate. a real
-   defect/risk/decision 🦍 DO bark.
-   - **commit subject = PLAIN ENGLISH.** `Restore removed files through
-symlinked paths` — a plain sentence, like a plain person wrote it. robot
-     git-log-speak (`fix(scope):`, `feat(x):`, `docs:`) mean a MODEL leaked
-     convention over the owner voice; 🦍 write the plain sentence instead.
-7. **push is the backup.** the server back up, so a batch of work end the same
-   way every time: commit it, then `git push`. a commit that only live on this
-   box is one dead drive away from gone — push make it real.
-   - push need no permission, same as commit. free, quiet, often.
-   - what already pushed stay pushed: no `--force`, no rewriting pushed
-     history, no deleting remote branch, unless KING 👑 plainly say so. local
-     undo (`reset`, `revert`, `--amend` before push) stay free.
-   - big or speculative work go on a plain-named branch; merge it back when it
-     green, delete the branch. no branch live long.
-   - 🦍 own ALL of git. KING 👑 no touch git and no learn git — 🦍 never ask a
-     git question 🦍 can answer alone, and 🦍 keep the mechanic silent. only
-     bark when the history itself truly at risk.
+## Privacy 
+- Keep our chat out of the files unless its relavent.
+Commentary about having a hard drive go bad - No.
+Commentary about technical discussions in which we arrived at a genuine shared conclusion and information is not a temporary state - Yes.
 
-burn it in: **commit = reversible, do it. push = backup, do it.**
-
-## commands
-
-```bash
-just                 # list every recipe
-just sync            # rebuild env (test + browser except on musl). the fix for a broken venv.
-just run -p "..."    # run js (REPL with no args). forwards all flags
-just test            # offline suite: -m "not ai_provider and not vision" -p no:cacheprovider
-just test-file tests/test_picker.py        # one file or node
-just test-mark "not ai_provider"           # by pytest marker
-just lint            # ruff check . (errors + pyflakes + pyupgrade) — the quality gate
-just check           # the quality gate, stops at first failure
-just fix             # ruff safe auto-fixes only; leaves unused imports and formatting alone
-just shell           # shell with the project env active
-just build           # uv build -> sdist + wheel
-```
-
-focused suites exist too — `just test-tools`, `test-wiki`, `test-runtime`,
-`test-subagents`, `test-memory`, `test-cli`, `test-vision`. `just` alone list
-the rest (`format`, `install`, `lock`, `upgrade`, `clean`).
-
-run one test directly when 🦍 need a single node:
+## Commands
+`just` lists everything. The daily few: `just sync` (rebuild env — the fix
+for a broken venv), `just run -p "..."` (run js; REPL with no args),
+`just test` (offline suite), `just test-file <path>`, `just lint`,
+`just check`. Focused suites exist (`just test-tools`, `test-wiki`,
+`test-runtime`, …). Live tests (`ai_provider`, `e2e`, `vision`) need real
+provider creds: `just test-live`. One test directly:
 `uv run --extra test --extra browser pytest -q tests/test_foo.py::test_bar`
-(omit `--extra browser` on musl; Playwright publishes no musllinux wheel)
 
-**live tests** (`ai_provider`, `e2e`, `vision`) need real provider creds or a
-local OpenAI-compatible / vision endpoint — `just test` skips them on purpose.
-`just test-live` run them. markers defined in `pyproject.toml`.
+## Architecture in one breath
 
-**mypy was tried and DROPPED** — ~115 unactionable
-errors on a dynamic codebase (ToolContext dynamic attrs, `**kwargs` splat,
-implicit optionals). this repo run with no type gate; re-add it when owner say.
+Streaming tool-use loop: sync runtime over the async SDK.
+`js/model_client.py` is the model I/O boundary (new providers land next to
+`codex_provider.py`); `js/runtime.py` is the loop (streaming, dispatch,
+subagent fan-out); `js/toolkit/` is the tools — model-facing contracts live
+in `tool_descriptions/*.md`, not in code. Agents are prompt directories
+(`js/persona.py` + `prompts/`; layered project > global > repo; `tools:`
+frontmatter picks the tool surface). Config layers jsrc < `.js/jsrc` <
+`.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
+compaction leaves history intact. Inline-directive expansion
+(`js/promptexpand.py`) is single-pass on purpose — that is the injection
+guard; preserve it. Deep dives in `docs/technical-guide.md`.
 
-## architecture — the big picture
+## Docs
 
-streaming tool-use loop, sync runtime, async SDK underneath. the parts that
-need reading many files to see:
-
-- **`js/model_client.py` — the model I/O boundary.** it adapt the SDK
-  async/part-based API down to the sync/dict-based runtime, and every model call
-  cross it. `import ai` also live in `runtime.py`, `providers.py`,
-  `codex_provider.py`, `logins.py`, `login_cli.py`, `attach.py` — provider
-  registration and login are their own thing. request/response shaping land in
-  `model_client.py`; a new provider land next to `codex_provider.py`.
-- **`js/runtime.py` — the loop.** stream output, dispatch tool call, typed error
-  handling, telemetry, subagent fan-out (ThreadPoolExecutor). calls
-  `model_client` for I/O, `toolkit.registry` for tools.
-- **`js/toolkit/` — the tools.**
-  - `core.py` — `Tool`, `ToolContext`, `call_tool`.
-  - `registry.py` — assemble the registry + selector filtering (which tools a
-    given agent see).
-  - `fs.py` read/write/search/patch/remove/undo · `process_net.py` shell+fetch ·
-    `meta.py` todo/plan/skill/task/subagents.
-  - `tool_descriptions/*.md` — model-facing tool contracts, shipped as
-    package-data. the WORDS the model read about each tool live here, not in code.
-  - `wiki/` — deterministic tools for installed wiki agents.
-- **`js/persona.py` + `prompts/` — agents are PROMPT DIRECTORIES.** a dir of
-  numbered `NN-*.md` files concatenated into the system prompt. layered:
-  repo `prompts/` < global `agents/` (platform config dir) < project
-  `.js/agents/` — **project win over global win over repo.** `tools:`
-  frontmatter pick the tool surface. id rule in `config.py`.
-- **`js/promptexpand.py` — inline directive expansion at load.** `{{VAR}}` (env),
-  `!{sub ...}` inline, ` ```!sub ` fenced block. read-only subs (`env`,`file`)
-  always on; code subs (`sh`,`bash`,`python`,`node`,`c`) ON by default
-  (`runtime.allow_inline_code`), opt out per-run with `--im-a-pussy` or
-  `JS_ALLOW_INLINE_CODE=0`. SINGLE pass = the injection guard: output stay
-  unscanned. backtick-wrap or a leading `\` keep a directive LITERAL (for docs).
-  🦍 preserve both property if 🦍 touch this.
-- **`js/config.py` + `js/settings.py` — config layering.** jsrc (global)
-  < `.js/jsrc` < `.js/jsrc.local` < env (`JS_MODEL`, `JS_PROVIDER`, `JS_BASE_URL`,
-  `JS_API_KEY`, etc.) < `--extra` CLI flag. Config files are scripts: each line is
-  a `set <key> <value>` command (no TOML; legacy `config.toml` migrated via
-  `js --migrate-config`). Set model id via `set model.id <value>`. Official SDK env
-  vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`)
-  are read by `ai` directly when no explicit provider set.
-- **sessions = append-only JSONL** at platform-data `sessions/<agent_id>/<session>.jsonl`,
-  one isolated state per agent. **compaction APPENDS marks and leave history
-  intact** (`/compact [focus]`, `/compact up to here`, `js --compact <session>`).
-- **`js/cli.py` — arg parse + mode dispatch** (REPL / `-p` / `--commit` /
-  `--compact` / `--tui` / `--nonblocking` /
-  `--login`/`--logout` / `--bench`).
-
-## prefer computed context over manual probing
-
-Before doing a deterministic, mechanical task through a sequence of tool calls —
-gathering state, computing a value, reshaping data, checking a condition — first
-ask whether code can produce the result and hand it to you directly. This harness
-evaluates inline directives at prompt-load (`!{sh ...}`, `!{python ...}`, fenced
-` ```!lang ` blocks) and injects their output, and you can shell out to a helper
-at runtime. Your leverage is judgment; the rote work is cheaper, steadier, and
-reproducible as code. When you catch yourself driving mechanical machinery through
-a fragile channel — anything interactive, order-sensitive, or many-round-trip —
-stop and move it into a script whose output you consume. Keep the model deciding;
-let code do the rote.
-
-## standing facts — 🦍 keep these true
-
-- **canonical tool names only.** the names the MODEL see are the ones in
-  `docs/tools-reference.md`. the old model-facing names (`fs_read`, `fs_write`,
-  `cat`, `grep`, `semantic_search`) are dead and stay dead — the python symbol
-  `fs.fs_read` still exist as the implementation, that fine, it the registry
-  name that matter.
-
-## docs
-
-deep dives live in `docs/` — `technical-guide.md` (internals), `tool-system.md`,
-`tools-reference.md` (the canonical tool names), `subagents.md`,
-`inline-directives.md`, `configuration-and-sessions.md`,
-`models-and-providers.md`, `testing-and-development.md`, `user-guide.md`,
-`nonblocking-windows.md`, `ircii/`.
-`CHANGELOG.md` track what moved.
-
-## Agent skills
-
-### Issue tracker
-
-Issues live as markdown files under `.scratch/<feature>/` in this repo. See
-`docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default vocabulary — the five canonical roles, label strings unchanged. See
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See
-`docs/agents/domain.md`.
+- Deep dives live in `docs/` (). `
+- Agent-skill docs: `docs/agents/` (issue tracker — issues as
+markdown under `.scratch/<feature>/`; triage labels; single-context domain docs with `CONTEXT.md` + `docs/adr/`).
