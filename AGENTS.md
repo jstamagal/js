@@ -57,7 +57,7 @@ burn it in: **commit = reversible, do it. push = backup, do it.**
 just                 # list every recipe
 just sync            # rebuild env (test + browser except on musl). the fix for a broken venv.
 just run -p "..."    # run js (REPL with no args). forwards all flags
-just test            # offline suite: -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
+just test            # offline suite: -m "not ai_provider and not vision" -p no:cacheprovider
 just test-file tests/test_picker.py        # one file or node
 just test-mark "not ai_provider"           # by pytest marker
 just lint            # ruff check . (errors + pyflakes + pyupgrade) — the quality gate
