@@ -138,6 +138,11 @@ _CONTEXT_OVERFLOW_NEEDLES = (
     "tokens exceed",
     "reduce the length",
     "request too large",
+    # llama.cpp: "request (N tokens) exceeds the available context size (M
+    # tokens)", type "exceed_context_size_error". Neither matched any needle
+    # above, so overflow recovery never fired on llama.cpp at all.
+    "context size",
+    "exceed_context_size",
 )
 
 
