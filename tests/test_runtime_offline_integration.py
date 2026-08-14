@@ -443,13 +443,13 @@ def test_context_overflow_error_forces_compaction_and_retries_once(monkeypatch, 
 
 
 def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path):
-    from ai.types import integrity
+    from ai.providers import history_utils
 
     calls: list[list[ai.messages.Message]] = []
     first_turn_calls = {"count": 0}
 
     def first_stream_stub(**kwargs):
-        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        history_utils.validate(kwargs["messages"])
         calls.append(kwargs["messages"])
         first_turn_calls["count"] += 1
         if first_turn_calls["count"] == 1:
@@ -479,7 +479,7 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
     json.loads(tool_call["tool_calls"][0]["function"]["arguments"])
 
     def second_stream_stub(**kwargs):
-        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        history_utils.validate(kwargs["messages"])
         calls.append(kwargs["messages"])
         return model_text_result("clean")
 
@@ -502,7 +502,7 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
 def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_runs(
     monkeypatch, tmp_path
 ):
-    from ai.types import integrity
+    from ai.providers import history_utils
 
     poisoned_args = '{"file_path":"old.txt","content":"cut'
     messages = [
@@ -531,7 +531,7 @@ def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_r
     calls = {"count": 0}
 
     def stream_stub(**kwargs):
-        integrity.prepare_messages(kwargs["messages"], mode="strict")
+        history_utils.validate(kwargs["messages"])
         calls["count"] += 1
         if calls["count"] == 1:
             return model_tool_call_result(

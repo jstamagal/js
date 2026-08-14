@@ -537,7 +537,7 @@ def test_canonical_tool_args_survives_sdk_integrity_pass():
     """The end-to-end guarantee: a malformed-but-repairable tool call, once
     canonicalized and round-tripped through the SDK's integrity pass, retains
     non-empty json-decodable args instead of being blanked to "{}"."""
-    from ai.types import integrity
+    from ai.providers import history_utils
 
     bad = '{"file_path": "/tmp/out.md", "content": "hi",}'  # trailing comma
     fixed = runtime._canonical_tool_args(bad)
@@ -552,7 +552,7 @@ def test_canonical_tool_args_survives_sdk_integrity_pass():
             tool_call_id="c1", tool_name="write", result="ok"
         )
     )
-    prepared = integrity.prepare_messages([ai.user_message("hi"), asst, tool_res])
+    prepared = history_utils.repair([ai.user_message("hi"), asst, tool_res])
 
     seen = [
         part.tool_args
