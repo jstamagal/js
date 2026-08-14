@@ -78,9 +78,13 @@ class SkillCatalog:
         *,
         package_dir: Path | None = None,
         global_dir: Path | None = None,
+        user_dir: Path | None = None,
     ) -> SkillCatalog:
         return discover_skills(
-            project_dir, package_dir=package_dir, global_dir=global_dir
+            project_dir,
+            package_dir=package_dir,
+            global_dir=global_dir,
+            user_dir=user_dir,
         )
 
     @property
@@ -163,19 +167,24 @@ def discover_skills(
     *,
     package_dir: Path | None = None,
     global_dir: Path | None = None,
+    user_dir: Path | None = None,
 ) -> SkillCatalog:
-    """Index package, global, and project skills without retaining their bodies."""
+    """Index package, user, global, and project skills without retaining their bodies."""
 
     package_root = package_dir or Path(__file__).resolve().parent / "skills"
     global_root = global_dir or paths.global_skills_dir()
+    user_root = user_dir or Path.home() / ".agents" / "skills"
+    # Within a scope the cross-client dir (.agents/skills) is scanned first and
+    # the js-native dir last, so native wins a name collision — with a warning,
+    # because two same-named skills in one scope is ambiguity, not layering.
     layers = (
         ("package", (package_root,)),
-        ("global", (global_root,)),
-        # Keep the old local ordering: skills/ wins over .skills/.
-        ("project", (project_dir / ".skills", project_dir / "skills")),
+        ("global", (user_root, global_root)),
+        ("project", (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")),
     )
     selected: dict[str, _SkillRecord] = {}
     for source, roots in layers:
+        layer_records: dict[str, _SkillRecord] = {}
         for root in roots:
             root_records: dict[str, _SkillRecord] = {}
             for path in _skill_paths(root):
@@ -197,35 +206,30 @@ def discover_skills(
                     )
                     continue
                 root_records[key] = record
-            selected.update(root_records)
+            for key, record in root_records.items():
+                prior = layer_records.get(key)
+                if prior is not None:
+                    print(
+                        f"WARNING: skill {record.metadata.name!r} at {record.metadata.path} "
+                        f"shadows {prior.metadata.path}",
+                        file=sys.stderr,
+                    )
+            layer_records.update(root_records)
+        selected.update(layer_records)
     return SkillCatalog(selected.values())
 
 
 def _skill_paths(root: Path) -> tuple[Path, ...]:
+    """A skill is a subdirectory holding a SKILL.md — the Agent Skills format."""
     if not root.is_dir():
         return ()
-    candidates: dict[str, Path] = {}
-    # Later layouts only fill names not already supplied by the older lookup form.
-    for path in sorted(root.glob("*.md"), key=lambda item: item.name.casefold()):
-        candidates.setdefault(path.stem.casefold(), path)
-    for filename in ("README.md", "SKILL.md"):
-        for path in sorted(root.glob(f"*/{filename}"), key=lambda item: str(item).casefold()):
-            candidates.setdefault(path.parent.name.casefold(), path)
-    return tuple(candidates.values())
+    return tuple(sorted(root.glob("*/SKILL.md"), key=lambda item: str(item).casefold()))
 
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:
     text = path.read_text(encoding="utf-8", errors="replace")
     manifest, body, _ = _split_frontmatter(path, text)
-    derived_name = (
-        path.stem
-        if path.parent.name == "skills" and path.suffix == ".md"
-        else path.parent.name
-    )
-    # A dot-directory can contain flat files too; only layout filenames derive from the parent.
-    if path.name not in {"README.md", "SKILL.md"}:
-        derived_name = path.stem
-
+    derived_name = path.parent.name
     name = _string_field(path, manifest, "name") or derived_name
     _validate_name(path, name)
     description = _string_field(path, manifest, "description")
