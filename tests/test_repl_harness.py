@@ -835,7 +835,7 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     class FakeModel:
         provider = FakeProvider()
 
-    async def stream_async_stub(*, model, messages, tools, params, executor, on_text):
+    async def stream_async_stub(*, model, messages, tools, params, on_text):
         params_seen.append(params)
         return cli.runtime.model_client.ModelStreamResult(
             text="ok",
