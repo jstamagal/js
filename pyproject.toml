@@ -9,6 +9,12 @@ description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
     "ai[openai,anthropic]==0.4.2",
+    # `just install` resolves from these constraints rather than uv.lock. Keep
+    # the provider boundary aligned with the tested lock: openai 3 switched to
+    # httpx2/httpcore2 and exposed a broken async-generator shutdown path.
+    "openai==2.44.0",
+    "anthropic==0.113.0",
+    "httpx==0.28.1",
     # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
     # not an extra: one box, one user, and a mode that half-installs is a mode
     # that fails at the worst moment. the tools still degrade to one clear ERROR

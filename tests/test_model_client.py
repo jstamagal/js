@@ -40,6 +40,37 @@ def _use_fake_stream(monkeypatch, events) -> _FakeStreamFactory:
     return factory
 
 
+def test_sync_stream_finalizes_generator_before_event_loop_shutdown(monkeypatch):
+    finalized = False
+
+    async def generate():
+        nonlocal finalized
+        try:
+            for event in _text_events("done"):
+                yield event
+        finally:
+            finalized = True
+
+    def open_stream(**_kwargs):
+        return ai.models.Stream(generate())
+
+    monkeypatch.setattr(model_client, "_open_stream", open_stream)
+    result = model_client.stream_model(
+        model_id="test",
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort=None,
+        on_text=lambda _text: None,
+    )
+
+    assert result.text == "done"
+    assert finalized
+
+
 def _text_events(text: str) -> list[ai.types.events.Event]:
     return [
         ai.types.events.StreamStart(),

@@ -509,8 +509,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ai", extra = ["anthropic", "openai"] },
+    { name = "anthropic" },
+    { name = "httpx" },
     { name = "ipykernel" },
     { name = "jupyter-client" },
+    { name = "openai" },
     { name = "pexpect" },
     { name = "pillow" },
     { name = "platformdirs" },
@@ -538,8 +541,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ai", extras = ["openai", "anthropic"], specifier = "==0.4.2" },
+    { name = "anthropic", specifier = "==0.113.0" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "jupyter-client", specifier = ">=8.0" },
+    { name = "openai", specifier = "==2.44.0" },
     { name = "pexpect", specifier = ">=4.9.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "platformdirs", specifier = ">=4.0" },
