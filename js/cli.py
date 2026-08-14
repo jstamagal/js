@@ -205,17 +205,19 @@ def _replace_runtime_user_message(
             return
 
 
-def _common_message_prefix_len(left: list[dict], right: list[dict]) -> int:
-    idx = 0
-    limit = min(len(left), len(right))
-    while idx < limit and left[idx] == right[idx]:
-        idx += 1
-    return idx
-
-
-def _persist_unrecorded_messages(cfg: Config, messages: list[dict]) -> None:
-    persisted = M.load_messages(cfg.session_file)
-    start = _common_message_prefix_len(persisted, messages)
+def _persist_turn_messages(
+    cfg: Config,
+    messages: list[dict],
+    user_message: dict,
+    *,
+    user_recorded: bool,
+) -> None:
+    try:
+        start = next(idx for idx, message in enumerate(messages) if message is user_message)
+    except StopIteration as exc:
+        raise RuntimeError("current turn's user message is missing from history") from exc
+    if user_recorded:
+        start += 1
     for message in messages[start:]:
         _append_turn(cfg, message)
 
@@ -1841,7 +1843,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     with _mute_transcript_tee(_transcript_sink(telemetry)):
                         print(content)
                 if save:
-                    _persist_unrecorded_messages(cfg, messages)
+                    _persist_turn_messages(
+                        cfg,
+                        messages,
+                        user_bundle.history_message,
+                        user_recorded=False,
+                    )
                     _maybe_auto_compact(cfg, {
                         "system": system,
                         "messages": messages,
@@ -2386,7 +2393,12 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             user_bundle.history_message,
             before_len,
         )
-        _persist_unrecorded_messages(cfg, state["messages"])
+        _persist_turn_messages(
+            cfg,
+            state["messages"],
+            user_bundle.history_message,
+            user_recorded=True,
+        )
         if _post_auto_compact_needs_executor():
             await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
         else:
@@ -2411,7 +2423,12 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
                 user_bundle.history_message,
                 before_len,
             )
-            _persist_unrecorded_messages(cfg, state["messages"])
+            _persist_turn_messages(
+                cfg,
+                state["messages"],
+                user_bundle.history_message,
+                user_recorded=True,
+            )
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
@@ -3229,7 +3246,12 @@ def main(argv: list[str] | None = None) -> int:
                 user_bundle.history_message,
                 before_len,
             )
-            _persist_unrecorded_messages(cfg, state["messages"])
+            _persist_turn_messages(
+                cfg,
+                state["messages"],
+                user_bundle.history_message,
+                user_recorded=True,
+            )
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
@@ -3256,7 +3278,12 @@ def main(argv: list[str] | None = None) -> int:
                     user_bundle.history_message,
                     before_len,
                 )
-                _persist_unrecorded_messages(cfg, state["messages"])
+                _persist_turn_messages(
+                    cfg,
+                    state["messages"],
+                    user_bundle.history_message,
+                    user_recorded=True,
+                )
                 M.append_mark(cfg.session_file, "turn_interrupted")
                 state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
             else:
