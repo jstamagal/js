@@ -30,7 +30,6 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from . import supervisor
 
 from . import attach, codex_auth, colors as C
-from . import compaction
 from . import events
 from . import logins
 from . import memory as M
@@ -50,10 +49,62 @@ from . import settings
 from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
-from .config import Config, from_env, validate_agent_id, _norm_effort, vision_enabled_for_model
-from .tool_binaries import resolve_binary
-from .toolkit.registry import registry_for_roots
+from .config import (
+    Config,
+    _norm_effort,
+    derive_session_name,
+    from_env,
+    validate_agent_id,
+    vision_enabled_for_model,
+)
+from .session_catalog import acquire_session, catalog_sessions, record_session_start
+from .toolkit.artifact import build_artifact_system
+from .toolkit.wiki import build_wiki_system, infer_vault
+from .toolkit.wiki.helpers import resolve_vault
+from .toolkit.registry import build_default_registry
 from .toolkit import ToolContext
+
+_FULL_REGISTRY = build_default_registry()
+
+
+_SHORT_HELP = """js — one agent, one terminal.
+
+RUN
+  js                          interactive REPL in this directory
+  js -p "task"                one prompt, print the answer
+  echo task | js -p           same, from stdin
+  js -C DIR ...               run as if launched from DIR
+
+PICK
+  -a NAME     agent profile (~/.config/js/agents/NAME)
+  -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
+  -r EFFORT   off|minimal|low|medium|high|xhigh|max
+
+STATE (sessions are saved by default — this is what a driven agent normally wants)
+  -s NAME     create or resume a named session
+  --session-key KEY   derive a stable session from agent + cwd + key
+  --list [--json]     list every saved session
+  -n, --no-save
+              expensive throwaway choice: resume is unavailable, so the next
+              run must re-read context. Use only for throwaway one-liners.
+  --debug-file PATH   full request trace, for debugging js
+
+SCRIPTING
+  -q          no resume hint after the answer (the session is still saved)
+  -f PATH     attach a file or image (repeatable)
+  --max-out N max output tokens
+  --extra K=V one-off config, e.g. --extra limits.task_max_depth=3
+
+MORE
+  js --login [PROVIDER]   sign in      js --list-models
+  js --commit             commit agent js --help-full
+"""
+
+
+class _ShortHelpAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser._print_message(_SHORT_HELP, sys.stdout)
+        parser.exit()
 
 
 def _error_text(e: BaseException) -> str:
@@ -63,16 +114,12 @@ def _error_text(e: BaseException) -> str:
 
 
 def _registry_for(cfg) -> object:
-    # Always build from THIS cfg's prompt roots. The old code returned a module-level
-    # registry built with no roots on the normal path, and only passed cfg.prompt_roots
-    # on the locked branch — so every agent in ~/.config/js/agents and .js/agents was
-    # invisible as a tool unless the operator happened to lock subagent models.
-    #
-    # The `model_override` flag exposes the subagent `model` param on the task tool;
-    # when the operator has locked subagent model selection it is dropped from both the
-    # schema and the description rather than merely ignored.
-    flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags)
+    # The default registry exposes the subagent `model` override on the task tool.
+    # When the operator has locked subagent model selection, rebuild without that
+    # flag so the param is gone from both the tool description and its schema.
+    if getattr(cfg, "lock_subagent_model", False):
+        return build_default_registry(cfg.prompt_roots, flags=())
+    return _FULL_REGISTRY
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -179,6 +226,91 @@ def _session_hint_arg(cfg: Config) -> str:
         return str(cfg.session_file)
 
 
+_session_leases = threading.local()
+
+
+def _session_scope(func):
+    """Release every saved session activated during one CLI entry point."""
+
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        leases = getattr(_session_leases, "items", None)
+        if leases is None:
+            leases = []
+            _session_leases.items = leases
+        start = len(leases)
+        old_caller_key = getattr(_session_leases, "caller_key", None)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            while len(leases) > start:
+                leases.pop().release()
+            _session_leases.caller_key = old_caller_key
+
+    return wrapped
+
+
+def _activate_saved_session(
+    cfg: Config,
+    *,
+    caller_key: str | None = None,
+    announce_generated: bool = False,
+) -> None:
+    if cfg.session_file == Path(os.devnull):
+        return
+    effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
+    record_session_start(cfg.session_file, cwd=Path.cwd(), caller_key=effective_key)
+    lease = acquire_session(cfg.session_file)
+    _session_leases.items.append(lease)
+    if announce_generated:
+        _announce_generated_session(cfg)
+
+
+def _announce_generated_session(cfg: Config) -> None:
+    payload = {
+        "js_session": {
+            "agent": cfg.agent_id,
+            "session_id": _session_hint_arg(cfg),
+            "path": str(cfg.session_file.resolve(strict=False)),
+        }
+    }
+    print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), file=sys.stderr)
+
+
+def _print_session_list(*, json_lines: bool) -> int:
+    records = catalog_sessions(_paths.sessions_root())
+    if json_lines:
+        for record in records:
+            print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
+        return 0
+
+    headings = ("AGENT", "NAME", "MTIME", "SIZE", "TURNS", "IN-FLIGHT", "CWD", "JOB")
+    rows = []
+    for record in records:
+        identity = record["caller_key"]
+        if record["job_id"] is not None:
+            identity = str(record["job_id"]) if identity is None else f"{identity}/{record['job_id']}"
+        rows.append(
+            (
+                record["agent"],
+                record["name"],
+                datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
+                str(record["size"]),
+                str(record["user_turns"]),
+                "yes" if record["in_flight"] else "no",
+                record["cwd"] or "-",
+                identity or "-",
+            )
+        )
+    widths = [len(value) for value in headings]
+    for row in rows:
+        widths = [max(width, len(value)) for width, value in zip(widths, row, strict=True)]
+    print("  ".join(value.ljust(width) for value, width in zip(headings, widths, strict=True)))
+    for row in rows:
+        print("  ".join(value.ljust(width) for value, width in zip(row, widths, strict=True)))
+    return 0
+
+
 def _read_stdin_if_piped() -> str:
     if sys.stdin.isatty():
         return ""
@@ -194,6 +326,138 @@ def _read_stdin_attachment_if_piped() -> bytes:
     if buffer is not None:
         return buffer.read()
     return sys.stdin.read().encode("utf-8")
+
+
+
+
+def _compact_cfg(cfg: Config, key: str, default):
+    settings = getattr(cfg, "settings", {}) or {}
+    compact = settings.get("compact", {}) if isinstance(settings, dict) else {}
+    return compact.get(key, default) if isinstance(compact, dict) else default
+
+
+def _compact_bool(cfg: Config, key: str, default: bool) -> bool:
+    value = _compact_cfg(cfg, key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+def _compact_int(cfg: Config, key: str, default: int) -> int:
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _compact_float(cfg: Config, key: str, default: float) -> float:
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if 0.0 < value <= 1.0 else default
+
+
+def _compact_nonnegative_int(cfg: Config, key: str, default: int) -> int:
+    """Like _compact_int but 0 is a legal value, not a request for the default —
+    a buffer of 0 is a real choice."""
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
+def _estimated_prompt_tokens(cfg: Config, state: dict) -> int:
+    """Local estimate of what the next request will cost, in tokens.
+
+    Only used when the provider reported nothing — which is exactly the case
+    after a turn that failed for being too large. Without this the trigger
+    reads 0, does nothing, and the history that caused the failure survives
+    into the next attempt unchanged.
+    """
+    try:
+        from .context_budget import estimate_messages_tokens, estimate_system_tokens
+    except ImportError:
+        return 0
+    cpt = _compact_float_cfg(cfg, "chars_per_token", 4.0)
+    messages = state.get("messages") or []
+    system = state.get("system") or ""
+    try:
+        return (
+            estimate_messages_tokens(messages, chars_per_token=cpt)
+            + estimate_system_tokens(system, chars_per_token=cpt)
+        )
+    except Exception:  # noqa: BLE001 - an estimate must never break the turn
+        return 0
+
+
+def _compact_float_cfg(cfg: Config, key: str, default: float) -> float:
+    """chars_per_token is a ratio, not a fraction — _compact_float rejects
+    anything above 1.0, which would silently turn 4.0 into the default."""
+    raw = _compact_cfg(cfg, key, default)
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _effective_context_window(cfg: Config, context_window: int) -> int:
+    """Window minus the room the next turn already owes: one full reply plus the
+    compaction buffer. This mirrors runtime._maybe_compact_request_for_budget so
+    both triggers agree on what 'full' means. A fraction of the raw window does
+    not survive a small model — 0.8 of 32k leaves 6.4k, less than a single
+    max-length reply, so compaction would arm only after the turn it needed to
+    prevent."""
+    if context_window <= 0:
+        return 0
+    max_out = cfg.max_output_tokens
+    if max_out is None:
+        max_out = runtime._resolve_max_output(cfg.model, cfg.provider_id)
+    # Reserve what a reply plausibly costs, NOT what the model is willing to
+    # emit. gpt-5.6-sol declares max_output 128000; holding all of that back
+    # would hand a third of a 370k window to an outcome that essentially never
+    # happens. Cap it the way Claude Code does (min(max_output, 20k)).
+    reserve = min(
+        max(0, int(max_out or 0)),
+        _compact_nonnegative_int(cfg, "summary_reserve_tokens", 20_000),
+    )
+    buffer_tokens = _compact_nonnegative_int(cfg, "buffer_tokens", 4096)
+    # Never let the reserve eat the whole window on a model with a huge declared
+    # output cap; keep at least half the window addressable for input.
+    return max(context_window // 2, context_window - reserve - buffer_tokens)
+
+
+def _compact_thresholds(cfg: Config) -> tuple[float, float, float]:
+    notify_at = _compact_float(cfg, "notify_threshold", 0.50)
+    trigger_at = _compact_float(cfg, "trigger_threshold", 0.80)
+    force_at = _compact_float(cfg, "force_threshold", 0.90)
+    if not (notify_at <= trigger_at <= force_at):
+        return 0.50, 0.80, 0.90
+    return notify_at, trigger_at, force_at
+
+
+def _is_max_output_incomplete(reason: object) -> bool:
+    text = str(reason or "").lower()
+    return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text
 
 
 def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
@@ -244,8 +508,6 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
     ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
     ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
-    ("browse_timeout_s", ("limits", "browse_timeout_s")),
-    ("download_timeout_s", ("limits", "download_timeout_s")),
     ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
     ("max_read_lines", ("limits", "max_read_lines")),
     ("max_line_chars", ("limits", "max_line_chars")),
@@ -257,24 +519,20 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
     ("task_max_depth", ("limits", "task_max_depth")),
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
-    ("kernel_render_max_lines", ("kernel", "render_max_lines")),
-)
-
-
-# `set kernel.verbosity verbose` mid-session has to take effect on the next
-# kernel call, so it rides the same live-settings path as the numeric knobs.
-_LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
-    ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
-)
-
-_LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("shell_env_allow", ("limits", "shell_env_allow")),
+    ("wiki_vault_lock_timeout_s", ("limits", "wiki_vault_lock_timeout_s")),
 )
 
 
 _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_output_tokens", ("model", "max_output_tokens")),
     ("model_context_window", ("model", "context_window")),
+)
+
+
+_LIVE_OPTIONAL_STRING_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("artifact_dir", ("artifact", "dir")),
+    ("artifact_url", ("artifact", "url")),
+    ("artifact_bin", ("artifact", "bin")),
 )
 
 
@@ -565,19 +823,10 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
         live_settings,
         active.reasoning_effort,
     )
+    for attr, path in _LIVE_OPTIONAL_STRING_FIELDS:
+        updates[attr] = _live_optional_str_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_BOOL_FIELDS:
         updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
-    for attr, path, allowed in _LIVE_STR_FIELDS:
-        raw = str(settings.get_dotted(live_settings, path, getattr(active, attr)) or "").strip().lower()
-        updates[attr] = raw if raw in allowed else getattr(active, attr)
-    for attr, path in _LIVE_STR_LIST_FIELDS:
-        raw = settings.get_dotted(live_settings, path, getattr(active, attr))
-        updates[attr] = (
-            tuple(raw)
-            if isinstance(raw, (list, tuple))
-            and all(isinstance(item, str) and item.strip() for item in raw)
-            else getattr(active, attr)
-        )
     return replace(active, **updates)
 
 
@@ -924,31 +1173,82 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 
 
 def _maybe_auto_compact(cfg: Config, state: dict) -> None:
-    """The REPL's between-turn trigger: the policy lives in compaction, the
-    printing lives here."""
-    if not compaction.get_bool(cfg, "auto", True):
+    if not _compact_bool(cfg, "auto", True):
+        return
+    output_limited = _is_max_output_incomplete(
+        getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
+    )
+    if output_limited:
+        state["compact_incomplete_consecutive"] = int(
+            state.get("compact_incomplete_consecutive", 0) or 0
+        ) + 1
+    else:
+        state["compact_incomplete_consecutive"] = 0
+    incomplete_forced = state.get("compact_incomplete_consecutive", 0) >= 2
+    prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
+    if prompt_tokens <= 0:
+        # No provider usage: the last turn errored, or the provider does not
+        # report it. Returning here disabled auto-compaction exactly when it
+        # was needed most — a turn that fails for size reports no usage, so the
+        # counter stays 0 and nothing ever shrinks the history that caused it.
+        # Fall back to the local estimate so the trigger still fires blind.
+        prompt_tokens = _estimated_prompt_tokens(cfg, state)
+    if prompt_tokens <= 0 and not incomplete_forced:
         return
     active_cfg = _cfg_for_active_model(cfg, state)
-    outcome = compaction.maybe_auto_compact(
-        active_cfg,
-        state.setdefault("auto_compact", compaction.AutoCompactState()),
-        runtime.T.DEFAULT_CONTEXT,
-        state.get("system") or "",
-        state.get("messages") or [],
-        lambda: runtime._resolve_context_window(
-            active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
-        ),
+    inferred_window = runtime._resolve_context_window(
+        active_cfg.model,
+        active_cfg.provider_id,
+        active_cfg.provider_base_url,
     )
-    for notice in outcome.notices:
-        print(f"{C.ORANGE}{notice}{C.RESET}")
-    if outcome.result is not None:
-        print(f"{C.GREY}({outcome.result}){C.RESET}")
+    context_window = _compact_int(active_cfg, "context_window", inferred_window or 0)
+    if context_window <= 0:
+        context_window = _compact_int(active_cfg, "context_window_fallback", 0)
+    # Fullness is measured against the window we can actually put INPUT in, not
+    # the raw window: the next reply needs max_output_tokens of room and the
+    # summary call needs compact.buffer_tokens on top. Measuring against the raw
+    # window made these thresholds mean something different from the in-turn
+    # budget check in runtime._maybe_compact_request_for_budget, which has always
+    # subtracted both — so the cruder trigger fired first and the exact one
+    # rarely ran. Same denominator now, both places.
+    effective_window = _effective_context_window(active_cfg, context_window)
+    if effective_window <= 0:
+        fullness = 0.0
+    else:
+        fullness = prompt_tokens / effective_window
+    notify_at, trigger_at, force_at = _compact_thresholds(cfg)
+    if fullness < trigger_at and not incomplete_forced:
+        state["compact_consecutive"] = 0
+        state["compact_paused"] = False
+        if fullness < notify_at:
+            state["compact_notified"] = False
+        elif not state.get("compact_notified"):
+            print(f"{C.ORANGE}(context {fullness:.0%} full; auto-compaction armed){C.RESET}")
+            state["compact_notified"] = True
+        return
+    if state.get("compact_paused"):
+        return
+    if fullness >= notify_at and not state.get("compact_notified"):
+        print(f"{C.ORANGE}(context {fullness:.0%} full; auto-compaction armed){C.RESET}")
+        state["compact_notified"] = True
+    if incomplete_forced:
+        print(f"{C.ORANGE}(response incomplete from max output tokens twice; auto-compacting){C.RESET}")
+    forced = fullness >= force_at or incomplete_forced
+    compact_cfg = _cfg_for_active_model(cfg, state)
+    result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], forced=forced)
+    print(f"{C.GREY}({result}){C.RESET}")
+    if incomplete_forced:
+        state["compact_incomplete_consecutive"] = 0
+    state["compact_consecutive"] = int(state.get("compact_consecutive", 0) or 0) + 1
+    if state["compact_consecutive"] >= 2:
+        state["compact_paused"] = True
+        print(f"{C.ORANGE}(auto-compaction paused after two consecutive turns; resumes when context drops below trigger){C.RESET}")
 
 
 def _post_auto_compact_needs_executor() -> bool:
     prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
     incomplete_reason = getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
-    return prompt_tokens > 0 or compaction.is_max_output_incomplete(incomplete_reason)
+    return prompt_tokens > 0 or _is_max_output_incomplete(incomplete_reason)
 
 
 
@@ -1443,7 +1743,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
             focus = ""
         try:
             compact_cfg = _cfg_for_live_state(cfg, state)
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
+            result = runtime.compact_messages(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
         else:
@@ -1532,6 +1832,7 @@ def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
     return settings.coerce_value(spec, reasoning)
 
 
+@_session_scope
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -1542,7 +1843,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 ignore_local_config: bool = False, ignore_global_config: bool = False,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
                 presets: list[str] | None = None,
-                stats_json: str | None = None, stats_csv: str | None = None) -> int:
+                stats_json: str | None = None, stats_csv: str | None = None,
+                caller_key: str | None = None, announce_generated: bool | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
@@ -1566,13 +1868,20 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     except ValueError as e:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
+    if announce_generated is None:
+        announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
+    _activate_saved_session(
+        cfg,
+        caller_key=caller_key,
+        announce_generated=announce_generated and save,
+    )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
 
     prompt_spec = None
     if system_override is not None:
         system = system_override
-        active_registry = tool_registry or _registry_for(cfg)
+        active_registry = tool_registry or _FULL_REGISTRY
     else:
         try:
             prompt_spec = P.load_configured_prompt_spec(cfg)
@@ -1711,7 +2020,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         # Plain -p has no resume_prefix; the session lives under
                         # sessions/<agent>, so a non-default agent MUST be echoed or
                         # the resume looks in the wrong dir and 404s the .jsonl.
-                        # (wiki/commit already fold the agent into resume_prefix.)
+                        # (wiki/artifact/commit already fold the agent into resume_prefix.)
                         if resume_prefix is None and agent:
                             cont += f" --agent {shlex.quote(agent)}"
                         if model:
@@ -1880,6 +2189,248 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     return 130 if interrupted else 0
 
 
+def _wiki_kickoff(mode: str, vault: str, target_desc: str, resuming: bool,
+                  immediate_file: str | None = None, immediate_unit: str | None = None) -> str:
+    """The single-mode kickoff prompt that opens a wiki turn."""
+    # Single-file ingest takes priority over the generic resume/ingest text (even on
+    # resume) so it never falls back to a prompt that tells the agent to call wiki_inbox.
+    if mode == "ingest" and immediate_file:
+        # Ingest exactly this one named file instead of the inbox flow picking a unit.
+        # If it IS a top-level inbox unit, close with wiki_finish_ingest so it is
+        # archived (the done-marker) and cannot be re-ingested/duplicated later. The
+        # inbox tool itself is never modified.
+        if immediate_unit:
+            close = (f"Then close out with ONE call: wiki_finish_ingest(\"{vault}\", \"{immediate_unit}\", "
+                     f"\"<title>\", \"<pages written>\") — it archives inbox/{immediate_unit} to Clippings, "
+                     f"writes the log entry, and commits, all at once (the done-marker that stops it duping on "
+                     f"a later run). Do NOT also call wiki_log — wiki_finish_ingest already logs.")
+        else:
+            close = (f"Then call wiki_log(\"{vault}\", \"ingest\", \"<title>\", \"<note>\"). Do NOT call "
+                     f"wiki_finish_ingest or wiki_archive — leave the file exactly where it sits.")
+        return (f"Wiki mode: ingest ONE FILE (SOURCE PAGE ONLY). vault={vault}. file={immediate_file}. "
+                f"Begin: call wiki_purpose(\"{vault}\") for the lens. Convert and read fully: "
+                f"wiki_convert(\"{immediate_file}\"). BEFORE writing, check whether a source page already "
+                f"covers this file (wiki_search + ls sources/); if so READ it and UPSERT (overwrite=true) — "
+                f"never duplicate. Write EXACTLY ONE kind=\"source\" page: a rich factual summary plus "
+                f"'## Candidate entities' and '## Candidate concepts' lists (each line: name — one-line why) "
+                f"as the synthesize pass's worklist. Do NOT write entity/concept/synthesis pages — the "
+                f"synthesize pass owns those (wiki_write refuses them in ingest mode). "
+                f"Do NOT call wiki_inbox; do NOT pick any other unit. {close} Report what you wrote, then stop.")
+    if resuming:
+        return (f"RESUME wiki mode: {mode}. vault={vault}. target={target_desc}. "
+                f"You were interrupted mid-task. Re-check state first (wiki_purpose, wiki_inbox, "
+                f"and read any pages you already started), then FINISH the {mode} flow. Pages that "
+                f"already exist -> read and UPSERT (wiki_write overwrite=true), never recreate.")
+    if mode == "ingest":
+        return (f"Wiki mode: ingest. vault={vault}. target={target_desc}. "
+                f"Begin: call wiki_purpose(\"{vault}\") first, then run the ingest flow — write ONE rich "
+                f"kind=\"source\" page (factual summary + '## Candidate entities' / '## Candidate concepts' "
+                f"lists, each line: name — one-line why), then wiki_finish_ingest. Do NOT write "
+                f"entity/concept/synthesis pages — those are the synthesize pass's job.")
+    if mode == "synthesize":
+        return (f"Wiki mode: synthesize. vault={vault}. "
+                f"Begin: call wiki_purpose(\"{vault}\") first, then run the synthesize flow — derive and "
+                f"UPSERT the SHARED entity/concept pages from the source pages' candidate lists, then weave "
+                f"synthesis pages citing every source with [[links]] and flagging contradictions, then commit.")
+    if mode == "query":
+        return (f"Wiki mode: query. vault={vault}. question={target_desc}. "
+                f"Begin: call wiki_purpose(\"{vault}\") first, then answer from the wiki with [[links]] "
+                f"and file a synthesis page if the answer is substantial.")
+    return (f"Wiki mode: lint. vault={vault}. "
+            f"Begin: call wiki_purpose(\"{vault}\") first, then health-check the wiki and fix mechanical "
+            f"issues (contradictions, orphans, stale claims, missing cross-refs).")
+
+
+def _run_wiki(wiki_arg: str, target: str | None, vault: str | None,
+              model: str | None = None, debug: bool = False, debug_file: str | None = None,
+              agent: str | None = None, session: str | None = None, save: bool = True,
+              reasoning: str | None = None, maxout: int | None = None,
+              extras: list[str] | None = None,
+              ignore_local_config: bool = False, ignore_global_config: bool = False,
+              presets: list[str] | None = None) -> int:
+    """js --wiki=ingest,synthesize [--vault=creative] <target>.
+
+    Built-in wiki prompting (ignores defaultagent). If --agent is given, that
+    agent's persona leads and the wiki prompting follows.
+
+    Each mode runs as its OWN kickoff turn over one shared session, in order.
+    Cramming every mode section into a single loop made the model obey the
+    ingest prompt's "then stop" and never reach synthesize; each mode prompt
+    re-orients from disk (wiki_purpose) so sequencing doesn't need shared chat.
+    """
+    valid = {"ingest", "synthesize", "query", "lint"}
+    modes = [m.strip().lower() for m in wiki_arg.split(",") if m.strip()]
+    bad = [m for m in modes if m not in valid]
+    if not modes or bad:
+        print(f"{C.ORANGE}error: --wiki expects a comma list of {sorted(valid)} (got {wiki_arg!r}){C.RESET}", file=sys.stderr)
+        return 2
+
+    if not vault:
+        vault = infer_vault(target, Path(os.getcwd()))
+    if not vault:
+        print(f"{C.ORANGE}error: no vault given and none inferred; pass --vault <name|path> or cd into a vault (PURPOSE.md sentinel or wiki-* dir){C.RESET}", file=sys.stderr)
+        return 2
+
+    # wiki mode runs under its own agent id ('wiki') unless --agent is given;
+    # an explicit --agent loads that persona AND prepends it to the wiki prompting.
+    eff_agent = agent or "wiki"
+    persona = ""
+    if agent:
+        try:
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
+            persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
+        except (ValueError, FileNotFoundError) as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+
+    # Reserve ONE session up front so every mode turn appends to the same jsonl.
+    active_session = session
+    if save and active_session is None:
+        try:
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+        active_session = _session_hint_arg(cfg)
+        _announce_generated_session(cfg)
+
+    modes_arg = ",".join(modes)
+    resume_prefix = f"js --wiki={modes_arg} --vault={vault}"
+    if agent:
+        resume_prefix += f" --agent {agent}"
+    target_desc = target if target else "the inbox"
+    # Single-file ingest: if `target` is an actual file, ingest THAT one file (instead
+    # of the inbox flow picking a unit). Self-contained — uses BASE only, NOT the
+    # INGEST/inbox mode prompt, so the inbox tool/flow is never modified. If the file
+    # is an inbox unit, it is archived on success (wiki_finish_ingest = the done-marker)
+    # so it cannot be re-ingested or duplicated on a later run.
+    immediate_file = os.path.abspath(target) if target and os.path.isfile(target) else None
+    immediate_unit = None
+    if immediate_file:
+        # Resolve the vault the SAME way the wiki toolkit does (config aliases + ~ + cwd-relative).
+        _alias_cfg = _cfg_from_env_compat(None, save_session=False, extras=extras, agent_id=eff_agent,
+                                          ignore_local_config=ignore_local_config,
+                                          ignore_global_config=ignore_global_config, presets=presets)
+        _wiki = (getattr(_alias_cfg, "settings", {}) or {}).get("wiki")
+        _aliases = _wiki.get("aliases", {}) if isinstance(_wiki, dict) and isinstance(_wiki.get("aliases"), dict) else {}
+        vp = resolve_vault(vault, ToolContext(cwd=Path(os.getcwd()), vault_aliases=_aliases))
+        try:
+            rel = Path(immediate_file).resolve().relative_to((vp / "inbox").resolve())
+        except ValueError:
+            rel = None
+        # Only a TOP-LEVEL inbox unit is archiveable. A nested file (inbox/proj/child)
+        # must NOT archive its parent folder — that would hide unprocessed siblings.
+        # Skip _skipped and dotfiles, which the inbox tool itself ignores.
+        if rel is not None and len(rel.parts) == 1 and rel.parts[0] != "_skipped" \
+                and not rel.parts[0].startswith("."):
+            immediate_unit = rel.parts[0]
+
+    rc = 0
+    for idx, mode in enumerate(modes):
+        if immediate_file and mode == "ingest":
+            system = persona + build_wiki_system([])
+        else:
+            system = persona + build_wiki_system([mode])
+        prompt = _wiki_kickoff(mode, vault, target_desc, resuming=(session is not None and idx == 0),
+                               immediate_file=immediate_file, immediate_unit=immediate_unit)
+        mode_context = ToolContext(cwd=Path.cwd(), wiki_mode=mode)
+        rc = _run_prompt_compat(prompt, model=model, debug=debug, agent=eff_agent,
+                                debug_file=debug_file, session=active_session, save=save, system_override=system,
+                                resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
+                                tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
+                                extras=extras, tool_context=mode_context,
+                                ignore_local_config=ignore_local_config,
+                                ignore_global_config=ignore_global_config, presets=presets)
+        if rc != 0:
+            break
+    return rc
+
+
+
+def _artifact_kickoff(mode: str, target_desc: str, resuming: bool) -> str:
+    if resuming:
+        return (f"RESUME artifact mode: {mode}. target={target_desc}. "
+                f"You were interrupted mid-task. Start with artifact_overview(), inspect current "
+                f"manifest/curation state, then finish the {mode} flow without duplicating pages.")
+    if mode == "curate":
+        return (f"Artifact mode: curate. target={target_desc}. "
+                f"Begin: call artifact_overview() first, then classify recent/unassigned artifacts, "
+                f"install curation assignments/refs, and stop.")
+    if mode == "digest":
+        return (f"Artifact mode: digest. target={target_desc}. "
+                f"Begin: call artifact_overview() first, then write or update a concise artifact digest.")
+    if mode == "query":
+        return (f"Artifact mode: query. question={target_desc}. "
+                f"Begin: call artifact_overview() first, then search/read artifacts and answer with stable URLs.")
+    return (f"Artifact mode: lint. target={target_desc}. "
+            f"Begin: call artifact_overview() first, then health-check curation, refs, duplicates, "
+            f"and uncategorized artifacts.")
+
+
+def _run_artifact(artifact_arg: str, target: str | None,
+                  model: str | None = None, debug: bool = False, debug_file: str | None = None,
+                  agent: str | None = None, session: str | None = None, save: bool = True,
+                  reasoning: str | None = None, maxout: int | None = None,
+                  extras: list[str] | None = None,
+                  ignore_local_config: bool = False, ignore_global_config: bool = False,
+                  presets: list[str] | None = None) -> int:
+    valid = {"curate", "digest", "query", "lint"}
+    modes = [m.strip().lower() for m in artifact_arg.split(",") if m.strip()]
+    bad = [m for m in modes if m not in valid]
+    if not modes or bad:
+        print(f"{C.ORANGE}error: --artifact expects a comma list of {sorted(valid)} (got {artifact_arg!r}){C.RESET}", file=sys.stderr)
+        return 2
+
+    eff_agent = agent or "artifact"
+    persona = ""
+    if agent:
+        try:
+            cfg = _cfg_from_env_compat(session, save_session=False, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
+            persona = P.load_configured_prompt_spec(cfg).system + "\n\n"
+        except (ValueError, FileNotFoundError) as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+
+    active_session = session
+    if save and active_session is None:
+        try:
+            cfg = _cfg_from_env_compat(None, save_session=True, extras=extras, agent_id=eff_agent,
+                                       ignore_local_config=ignore_local_config,
+                                       ignore_global_config=ignore_global_config, presets=presets)
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+        active_session = _session_hint_arg(cfg)
+        _announce_generated_session(cfg)
+
+    modes_arg = ",".join(modes)
+    resume_prefix = f"js --artifact={modes_arg}"
+    if agent:
+        resume_prefix += f" --agent {agent}"
+    target_desc = target if target else "the artifact library"
+
+    rc = 0
+    for idx, mode in enumerate(modes):
+        system = persona + build_artifact_system([mode])
+        prompt = _artifact_kickoff(mode, target_desc, resuming=(session is not None and idx == 0))
+        rc = _run_prompt(prompt, model=model, debug=debug, agent=eff_agent,
+                         debug_file=debug_file, session=active_session, save=save, system_override=system,
+                         resume_prefix=resume_prefix, show_continue=(idx == len(modes) - 1),
+                         tool_registry=_FULL_REGISTRY, reasoning=reasoning, maxout=maxout,
+                         extras=extras,
+                         ignore_local_config=ignore_local_config,
+                         ignore_global_config=ignore_global_config, presets=presets)
+        if rc != 0:
+            break
+    return rc
+
+
 def _commit_backup_root() -> Path:
     return _paths.data_dir() / "commit-backups"
 
@@ -2030,7 +2581,7 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
-        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
+        result = runtime.compact_messages(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
     except Exception as e:  # noqa: BLE001
         print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
         return 1
@@ -2168,29 +2719,12 @@ def _warn_missing_binaries() -> None:
     for name, why in _EXPECTED_BINARIES:
         if name in _warned_binaries:
             continue
-        binary = resolve_binary(name) if name == "rg" else shutil.which(name)
-        if binary is None:
+        if shutil.which(name) is None:
             _warned_binaries.add(name)
-            expected_location = "in js/tools or PATH" if name == "rg" else "on PATH"
             print(
-                f"{C.ORANGE}warning: {name} not found {expected_location}; {why} — "
-                f"run `just install` to provision it{C.RESET}",
+                f"{C.ORANGE}warning: {name} not found on PATH; {why} — run `just install` to provision it{C.RESET}",
                 file=sys.stderr,
             )
-
-
-def _session_mcp_host(cfg, telemetry):
-    if getattr(cfg, "mcp", None) is None or not getattr(cfg.mcp, "servers", ()):
-        return None
-    from .mcp.host import MCPHost
-
-    return MCPHost(cfg.mcp, telemetry=telemetry)
-
-
-async def _close_session_mcp_host(state: dict) -> None:
-    host = state.get("mcp_host")
-    if host is not None:
-        await host.close()
 
 
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
@@ -2222,7 +2756,6 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             tool_registry=state["tool_registry"],
             sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
             event_hooks=state.get("events"),
-            mcp_host=state.get("mcp_host"),
         )
         after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
         if after_turn_sampling != before_turn_sampling:
@@ -2417,7 +2950,6 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
             await consumer
         for job in sup.jobs():  # backstop: cancel any straggler
             job.task.cancel()
-        await _close_session_mcp_host(state)
     return 0
 
 
@@ -2568,27 +3100,36 @@ def _printonly_run(args, cli_agent, presets) -> int:
     return 0
 
 
+@_session_scope
 def main(argv: list[str] | None = None) -> int:
+    dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Handle login/logout before argparse so they don't require a valid agent/config.
-    if argv and argv[0] in ("--login", "login"):
+    if dispatch_argv and dispatch_argv[0] in ("--login", "login"):
         from . import login_cli
-        return login_cli.main(argv[1:])
-    if argv and argv[0] in ("--logout", "logout"):
+        return login_cli.main(dispatch_argv[1:])
+    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout"):
         from . import login_cli
-        return login_cli.main(["logout"] + (argv[1:] if len(argv) > 1 else []))
+        return login_cli.main(["logout"] + dispatch_argv[1:])
+    if dispatch_argv and dispatch_argv[0] in ("--models-edit", "models-edit"):
+        from . import login_cli
+        return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = argparse.ArgumentParser(add_help=True)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help="show the short usage guide and exit")
+    parser.add_argument("--help-full", action="help", help="show the complete option reference and exit")
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
     parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
     parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
-    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
+    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, --wiki, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
-    parser.add_argument("-s", "--session", help="load existing session id or .jsonl file under platform data sessions/<agent>")
-    parser.add_argument("-n", "--no-save", action="store_true", help="run one-shot prompt/pipe mode without writing session state")
+    session_group = parser.add_mutually_exclusive_group()
+    session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
+    session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
+    parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
     parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
@@ -2607,13 +3148,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
     parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
     parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
+    parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
+    parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
     parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
     parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
     parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
     parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
+    parser.add_argument("--wiki", metavar="MODES", help="wiki mode: comma list of ingest,synthesize,query,lint (e.g. --wiki=ingest,synthesize). Built-in wiki prompting; ignores defaultagent unless --agent is also given (persona + wiki).")
+    parser.add_argument("--artifact", metavar="MODES", help="artifact mode: comma list of curate,digest,query,lint (e.g. --artifact=digest). Built-in artifact prompting; ignores defaultagent unless --agent is also given.")
     parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
     parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
+    parser.add_argument("--vault", help="wiki vault: creative|general|path (default: infer from target/cwd, else creative)")
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
                         help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
                              "and ```!lang fences are left literal instead of running. Inline code runs by "
@@ -2625,7 +3171,7 @@ def main(argv: list[str] | None = None) -> int:
                              "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
                              ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
                              "Never errors — unknown letters/unwritable paths degrade with a warning.")
-    parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
+    parser.add_argument("target", nargs="?", help="file or dir to ingest in --wiki mode")
     args = parser.parse_args(argv)
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
@@ -2637,6 +3183,39 @@ def main(argv: list[str] | None = None) -> int:
         # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+    if args.json and not args.list:
+        print(f"{C.ORANGE}error: --json only works with --list{C.RESET}", file=sys.stderr)
+        return 2
+    if args.list:
+        ambiguous = any(
+            (
+                args.prompt is not None,
+                args.session is not None,
+                args.session_key is not None,
+                args.agent is not None,
+                args.wiki is not None,
+                args.artifact is not None,
+                args.commit,
+                args.compact is not None,
+                args.bench is not None,
+                args.target is not None,
+            )
+        )
+        if ambiguous:
+            print(f"{C.ORANGE}error: --list cannot be combined with run or session options{C.RESET}", file=sys.stderr)
+            return 2
+        return _print_session_list(json_lines=args.json)
+    if args.session_key is not None:
+        try:
+            mode_agent = "wiki" if args.wiki else "artifact" if args.artifact else "commit" if args.commit else None
+            effective_agent = validate_agent_id(
+                args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
+            )
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+        args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
+    _session_leases.caller_key = args.session_key
     if presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
@@ -2702,6 +3281,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if (
             args.prompt is None
+            and args.wiki is None
+            and args.artifact is None
             and not args.commit
             and args.compact is None
             and args.target is None
@@ -2730,9 +3311,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.printonly is not None:
         return _printonly_run(args, cli_agent, presets)
 
-    selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
+    selected_modes = [name for name, enabled in (("wiki", args.wiki), ("artifact", args.artifact), ("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
-        print(f"{C.ORANGE}error: choose only one built-in mode: --commit or --compact{C.RESET}", file=sys.stderr)
+        print(f"{C.ORANGE}error: choose only one built-in mode: --wiki, --artifact, --commit, or --compact{C.RESET}", file=sys.stderr)
         return 2
     if args.files and selected_modes:
         print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
@@ -2753,6 +3334,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
+
+    if args.wiki:
+        return _run_wiki(args.wiki, args.target, args.vault, model=args.model,
+                         debug=args.debug, debug_file=args.debug_file, agent=args.agent,
+                         session=args.session, save=not args.no_save,
+                         reasoning=args.reasoning, maxout=args.max_out,
+                         extras=args.extras,
+                         ignore_local_config=args.ignore_local,
+                         ignore_global_config=args.ignore_global, presets=presets)
+
+    if args.artifact:
+        return _run_artifact(args.artifact, args.target, model=args.model,
+                             debug=args.debug, debug_file=args.debug_file, agent=args.agent,
+                             session=args.session, save=not args.no_save,
+                             reasoning=args.reasoning, maxout=args.max_out,
+                             extras=args.extras,
+                             ignore_local_config=args.ignore_local,
+                             ignore_global_config=args.ignore_global, presets=presets)
 
     if args.migrate_config:
         return _run_migrate_config()
@@ -2780,7 +3379,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.prompt is not None or (not sys.stdin.isatty() and not args.tui):
-        os.environ["JS_MODE"] = "headless"
         stdin_attachment = None
         if "-" in args.files:
             if args.prompt in {None, "-"}:
@@ -2798,19 +3396,27 @@ def main(argv: list[str] | None = None) -> int:
         else:
             stdin_text = _read_stdin_if_piped()
             prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        return _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                           agent=args.agent, session=args.session, save=not args.no_save,
-                           reasoning=args.reasoning, maxout=args.max_out,
-                           show_continue=not args.quiet,
-                           extras=args.extras,
-                           ignore_local_config=args.ignore_local,
-                           ignore_global_config=args.ignore_global,
-                           files=args.files,
-                           stdin_attachment=stdin_attachment,
-                           presets=presets,
-                           stats_json=args.stats_json, stats_csv=args.stats_csv)
+        generated_session = (
+            not args.no_save
+            and args.session is None
+            and os.environ.get("JS_SESSION") is None
+        )
+        result = _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                             agent=args.agent, session=args.session, save=not args.no_save,
+                             caller_key=args.session_key, announce_generated=generated_session,
+                             reasoning=args.reasoning, maxout=args.max_out,
+                             show_continue=not args.quiet,
+                             extras=args.extras,
+                             ignore_local_config=args.ignore_local,
+                             ignore_global_config=args.ignore_global,
+                             files=args.files,
+                             stdin_attachment=stdin_attachment,
+                             presets=presets,
+                             stats_json=args.stats_json, stats_csv=args.stats_csv)
+        if args.no_save:
+            print("session not saved; resume unavailable", file=sys.stderr)
+        return result
 
-    os.environ["JS_MODE"] = "repl"
     try:
         cfg = _cfg_from_env_compat(
             args.session,
@@ -2851,12 +3457,12 @@ def main(argv: list[str] | None = None) -> int:
         completer=completer,
         complete_while_typing=False,  # Tab-triggered, never auto-pops
         complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
-        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
     )
 
     messages = M.load_messages(cfg.session_file)
     if messages:
         print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
+    _activate_saved_session(cfg, caller_key=args.session_key)
     M.append_mark(cfg.session_file, "session_start")
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
@@ -2906,7 +3512,6 @@ def main(argv: list[str] | None = None) -> int:
         "compact_paused": False,
     }
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state["mcp_host"] = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn (all three REPL
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
@@ -2943,7 +3548,6 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             transcript_stack.close()
 
-    mcp_loop = asyncio.Runner()
     while state["running"]:
         try:
             line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
@@ -3010,8 +3614,6 @@ def main(argv: list[str] | None = None) -> int:
                 tool_registry=state["tool_registry"],
                 sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
                 event_hooks=state.get("events"),
-                mcp_host=state.get("mcp_host"),
-                loop_runner=mcp_loop,
             )
             after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             if after_turn_sampling != before_turn_sampling:
@@ -3077,8 +3679,6 @@ def main(argv: list[str] | None = None) -> int:
             state["messages"][:] = state["messages"][:before_len]
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
-    mcp_loop.run(_close_session_mcp_host(state))
-    mcp_loop.close()
     transcript_stack.close()
     return 0
 if __name__ == "__main__":
