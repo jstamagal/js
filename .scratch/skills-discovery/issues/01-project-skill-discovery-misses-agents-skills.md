@@ -1,6 +1,6 @@
 # Project skill discovery scans the wrong directories
 
-Status: needs-triage
+Status: ready-for-human (verify), fix landed
 Filed: 2026-08-13
 Component: `js/skills.py` (discovery), Skill tool
 
@@ -88,3 +88,7 @@ missing/empty description → skip and log; unparseable YAML → skip and log.
 - https://agentskills.io/specification
 - https://agentskills.io/client-implementation/adding-skills-support.md
 - https://github.com/agentskills/agentskills
+
+## Comments
+
+2026-08-14: Fixed. Discovery now scans .agents/skills (project+user) and .js/skills; SKILL.md dirs only; shadow warnings added. Commit: skills discovery fix on main. Tests rewritten to the new layout, 9/9 green.
