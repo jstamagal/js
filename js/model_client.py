@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 
 import ai
 
@@ -518,6 +519,22 @@ def build_tool_result_messages(
     ]
 
 
+def _open_stream(
+    *,
+    model: ai.Model,
+    messages: list[ai.messages.Message],
+    tools: Sequence[ai.types.tools.Tool] | None,
+    params: ai_params.InferenceRequestParams | None,
+) -> AbstractAsyncContextManager[ai.models.Stream]:
+    """Open an SDK stream through one js-owned, patchable boundary.
+
+    ai 0.4 removed the public ``executor=`` argument from :func:`ai.stream`.
+    Keeping the test seam here lets offline tests supply a public
+    :class:`ai.models.Stream` without reaching into SDK internals.
+    """
+    return ai.stream(model=model, messages=messages, tools=tools, params=params)
+
+
 def _usage_from_stream(stream: ai.models.Stream) -> ai.types.usage.Usage | None:
     usage = stream.usage
     if usage is None:
@@ -543,7 +560,6 @@ async def _stream_async(
     messages: list[ai.messages.Message],
     tools: list[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
-    executor: ai.models.StreamExecutor | None,
     on_text: Callable[[str], None],
 ) -> ModelStreamResult:
     kwargs: dict[str, Any] = {
@@ -553,13 +569,10 @@ async def _stream_async(
     }
     if params is not None:
         kwargs["params"] = params
-    if executor is not None:
-        kwargs["executor"] = executor
-
     start = time.perf_counter()
     first_token_s: float | None = None
     stream_provider_metadata: dict[str, Any] | None = None
-    async with ai.stream(**kwargs) as stream:
+    async with _open_stream(**kwargs) as stream:
         async for event in stream:
             event_metadata = getattr(event, "provider_metadata", None)
             if isinstance(event_metadata, dict):
@@ -755,7 +768,6 @@ async def stream_model_async(
     on_text: Callable[[str], None],
     provider_headers: dict[str, str] | None = None,
     provider_extra: dict[str, Any] | None = None,
-    executor: ai.models.StreamExecutor | None = None,
     sampling: Sampling | None = None,
     trace_request: bool = False,
     trace_sink: Any = None,
@@ -895,7 +907,6 @@ async def stream_model_async(
             messages=messages,
             tools=tools,
             params=params,
-            executor=executor,
             on_text=on_text,
         )
     except routing.ProviderNotLoggedInError:

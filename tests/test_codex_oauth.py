@@ -139,23 +139,28 @@ def test_bind_callback_servers_returns_empty_when_both_families_fail(monkeypatch
 
 
 def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
-    class FakeExecutor:
-        request = None
+    class FakeStreamFactory:
+        kwargs = None
 
-        async def _do_stream(self, request):
-            self.request = request
-            yield ai.events.StreamStart()
-            yield ai.events.TextStart(block_id="text")
-            yield ai.events.TextDelta(block_id="text", chunk="ok")
-            yield ai.events.TextEnd(block_id="text")
-            yield ai.events.StreamEnd()
+        def __call__(self, **kwargs):
+            self.kwargs = kwargs
 
-    executor = FakeExecutor()
+            async def generate():
+                yield ai.events.StreamStart()
+                yield ai.events.TextStart(block_id="text")
+                yield ai.events.TextDelta(block_id="text", chunk="ok")
+                yield ai.events.TextEnd(block_id="text")
+                yield ai.events.StreamEnd()
+
+            return ai.models.Stream(generate())
+
+    factory = FakeStreamFactory()
 
     def fake_resolve(model_id, *, provider_id, provider_base_url, provider_api_key, provider_headers=None):
         return ai.Model(id=model_id, provider=ai.get_provider("openai", api_key="x"))
 
     monkeypatch.setattr(model_client, "resolve_model", fake_resolve)
+    monkeypatch.setattr(model_client, "_open_stream", factory)
     model_client.stream_model(
         model_id="gpt-5-codex",
         provider_id="openai-codex",
@@ -166,10 +171,9 @@ def test_stream_model_shapes_codex_params_without_output_cap(monkeypatch):
         max_output_tokens=64,
         reasoning_effort="xhigh",
         on_text=lambda _s: None,
-        executor=executor,
     )
     # Codex takes a reasoning effort but no output cap (its API rejects max_tokens).
-    params = executor.request.params
+    params = factory.kwargs["params"]
     assert params.output is None
     assert params.reasoning.effort == "xhigh"
 

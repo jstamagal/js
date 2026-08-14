@@ -30,7 +30,7 @@ def _args(tag: str) -> dict:
 def test_stream_model_async_runs_concurrently_on_one_loop(monkeypatch):
     order: list[tuple[str, str]] = []
 
-    async def fake_stream(*, model, messages, tools, params, executor, on_text):
+    async def fake_stream(*, model, messages, tools, params, on_text):
         tag = messages[0]
         order.append(("start", tag))
         await asyncio.sleep(0.05)

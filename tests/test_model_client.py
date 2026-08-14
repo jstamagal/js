@@ -1,6 +1,6 @@
 """Tests for the ai-python SDK boundary in js/model_client.py.
 
-No network calls. All model interactions use a fake ``StreamExecutor``.
+No network calls. All model interactions use a public ``ai.models.Stream``.
 """
 
 from __future__ import annotations
@@ -17,17 +17,27 @@ from js import model_client
 from js.sampling import Sampling
 
 
-class _FakeExecutor:
-    """Yields scripted events for a single stream."""
+class _FakeStreamFactory:
+    """Returns a public SDK stream over scripted events and captures inputs."""
 
     def __init__(self, events):
         self.events = events
-        self.request = None
+        self.kwargs = None
 
-    async def _do_stream(self, request: ai.models.StreamRequest):
-        self.request = request
-        for event in self.events:
-            yield event
+    def __call__(self, **kwargs):
+        self.kwargs = kwargs
+
+        async def generate():
+            for event in self.events:
+                yield event
+
+        return ai.models.Stream(generate())
+
+
+def _use_fake_stream(monkeypatch, events) -> _FakeStreamFactory:
+    factory = _FakeStreamFactory(events)
+    monkeypatch.setattr(model_client, "_open_stream", factory)
+    return factory
 
 
 def _text_events(text: str) -> list[ai.types.events.Event]:
@@ -337,7 +347,7 @@ def test_history_to_ai_messages_preserves_roles():
     assert tc_parts[2].tool_name == "fs_search"
 
 
-def test_stream_model_collects_text_reasoning_tool_calls_and_usage():
+def test_stream_model_collects_text_reasoning_tool_calls_and_usage(monkeypatch):
     events = [
         ai.types.events.StreamStart(),
         ai.types.events.TextStart(block_id="text"),
@@ -360,7 +370,7 @@ def test_stream_model_collects_text_reasoning_tool_calls_and_usage():
             )
         ),
     ]
-    executor = _FakeExecutor(events)
+    factory = _use_fake_stream(monkeypatch, events)
     emitted_text: list[str] = []
     result = model_client.stream_model(
         model_id="test",
@@ -372,7 +382,6 @@ def test_stream_model_collects_text_reasoning_tool_calls_and_usage():
         max_output_tokens=100,
         reasoning_effort=None,
         on_text=emitted_text.append,
-        executor=executor,
     )
     assert result.text == "DONE"
     assert result.reasoning == "thinking"
@@ -382,12 +391,12 @@ def test_stream_model_collects_text_reasoning_tool_calls_and_usage():
     assert tc.id == "tc1"
     assert result.usage.output_tokens == 10
     assert emitted_text == ["DONE"]
-    assert executor.request is not None
-    assert _pview(executor.request.params) == {"max_tokens": 100}
+    assert factory.kwargs is not None
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 100}
 
 
-def test_stream_model_passes_reasoning_effort():
-    executor = _FakeExecutor(_text_events("ok"))
+def test_stream_model_passes_reasoning_effort(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="test",
         provider_id="openai",
@@ -398,13 +407,12 @@ def test_stream_model_passes_reasoning_effort():
         max_output_tokens=64,
         reasoning_effort="low",
         on_text=lambda _s: None,
-        executor=executor,
     )
-    assert _pview(executor.request.params) == {"max_tokens": 64, "reasoning_effort": "low"}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "reasoning_effort": "low"}
 
 
-def test_stream_model_passes_reasoning_none():
-    executor = _FakeExecutor(_text_events("ok"))
+def test_stream_model_passes_reasoning_none(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="test",
         provider_id="openai",
@@ -415,13 +423,12 @@ def test_stream_model_passes_reasoning_none():
         max_output_tokens=64,
         reasoning_effort="none",
         on_text=lambda _s: None,
-        executor=executor,
     )
-    assert _pview(executor.request.params) == {"max_tokens": 64}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
 
 
-def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body():
-    executor = _FakeExecutor(_text_events("ok"))
+def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="deepseek-chat",
         provider_id="deepseek",
@@ -432,13 +439,12 @@ def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body():
         max_output_tokens=64,
         reasoning_effort=None,
         on_text=lambda _s: None,
-        executor=executor,
     )
-    assert _pview(executor.request.params) == {"max_tokens": 64, "extra_body": {"max_reasoning_tokens": 32_000}}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "extra_body": {"max_reasoning_tokens": 32_000}}
 
 
-def test_stream_model_strips_minimax_reasoning_by_model_prefix():
-    executor = _FakeExecutor(_text_events("ok"))
+def test_stream_model_strips_minimax_reasoning_by_model_prefix(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="minimax:text-01",
         provider_id=None,
@@ -452,13 +458,12 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix():
         max_output_tokens=64,
         reasoning_effort="high",
         on_text=lambda _s: None,
-        executor=executor,
     )
-    assert _pview(executor.request.params) == {"max_tokens": 64}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
 
 
 
-def test_stream_model_applies_sampling_from_env_for_openai():
+def test_stream_model_applies_sampling_from_env_for_openai(monkeypatch):
     """JS_* env sampling is typed before stream_model; OpenAI only receives supported knobs."""
     sampling = Sampling.from_env(
         {
@@ -469,7 +474,7 @@ def test_stream_model_applies_sampling_from_env_for_openai():
             "JS_PRPEN": "1.5",
         }
     )
-    executor = _FakeExecutor(_text_events("ok"))
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="test",
         provider_id="openai",
@@ -480,10 +485,9 @@ def test_stream_model_applies_sampling_from_env_for_openai():
         max_output_tokens=64,
         reasoning_effort=None,
         on_text=lambda _s: None,
-        executor=executor,
         sampling=sampling,
     )
-    assert _pview(executor.request.params) == {
+    assert _pview(factory.kwargs["params"]) == {
         "max_tokens": 64,
         "temperature": 1.1,
         "top_p": 0.96,
@@ -491,11 +495,11 @@ def test_stream_model_applies_sampling_from_env_for_openai():
     }
 
 
-def test_stream_model_sampling_topk_merges_with_provider_extra_body():
+def test_stream_model_sampling_topk_merges_with_provider_extra_body(monkeypatch):
     """On the openai-compatible family top_k rides as RAW extra_body (the OpenAI
     protocol hard-rejects a TopKSamplerParams class) and merges with, not clobbers,
     an existing extra_body."""
-    executor = _FakeExecutor(_text_events("ok"))
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="deepseek-chat",
         provider_id="deepseek",
@@ -506,10 +510,9 @@ def test_stream_model_sampling_topk_merges_with_provider_extra_body():
         max_output_tokens=64,
         reasoning_effort=None,
         on_text=lambda _s: None,
-        executor=executor,
         sampling=Sampling(top_k=40),
     )
-    assert _pview(executor.request.params) == {
+    assert _pview(factory.kwargs["params"]) == {
         "max_tokens": 64,
         "extra_body": {"top_k": 40, "max_reasoning_tokens": 32_000},
     }

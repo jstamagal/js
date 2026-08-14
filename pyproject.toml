@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
-    "ai[openai,anthropic]",
+    "ai[openai,anthropic]==0.4.2",
     # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
     # not an extra: one box, one user, and a mode that half-installs is a mode
     # that fails at the worst moment. the tools still degrade to one clear ERROR

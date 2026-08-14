@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "ai"
-version = "0.2.1"
+version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -12,9 +12,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/d8/0711b851f473732f856df713cb6e7efeb8320f41fee59ff7615db7a4e461/ai-0.2.1.tar.gz", hash = "sha256:26797971c52837a2ae15251cdd4d68d1ed1a499cdae9e2855dd882c49def1b49", size = 837716, upload-time = "2026-06-23T02:44:41.484Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/e2/134605bd59c7c45a483c61572bf87dd887271ec82f3a1faf091ad91c73a0/ai-0.4.2.tar.gz", hash = "sha256:1c07429e1653d83a3b1b293bea3b2eb301c93e31439e3bca5e81fab87dc8d5a2", size = 1178023, upload-time = "2026-08-05T16:54:32.543Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/b9/42ad2e12302b3dafa88f4783081d43354568b1a7da65f88f14709f479d73/ai-0.2.1-py3-none-any.whl", hash = "sha256:cbee5d94cc4a20697d32a8a62b1dacf9d6f09e68b4b49355e2b2e81053cee6d0", size = 144200, upload-time = "2026-06-23T02:44:39.674Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/8a/7f7e48978ae40215f260e19517161b153b32ad6afc22df06a8bc8c1fcbb2/ai-0.4.2-py3-none-any.whl", hash = "sha256:55bd0d35213e202fd60632b788c29f3556e86ab8face1d9216ccdb224a1b21f0", size = 179861, upload-time = "2026-08-05T16:54:30.889Z" },
 ]
 
 [package.optional-dependencies]
@@ -537,7 +537,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai", extras = ["openai", "anthropic"] },
+    { name = "ai", extras = ["openai", "anthropic"], specifier = "==0.4.2" },
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "jupyter-client", specifier = ">=8.0" },
     { name = "pexpect", specifier = ">=4.9.0" },
