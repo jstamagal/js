@@ -52,7 +52,7 @@ def test_todo_item_contract_requires_content_and_defaults_status(tmp_path):
 
     assert item["required"] == ["content"]
     assert item["properties"]["content"]["minLength"] == 1
-    assert item["properties"]["content"]["pattern"] == r"\S"
+    assert "pattern" not in item["properties"]["content"]  # llama.cpp grammar path chokes on regex patterns; todo_write validates in code
     assert item["properties"]["status"]["default"] == "pending"
     result = call_tool(
         tool,

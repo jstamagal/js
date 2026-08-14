@@ -624,7 +624,9 @@ def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
             {"todos": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
-                    "content": {"type": "string", "minLength": 1, "pattern": r"\S"},
+                    # No regex pattern here: llama.cpp's schema-to-grammar path
+                    # chokes on them, and todo_write strips/validates in code.
+                    "content": {"type": "string", "minLength": 1},
                     "status": {"type": "string", "enum": sorted(_ALLOWED_STATUS), "default": "pending"},
                 },
                 "required": ["content"],
