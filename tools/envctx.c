@@ -715,12 +715,13 @@ int main(void) {
         "git status --porcelain=v2 --branch 2>/dev/null; echo @@L; "
         "git log -1 --format='%h%x09%s%x09%cr%x09%an' 2>/dev/null; echo @@S; "
         "git stash list 2>/dev/null | wc -l; echo @@R; "
-        "git config --get remote.origin.url 2>/dev/null",
+        "git config --get remote.origin.url 2>/dev/null; echo @@U; "
+        "git branch --no-merged 2>/dev/null | wc -l",
         "r");
     if (g) {
       char branch[128] = "?", upstream[128] = "", ab[64] = "", head[64] = "";
       int mod = 0, add = 0, del = 0, unt = 0, stg = 0, cfl = 0;
-      char logline[LINE] = "", stash[32] = "0", remote[512] = "";
+      char logline[LINE] = "", stash[32] = "0", remote[512] = "", unmerged[16] = "0";
       int sect = 0;
       while (fgets(buf, sizeof buf, g)) {
         chomp(buf);
@@ -734,6 +735,10 @@ int main(void) {
         }
         if (!strcmp(buf, "@@R")) {
           sect = 3;
+          continue;
+        }
+        if (!strcmp(buf, "@@U")) {
+          sect = 4;
           continue;
         }
         if (sect == 0) {
@@ -769,8 +774,11 @@ int main(void) {
         } else if (sect == 2) {
           if (isdigit((unsigned char)buf[0]))
             snprintf(stash, sizeof stash, "%.16s", buf);
-        } else if (buf[0])
-          snprintf(remote, sizeof remote, "%.500s", buf);
+        } else if (sect == 3) {
+          if (buf[0])
+            snprintf(remote, sizeof remote, "%.500s", buf);
+        } else if (isdigit((unsigned char)buf[0]))
+          snprintf(unmerged, sizeof unmerged, "%.15s", buf);
       }
       pclose(g);
       printf("git branch=%s", branch);
@@ -785,6 +793,8 @@ int main(void) {
         printf(" staged=%d", stg);
       if (strcmp(stash, "0"))
         printf(" stash=%s", stash);
+      if (strcmp(unmerged, "0"))
+        printf(" unmerged=%s", unmerged);
       if (remote[0]) {
         scrub(remote, b2, sizeof b2);
         printf(" remote=%s", b2);
