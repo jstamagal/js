@@ -5,6 +5,8 @@ silently demanded about 2 MB/s sustained to move anything large.
 """
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from js.toolkit import ToolContext
@@ -16,8 +18,11 @@ class _FakeResponse:
     headers = {"Content-Type": "application/octet-stream"}
     status = 200
 
-    def read(self, *_args):
-        return b"payload"
+    def __init__(self):
+        self._body = io.BytesIO(b"payload")
+
+    def read(self, *args):
+        return self._body.read(*args)
 
     def __enter__(self):
         return self
