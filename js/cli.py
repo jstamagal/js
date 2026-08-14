@@ -2800,8 +2800,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.session is not None,
                 args.session_key is not None,
                 args.agent is not None,
-                args.wiki is not None,
-                args.artifact is not None,
                 args.commit,
                 args.compact is not None,
                 args.bench is not None,
@@ -2814,7 +2812,7 @@ def main(argv: list[str] | None = None) -> int:
         return _print_session_list(json_lines=args.json)
     if args.session_key is not None:
         try:
-            mode_agent = "wiki" if args.wiki else "artifact" if args.artifact else "commit" if args.commit else None
+            mode_agent = "commit" if args.commit else None
             effective_agent = validate_agent_id(
                 args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
             )
