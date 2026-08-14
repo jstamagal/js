@@ -22,6 +22,11 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 4. **Run the tests that cover it.** Green before done.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
+7. **Merge it.** A branch nobody merged is organized forgetting — the work is
+   not done while it sits unmerged. Merge to main when green; if main moved
+   underneath, review then merge. Never park work on a branch silently: 28
+   commits rotted that way once. Saying "awaiting review" once and moving on
+   counts as silent.
 
 ## Privacy 
 - Keep our chat out of the files unless its relavent.
