@@ -390,6 +390,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_bash_output_ceiling", ("limits", "max_bash_output_ceiling")),
     ("max_tool_result_inline_bytes", ("limits", "max_tool_result_inline_bytes")),
     ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
+    ("max_tool_calls_per_message", ("limits", "max_tool_calls_per_message")),
     ("task_max_depth", ("limits", "task_max_depth")),
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
     ("kernel_render_max_lines", ("kernel", "render_max_lines")),

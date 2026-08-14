@@ -100,6 +100,7 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
     for name in (
         "JS_MAX_OUTPUT_TOKENS",
         "JS_MAX_TOOL_ITERATIONS",
+        "JS_MAX_TOOL_CALLS_PER_MESSAGE",
         "JS_MAX_BASH_OUTPUT_BYTES",
         "JS_MAX_TOOL_RESULT_BYTES",
         "JS_FETCH_TIMEOUT",
@@ -111,6 +112,7 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
     (config_dir / "jsrc").write_text(
         """set model.max_output_tokens true
 set limits.max_tool_iterations true
+set limits.max_tool_calls_per_message true
 set limits.max_bash_output_bytes true
 set limits.max_tool_result_bytes true
 set limits.fetch_timeout_s true
@@ -127,6 +129,7 @@ set limits.task_max_depth true
 
     assert actual.max_output_tokens is None
     assert actual.max_tool_iterations == settings.DEFAULT_MAX_TOOL_ITERATIONS
+    assert actual.max_tool_calls_per_message == settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
     assert actual.max_bash_output_bytes == settings.DEFAULT_MAX_BASH_OUTPUT_BYTES
     assert actual.max_tool_result_bytes == settings.DEFAULT_MAX_TOOL_RESULT_BYTES
     assert actual.fetch_timeout_s == settings.DEFAULT_FETCH_TIMEOUT_S
@@ -148,6 +151,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     monkeypatch.setenv("JS_REASONING", "max")
     monkeypatch.setenv("JS_MAX_OUTPUT_TOKENS", "1234")
     monkeypatch.setenv("JS_MAX_TOOL_ITERATIONS", "7")
+    monkeypatch.setenv("JS_MAX_TOOL_CALLS_PER_MESSAGE", "23")
     monkeypatch.setenv("JS_MAX_BASH_OUTPUT_BYTES", "4567")
     monkeypatch.setenv("JS_MAX_TOOL_RESULT_BYTES", "8910")
     monkeypatch.setenv("JS_FETCH_TIMEOUT", "42")
@@ -177,6 +181,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.reasoning_effort == "max"
     assert actual.max_output_tokens == 1234
     assert actual.max_tool_iterations == 7
+    assert actual.max_tool_calls_per_message == 23
     assert actual.max_bash_output_bytes == 4567
     assert actual.max_tool_result_bytes == 8910
     assert actual.fetch_timeout_s == 42

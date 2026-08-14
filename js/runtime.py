@@ -21,6 +21,8 @@ from typing import Any
 from . import events as event_mod
 from . import model_client
 import ai
+from jsonschema import exceptions as jsonschema_exceptions
+from jsonschema import validators as jsonschema_validators
 
 from . import colors as C
 from . import context_budget
@@ -141,7 +143,12 @@ def _canonical_tool_call_name(name: str, registry: ToolRegistry) -> str:
 
 
 def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
-    return _PendingToolCall(id=pc.id, name=name, arg_chunks=list(pc.arg_chunks))
+    return _PendingToolCall(
+        id=pc.id,
+        name=name,
+        arg_chunks=list(pc.arg_chunks),
+        validation_error=pc.validation_error,
+    )
 
 
 _CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
@@ -289,9 +296,123 @@ class _PendingToolCall:
     id: str
     name: str = ""
     arg_chunks: list[str] = field(default_factory=list)
+    validation_error: str | None = None
 
     def arguments(self) -> str:
         return "".join(self.arg_chunks)
+
+
+@dataclass(frozen=True)
+class _ToolBatchStats:
+    received: int
+    retained: int
+    duplicate: int
+    invalid: int
+    capped: int
+
+
+def _normalize_tool_call_batch(
+    calls: list[_PendingToolCall],
+    registry: ToolRegistry,
+    limit: int,
+) -> tuple[list[_PendingToolCall], _ToolBatchStats]:
+    """Canonicalize, deduplicate, validate, and cap one assistant batch."""
+    retained: list[_PendingToolCall] = []
+    seen: set[tuple[str, str]] = set()
+    duplicate = invalid = capped = 0
+
+    for call in calls:
+        tool = registry.resolve(call.name)
+        canonical_name = tool.name if tool is not None else _canonical_tool_call_name(
+            call.name, registry
+        )
+        validation_error: str | None = None
+        try:
+            arguments = _repair_jsonish(call.arguments())
+        except ValueError as exc:
+            arguments = {}
+            validation_error = f"could not parse arguments: {exc}"
+        canonical_args = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        identity = (canonical_name, canonical_args)
+        if identity in seen:
+            duplicate += 1
+            continue
+        seen.add(identity)
+
+        if validation_error is None and tool is None:
+            validation_error = "tool was not published for this model call"
+        if validation_error is None and tool is not None:
+            schema = tool.openai_spec()["function"]["parameters"]
+            try:
+                validator_type = jsonschema_validators.validator_for(schema)
+                validator_type.check_schema(schema)
+                validator_type(schema).validate(arguments)
+            except (jsonschema_exceptions.SchemaError, jsonschema_exceptions.ValidationError) as exc:
+                validation_error = " ".join(exc.message.split())
+        if validation_error is not None:
+            invalid += 1
+
+        if len(retained) >= limit:
+            capped += 1
+            continue
+        retained.append(
+            _PendingToolCall(
+                id=call.id,
+                name=canonical_name,
+                arg_chunks=[canonical_args],
+                validation_error=validation_error,
+            )
+        )
+
+    return retained, _ToolBatchStats(
+        received=len(calls),
+        retained=len(retained),
+        duplicate=duplicate,
+        invalid=invalid,
+        capped=capped,
+    )
+
+
+def _assistant_message_with_tool_calls(
+    message: ai.messages.Message,
+    calls: list[_PendingToolCall],
+    *,
+    diagnostic_suffix: str = "",
+) -> ai.messages.Message:
+    """Replace raw SDK tool-call parts with the normalized batch."""
+    original = {
+        part.tool_call_id: part
+        for part in message.parts
+        if isinstance(part, ai.types.messages.ToolCallPart)
+    }
+    parts = [
+        part
+        for part in message.parts
+        if not isinstance(part, ai.types.messages.ToolCallPart)
+    ]
+    if diagnostic_suffix:
+        parts.append(ai.types.messages.TextPart(text=diagnostic_suffix))
+    for call in calls:
+        prior = original.get(call.id)
+        if prior is None:
+            part = ai.types.messages.ToolCallPart(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                tool_args=call.arguments(),
+            )
+        else:
+            part = prior.model_copy(
+                update={"tool_name": call.name, "tool_args": call.arguments()}
+            )
+        parts.append(part)
+    if not parts:
+        parts.append(ai.types.messages.TextPart(text=""))
+    return message.model_copy(update={"parts": parts})
 
 
 def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) -> bool:
@@ -658,7 +779,17 @@ def _dispatch_tool_calls(
     appending tool messages.
     """
     records: list[tuple[dict, str] | None] = [None] * len(tool_calls)
-    task_indices = [idx for idx, pc in enumerate(tool_calls) if _is_task_call(pc)]
+    for idx, pc in enumerate(tool_calls):
+        if pc.validation_error is None:
+            continue
+        args = json.loads(pc.arguments())
+        telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
+        result = f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
+        records[idx] = (args, error_tracker.record(pc.name, _cap_result(result, cap_bytes)))
+    task_indices = [
+        idx for idx, pc in enumerate(tool_calls)
+        if records[idx] is None and _is_task_call(pc)
+    ]
 
     if task_indices:
         with ThreadPoolExecutor(max_workers=len(task_indices), thread_name_prefix="js-runtime-task") as executor:
@@ -810,6 +941,8 @@ async def _dispatch_batch(
     async_idx: list[int] = []
     fan_out_now: set[int] = set()
     for i, pc in enumerate(tool_calls):
+        if pc.validation_error is not None:
+            continue
         tool = registry.resolve(pc.name)
         if tool is None:
             continue
@@ -855,6 +988,8 @@ async def _dispatch_batch(
     fan_out_idx: list[int] = []
     if current_supervisor is not None:
         for i, pc in enumerate(tool_calls):
+            if pc.validation_error is not None:
+                continue
             tool = registry.resolve(pc.name)
             if tool is not None and meta.is_fan_out_handler(tool.handler):
                 fan_out_idx.append(i)
@@ -1408,21 +1543,40 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # newly loaded tool is callable only after its schema is emitted on
             # the next model iteration.
             dispatch_registry = active_registry.dispatch_registry()
+            batch_diagnostic_suffix = ""
+            if pending_calls:
+                pending_calls, batch_stats = _normalize_tool_call_batch(
+                    pending_calls,
+                    dispatch_registry,
+                    getattr(
+                        cfg,
+                        "max_tool_calls_per_message",
+                        _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE,
+                    ),
+                )
+                telemetry.event(
+                    "tool_call_batch_normalized",
+                    received=batch_stats.received,
+                    retained=batch_stats.retained,
+                    duplicate=batch_stats.duplicate,
+                    invalid=batch_stats.invalid,
+                    capped=batch_stats.capped,
+                )
+                if batch_stats.capped:
+                    diagnostic = (
+                        "Tool-call batch limit reached: "
+                        f"retained {batch_stats.retained} distinct calls and rejected "
+                        f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
+                    )
+                    batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
+                    text += batch_diagnostic_suffix
 
             # --- Record the assistant turn ---
-            assistant_record: dict = {"role": "assistant", "content": text}
             history_assistant_record: dict = {"role": "assistant", "content": text}
             if pending_calls:
-                if reasoning:
-                    assistant_record["reasoning_content"] = reasoning
-                assistant_record["tool_calls"] = [
-                    {"id": pc.id, "type": "function",
-                     "function": {"name": pc.name, "arguments": _canonical_tool_args(pc.arguments())}}
-                    for pc in pending_calls
-                ]
                 history_assistant_record["tool_calls"] = [
                     {"id": pc.id, "type": "function",
-                     "function": {"name": _canonical_tool_call_name(pc.name, active_registry), "arguments": _canonical_tool_args(pc.arguments())}}
+                     "function": {"name": pc.name, "arguments": pc.arguments()}}
                     for pc in pending_calls
                 ]
             if reasoning:
@@ -1436,6 +1590,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if incomplete_reason:
                 history_assistant_record["incomplete_reason"] = incomplete_reason
             assistant_message = assistant_message_override or result.assistant_message
+            if result.tool_calls:
+                assistant_message = _assistant_message_with_tool_calls(
+                    assistant_message,
+                    pending_calls,
+                    diagnostic_suffix=batch_diagnostic_suffix,
+                )
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))

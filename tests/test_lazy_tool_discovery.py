@@ -303,7 +303,8 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
 
     tool_results = [message["content"] for message in messages if message.get("role") == "tool"]
     assert json.loads(tool_results[0])["loaded"] == ["browser_probe"]
-    assert tool_results[1].startswith("ERROR: no tool named browser_probe")
+    assert tool_results[1].startswith("ERROR: invalid arguments for browser_probe")
+    assert "tool was not published for this model call" in tool_results[1]
     assert "browser_probe" not in [tool.name for tool in calls[0]]
     assert "browser_probe" in [tool.name for tool in calls[1]]
 

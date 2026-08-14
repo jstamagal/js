@@ -136,6 +136,7 @@ class Config:
     sessions_dir: Path
     session_file: Path
     prompts_dir: Path
+    max_tool_calls_per_message: int = _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
     inline_code_timeout_s: int = _settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     browse_timeout_s: int = _settings.DEFAULT_BROWSE_TIMEOUT_S
     download_timeout_s: int = _settings.DEFAULT_DOWNLOAD_TIMEOUT_S
@@ -425,6 +426,7 @@ def from_env(
     max_output_tokens = _numeric_setting(js_root_settings, ("model", "max_output_tokens"), None)
     model_context_window = _numeric_setting(js_root_settings, ("model", "context_window"), None)
     max_tool_iterations = _numeric_setting(js_root_settings, ("limits", "max_tool_iterations"), _settings.DEFAULT_MAX_TOOL_ITERATIONS)
+    max_tool_calls_per_message = _numeric_setting(js_root_settings, ("limits", "max_tool_calls_per_message"), _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE)
     max_bash_output_bytes = _numeric_setting(js_root_settings, ("limits", "max_bash_output_bytes"), _settings.DEFAULT_MAX_BASH_OUTPUT_BYTES)
     max_tool_result_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_BYTES)
     fetch_timeout_s = _numeric_setting(js_root_settings, ("limits", "fetch_timeout_s"), _settings.DEFAULT_FETCH_TIMEOUT_S)
@@ -504,6 +506,7 @@ def from_env(
         max_output_tokens=max_output_tokens,
         model_context_window=model_context_window,
         max_tool_iterations=max_tool_iterations,
+        max_tool_calls_per_message=max_tool_calls_per_message,
         max_bash_output_bytes=max_bash_output_bytes,
         max_tool_result_bytes=max_tool_result_bytes,
         fetch_timeout_s=fetch_timeout_s,

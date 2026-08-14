@@ -923,6 +923,177 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
     assert messages[-1] == {"role": "assistant", "content": "READ_OK"}
 
 
+def test_duplicate_invalid_tool_batch_is_retained_once_without_handler_side_effect(
+    monkeypatch, tmp_path
+):
+    from ai.providers import history_utils
+
+    handler_calls = 0
+
+    def patch_handler(**_kwargs):
+        nonlocal handler_calls
+        handler_calls += 1
+        return "patched"
+
+    patch_tool = Tool(
+        name="patch",
+        description="Apply one patch operation.",
+        handler=patch_handler,
+        params={
+            "path": {"type": "string"},
+            "patch": {"type": "string"},
+        },
+        aliases=("apply_patch",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "patch": {"type": "string"},
+            },
+            "oneOf": [
+                {"required": ["patch"]},
+                {"required": ["path"]},
+            ],
+            "additionalProperties": False,
+        },
+    )
+    registry = ToolRegistry(
+        tools=(patch_tool,),
+        aliases={"patch": "patch", "apply_patch": "patch"},
+    )
+    model_calls = 0
+
+    def stream_stub(**kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return model_parallel_tool_calls_result(
+                [(f"call_{idx}", "patch", "{}") for idx in range(200)]
+            )
+        history_utils.validate(kwargs["messages"])
+        return model_text_result("recovered")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    debug_log = tmp_path / "debug.jsonl"
+    messages = [{"role": "user", "content": "apply patch"}]
+    runtime.run_turn(
+        offline_config(tmp_path),
+        "system",
+        messages,
+        runtime.Telemetry(debug_log),
+        trace_override=False,
+        tool_registry=registry,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert handler_calls == 0
+    assistant = next(message for message in messages if message.get("tool_calls"))
+    assert [call["id"] for call in assistant["tool_calls"]] == ["call_0"]
+    tool_results = [message for message in messages if message.get("role") == "tool"]
+    assert len(tool_results) == 1
+    assert "invalid arguments for patch" in tool_results[0]["content"]
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+
+    records = [json.loads(line) for line in debug_log.read_text(encoding="utf-8").splitlines()]
+    normalized = next(record for record in records if record["kind"] == "tool_call_batch_normalized")
+    assert {
+        key: normalized[key]
+        for key in ("received", "retained", "duplicate", "invalid", "capped")
+    } == {"received": 200, "retained": 1, "duplicate": 199, "invalid": 1, "capped": 0}
+
+
+def test_tool_batch_aliases_and_json_formatting_deduplicate_before_cap():
+    tool = Tool(
+        name="write",
+        description="write",
+        handler=lambda **_kwargs: "ok",
+        params={"path": {"type": "string"}},
+        required=("path",),
+        aliases=("Write",),
+    )
+    registry = ToolRegistry(
+        tools=(tool,),
+        aliases={"write": "write"},
+    ).aliased({"write": "Write"})
+    calls = [
+        runtime._PendingToolCall("first", "Write", ['{"path":"a"}']),
+        runtime._PendingToolCall("second", "write", ['{ "path": "a" }']),
+        runtime._PendingToolCall("third", "write", ['{"path":"b"}']),
+    ]
+
+    normalized, stats = runtime._normalize_tool_call_batch(calls, registry, limit=1)
+
+    assert [(call.id, call.name, call.arguments()) for call in normalized] == [
+        ("first", "write", '{"path":"a"}')
+    ]
+    assert stats == runtime._ToolBatchStats(
+        received=3,
+        retained=1,
+        duplicate=1,
+        invalid=0,
+        capped=1,
+    )
+
+
+def test_distinct_tool_batch_cap_executes_limit_and_reports_one_diagnostic(
+    monkeypatch, tmp_path
+):
+    from dataclasses import replace
+
+    from ai.providers import history_utils
+
+    executed: list[int] = []
+
+    def numbered(value: int):
+        executed.append(value)
+        return f"done {value}"
+
+    tool = Tool(
+        name="numbered",
+        description="record a number",
+        handler=numbered,
+        params={"value": {"type": "integer"}},
+        required=("value",),
+    )
+    registry = ToolRegistry(tools=(tool,), aliases={"numbered": "numbered"})
+    model_calls = 0
+
+    def stream_stub(**kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return model_parallel_tool_calls_result(
+                [
+                    (f"call_{value}", "numbered", json.dumps({"value": value}))
+                    for value in range(5)
+                ]
+            )
+        history_utils.validate(kwargs["messages"])
+        assert "retained 2 distinct calls and rejected 3" in kwargs["messages"][-3].text
+        return model_text_result("done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    cfg = replace(offline_config(tmp_path), max_tool_calls_per_message=2)
+    messages = [{"role": "user", "content": "record numbers"}]
+    runtime.run_turn(
+        cfg,
+        "system",
+        messages,
+        runtime.Telemetry(None),
+        trace_override=False,
+        tool_registry=registry,
+        tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True,
+    )
+
+    assert executed == [0, 1]
+    assistant = next(message for message in messages if message.get("tool_calls"))
+    assert len(assistant["tool_calls"]) == 2
+    assert "retained 2 distinct calls and rejected 3" in assistant["content"]
+    assert len([message for message in messages if message.get("role") == "tool"]) == 2
+
+
 def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(monkeypatch, tmp_path):
     calls = 0
 
@@ -948,7 +1119,7 @@ def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(
     assert calls == 3
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after missing_tool")
-    assert "ERROR: no tool named missing_tool" in messages[-1]["content"]
+    assert "tool was not published for this model call" in messages[-1]["content"]
 
 
 def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure(monkeypatch, tmp_path):
@@ -961,9 +1132,9 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
         nonlocal calls
         calls += 1
         return model_parallel_tool_calls_result([
-            ("orphan_1", "missing_tool", "{}"),
-            ("orphan_2", "missing_tool", "{}"),
-            ("orphan_3", "missing_tool", "{}"),
+            ("orphan_1", "missing_tool", '{"attempt":1}'),
+            ("orphan_2", "missing_tool", '{"attempt":2}'),
+            ("orphan_3", "missing_tool", '{"attempt":3}'),
         ])
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)

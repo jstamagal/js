@@ -60,6 +60,7 @@ def test_collect_settings_uses_built_in_default_when_no_file_or_env():
     out = settings.collect_settings(config_paths=[], env={})
     assert out["model"]["id"] == settings.DEFAULT_MODEL
     assert out["limits"]["max_tool_iterations"] == settings.DEFAULT_MAX_TOOL_ITERATIONS
+    assert out["limits"]["max_tool_calls_per_message"] == settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
 
 
 def test_collect_settings_reads_jsrc_set_lines(tmp_path):

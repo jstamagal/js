@@ -31,6 +31,7 @@ from typing import Any
 # Built-in defaults — the value used when no config file or env var supplies one.
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_MAX_TOOL_ITERATIONS = 50
+DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE = 50
 DEFAULT_MAX_BASH_OUTPUT_BYTES = 256 * 1024
 DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000
 DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES = 51_200
@@ -149,6 +150,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("limits.max_tool_iterations", "int", DEFAULT_MAX_TOOL_ITERATIONS,
                 "Max tool calls per turn before the loop gives up.",
                 env="JS_MAX_TOOL_ITERATIONS"),
+    SettingSpec("limits.max_tool_calls_per_message", "int", DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE,
+                "Maximum distinct tool calls accepted from one assistant message; "
+                "duplicates are collapsed before this ceiling is applied.",
+                env="JS_MAX_TOOL_CALLS_PER_MESSAGE"),
     SettingSpec("limits.max_bash_output_bytes", "int", DEFAULT_MAX_BASH_OUTPUT_BYTES,
                 "Hard cap on shell stdout per call.",
                 env="JS_MAX_BASH_OUTPUT_BYTES"),
@@ -401,7 +406,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             value = int(text)
         except ValueError:
             return None, "expected an integer"
-        if spec.key == "limits.subagent_max_workers" and value < 1:
+        if spec.key in {"limits.max_tool_calls_per_message", "limits.subagent_max_workers"} and value < 1:
             return None, "expected an integer >= 1"
         return value, None
     if kind == "float":
