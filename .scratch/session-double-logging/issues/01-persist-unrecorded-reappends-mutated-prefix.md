@@ -1,6 +1,6 @@
 # Session writer double-logs: prefix diff re-appends already-persisted records
 
-Status: needs-triage
+Status: fixed
 Filed: 2026-08-14
 Component: js/cli.py `_persist_unrecorded_messages`, js/memory.py load healing
 
@@ -45,3 +45,16 @@ why heavy-^C sessions (like this one) show it most.
 The 443-call storm was a separate, server-side event (llama.cpp parser).
 This bug is js's own and predates today; the new strict loader from the
 session-catalog port is what finally made it visible.
+
+## Resolution
+
+The writer no longer reconstructs its boundary by comparing mutable history
+with the loader's healed view. Each turn now persists from its current user
+message object, and the caller states whether that user record was written
+before runtime execution. Object identity survives history normalization and
+in-turn list shifts, so only the current turn's unwritten tail is appended.
+
+Regression coverage mutates an already-persisted history record, persists a
+partial turn, and verifies that reload contains the original record once plus
+the new tail. The interrupt, one-shot, attachment, nonblocking REPL, and
+compaction suites pass; ruff passes.

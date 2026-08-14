@@ -4,7 +4,7 @@ wipe it — except when the turn produced nothing, where the bare prompt is drop
 from __future__ import annotations
 
 from js import cli
-from js.memory import load_messages
+from js.memory import append_message, load_messages
 
 
 def _session_file(tmp_path):
@@ -58,6 +58,31 @@ def test_interrupt_keeps_partial_work_across_reload(monkeypatch, tmp_path):
     assert reloaded[0]["content"] == "please do the thing"
     assert reloaded[1]["tool_calls"][0]["id"] == "call_1"
     assert "interrupted" in reloaded[2]["content"].lower()
+
+
+def test_turn_persistence_does_not_reappend_mutated_history(tmp_path):
+    session_file = tmp_path / "session.jsonl"
+    append_message(session_file, {"role": "assistant", "content": "before normalization"})
+    user_message = {"role": "user", "content": "new work"}
+    append_message(session_file, user_message)
+    messages = [
+        {"role": "assistant", "content": "after normalization"},
+        user_message,
+        {"role": "assistant", "content": "partial work"},
+    ]
+
+    cli._persist_turn_messages(
+        type("Cfg", (), {"session_file": session_file})(),
+        messages,
+        user_message,
+        user_recorded=True,
+    )
+
+    assert load_messages(session_file) == [
+        {"role": "assistant", "content": "before normalization"},
+        {"role": "user", "content": "new work"},
+        {"role": "assistant", "content": "partial work"},
+    ]
 
 
 def test_interrupt_with_no_work_drops_the_bare_prompt(monkeypatch, tmp_path):
