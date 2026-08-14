@@ -36,7 +36,7 @@ class OutputEvent:
     `text` is the fallback rendering used only when no hook formats the event."""
 
     name: str
-    source: str = ""                       # model!provider@baseurl; "" = the harness itself
+    source: str = ""  # model!provider@baseurl; "" = the harness itself
     args: tuple[str, ...] = ()
     fields: tuple[tuple[str, object], ...] = ()
     text: str | None = None
