@@ -249,7 +249,7 @@ fire. No path, no addition.
 - An absence test keeps the dead name written down. That is a compat alias.
 - A guard for an error that cannot arrive is not safety. It is noise with a
   runtime cost.
-- Writing the state of today forever seals that state in stone. It adds untold frustration trying to figure out where 
+- Writing the state of today forever seals that state in stone. It adds untold frustration trying to figure out where the requirement ends and the fossil begins.
 
 ---
 
