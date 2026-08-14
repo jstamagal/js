@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from js.skills import ToolActivationResult
 from js.toolkit import ToolContext
 from js.toolkit import meta
@@ -86,36 +88,27 @@ def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):
     assert target.read_text(encoding="utf-8") == "first"
 
 
-def test_skill_loads_local_skill_markdown_from_skills_dir(tmp_path):
-    # js/toolkit/meta.py:84 — local ./skills/<name>.md is a load candidate.
+def _write_skill(root: Path, name: str, text: str) -> Path:
+    path = root / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def test_skill_loads_local_skill_from_agents_skills_dir(tmp_path):
+    # Project skills live in ./.agents/skills/<name>/SKILL.md.
     context = ToolContext(cwd=tmp_path)
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "deploy.md").write_text("# Deploy\n\nrun the thing\n")
+    _write_skill(tmp_path / ".agents" / "skills", "deploy", "# Deploy\n\nrun the thing\n")
 
     result = meta.skill("deploy", context=context)
 
     assert result == "# Deploy\n\nrun the thing\n"
 
 
-def test_skill_loads_local_skill_from_named_dir_readme(tmp_path):
-    # js/toolkit/meta.py:85 — ./skills/<name>/README.md is also a candidate.
+def test_skill_loads_from_native_js_skills_dir(tmp_path):
+    # ./.js/skills/<name>/SKILL.md is the client-native project location.
     context = ToolContext(cwd=tmp_path)
-    nested = tmp_path / "skills" / "review"
-    nested.mkdir(parents=True)
-    (nested / "README.md").write_text("review skill body")
-
-    result = meta.skill("review", context=context)
-
-    assert result == "review skill body"
-
-
-def test_skill_loads_from_dotskills_dir(tmp_path):
-    # js/toolkit/meta.py:86 — ./.skills/<name>.md is the last local candidate.
-    context = ToolContext(cwd=tmp_path)
-    dot = tmp_path / ".skills"
-    dot.mkdir()
-    (dot / "lint.md").write_text("lint skill")
+    _write_skill(tmp_path / ".js" / "skills", "lint", "lint skill")
 
     assert meta.skill("lint", context=context) == "lint skill"
 
@@ -123,10 +116,10 @@ def test_skill_loads_from_dotskills_dir(tmp_path):
 def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
     context = ToolContext(cwd=tmp_path)
     context.tool_registry = select(["shell"])
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "legacy.md").write_text(
-        "---\ntools: [shell, missing]\n---\nlegacy instructions"
+    _write_skill(
+        tmp_path / ".agents" / "skills",
+        "legacy",
+        "---\ntools: [shell, missing]\n---\nlegacy instructions",
     )
 
     assert meta.skill("legacy", context=context) == "legacy instructions"
@@ -134,10 +127,10 @@ def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
 
 def test_skill_invocation_activates_declared_tools_and_still_returns_instructions(tmp_path):
     context = ToolContext(cwd=tmp_path)
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "deploy.md").write_text(
-        "---\ntools: [shell, browser, absent]\n---\n# Deploy\n\nrun it\n"
+    _write_skill(
+        tmp_path / ".agents" / "skills",
+        "deploy",
+        "---\ntools: [shell, browser, absent]\n---\n# Deploy\n\nrun it\n",
     )
 
     class Activator:
