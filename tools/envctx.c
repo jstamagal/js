@@ -79,15 +79,11 @@ static void chomp(char *s) {
     s[--n] = 0;
 }
 
-/* full path of `prog`, searching the usual bindirs then $PATH */
+/* full path of `prog`: $PATH first so the result agrees with `command -v`
+   (the tools cache fingerprints this path; a PATH-shadowed binary must be
+   the one fingerprinted or its upgrade never invalidates the cache), then
+   the usual bindirs as fallback for stripped environments */
 static int which_path(const char *prog, char *out, size_t cap) {
-  static const char *dirs[] = {"/usr/bin/", "/bin/", "/usr/local/bin/",
-                               "/usr/sbin/", "/sbin/"};
-  for (unsigned i = 0; i < sizeof dirs / sizeof *dirs; i++) {
-    snprintf(out, cap, "%s%s", dirs[i], prog);
-    if (access(out, X_OK) == 0)
-      return 1;
-  }
   const char *path = getenv("PATH");
   if (path) {
     char pb[4096];
@@ -97,6 +93,13 @@ static int which_path(const char *prog, char *out, size_t cap) {
       if (access(out, X_OK) == 0)
         return 1;
     }
+  }
+  static const char *dirs[] = {"/usr/bin/", "/bin/", "/usr/local/bin/",
+                               "/usr/sbin/", "/sbin/"};
+  for (unsigned i = 0; i < sizeof dirs / sizeof *dirs; i++) {
+    snprintf(out, cap, "%s%s", dirs[i], prog);
+    if (access(out, X_OK) == 0)
+      return 1;
   }
   out[0] = 0;
   return 0;
@@ -210,7 +213,7 @@ static int looks_blob(const char *t) {
   size_t n = strlen(t);
   if (n < 28)
     return 0;
-  int lo = 0, up = 0, dg = 0, other = 0;
+  int lo = 0, up = 0, dg = 0, other = 0, hex = 1;
   for (const char *p = t; *p; p++) {
     if (islower((unsigned char)*p))
       lo++;
@@ -222,8 +225,15 @@ static int looks_blob(const char *t) {
       other++;
     else
       return 0; /* contains . / : etc -> path or url, leave it */
+    if (!(isdigit((unsigned char)*p) || (*p >= 'a' && *p <= 'f')))
+      hex = 0;
   }
   if (!dg)
+    return 0;
+  /* full git SHA1: pure lowercase hex, exactly 40 chars. Common in shell
+     history and not a secret. 64-hex stays redacted: too many real tokens
+     share that shape, and a scrubber errs toward redaction. */
+  if (hex && n == 40)
     return 0;
   if (n >= 40 && dg && (lo || up))
     return 1;
@@ -256,7 +266,14 @@ static void scrub_token(const char *t, char *out, size_t cap) {
     return;
   }
   const char *at = strchr(t, '@');
-  if (at && at != t && strchr(at, '.')) {
+  if (at && at != t && strchr(at, '.') && !strchr(t, '/') &&
+      !strchr(at, ':')) {
+    /* bare email: no slash, no colon after the @ — otherwise it is an
+       scp-style remote (git@host:path) or URL, handled below/left alone */
+    snprintf(out, cap, "<email>");
+    return;
+  }
+  if (at && at != t) {
     const char *scheme = strstr(t, "://");
     if (scheme && scheme < at) { /* url userinfo */
       char host[256];
@@ -270,11 +287,10 @@ static void scrub_token(const char *t, char *out, size_t cap) {
       snprintf(out, cap, "%s<user:pw>@%s", sch, host);
       return;
     }
-    snprintf(out, cap, "<email>");
-    return;
   }
+  int p172 = !strncmp(t, "172.", 4) && atoi(t + 4) >= 16 && atoi(t + 4) <= 31;
   if (looks_ipv4(t) && strncmp(t, "127.", 4) && strncmp(t, "0.0.0.0", 7) &&
-      strncmp(t, "192.168.", 8) && strncmp(t, "10.", 3)) {
+      strncmp(t, "192.168.", 8) && strncmp(t, "10.", 3) && !p172) {
     snprintf(out, cap, "<ip>");
     return;
   }
@@ -307,8 +323,20 @@ static void scrub(const char *in, char *out, size_t cap) {
   size_t o = 0;
   const char *p = in;
   char tok[LINE], red[LINE];
+  int pending = 0; /* KEY=<redacted> just emitted with an empty value: the
+                      quote-split detached the secret; swallow the quoted
+                      value instead of letting it through as its own token */
   while (*p && o < cap - 1) {
     if (isspace((unsigned char)*p) || *p == '"' || *p == '\'' || *p == '`') {
+      if (pending && (*p == '"' || *p == '\'' || *p == '`')) {
+        char q = *p++;
+        while (*p && *p != q)
+          p++;
+        if (*p == q)
+          p++;
+        pending = 0;
+        continue;
+      }
       out[o++] = *p++;
       continue;
     }
@@ -319,6 +347,8 @@ static void scrub(const char *in, char *out, size_t cap) {
     tok[n] = 0;
     scrub_token(tok, red, sizeof red);
     size_t rl = strlen(red);
+    pending = n && tok[n - 1] == '=' && rl >= 10 &&
+              !strcmp(red + rl - 10, "<redacted>");
     if (o + rl >= cap - 1)
       break;
     memcpy(out + o, red, rl);
@@ -525,10 +555,12 @@ int main(void) {
   char osname[128] = "", osver[64] = "";
   if (slurp("/etc/os-release", buf, sizeof buf)) {
     char *p = strstr(buf, "\nPRETTY_NAME=");
-    if (!p && !strncmp(buf, "PRETTY_NAME=", 12))
-      p = buf - 1;
+    if (p)
+      p++;
+    else if (!strncmp(buf, "PRETTY_NAME=", 12))
+      p = buf;
     if (p) {
-      p = strchr(p + 1, '=') + 1;
+      p = strchr(p, '=') + 1;
       if (*p == '"')
         p++;
       size_t i = 0;
@@ -841,6 +873,7 @@ int main(void) {
                                   "rustc",   "go",   "uv",     "just",
                                   "rg",      "jq",   "docker", NULL};
     char fp[2048];
+    fp[0] = 0;
     size_t fl = 0;
     for (int i = 0; TOOLS[i]; i++) {
       /* search $PATH, not just the system bindirs: the version line below is
@@ -977,5 +1010,14 @@ int main(void) {
              age[0] ? ")" : "", b2, strlen(b2) > 180 ? ".." : "");
     }
   }
+
+  /* ---- standing rules for the agent reading this context ---- */
+  /* js sets JS_MODE itself (repl or headless), so trust it rather than
+     guessing from the parent chain. Absent means envctx ran outside js. */
+  const char *jm = getenv("JS_MODE");
+  if (!jm || strcmp(jm, "repl"))
+    printf("rule: js is%s in one-shot mode (not interactive chat): "
+           "NEVER end the turn on a question — end on doing it.\n",
+           jm ? "" : " possibly");
   return 0;
 }
