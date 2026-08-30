@@ -9,6 +9,10 @@ runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, a
 pip install -e ".[test,browser]"
 ```
 
+The `browser` extra only installs the Playwright Python package; run
+`just install-browser` to fetch the Chromium build the browser-probe tests
+drive. Without it those tests skip rather than fail.
+
 Playwright does not publish musllinux wheels. On Alpine or another musl system,
 omit `browser`; the browser-probe integration test skips while the rest of the
 suite remains available.

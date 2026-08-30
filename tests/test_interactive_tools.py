@@ -16,6 +16,27 @@ from js.toolkit.registry import build_default_registry
 from js.toolkit.terminal import close_terminal_sessions, terminal_session, terminal_snapshot
 
 
+def _chromium_is_installed() -> bool:
+    """Report whether the Chromium build browser_probe drives is on disk.
+
+    The `browser` extra installs the playwright Python package; the browser is a
+    separate download that `just install-browser` fetches. Importing playwright
+    therefore proves nothing about whether a probe can launch.
+    """
+    if importlib.util.find_spec("playwright") is None:
+        return False
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as driver:
+        return Path(driver.chromium.executable_path).exists()
+
+
+_needs_chromium = pytest.mark.skipif(
+    not _chromium_is_installed(),
+    reason="Chromium build is missing; run `just install-browser`",
+)
+
+
 def _payload(result: str) -> dict:
     assert not result.startswith("ERROR:"), result
     return json.loads(result)
@@ -383,10 +404,7 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
     assert events == ["shutdown", "server_close"]
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None,
-    reason="optional Playwright backend is unavailable on this platform",
-)
+@_needs_chromium
 def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path):
     target = tmp_path / "index.html"
     target.write_text(
@@ -446,10 +464,7 @@ def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path
             assert list(image.size) == frame["dimensions"]
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None,
-    reason="optional Playwright backend is unavailable on this platform",
-)
+@_needs_chromium
 def test_browser_probe_pins_page_region_when_click_creates_canvas(tmp_path):
     target = tmp_path / "creates-canvas.html"
     target.write_text(
@@ -483,10 +498,7 @@ def test_browser_probe_pins_page_region_when_click_creates_canvas(tmp_path):
     assert report["changed_pixel_percentages"][0] > 0
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None,
-    reason="optional Playwright backend is unavailable on this platform",
-)
+@_needs_chromium
 def test_browser_probe_reports_why_pinned_canvas_dimensions_changed(tmp_path):
     target = tmp_path / "resizes-canvas.html"
     target.write_text(
@@ -519,10 +531,7 @@ def test_browser_probe_reports_why_pinned_canvas_dimensions_changed(tmp_path):
     ]
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None,
-    reason="optional Playwright backend is unavailable on this platform",
-)
+@_needs_chromium
 def test_browser_probe_total_navigation_failure_is_an_error_result(tmp_path):
     result = browser_probe(
         target="http://127.0.0.1:9/nope",
@@ -535,10 +544,7 @@ def test_browser_probe_total_navigation_failure_is_an_error_result(tmp_path):
     assert "failed before it captured a frame" in report["reading"]
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None,
-    reason="optional Playwright backend is unavailable on this platform",
-)
+@_needs_chromium
 def test_browser_probe_caps_errors_and_returns_parseable_json(tmp_path):
     target = tmp_path / "many-errors.html"
     target.write_text(
