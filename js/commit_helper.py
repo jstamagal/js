@@ -68,7 +68,12 @@ def _git(
     workdir = _repo_path(repo)
     try:
         proc = subprocess.run(
-            ["git", "-C", str(workdir), *args],
+            # -c color.ui=false: every caller here parses plumbing output, and
+            # an operator with color.ui=always (or GIT_CONFIG_PARAMETERS
+            # carrying it) gets ANSI-wrapped lines that no longer start with
+            # "@@" or a status code. An explicit -c outranks both config and
+            # GIT_CONFIG_PARAMETERS, so parsing sees plain text regardless.
+            ["git", "-c", "color.ui=false", "-C", str(workdir), *args],
             capture_output=True,
             text=True,
             input=stdin,

@@ -92,6 +92,32 @@ def test_stage_subset_of_hunks(repo):
     assert "line15_X" in _git(repo, "diff").stdout
 
 
+def test_stage_and_survey_work_when_the_operator_forces_git_color(repo, capsys):
+    """color.ui=always must not reach the parser.
+
+    An operator with `color.ui=always` in config, or GIT_CONFIG_PARAMETERS
+    carrying it, gets ANSI-wrapped diff lines: `\\x1b[36m@@` instead of `@@`.
+    Hunk splitting and status parsing both go blind, and `js --commit` breaks
+    for that operator only.
+    """
+    _git(repo, "config", "color.ui", "always")
+    (repo / "f.txt").write_text(
+        "\n".join((f"line{i}_X" if i in (2, 15, 28) else f"line{i}") for i in range(1, 31)) + "\n"
+    )
+    (repo / "new.txt").write_text("brand new\n")
+
+    assert commit_helper.main(["survey"]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b[" not in out
+    assert "### f.txt  (3 hunks)" in out
+    assert "?? new.txt" in out
+
+    assert commit_helper.main(["stage", "f.txt", "1,3"]) == 0
+    staged = _staged(repo)
+    assert "line2_X" in staged and "line28_X" in staged
+    assert "line15_X" not in staged
+
+
 def test_stage_all_whole_file(repo):
     (repo / "f.txt").write_text(
         "\n".join((f"line{i}_X" if i in (2, 15, 28) else f"line{i}") for i in range(1, 31)) + "\n"
