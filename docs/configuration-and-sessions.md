@@ -177,6 +177,35 @@ Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0
 disables them (`--im-a-pussy` sets exactly that for one run). See
 [inline-directives.md](inline-directives.md).
 
+## `.env` Files
+
+At startup `js` fills **unset** environment names from `.env` files
+(`js/dotenv.py`). This is how tool keys that are read straight from the
+environment — `TAVILY_API_KEY`, `EXA_API_KEY`, `SERPER_API_KEY`,
+`CONTEXT7_API_KEY` — reach a bare `js` on PATH. `just run` already got them
+from the justfile's `set dotenv-load`; this makes both entry points behave the
+same.
+
+Files consulted, nearest first:
+
+1. `./.env`
+2. each parent directory's `.env`, up to the filesystem root
+3. `~/.config/js/.env`
+
+The real process environment always wins, and the nearest file wins over a
+farther one: `TAVILY_API_KEY=x js ...` beats every file, and a project `.env`
+beats `~/.config/js/.env`. Nothing is ever overwritten — only unset names are
+filled. `-C DIR` is applied first, so the walk starts at `DIR`.
+
+Format is the usual one: `KEY=value` per line, `#` comments, optional
+`export ` prefix, optional single or double quotes around the value. Malformed
+lines are skipped rather than raising.
+
+Provider credentials are a separate matter: `js` deliberately does **not**
+ride ambient provider keys in place of a login (`js/model_client.py`). A
+`.env` sets env vars, so it feeds the same knobs env vars do — including
+`JS_API_KEY` — but it does not bypass the login gate.
+
 ## CLI Overrides
 
 Common flags:
