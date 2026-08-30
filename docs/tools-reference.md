@@ -172,6 +172,10 @@ before urllib handles the transfer.
 
 ## Search And Docs
 
+The keys below are read from the environment, which `js` fills from `.env`
+files at startup when a name is unset — see
+[configuration-and-sessions.md](configuration-and-sessions.md).
+
 ### `serper_search`
 
 Runs Google-style keyword search through Serper. Use it for current facts,
