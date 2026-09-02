@@ -13,6 +13,9 @@ Output is capped and marked where it was cut, so do not pipe through `head` or
 {{#if read}}
 - Read files with `read`, not `cat`, `head`, or `tail`.
 {{/if}}
+{{#unless read}}
+- Read files with `sed -n 'A,Bp'`. Use `cat` only when you need the whole file.
+{{/unless}}
 {{#if patch}}
 - Edit files with `patch`, not `sed` or `awk`.
 {{/if}}
