@@ -910,12 +910,12 @@ def test_registry_aliased_resolves_noncase_variant_alias_to_canonical():
     assert base.aliased(None) is base
 
 
-def test_jsonl_long_lines_use_dedicated_cap_while_other_suffixes_truncate(tmp_path):
-    # One ~64K-char line: under the .jsonl cap (65536) but far over the normal
-    # per-line cap (2000). The .jsonl read must keep it whole; the .py read must truncate.
+def test_long_lines_are_returned_whole_for_every_suffix(tmp_path):
+    # `read` pages by line, not by column, so a truncated line would be
+    # unreachable content. Whole-read caps bound the output instead.
     long_value = "x" * 64_000
     record = f'{{"k":"{long_value}"}}'
-    context = ToolContext(cwd=tmp_path, max_line_chars=2_000, jsonl_max_line_chars=65_536)
+    context = ToolContext(cwd=tmp_path)
 
     (tmp_path / "data.jsonl").write_text(record + "\n", encoding="utf-8")
     (tmp_path / "data.py").write_text(record + "\n", encoding="utf-8")
@@ -923,10 +923,8 @@ def test_jsonl_long_lines_use_dedicated_cap_while_other_suffixes_truncate(tmp_pa
     jsonl_out = fs.read("data.jsonl", context=context)
     py_out = fs.read("data.py", context=context)
 
-    assert "[truncated, line exceeds" not in jsonl_out
     assert long_value in jsonl_out
-    assert "[truncated, line exceeds 2000 chars]" in py_out
-    assert long_value not in py_out
+    assert long_value in py_out
 
 
 def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_order():

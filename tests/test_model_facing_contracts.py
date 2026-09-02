@@ -112,7 +112,7 @@ def test_rendered_file_and_terminal_descriptions_state_the_real_contracts():
     assert "In `files` mode, `pattern` is instead a filename/path glob" in specs["fs_search"]["description"]
     assert "Directory-only discovery: use `shell` with `fd --type d`" in specs["shell"]["description"]
     assert "The final filesystem write itself is not crash-atomic." in specs["patch"]["description"]
-    assert "`.jsonl` records use the larger `ToolContext.jsonl_max_line_chars` limit." in specs["read"]["description"]
+    assert "Lines are returned whole, however long they are" in specs["read"]["description"]
     assert "`status` is optional and defaults to `pending`" in specs["todo_write"]["description"]
     assert "they indicate passive change since the prior observation" in specs["terminal_session"]["description"]
     assert "`terminal_snapshot` also updates the comparison baseline" in specs["terminal_session"]["description"]

@@ -11,8 +11,7 @@ Path and range rules:
   `ToolContext.max_read_lines`.
 - Use `range.start_line` and `range.end_line` for long files. Prefer reading a
   useful large section over many tiny reads.
-- Ordinary text lines longer than `ToolContext.max_line_chars` are truncated.
-  `.jsonl` records use the larger `ToolContext.jsonl_max_line_chars` limit.
+- Lines are returned whole, however long they are; nothing is cut mid-line.
 - `show_line_numbers=false` returns plain selected text.
 
 Text output format:

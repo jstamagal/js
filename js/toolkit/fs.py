@@ -189,12 +189,6 @@ def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
     return f"ERROR: pdftotext failed for {path}: {detail}", data
 
 
-def _truncate_line(line: str, max_chars: int) -> str:
-    if len(line) <= max_chars:
-        return line
-    return f"{line[:max_chars]}... [truncated, line exceeds {max_chars} chars]"
-
-
 
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
     data = _read_regular_bytes(path)
@@ -207,11 +201,10 @@ def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
     return data.decode("utf-8"), data
 
 
-def _format_numbered_lines(lines: list[str], start_line: int, max_chars: int) -> str:
+def _format_numbered_lines(lines: list[str], start_line: int) -> str:
     out: list[str] = []
     for idx, line in enumerate(lines, start=start_line):
-        truncated = _truncate_line(line, max_chars)
-        out.append(f"{idx}:{_line_hash(truncated)}|{truncated}")
+        out.append(f"{idx}:{_line_hash(line)}|{line}")
     return "\n".join(out)
 
 
@@ -346,10 +339,10 @@ def fs_read(
         total_lines=total,
         whole_file=start == 1 and end == total,
     )
-    # .jsonl rows are single-line records that routinely exceed the normal cap;
-    # give them a dedicated (larger) per-line budget so they are not truncated.
-    max_chars = context.jsonl_max_line_chars if target.suffix.lower() == ".jsonl" else context.max_line_chars
-    body = _format_numbered_lines(selected, start, max_chars) if show_line_numbers else "\n".join(selected)
+    # Lines are returned whole: `read` pages by line, not by column, so a cut
+    # line is unreachable content. max_read_bytes/max_read_lines bound the read,
+    # and the tool-result spill bounds what reaches the model.
+    body = _format_numbered_lines(selected, start) if show_line_numbers else "\n".join(selected)
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; read {target} with start_line={end + 1} to continue]"
@@ -1037,7 +1030,7 @@ def _ast_match_output(records: list[dict], context: ToolContext) -> str:
         if not isinstance(source, str):
             return "ERROR: invalid ast-grep JSON output: match has no source text"
         source_lines = source.splitlines() or [""]
-        numbered = _format_numbered_lines(source_lines, line_number, context.max_line_chars)
+        numbered = _format_numbered_lines(source_lines, line_number)
         blocks.append(f"{target}:{line_number}\n{numbered}")
     return "\n".join(blocks) if blocks else "(no matches)"
 

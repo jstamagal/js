@@ -101,7 +101,6 @@ def test_oversized_snapshot_stays_bounded_and_warns_that_restart_undo_is_unavail
         cwd=tmp_path,
         max_file_bytes=2 * 1024 * 1024,
         max_read_bytes=2 * 1024 * 1024,
-        max_line_chars=2 * 1024 * 1024,
     )
     first_process.configure_snapshot_store(
         "test-agent",
