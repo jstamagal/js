@@ -3,9 +3,6 @@ Output is capped and marked where it was cut, so do not pipe through `head` or
 `tail` just to shrink it.
 
 - Set `cwd` instead of `cd`.
-- The child environment is filtered to PATH, HOME, USER, LANG, LC_ALL, TERM,
-  PWD, and SHELL. Name any other variable a command needs in `env`. A nonzero
-  exit reports which names were allowed and present.
 {{#if fs_search}}
 - Search with `fs_search`, not `grep`, `rg`, or `find`.
   Directory-only discovery: use `shell` with `fd --type d`.

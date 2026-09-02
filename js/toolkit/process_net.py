@@ -667,29 +667,15 @@ def tools() -> tuple[Tool, ...]:
             shell,
             {
                 "command": {"type": "string"},
-                "cwd": {
-                    "type": "string",
-                    "description": "Working directory. Use this instead of `cd`.",
-                },
-                "timeout": {
-                    "type": "integer",
-                    "default": 300,
-                    "description": "Seconds before the command is killed. Raise it for long builds and test runs.",
-                },
-                "keep_ansi": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Keep ANSI color and control sequences instead of stripping them.",
-                },
+                "cwd": {"type": "string"},
+                "timeout": {"type": "integer", "default": 300},
+                "keep_ansi": {"type": "boolean", "default": False},
                 "env": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Extra environment variable names to pass through to the command.",
+                    "description": "Variable names to pass through. The child environment is filtered by default.",
                 },
-                "description": {
-                    "type": "string",
-                    "description": "Short note on the command's purpose, echoed in the result.",
-                },
+                "description": {"type": "string"},
             },
             required=("command",),
         ),
