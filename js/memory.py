@@ -50,7 +50,13 @@ def _migrate_record(d: dict) -> dict | None:
     function to upgrade an older record's shape instead of discarding it. Until
     then, a version mismatch returns None and the caller counts it — a record
     dropped here is never silent.
+
+    Only records this schema owns are judged. The conversation file also carries
+    records from other writers, each versioning itself independently, and their
+    counters are not comparable to this one.
     """
+    if d.get("kind") not in {"message", "mark"}:
+        return None
     if d.get("version") == SCHEMA_VERSION:
         return d
     return None
@@ -155,7 +161,11 @@ def load_messages(memory_file: Path) -> list[dict]:
                 continue
             migrated = _migrate_record(raw)
             if migrated is None:
-                if isinstance(raw, dict) and "version" in raw:
+                if (
+                    isinstance(raw, dict)
+                    and "version" in raw
+                    and raw.get("kind") in {"message", "mark"}
+                ):
                     skipped_versions += 1
                 continue
             rec = Record.from_dict(migrated)
