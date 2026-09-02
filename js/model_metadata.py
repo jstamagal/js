@@ -85,6 +85,7 @@ class _ModelRow:
 def _clear_caches() -> None:
     _all_models.cache_clear()
     lookup_limits.cache_clear()
+    accepts_image_input.cache_clear()
     _probe_local_context_window_cached.cache_clear()
 
 
@@ -129,6 +130,39 @@ def _normalize_request(model_id: str, provider_id: str | None) -> tuple[str, str
     if parsed_provider is not None and parsed_model is not None:
         return parsed_model, parsed_provider
     return model_id, provider_id
+
+
+@lru_cache(maxsize=256)
+def accepts_image_input(model_id: str) -> bool | None:
+    """Whether models.dev records image as an input modality for ``model_id``.
+
+    Keyed on the MODEL, not the provider: the same model reached through a proxy,
+    a router prefix, or a local server has the same input modalities. Returns None
+    when the catalog has never heard of the model, so the caller can fall back.
+    """
+    ensure_fresh_catalog()
+    wanted = _bare_model_name(model_id)
+    if not wanted:
+        return None
+    seen = False
+    for model in modelsdotdev.iter_models():
+        if _bare_model_name(model.id) != wanted:
+            continue
+        seen = True
+        modalities = getattr(model, "modalities", None)
+        for modality in getattr(modalities, "input", ()) or ():
+            if str(getattr(modality, "value", modality)).lower() == "image":
+                return True
+    return False if seen else None
+
+
+def _bare_model_name(model_id: str) -> str:
+    """Strip provider/router prefixes and punctuation so ``openai/qwen3.8:27B``,
+    ``9router/cx/gpt-5.6-sol`` and ``Qwen/Qwen3.8-27B`` compare equal to their
+    catalog rows."""
+    name = (model_id or "").strip().lower()
+    name = name.rsplit("/", 1)[-1]
+    return name.replace(":", "-").replace("_", "-").replace(".", "")
 
 
 def _positive_int(value: Any) -> int | None:
