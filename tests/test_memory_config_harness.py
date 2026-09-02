@@ -118,7 +118,6 @@ set limits.max_tool_result_bytes true
 set limits.fetch_timeout_s true
 set limits.inline_code_timeout_s true
 set limits.max_read_lines true
-set limits.max_line_chars true
 set limits.max_file_bytes true
 set limits.task_max_depth true
 """,
@@ -135,7 +134,6 @@ set limits.task_max_depth true
     assert actual.fetch_timeout_s == settings.DEFAULT_FETCH_TIMEOUT_S
     assert actual.inline_code_timeout_s == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
     assert actual.max_read_lines == settings.DEFAULT_MAX_READ_LINES
-    assert actual.max_line_chars == settings.DEFAULT_MAX_LINE_CHARS
     assert actual.max_file_bytes == settings.DEFAULT_MAX_FILE_BYTES
     assert actual.task_max_depth == settings.DEFAULT_TASK_MAX_DEPTH
 
@@ -257,6 +255,39 @@ def test_resolve_session_file_rejects_unsafe_names_without_creating_files(tmp_pa
         resolve_session_file(sessions_dir, session, create=True)
 
     assert not sessions_dir.exists()
+
+
+def test_resolve_session_file_resumes_pasted_relative_path_of_existing_session(tmp_path):
+    # A path pasted back out of `--list`/`latest.json` names the session it points
+    # at. Taken literally the leading components are mkdir'd under the agent dir
+    # and the resume silently lands in a new empty session.
+    sessions_dir = tmp_path / "sessions" / "defaultagent"
+    sessions_dir.mkdir(parents=True)
+    existing = sessions_dir / "20260830T130250464430Z-53b4fd3cc19a55c8.jsonl"
+    existing.write_text("history\n", encoding="utf-8")
+
+    for pasted in (
+        ".local/share/js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
+        ".local/share/js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8",
+        "defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
+        "20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
+        "20260830T130250464430Z-53b4fd3cc19a55c8",
+    ):
+        assert resolve_session_file(sessions_dir, pasted, create=True) == existing
+
+    assert existing.read_text(encoding="utf-8") == "history\n"
+    assert not (sessions_dir / ".local").exists()
+
+
+def test_resolve_session_file_creates_literal_path_when_no_existing_tail_matches(tmp_path):
+    # Tail matching only ever finds. A genuinely new nested name is still created
+    # exactly where it was asked for.
+    sessions_dir = tmp_path / "sessions" / "agent"
+
+    created = resolve_session_file(sessions_dir, "batch/slice01", create=True)
+
+    assert created == sessions_dir / "batch" / "slice01.jsonl"
+    assert created.is_file()
 
 
 def test_resolve_session_file_rejects_relative_traversal_even_when_target_exists(tmp_path):

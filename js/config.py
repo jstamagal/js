@@ -106,13 +106,23 @@ def _vision_by_name(model: str) -> bool:
 def vision_enabled_for_model(model: str) -> bool:
     """Whether image bytes should be sent to ``model``.
 
-    Order: explicit JS_VISION override → curated name heuristic. There is no
-    public ai-python model-capability registry in the source inspected."""
+    Order: explicit JS_VISION override → models.dev input modalities → curated
+    name heuristic for ids the catalog has never heard of (private builds, local
+    GGUF paths). The catalog is keyed on the model, not the provider: the same
+    model behind a proxy, a router prefix, or a local server has the same inputs."""
     override = os.environ.get("JS_VISION")
     if override is not None:
         parsed = _env_bool(override)
         if parsed is not None:
             return parsed
+    from . import model_metadata
+
+    try:
+        catalog = model_metadata.accepts_image_input(model)
+    except Exception:  # noqa: BLE001 - capability lookup is strictly best-effort
+        catalog = None
+    if catalog is not None:
+        return catalog
     return _vision_by_name(model)
 
 
@@ -154,8 +164,6 @@ class Config:
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     project_dir: Path = field(default_factory=Path.cwd, compare=False)
     max_read_lines: int = _settings.DEFAULT_MAX_READ_LINES
-    max_line_chars: int = _settings.DEFAULT_MAX_LINE_CHARS
-    jsonl_max_line_chars: int = _settings.DEFAULT_JSONL_MAX_LINE_CHARS
     max_file_bytes: int = _settings.DEFAULT_MAX_FILE_BYTES
     max_read_bytes: int = _settings.DEFAULT_MAX_READ_BYTES
     max_bash_output_ceiling: int = _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING
@@ -219,6 +227,29 @@ def _relative_session_path(session: str) -> Path:
     return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
 
 
+def _existing_tail_match(
+    sessions_dir: Path, relative_path: Path, resolved_sessions_dir: Path
+) -> Path | None:
+    """Find an existing session named by the trailing components of *relative_path*.
+
+    `<name>`, `<name>.jsonl`, `<dir>/<name>` and a whole pasted
+    `.local/share/js/sessions/<agent>/<name>.jsonl` all name one session, because
+    that is how the flag reads to anyone pasting a path back out of `--list`.
+    Without this, the leading components are taken literally and mkdir'd, so the
+    paste silently opens an empty session instead of the one it names.
+
+    Only ever resolves to a file that already exists; never creates."""
+    parts = relative_path.parts
+    for start in range(1, len(parts)):
+        candidate = sessions_dir.joinpath(*parts[start:])
+        if not candidate.is_file():
+            continue
+        if not candidate.resolve(strict=True).is_relative_to(resolved_sessions_dir):
+            continue
+        return candidate
+    return None
+
+
 def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False) -> Path:
     """Resolve a safe session name, optionally reserving it when absent."""
     raw_path = Path(session).expanduser()
@@ -244,6 +275,11 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
         if not concrete_path.is_file():
             raise ValueError(f"session path must be a .jsonl file: {session}")
         return concrete_path
+
+    tail_match = _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
+    if tail_match is not None:
+        return tail_match
+
     if not create:
         raise ValueError(f"session must identify an existing .jsonl file: {session}")
 
@@ -446,8 +482,6 @@ def from_env(
     max_download_bytes = _numeric_setting(js_root_settings, ("limits", "max_download_bytes"), _settings.DEFAULT_MAX_DOWNLOAD_BYTES)
     inline_code_timeout_s = _numeric_setting(js_root_settings, ("limits", "inline_code_timeout_s"), _settings.DEFAULT_INLINE_CODE_TIMEOUT_S)
     max_read_lines = _numeric_setting(js_root_settings, ("limits", "max_read_lines"), _settings.DEFAULT_MAX_READ_LINES)
-    max_line_chars = _numeric_setting(js_root_settings, ("limits", "max_line_chars"), _settings.DEFAULT_MAX_LINE_CHARS)
-    jsonl_max_line_chars = _numeric_setting(js_root_settings, ("limits", "jsonl_max_line_chars"), _settings.DEFAULT_JSONL_MAX_LINE_CHARS)
     max_file_bytes = _numeric_setting(js_root_settings, ("limits", "max_file_bytes"), _settings.DEFAULT_MAX_FILE_BYTES)
     max_read_bytes = _numeric_setting(js_root_settings, ("limits", "max_read_bytes"), _settings.DEFAULT_MAX_READ_BYTES)
     max_bash_output_ceiling = _numeric_setting(js_root_settings, ("limits", "max_bash_output_ceiling"), _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING)
@@ -527,8 +561,6 @@ def from_env(
         agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),
         project_dir=project_dir,
         max_read_lines=max_read_lines,
-        max_line_chars=max_line_chars,
-        jsonl_max_line_chars=jsonl_max_line_chars,
         max_file_bytes=max_file_bytes,
         max_read_bytes=max_read_bytes,
         max_bash_output_ceiling=max_bash_output_ceiling,
