@@ -233,6 +233,13 @@ format:
 check: lint
     @echo "quality ok."
 
+# ── diagnostics ──────────────────────────────────────────────────────────────
+
+# per-tool byte cost of model-facing descriptions and parameter schemas.
+# forwards args: just tool-bytes --surface shell
+tool-bytes *args:
+    uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
+
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 
 # build sdist + wheel into dist/.
