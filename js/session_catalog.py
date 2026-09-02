@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 _METADATA_KIND = "session_metadata"
-_METADATA_VERSION = 1
+_METADATA_VERSION = 2
 _LIVENESS_VERSION = 1
 
 
@@ -180,8 +180,13 @@ def record_session_start(
     cwd: Path | str,
     caller_key: str | None = None,
     job_id: str | int | None = None,
+    agent: str | None = None,
+    model: str | None = None,
 ) -> None:
-    """Append non-message session start metadata to a conversation JSONL file."""
+    """Append non-message session start metadata to a conversation JSONL file.
+
+    *agent* and *model* are recorded so a later resume with no flags can come
+    back on what was actually in use rather than the config default."""
     session_file = Path(session_file)
     session_file.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -191,6 +196,8 @@ def record_session_start(
         "cwd": str(Path(cwd).expanduser().resolve(strict=False)),
         "caller_key": caller_key,
         "job_id": job_id,
+        "agent": agent,
+        "model": model,
     }
     with session_file.open("a", encoding="utf-8") as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
@@ -227,6 +234,18 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
     return user_turns, metadata
 
 
+def last_session_model(session_file: Path) -> str | None:
+    """The model most recently recorded for a session, or None when unknown.
+
+    Sessions written before models were recorded, and those whose metadata is
+    unreadable, resolve to None so the caller falls back to its own default."""
+    _, metadata = _session_details(Path(session_file))
+    if not metadata:
+        return None
+    model = metadata.get("model")
+    return model if isinstance(model, str) and model else None
+
+
 def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
     """Recursively catalog all agent session JSONL files under *sessions_root*."""
     root = Path(sessions_root)
@@ -252,6 +271,7 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
                     "cwd": metadata.get("cwd") if metadata else None,
                     "caller_key": metadata.get("caller_key") if metadata else None,
                     "job_id": metadata.get("job_id") if metadata else None,
+                    "model": metadata.get("model") if metadata else None,
                 }
             )
     return records

@@ -58,7 +58,7 @@ from .config import (
     validate_agent_id,
     vision_enabled_for_model,
 )
-from .session_catalog import acquire_session, catalog_sessions, record_session_start
+from .session_catalog import acquire_session, catalog_sessions, last_session_model, record_session_start
 from .tool_binaries import resolve_binary
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
@@ -258,11 +258,18 @@ def _activate_saved_session(
     *,
     caller_key: str | None = None,
     announce_generated: bool = False,
+    model: str | None = None,
 ) -> None:
     if cfg.session_file == Path(os.devnull):
         return
     effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
-    record_session_start(cfg.session_file, cwd=Path.cwd(), caller_key=effective_key)
+    record_session_start(
+        cfg.session_file,
+        cwd=Path.cwd(),
+        caller_key=effective_key,
+        agent=cfg.agent_id,
+        model=model or cfg.model,
+    )
     lease = acquire_session(cfg.session_file)
     _session_leases.items.append(lease)
     if announce_generated:
@@ -278,6 +285,43 @@ def _announce_generated_session(cfg: Config) -> None:
         }
     }
     print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), file=sys.stderr)
+
+
+def _latest_session_name(agent_id: str) -> str | None:
+    """The most recently started session for *agent_id*, or None when there is none.
+
+    A recorded name that no longer resolves to a file is treated as absent rather
+    than resurrected, so --last never creates an empty session."""
+    latest_file = _paths.sessions_root() / agent_id / "latest.json"
+    try:
+        payload = json.loads(latest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    session_file = payload.get("session_file")
+    if not isinstance(session_file, str) or not Path(session_file).is_file():
+        return None
+    name = payload.get("session_name")
+    return name if isinstance(name, str) and name else None
+
+
+def _print_resume_hint(cfg: Config, state: dict) -> None:
+    """Print the command that reopens this session.
+
+    Without it the name is only recoverable by hunting through the sessions
+    directory, and the session is effectively lost the moment the screen scrolls.
+    The model is folded in so the resume comes back on the one in use."""
+    if cfg.session_file == Path(os.devnull) or not state.get("messages"):
+        return
+    resume = "js"
+    if cfg.agent_id != "defaultagent":
+        resume += f" --agent {shlex.quote(cfg.agent_id)}"
+    model = state.get("model")
+    if isinstance(model, str) and model:
+        resume += f" --model {shlex.quote(model)}"
+    resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
+    print(f"{C.GREY}Resume: {C.RESET}{resume}")
 
 
 def _print_session_list(*, json_lines: bool) -> int:
@@ -1441,9 +1485,48 @@ def _run_migrate_config() -> int:
     return 0
 
 
+def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
+    """Fold a closing note into the conversation without breaking role alternation.
+
+    After a completed turn the note is simply the next user message. When the last
+    message is already a user turn it is rewritten to carry the note instead, since
+    two user messages in a row are rejected outright by some providers and silently
+    mangled by chat templates that assume alternation."""
+    messages = state["messages"]
+    if not messages or messages[-1].get("role") != "user":
+        message = {"role": "user", "content": reminder}
+        messages.append(message)
+        _append_turn(cfg, message)
+        return
+
+    last_user = messages[-1]
+    content = last_user.get("content")
+    if isinstance(content, str):
+        last_user["content"] = f"{content}\n\n{reminder}"
+    elif isinstance(content, list):
+        last_user["content"] = [*content, {"type": "text", "text": reminder}]
+    else:
+        last_user["content"] = reminder
+    # Append-only history cannot edit in place: drop the stale copy, write the
+    # rewritten one, so a reload sees exactly what memory holds.
+    M.append_mark(cfg.session_file, f"rollback_to:{len(messages) - 1}")
+    _append_turn(cfg, last_user)
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in {"exit", "quit", ":q"}:
+        state["running"] = False
+        return True
+    if line == "/quit" or line.startswith("/quit "):
+        note = line[len("/quit "):].strip() if line.startswith("/quit ") else ""
+        if note:
+            # Recorded as a user message so the next turn actually sees it. It is
+            # appended to the previous user message rather than added as a second
+            # one: providers with strict role alternation reject back-to-back user
+            # turns, and chat templates that tolerate it silently degrade.
+            reminder = f"<js-reminder>User closed the client with the message: {note}</js-reminder>"
+            _append_closing_note(cfg, state, reminder)
         state["running"] = False
         return True
     if line == "/help":
@@ -2775,6 +2858,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
     parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
     parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
+    parser.add_argument("--last", action="store_true", help="resume the most recently used session for this agent")
     parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
     parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
     parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
@@ -2826,6 +2910,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{C.ORANGE}error: --list cannot be combined with run or session options{C.RESET}", file=sys.stderr)
             return 2
         return _print_session_list(json_lines=args.json)
+    if args.last:
+        if args.session is not None:
+            print(f"{C.ORANGE}error: --last cannot be combined with --session{C.RESET}", file=sys.stderr)
+            return 2
+        try:
+            last_agent = validate_agent_id(
+                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", "defaultagent")
+            )
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            return 2
+        resolved_last = _latest_session_name(last_agent)
+        if resolved_last is None:
+            print(f"{C.ORANGE}error: no previous session for agent {last_agent}{C.RESET}", file=sys.stderr)
+            return 2
+        args.session = resolved_last
     if args.session_key is not None:
         try:
             mode_agent = "commit" if args.commit else None
@@ -3034,6 +3134,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
 
+    # Resuming with no --model comes back on the model the session was using,
+    # not the config default. An explicit --model still wins. A remembered model
+    # that matches what config already resolved is left alone: applying it as an
+    # explicit override would put an otherwise fine launch through the
+    # login gate for a model it was going to use anyway.
+    if args.model is None:
+        remembered_model = last_session_model(cfg.session_file)
+        if remembered_model and remembered_model != cfg.model:
+            args.model = remembered_model
+            print(f"{C.GREY}(model: {remembered_model}){C.RESET}")
+
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
@@ -3066,7 +3177,11 @@ def main(argv: list[str] | None = None) -> int:
     messages = M.load_messages(cfg.session_file)
     if messages:
         print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
-    _activate_saved_session(cfg, caller_key=args.session_key)
+    elif args.session is not None:
+        # Asked for a specific session and got nothing. Silence here reads as a
+        # successful resume, so an empty one has to say so.
+        print(f"{C.ORANGE}(empty session — nothing to resume: {cfg.session_file}){C.RESET}")
+    _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
@@ -3154,10 +3269,21 @@ def main(argv: list[str] | None = None) -> int:
             transcript_stack.close()
 
     mcp_loop = asyncio.Runner()
+    interrupt_armed = False
     while state["running"]:
         try:
             line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
-        except (EOFError, KeyboardInterrupt):
+            interrupt_armed = False
+        except KeyboardInterrupt:
+            # One stray ^C at the prompt should not end a session that took real
+            # work to build; the second one within the same idle stretch does.
+            if not interrupt_armed:
+                interrupt_armed = True
+                print(f"\n{C.GREY}(press ^C again to exit){C.RESET}")
+                continue
+            print()
+            break
+        except EOFError:
             print()
             break
         if not line:
@@ -3300,6 +3426,7 @@ def main(argv: list[str] | None = None) -> int:
     mcp_loop.run(_close_session_mcp_host(state))
     mcp_loop.close()
     transcript_stack.close()
+    _print_resume_hint(cfg, state)
     return 0
 if __name__ == "__main__":
     sys.exit(main())

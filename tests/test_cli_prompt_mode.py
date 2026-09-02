@@ -1670,7 +1670,7 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
         ("agent", "caller/nested"),
     }
     assert next(item for item in records if item["agent"] == "old")["user_turns"] == 1
-    expected_fields = {"agent", "name", "path", "mtime", "size", "user_turns", "in_flight", "cwd", "caller_key", "job_id"}
+    expected_fields = {"agent", "name", "path", "mtime", "size", "user_turns", "in_flight", "cwd", "caller_key", "job_id", "model"}
     assert all(set(item) == expected_fields for item in records)
 
 
