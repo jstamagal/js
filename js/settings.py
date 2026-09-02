@@ -48,8 +48,6 @@ DEFAULT_MAX_DOWNLOAD_BYTES = 0        # 0 = unlimited; a download streams to dis
 DEFAULT_INLINE_CODE_TIMEOUT_S = 300
 DEFAULT_TRACE = True
 DEFAULT_MAX_READ_LINES = 2_000
-DEFAULT_MAX_LINE_CHARS = 2_000
-DEFAULT_JSONL_MAX_LINE_CHARS = 65536
 DEFAULT_MAX_FILE_BYTES = 2_000_000
 DEFAULT_MAX_READ_BYTES = 256 * 1024
 DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
@@ -195,11 +193,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 env="JS_INLINE_CODE_TIMEOUT"),
     SettingSpec("limits.max_read_lines", "int", DEFAULT_MAX_READ_LINES,
                 "Maximum lines returned by read()."),
-    SettingSpec("limits.max_line_chars", "int", DEFAULT_MAX_LINE_CHARS,
-                "Maximum characters shown per read/search line."),
-    SettingSpec("limits.jsonl_max_line_chars", "int", DEFAULT_JSONL_MAX_LINE_CHARS,
-                "Maximum characters shown per read line for .jsonl files only.",
-                env="JS_JSONL_MAX_LINE_CHARS"),
     SettingSpec("limits.max_file_bytes", "int", DEFAULT_MAX_FILE_BYTES,
                 "Maximum file bytes read by fs tools."),
     SettingSpec("limits.max_read_bytes", "int", DEFAULT_MAX_READ_BYTES,

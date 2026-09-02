@@ -108,7 +108,6 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
     child = ToolContext(
         cwd=parent.cwd,
         max_read_lines=parent.max_read_lines,
-        max_line_chars=parent.max_line_chars,
         max_file_bytes=parent.max_file_bytes,
         max_read_bytes=getattr(parent, "max_read_bytes", 256 * 1024),
         max_tool_result_bytes=parent.max_tool_result_bytes,

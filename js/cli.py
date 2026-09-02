@@ -383,8 +383,6 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("download_timeout_s", ("limits", "download_timeout_s")),
     ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
     ("max_read_lines", ("limits", "max_read_lines")),
-    ("max_line_chars", ("limits", "max_line_chars")),
-    ("jsonl_max_line_chars", ("limits", "jsonl_max_line_chars")),
     ("max_file_bytes", ("limits", "max_file_bytes")),
     ("max_read_bytes", ("limits", "max_read_bytes")),
     ("max_bash_output_ceiling", ("limits", "max_bash_output_ceiling")),

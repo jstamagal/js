@@ -56,8 +56,6 @@ as `<set>`.
 | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
 | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
 | `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
-| `limits.max_line_chars` | `2000` | Maximum characters shown per read/search line. |
-| `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
 | `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
 | `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
 | `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
@@ -159,7 +157,6 @@ coercion as `set`.
 | `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
 | `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
-| `JS_JSONL_MAX_LINE_CHARS` | `limits.jsonl_max_line_chars` | `65536` | Maximum characters shown per read line for .jsonl files only. |
 | `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `JS_TRACE` | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
 

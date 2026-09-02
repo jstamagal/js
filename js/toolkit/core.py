@@ -210,8 +210,6 @@ class ToolContext:
 
     cwd: Path = field(default_factory=Path.cwd)
     max_read_lines: int = 2_000
-    max_line_chars: int = 2_000
-    jsonl_max_line_chars: int = 65536
     max_file_bytes: int = 2_000_000
     max_read_bytes: int = 256 * 1024
     max_tool_result_bytes: int = 256 * 1024
