@@ -226,14 +226,13 @@ def test_registry_surface_composition_shell_only_vs_with_fs_search():
         return next(s["function"]["description"] for s in specs if s["function"]["name"] == "shell")
 
     shell_only = shell_desc(["shell"])
-    assert "ripgrep" in shell_only or "`rg`" in shell_only
+    assert "`rg`" in shell_only
     assert "`fd`" in shell_only
-    assert "use `fs_search`" not in shell_only
+    assert "`fs_search`" not in shell_only
 
     with_search = shell_desc(["shell", "fs_search"])
-    assert "use `fs_search`" in with_search
-    assert "ripgrep" not in with_search
-    assert "`fd`" not in with_search
+    assert "Search with `fs_search`" in with_search
+    assert "`rg` and `fd` are installed" not in with_search
 
 
 def test_openai_specs_never_leak_raw_markers_on_any_surface():
@@ -289,12 +288,8 @@ def test_shell_only_surface_gets_missing_tool_doctrine_without_phantom_tools():
         if spec["function"]["name"] == "shell"
     )
 
-    assert "Content search: use `rg`" in shell_desc
-    assert "File finding: use `fd`" in shell_desc
-    assert "Inspect known files with" in shell_desc
-    assert "Create complete files with" in shell_desc
-    assert "Edit existing files with" in shell_desc
-    assert "Remove files with" in shell_desc
-    assert "Download with" in shell_desc
+    assert "`rg` and `fd` are installed" in shell_desc
+    assert "checks the exact old text and the\n  match count before replacing" in shell_desc
+    assert "Never blind `sed -i`" in shell_desc
     for absent in CORE_TOOL_NAMES - {"shell"}:
         assert f"`{absent}`" not in shell_desc

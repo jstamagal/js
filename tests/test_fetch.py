@@ -289,7 +289,8 @@ def test_shell_tool_schema_exposes_timeout_param():
     param, or a schema-enforcing provider can never raise it for long builds."""
     tool = next(tool for tool in process_net.tools() if tool.name == "shell")
 
-    assert tool.params["timeout"] == {"type": "integer", "default": 300}
+    assert tool.params["timeout"]["type"] == "integer"
+    assert tool.params["timeout"]["default"] == 300
 
 
 def test_shell_uses_configured_environment_allowlist_and_explains_failure(

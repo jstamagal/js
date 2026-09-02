@@ -1,95 +1,28 @@
-Run a terminal command through the configured system shell.
+Run one command with `$SHELL -c` and return exit code, stdout, and stderr.
+Output is capped and marked where it was cut, so do not pipe through `head` or
+`tail` just to shrink it.
 
-On Unix this uses `$SHELL -c` and falls back to `/bin/sh -c` when `SHELL` is
-unset. On Windows it uses `COMSPEC /C`.
-
-Use this for terminal operations such as builds, tests, git, package managers,
-linters, formatters, dev tools, and project-specific programs that do not have a
-dedicated tool.
-
-Critical directory rule:
-- Do not put `cd` in the command string.
-- Use the `cwd` parameter to choose the working directory.
-- `cd path && command` is redundant and violates the tool contract.
-
-Do not use this for normal file operations:
+- Set `cwd` instead of `cd`.
+- The child environment is filtered to PATH, HOME, USER, LANG, LC_ALL, TERM,
+  PWD, and SHELL. Name any other variable a command needs in `env`. A nonzero
+  exit reports which names were allowed and present.
 {{#if fs_search}}
-- Filename discovery: use `fs_search` with `output_mode="files"`.
-- Content search: use `fs_search` with regex, not `grep` or `rg`.
-- Directory-only discovery: use `shell` with `fd --type d`; `fs_search` returns
-  files and does not report empty directories.
+- Search with `fs_search`, not `grep`, `rg`, or `find`.
+  Directory-only discovery: use `shell` with `fd --type d`.
 {{/if}}
 {{#unless fs_search}}
-- Content search: use `rg` (ripgrep), not `grep`. `rg` is installed; it skips
-  binary and non-regular files, honors `.gitignore`, and is far faster.
-- File finding: use `fd`, not `find`, to locate files by name or extension. `fd`
-  is installed and safer around special files. Reach for `find`/`grep` only when
-  `rg`/`fd` cannot express the query.
+- `rg` and `fd` are installed; use them instead of `grep` and `find`.
 {{/unless}}
 {{#if read}}
-- File reads: use `read`, not `cat`, `head`, or `tail`.
+- Read files with `read`, not `cat`, `head`, or `tail`.
 {{/if}}
 {{#if patch}}
-- File edits, single or multi-replacement: use `patch`, not `sed` or `awk`.
+- Edit files with `patch`, not `sed` or `awk`.
 {{/if}}
-{{#if write}}
-- File writes: use `write`, not `echo > file` or heredocs.
-{{/if}}
-- Communication: respond directly, not with `echo` or `printf`.
-
-When shell is the only tool for file work, use real Unix tools carefully:
-{{#unless read}}
-- Inspect known files with `python - <<'PY'` / `pathlib.Path(...).read_text()` or
-  focused commands such as `wc -l` and `file`. Avoid dumping huge files; use
-  small Python snippets to print numbered slices when needed.
-{{/unless}}
-{{#unless write}}
-- Create complete files with a small Python script that writes UTF-8 text or bytes
-  atomically enough for the task (`Path(...).write_text(...)` / `write_bytes(...)`).
-  Verify the parent directory first.
-{{/unless}}
 {{#unless patch}}
-- Edit existing files with Python scripts that read, validate the exact old text,
-  replace it, and fail if the match count is not what you intended. Do not rely on
-  blind `sed -i` rewrites for source changes.
+- Edit files with a short Python script that checks the exact old text and the
+  match count before replacing. Never blind `sed -i`.
 {{/unless}}
-{{#unless remove}}
-- Remove files with `trash` / `trash-put` when available; use `rm` only for
-  generated scratch you are certain about, and never for user data without explicit
-  instruction.
-{{/unless}}
-{{#unless fetch}}
-- Download with `aria2c --continue=true --split=8
-  --max-connection-per-server=8 --min-split-size=1M --max-tries=5
-  --retry-wait=1 --file-allocation=none --auto-file-renaming=false --dir=DIR
-  --out=NAME URL` when network transfer is truly needed; write to an explicit
-  path and verify size.
-{{/unless}}
-
-Before commands that create files or directories:
-- Verify the parent directory is the intended location.
-- Prefer dedicated file tools for deterministic file writes.
-
-Command construction:
-- Always quote paths containing spaces.
-- Add a concise `description` when the purpose is not obvious.
-- Use `env` only for environment variable names that should be passed through.
-- **Default child env is restricted to PATH, HOME, USER, LANG, LC_ALL, TERM,
-  PWD, and SHELL.** The operator can change this persistent allowlist with
-  `limits.shell_env_allow` (a JSON list of names); `env` adds names for one call.
-  A nonzero result reports the allowed and actually present names, so an omitted
-  variable is distinguishable from a broken command.
-- `timeout` (default `300` seconds): raise it for long builds/tests that legitimately run past 5 minutes.
-- Use `keep_ansi=true` only when color/control output matters.
-
-Output behavior:
-- Output includes exit code, stdout, and stderr.
-- stdout/stderr are capped by `ToolContext.max_bash_output_bytes`.
-- Do not pipe through `head` or `tail` merely to reduce output; let the runtime
-  cap it.
-
-Multiple commands:
-- If commands depend on each other, use `&&` in one shell call.
-- Use `;` only when later commands should run even if earlier commands fail.
-- If commands are independent, separate tool calls are clearer than one long
-  shell string.
+{{#if write}}
+- Write files with `write`, not redirects or heredocs.
+{{/if}}
