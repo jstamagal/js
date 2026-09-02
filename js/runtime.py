@@ -1116,8 +1116,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_tool_result_inline_bytes = getattr(cfg, "max_tool_result_inline_bytes", active_context.max_tool_result_inline_bytes)
     active_context.max_bash_output_ceiling = getattr(cfg, "max_bash_output_ceiling", active_context.max_bash_output_ceiling)
     install_context_window_overrides(cfg)
-    active_context.max_line_chars = getattr(cfg, "max_line_chars", active_context.max_line_chars)
-    active_context.jsonl_max_line_chars = getattr(cfg, "jsonl_max_line_chars", active_context.jsonl_max_line_chars)
     active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.model = model
     active_context.kernel_verbosity = getattr(cfg, "kernel_verbosity", active_context.kernel_verbosity)
@@ -1200,6 +1198,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # Streaming text: open WHITE once at first chunk, close RESET + newline
     # once after the stream completes. Avoids per-chunk escape wrapping.
     text_started = {"value": False}
+    # Text already displayed but not yet recorded. The assistant record is only
+    # built after the stream completes, so a ^C mid-stream would otherwise leave
+    # the answer on screen and nothing in history.
+    streamed_text = {"value": ""}
     _transcript_log = getattr(telemetry, "transcript_log", None)
 
     def _muted_transcript_tee():
@@ -1211,6 +1213,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     def _emit_text(t: str) -> None:
         if not t:
             return
+        streamed_text["value"] += t
         _emit_event("stream", text=t)
         if suppress_output:
             return
@@ -1225,6 +1228,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         with _muted_transcript_tee():
             sys.stdout.write(t)
             sys.stdout.flush()
+
+    def _commit_streamed_partial() -> None:
+        """Record text displayed before a cancellation as a real assistant turn.
+
+        Without this the caller sees no new message and treats the turn as having
+        produced nothing, discarding the user's prompt along with the answer."""
+        partial = streamed_text["value"]
+        streamed_text["value"] = ""
+        if not partial:
+            return
+        messages.append({
+            "role": "assistant",
+            "content": partial,
+            "incomplete_reason": "cancelled",
+        })
 
     def _close_text() -> None:
         if suppress_output:
@@ -1600,6 +1618,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))
             messages.append(history_assistant_record)
+            # Recorded in full now; a later ^C in this turn must not re-append it.
+            streamed_text["value"] = ""
             durable_side_effects_started = True
             token_state.record_provider_usage(
                 usage,
@@ -1698,6 +1718,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         # unbalanced, so pair turn_start with a turn_end before propagating.
         if not isinstance(_turn_exc, Exception):
             _close_text()
+            _commit_streamed_partial()
             _end_turn("cancelled")
         raise
     finally:
