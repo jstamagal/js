@@ -3151,6 +3151,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
         return 2
     system = prompt_spec.system
+    # A session sends the system prompt it was born with, byte for byte, for its
+    # whole life. Rebuilding it per launch puts a fresh clock and load average in
+    # front of an append-only history and breaks the shared prefix at byte zero.
+    # Genuine drift is reported to the model as a message at the end instead.
+    recorded_system = M.load_system_prompt(cfg.session_file)
+    system_drifted = recorded_system is not None and recorded_system != system
+    if recorded_system is not None:
+        system = recorded_system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
         cfg = _apply_agent_model(cfg, prompt_spec, args.model)
@@ -3183,6 +3191,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}(empty session — nothing to resume: {cfg.session_file}){C.RESET}")
     _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
+    if recorded_system is None:
+        M.append_system_prompt(cfg.session_file, system)
+    elif system_drifted:
+        # The prompt on disk changed since this session started. The frozen one is
+        # still what gets sent; the model is told what moved rather than having the
+        # change appear silently in front of its history.
+        notice = {
+            "role": "user",
+            "content": (
+                "<js-reminder>The agent prompt files changed since this session started. "
+                "The original system prompt is still in effect for this conversation; "
+                "restart in a new session to pick up the new one.</js-reminder>"
+            ),
+        }
+        messages.append(notice)
+        _append_turn(cfg, notice)
+        print(f"{C.GREY}(agent prompt changed on disk — keeping this session's original){C.RESET}")
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:

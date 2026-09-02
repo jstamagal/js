@@ -660,6 +660,10 @@ def _build_inference_params(
         kwargs["reasoning"] = reasoning
     if output is not None:
         kwargs["output"] = output
+    # Providers that need caching requested explicitly cache nothing without it.
+    # Every turn resends the whole conversation, so the prefix it shares with the
+    # previous turn is the bulk of each request.
+    kwargs["cache"] = ai_params.CacheParams()
     merged_extra = {**sampler_extra, **(extra_body or {})}
     if merged_extra:
         kwargs["extra_body"] = merged_extra

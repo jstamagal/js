@@ -212,6 +212,43 @@ def append_mark(memory_file: Path, marker: str) -> None:
     _append(memory_file, Record(kind="mark", ts=time.time(), marker=marker))
 
 
+_SYSTEM_MARK = "system:"
+
+
+def append_system_prompt(memory_file: Path, system: str) -> None:
+    """Record the system prompt a session was started with."""
+    append_mark(memory_file, _SYSTEM_MARK + json.dumps({"system": system}, separators=(",", ":")))
+
+
+def load_system_prompt(memory_file: Path) -> str | None:
+    """The system prompt a session was started with, or None when unrecorded.
+
+    A resumed session has to send the bytes it sent before. Rebuilding the prompt
+    puts a fresh clock, uptime and load average in front of an append-only
+    history, so the request no longer shares a prefix with the one that built the
+    conversation and every previously cached token is re-read at full price."""
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            lines = stream.readlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        marker = record.get("marker") if isinstance(record, dict) else None
+        if not isinstance(marker, str) or not marker.startswith(_SYSTEM_MARK):
+            continue
+        try:
+            payload = json.loads(marker[len(_SYSTEM_MARK):])
+        except json.JSONDecodeError:
+            return None
+        system = payload.get("system") if isinstance(payload, dict) else None
+        return system if isinstance(system, str) and system else None
+    return None
+
+
 def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False) -> None:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}
     append_mark(memory_file, "compaction:" + json.dumps(payload, separators=(",", ":")))
