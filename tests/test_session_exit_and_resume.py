@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from js import cli
 from js.memory import load_messages
