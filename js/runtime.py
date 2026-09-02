@@ -1100,6 +1100,17 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
     active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
+    # One conversation, one cache key: OpenAI-compatible endpoints use it to route
+    # a request to the machine already holding that conversation's prefix. Keyed on
+    # the session rather than the agent so two concurrent sessions do not contend
+    # for one prefix. A session-less run sends no key and falls back to the
+    # provider's own longest-prefix matching.
+    _session_file = getattr(cfg, "session_file", None)
+    _cache_key = (
+        f"js-{cfg.agent_id}-{Path(_session_file).stem}"
+        if _session_file is not None and Path(_session_file).name not in ("", os.devnull, "null")
+        else None
+    )
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
     active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
@@ -1406,6 +1417,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         trace_sink=_trace_sink,
                         trace_request_schemas=_trace_req["schemas"],
                         trace_request_from=_trace_req["sent"],
+                        cache_key=_cache_key,
                     )
                     if _trace_sink is not None:
                         _trace_req["sent"] = len(ai_convo)

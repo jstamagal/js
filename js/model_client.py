@@ -647,6 +647,7 @@ def _build_inference_params(
     reasoning: ai_params.ReasoningParams | None,
     output: ai_params.OutputParams | None,
     extra_body: dict[str, Any],
+    cache: ai_params.CacheParams | None = None,
 ) -> ai_params.InferenceRequestParams | None:
     """Assemble an ``InferenceRequestParams`` from the parts, or None when there
     is nothing to send (so the provider keeps every default)."""
@@ -660,10 +661,8 @@ def _build_inference_params(
         kwargs["reasoning"] = reasoning
     if output is not None:
         kwargs["output"] = output
-    # Providers that need caching requested explicitly cache nothing without it.
-    # Every turn resends the whole conversation, so the prefix it shares with the
-    # previous turn is the bulk of each request.
-    kwargs["cache"] = ai_params.CacheParams()
+    if cache is not None:
+        kwargs["cache"] = cache
     merged_extra = {**sampler_extra, **(extra_body or {})}
     if merged_extra:
         kwargs["extra_body"] = merged_extra
@@ -777,6 +776,7 @@ async def stream_model_async(
     trace_sink: Any = None,
     trace_request_schemas: bool = True,
     trace_request_from: int = 0,
+    cache_key: str | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
 
@@ -867,12 +867,32 @@ async def stream_model_async(
     if is_deepseek and reasoning_effort != "none":
         extra_body.setdefault("max_reasoning_tokens", 32_000)
 
+    # Prompt caching. Every turn resends the whole conversation, so the prefix it
+    # shares with the previous turn is the bulk of each request, and the three
+    # providers in use want three different things:
+    #   Anthropic caches only what a cache_control breakpoint covers, so the
+    #     request has to ask; the SDK's top-level form covers tools + system.
+    #   OpenAI-compatible endpoints cache long prefixes automatically. There is no
+    #     breakpoint to set, but prompt_cache_key pins a conversation to the machine
+    #     holding its prefix, which is what makes the hit rate hold up across turns.
+    #   DeepSeek caches on disk automatically from token zero, with no request-side
+    #     control at all, so it takes the same key harmlessly.
+    # Anthropic rejects a cache key outright, so the two shapes stay separate.
+    is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
+    if is_anthropic_wire:
+        cache_params = ai_params.CacheParams()
+    elif cache_key:
+        cache_params = ai_params.CacheParams(key=cache_key)
+    else:
+        cache_params = None
+
     params = _build_inference_params(
         sampling or Sampling(),
         provider_def.transport if provider_def is not None else None,
         reasoning=reasoning_params,
         output=output_params,
         extra_body=extra_body,
+        cache=cache_params,
     )
 
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense

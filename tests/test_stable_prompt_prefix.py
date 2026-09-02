@@ -1,12 +1,12 @@
-"""A session sends one system prompt for its whole life, and asks providers to
-cache the prefix that every turn resends."""
+"""A session sends one system prompt for its whole life.
+
+The caching that stable prefix enables is covered in test_prompt_cache_wire_shape
+and test_prompt_cache_key_per_session."""
 
 from __future__ import annotations
 
 from js import cli, memory
 from js.memory import append_system_prompt, load_messages, load_system_prompt
-from js.model_client import _build_inference_params
-from js.sampling import Sampling
 
 
 def test_recorded_system_prompt_round_trips(tmp_path):
@@ -110,12 +110,3 @@ def test_an_unchanged_prompt_reports_no_drift(monkeypatch, tmp_path):
 
     contents = [m.get("content") for m in load_messages(session_file) if m.get("role") == "user"]
     assert not any("prompt files changed" in str(c) for c in contents)
-
-
-def test_requests_ask_for_prompt_caching():
-    params = _build_inference_params(
-        Sampling(), None, reasoning=None, output=None, extra_body={},
-    )
-
-    assert params is not None
-    assert params.cache is not None
