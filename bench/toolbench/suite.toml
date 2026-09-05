@@ -48,26 +48,26 @@ hidden_test_patterns = [
 [[agents]]
 name = "js-full-slim"
 kind = "js"
-agent = "full"
+agent = "bench-full"
 descriptions = "slim"
 
 [[agents]]
 name = "js-full-stock"
 kind = "js"
-agent = "full"
+agent = "bench-full"
 descriptions = "stock"
 
 [[agents]]
 name = "js-shell-slim"
 kind = "js"
-agent = "shell"
+agent = "bench-shell"
 descriptions = "slim"
 default = false
 
 [[agents]]
 name = "js-shell-stock"
 kind = "js"
-agent = "shell"
+agent = "bench-shell"
 descriptions = "stock"
 default = false
 
@@ -106,7 +106,8 @@ default = false
 name = "click"
 url = "https://github.com/pallets/click"
 category = "python / CLI library"
-install = "uv venv --python 3.12 .reporacer-venv && uv pip install --python .reporacer-venv/bin/python -e . pytest"
+# pytest 9 turns a deprecation into an error on older click checkouts
+install = "uv venv --python 3.12 .reporacer-venv && uv pip install --python .reporacer-venv/bin/python -e . 'pytest<9'"
 test = ".reporacer-venv/bin/python -m pytest -q -x --no-header -p no:cacheprovider tests"
 
 [[repos]]

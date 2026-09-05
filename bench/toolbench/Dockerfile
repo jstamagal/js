@@ -6,9 +6,9 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential pkg-config \
-        ripgrep fd-find trash-cli jq xz-utils procps \
+        ripgrep fd-find bat fzf trash-cli jq xz-utils procps less \
     && apt-get clean \
-    && ln -s /usr/bin/fdfind /usr/local/bin/fd
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd && ln -s /usr/bin/batcat /usr/local/bin/bat
 
 # uv (python + tool installs), node LTS 22, go: current patch of each, pulled
 # at build time rather than pinned by hand.
@@ -17,7 +17,9 @@ RUN set -eux; f=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt
     curl -fsSL "https://nodejs.org/dist/latest-v22.x/$f" | tar -xJ -C /usr/local --strip-components=1; \
     corepack enable; node --version
 RUN set -eux; v=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version'); \
-    curl -fsSL "https://go.dev/dl/${v}.linux-amd64.tar.gz" | tar -xz -C /usr/local; /usr/local/go/bin/go version
+    curl -fsSL "https://go.dev/dl/${v}.linux-amd64.tar.gz" | tar -xz -C /usr/local; \
+    ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/; go version
+# (symlinked because `sh -lc` sources /etc/profile, which resets PATH)
 ENV PATH=/usr/local/go/bin:$PATH \
     UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
