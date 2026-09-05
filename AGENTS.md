@@ -48,7 +48,8 @@ Streaming tool-use loop: sync runtime over the async SDK.
 `js/model_client.py` is the model I/O boundary (new providers land next to
 `codex_provider.py`); `js/runtime.py` is the loop (streaming, dispatch,
 subagent fan-out); `js/toolkit/` is the tools — model-facing contracts live
-in `tool_descriptions/*.md`, not in code. Agents are prompt directories
+in `tool_descriptions/{stock,slim}/*.md` (the `tools.descriptions` knob picks
+the set the model sees), not in code. Agents are prompt directories
 (`js/persona.py` + `prompts/`; layered project > global > repo; `tools:`
 frontmatter picks the tool surface). Config layers jsrc < `.js/jsrc` <
 `.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and

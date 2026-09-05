@@ -54,6 +54,10 @@ DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
 DEFAULT_TASK_MAX_DEPTH = 2
 DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_KERNEL_VERBOSITY = "normal"
+# Which js/toolkit/tool_descriptions/<variant> set the model sees. `stock` is the
+# full text; `slim` is cut to what the model can act on. Same file set in both.
+TOOL_DESCRIPTION_VARIANTS = ("stock", "slim")
+DEFAULT_TOOL_DESCRIPTIONS = "stock"
 DEFAULT_KERNEL_RENDER_MAX_LINES = 24
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
@@ -295,6 +299,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "When true, the main agent cannot pick a subagent model via the task tool.",
                 empty=EMPTY_OFF),
     # --- tools ---
+    SettingSpec("tools.descriptions", "str", DEFAULT_TOOL_DESCRIPTIONS,
+                "Which model-facing tool description set ships: stock (the full text) or "
+                "slim (cut to what the model can act on; the schema carries the parameters).",
+                env="JS_TOOL_DESCRIPTIONS"),
     SettingSpec("tools.alias_profiles", "json", None,
                 "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
                 empty=EMPTY_NONE),
@@ -388,6 +396,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if not text.startswith(("http://", "https://")):
             return None, f"expected a URL starting with http:// or https:// (got {text!r})"
         return text, None
+    if spec.key == "tools.descriptions":
+        v = text.lower()
+        if v not in TOOL_DESCRIPTION_VARIANTS:
+            return None, f"expected one of: {', '.join(TOOL_DESCRIPTION_VARIANTS)}"
+        return v, None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)

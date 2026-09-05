@@ -489,7 +489,11 @@ def _prepare_fan_out(
     # `model` param is gone from the schema/description, not just ignored
     # (mirrors cli._registry_for).
     reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
-    full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
+    full_registry = build_default_registry(
+        getattr(parent_cfg, "prompt_roots", None),
+        flags=reg_flags,
+        descriptions=getattr(parent_cfg, "tool_descriptions", None),
+    )
     total = len(normalized_items)
     gate = asyncio.Semaphore(_subagent_worker_cap(context, total))
 

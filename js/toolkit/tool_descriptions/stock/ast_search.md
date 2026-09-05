@@ -17,7 +17,7 @@ Markdown, Nix, Php, Python, Ruby, Rust, Scala, Solidity, Swift, Tsx, TypeScript,
 and Yaml.
 
 Search results have an absolute `path:line` heading followed by read-compatible
-anchored source lines such as `12ab|code`. `max_results` defaults to 100 matches.
+anchored source lines such as `12:ab|code`. `max_results` defaults to 100 matches.
 
 Rewriting is deliberately two-step. Set `rewrite` to request a structural
 replacement; the default `apply=false` is a dry run that shows a unified diff

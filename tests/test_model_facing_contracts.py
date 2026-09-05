@@ -16,7 +16,7 @@ def _specs(*names: str) -> dict[str, dict]:
     }
 
 
-def test_fs_search_schema_exposes_filename_mode_and_both_flag_spellings():
+def test_fs_search_schema_exposes_filename_mode_and_readable_flag_names_only():
     params = _specs("fs_search")["fs_search"]["parameters"]
 
     assert params["properties"]["output_mode"]["enum"] == [
@@ -26,9 +26,12 @@ def test_fs_search_schema_exposes_filename_mode_and_both_flag_spellings():
         "count",
     ]
     assert {
-        "-B", "before_context", "-A", "after_context", "-C", "context_lines",
-        "-n", "show_line_numbers", "-i", "case_insensitive", "type", "file_type",
+        "before_context", "after_context", "context_lines",
+        "show_line_numbers", "case_insensitive", "file_type",
     }.issubset(params["properties"])
+    # The handler still takes ripgrep's short spellings through **rg_flags, but
+    # the schema is what the model reads and declaring both doubled it.
+    assert not {"-B", "-A", "-C", "-n", "-i", "type"} & set(params["properties"])
 
 
 def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():

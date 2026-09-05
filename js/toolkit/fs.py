@@ -1271,21 +1271,14 @@ def tools() -> tuple[Tool, ...]:
                 "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
                 "glob": {"type": "string", "description": "Optional glob filter such as *.py or **/*.tsx."},
                 "output_mode": {"type": "string", "enum": ["files", "content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: filename-glob paths, content-matching lines, paths whose contents match, or per-file content-match counts."},
-                # Both spellings are declared because the handler has always accepted
-                # both and the description teaches the readable ones: with only the
-                # rg-style keys declared under additionalProperties:false, a model
-                # following the prose emitted arguments its own schema rejected.
-                "-B": {"type": "integer", "description": "Lines before each match when output_mode is content (alias: before_context)."},
+                # The handler also takes ripgrep's short spellings (-B/-A/-C/-n/-i and
+                # `type`) through **rg_flags, but only the readable names are declared:
+                # the schema is what the model reads, and declaring both doubled it.
                 "before_context": {"type": "integer", "description": "Lines before each match when output_mode is content."},
-                "-A": {"type": "integer", "description": "Lines after each match when output_mode is content (alias: after_context)."},
                 "after_context": {"type": "integer", "description": "Lines after each match when output_mode is content."},
-                "-C": {"type": "integer", "description": "Lines before and after each match when output_mode is content (alias: context_lines)."},
                 "context_lines": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
-                "-n": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output (alias: show_line_numbers)."},
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
-                "-i": {"type": "boolean", "default": False, "description": "Match without case sensitivity (alias: case_insensitive)."},
                 "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
-                "type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs (alias: file_type)."},
                 "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs."},
                 "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset."},
                 "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
@@ -1372,5 +1365,5 @@ def tools() -> tuple[Tool, ...]:
                 ],
             },
         ),
-        Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest in-process snapshot should be restored."}}, required=("path",)),
+        Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest snapshot should be restored."}}, required=("path",)),
     )

@@ -32,24 +32,27 @@ def _prompt_agent_names() -> set[str]:
 
 
 def test_description_loader_rejects_missing_and_empty_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(descriptions, "_DESCRIPTION_DIR", tmp_path)
-    descriptions.load_description.cache_clear()
+    monkeypatch.setattr(descriptions, "_DESCRIPTIONS_ROOT", tmp_path)
+    descriptions._load_description.cache_clear()
+    (tmp_path / "stock").mkdir()
 
-    with pytest.raises(FileNotFoundError):
-        descriptions.load_description("missing")
+    with descriptions.using_variant("stock"):
+        with pytest.raises(FileNotFoundError):
+            descriptions.load_description("missing")
 
-    (tmp_path / "empty.md").write_text("\n", encoding="utf-8")
-    with pytest.raises(ValueError):
-        descriptions.load_description("empty")
+        (tmp_path / "stock" / "empty.md").write_text("\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            descriptions.load_description("empty")
 
-    descriptions.load_description.cache_clear()
+    descriptions._load_description.cache_clear()
 
 
-def test_registered_tools_and_description_files_match():
-    descriptions.load_description.cache_clear()
-    registry = build_default_registry()
+@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
+def test_registered_tools_and_description_files_match(variant):
+    descriptions._load_description.cache_clear()
+    registry = build_default_registry(descriptions=variant)
     registered = {tool.name for tool in registry.tools}
-    files = {path.stem for path in descriptions._DESCRIPTION_DIR.glob("*.md")}
+    files = {path.stem for path in descriptions.description_dir(variant).glob("*.md")}
     generated_agent_tools = _prompt_agent_names() - files
     turn_scoped_tools = {"tool_discovery"}
 
@@ -58,7 +61,8 @@ def test_registered_tools_and_description_files_match():
     for tool in registry.tools:
         assert tool.description.strip()
         if tool.name in files:
-            assert descriptions.load_description(tool.name) == tool.description
+            with descriptions.using_variant(variant):
+                assert descriptions.load_description(tool.name) == tool.description
 
 
 
@@ -97,7 +101,13 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert set(read.params) == {"file_path", "range", "show_line_numbers"}
     assert write.required == ("file_path", "content")
     assert set(write.params) == {"file_path", "content", "overwrite"}
-    assert {"-A", "-B", "-C", "-i", "-n", "type"}.issubset(search.params)
+    assert {
+        "before_context", "after_context", "context_lines",
+        "case_insensitive", "show_line_numbers", "file_type",
+    }.issubset(search.params)
+    # rg-style spellings still reach the handler through **rg_flags but are not
+    # declared: the schema is what the model reads, and declaring both doubled it.
+    assert not {"-A", "-B", "-C", "-i", "-n", "type"} & set(search.params)
     assert ast_search.required == ("pattern",)
     assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
     assert tuple(ast_search.params["lang"]["enum"]) == fs._AST_GREP_LANGUAGES
@@ -216,10 +226,20 @@ def test_text_without_markers_is_returned_unchanged():
     assert R(text, {"shell"}) is text
 
 
-def test_registry_surface_composition_shell_only_vs_with_fs_search():
+# Per variant: the fs_search pointer the shell description carries when fs_search
+# shares the surface, and the rg/fd doctrine phrase that must vanish when it does.
+_SHELL_DOCTRINE = {
+    "stock": ("use `fs_search` with regex", "`rg` (ripgrep)"),
+    "slim": ("Search with `fs_search`", "`rg` and `fd` are installed"),
+}
+
+
+@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
+def test_registry_surface_composition_shell_only_vs_with_fs_search(variant):
     """The headline: a shell-only agent is taught the rg/fd doctrine; an agent
     that also has fs_search is not schooled on rg/fd and is pointed at fs_search."""
-    full = build_default_registry()
+    full = build_default_registry(descriptions=variant)
+    search_pointer, rg_doctrine = _SHELL_DOCTRINE[variant]
 
     def shell_desc(selectors):
         specs = full.select(selectors).openai_specs()
@@ -231,12 +251,13 @@ def test_registry_surface_composition_shell_only_vs_with_fs_search():
     assert "`fs_search`" not in shell_only
 
     with_search = shell_desc(["shell", "fs_search"])
-    assert "Search with `fs_search`" in with_search
-    assert "`rg` and `fd` are installed" not in with_search
+    assert search_pointer in with_search
+    assert rg_doctrine not in with_search
 
 
-def test_openai_specs_never_leak_raw_markers_on_any_surface():
-    full = build_default_registry()
+@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
+def test_openai_specs_never_leak_raw_markers_on_any_surface(variant):
+    full = build_default_registry(descriptions=variant)
     surfaces = [
         ["shell"], ["read"], ["fs_search"], ["shell", "read"],
         ["read", "fs_search", "patch", "write", "task"], None,
@@ -248,8 +269,9 @@ def test_openai_specs_never_leak_raw_markers_on_any_surface():
             assert "{{#" not in desc and "{{/" not in desc, (sel, spec["function"]["name"])
 
 
-def test_rendered_surfaces_never_mention_unavailable_core_tools():
-    full = build_default_registry()
+@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
+def test_rendered_surfaces_never_mention_unavailable_core_tools(variant):
+    full = build_default_registry(descriptions=variant)
     surfaces = [
         ["shell"],
         ["shell", "read", "write", "patch", "remove", "undo"],
@@ -280,16 +302,65 @@ def test_rendered_surfaces_never_mention_unavailable_core_tools():
                 assert f"`{name}`" not in desc, (sel, tool, name)
 
 
-def test_shell_only_surface_gets_missing_tool_doctrine_without_phantom_tools():
-    full = build_default_registry()
+# What a naked shell must be taught in each variant, since no other tool can.
+_NAKED_SHELL_DOCTRINE = {
+    "stock": (
+        "Content search: use `rg`", "File finding: use `fd`", "Inspect known files with",
+        "Create complete files with", "Edit existing files with", "Remove files with",
+        "Download with",
+    ),
+    "slim": (
+        "`rg` and `fd` are installed", "sed -n",
+        "checks the exact old text and the\n  match count before replacing",
+        "Never blind `sed -i`",
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
+def test_shell_only_surface_gets_missing_tool_doctrine_without_phantom_tools(variant):
+    full = build_default_registry(descriptions=variant)
     shell_desc = next(
         spec["function"]["description"]
         for spec in full.select(["shell"]).openai_specs()
         if spec["function"]["name"] == "shell"
     )
 
-    assert "`rg` and `fd` are installed" in shell_desc
-    assert "checks the exact old text and the\n  match count before replacing" in shell_desc
-    assert "Never blind `sed -i`" in shell_desc
+    for phrase in _NAKED_SHELL_DOCTRINE[variant]:
+        assert phrase in shell_desc, (variant, phrase)
     for absent in CORE_TOOL_NAMES - {"shell"}:
         assert f"`{absent}`" not in shell_desc
+
+
+def test_description_variants_hold_the_same_file_set():
+    stock = {path.name for path in descriptions.description_dir("stock").glob("*.md")}
+    slim = {path.name for path in descriptions.description_dir("slim").glob("*.md")}
+    assert stock
+    assert stock == slim
+
+
+def test_descriptions_knob_selects_the_variant_the_model_sees():
+    descriptions._load_description.cache_clear()
+    stock = build_default_registry(descriptions="stock").resolve("shell").description
+    slim = build_default_registry(descriptions="slim").resolve("shell").description
+    assert stock != slim
+    assert len(slim) < len(stock)
+    with pytest.raises(ValueError):
+        with descriptions.using_variant("fat"):
+            pass
+
+
+def test_descriptions_knob_env_and_setting_coercion(monkeypatch):
+    from js import settings as _settings
+
+    spec = next(spec for spec in _settings.REGISTRY if spec.key == "tools.descriptions")
+    assert _settings.coerce_value(spec, " Slim ") == ("slim", None)
+    value, error = _settings.coerce_value(spec, "fat")
+    assert value is None and "stock" in error
+
+    monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "slim")
+    assert descriptions.active_variant() == "slim"
+    monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "nonsense")
+    assert descriptions.active_variant() == "stock"
+    with descriptions.using_variant("slim"):
+        assert descriptions.active_variant() == "slim"

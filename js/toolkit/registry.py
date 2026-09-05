@@ -11,7 +11,7 @@ import sys
 
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from .core import CatalogEntry, Tool
-from .descriptions import render_tool_name_sections
+from .descriptions import render_tool_name_sections, using_variant
 from . import browser, discovery, fs, kernel, meta, process_net, search, terminal, toolbox, wiki
 
 
@@ -375,12 +375,16 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
 
 
 @cache
-def _cached_registry(prompt_roots: tuple[Path, ...], flags: tuple[str, ...]) -> ToolRegistry:
-    return build_default_registry(prompt_roots or None, flags=flags)
+def _cached_registry(
+    prompt_roots: tuple[Path, ...], flags: tuple[str, ...], descriptions: str | None
+) -> ToolRegistry:
+    return build_default_registry(prompt_roots or None, flags=flags, descriptions=descriptions)
 
 
 def registry_for_roots(
-    prompt_roots: Sequence[Path] | None, flags: tuple[str, ...] = ("model_override",)
+    prompt_roots: Sequence[Path] | None,
+    flags: tuple[str, ...] = ("model_override",),
+    descriptions: str | None = None,
 ) -> ToolRegistry:
     """Registry for one config's prompt roots, built once per distinct root set.
 
@@ -394,26 +398,36 @@ def registry_for_roots(
     Building is not free — it walks every root and reads every description file — so
     results are cached on the exact inputs that determine them.
     """
-    return _cached_registry(tuple(prompt_roots or ()), tuple(flags))
+    return _cached_registry(tuple(prompt_roots or ()), tuple(flags), descriptions)
 
 
-def build_default_registry(prompts_root: Path | Sequence[Path] | None = None, flags: tuple[str, ...] = ("model_override",)) -> ToolRegistry:
-    base_tools = (
-        # Local search primitives (fs_search and ast_search) stay eager: they
-        # have no startup work and are useful on the first repository probe.
-        fs.tools()
-        + process_net.tools()
-        + search.tools()
-        + terminal.tools()
-        + browser.tools()
-        + meta.tools(flags)
-        + wiki.tools()
-        + kernel.tools()
-        + toolbox.tools()
-    )
-    reserved = {tool.name for tool in base_tools}
-    reserved.add(discovery.DISCOVERY_TOOL_NAME)
-    all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
+def build_default_registry(
+    prompts_root: Path | Sequence[Path] | None = None,
+    flags: tuple[str, ...] = ("model_override",),
+    descriptions: str | None = None,
+) -> ToolRegistry:
+    """Assemble every builtin tool plus the agent tools under ``prompts_root``.
+
+    ``descriptions`` picks the ``tool_descriptions/<variant>`` set the model sees
+    (``stock`` or ``slim``); ``None`` leaves the environment/default choice in force.
+    """
+    with using_variant(descriptions):
+        base_tools = (
+            # Local search primitives (fs_search and ast_search) stay eager: they
+            # have no startup work and are useful on the first repository probe.
+            fs.tools()
+            + process_net.tools()
+            + search.tools()
+            + terminal.tools()
+            + browser.tools()
+            + meta.tools(flags)
+            + wiki.tools()
+            + kernel.tools()
+            + toolbox.tools()
+        )
+        reserved = {tool.name for tool in base_tools}
+        reserved.add(discovery.DISCOVERY_TOOL_NAME)
+        all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
     return _registry_from_tools(all_tools)
 
 

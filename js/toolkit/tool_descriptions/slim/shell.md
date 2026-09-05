@@ -26,3 +26,6 @@ Output is capped and marked where it was cut, so do not pipe through `head` or
 {{#if write}}
 - Write files with `write`, not redirects or heredocs.
 {{/if}}
+{{#if remove}}
+- Delete with `remove`, not `rm`.
+{{/if}}

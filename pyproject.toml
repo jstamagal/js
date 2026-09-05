@@ -58,7 +58,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js.toolkit" = ["tool_descriptions/*.md"]
+"js.toolkit" = ["tool_descriptions/*/*.md"]
 
 # dev tooling for agents hacking this code (and for the justfile quality
 # recipes). synced into the project env by `uv sync`, so ruff lands on the
