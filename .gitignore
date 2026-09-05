@@ -239,3 +239,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# tool bench
+bench/toolbench/wheel/
+bench/toolbench/results/

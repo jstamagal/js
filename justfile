@@ -260,3 +260,27 @@ clean:
     -find . -type d -name __pycache__ -prune -exec rm -rf {} +
     -find . -type d -name '*.egg-info' -exec rm -rf {} +
     @echo "cleaned."
+
+# ── tool bench (bench/toolbench) ────────────────────────────────────────────
+
+# build the sandbox image: js wheel + rg/fd + python/node/go toolchains
+toolbench-image:
+    mkdir -p bench/toolbench/wheel && find bench/toolbench/wheel -name '*.whl' -delete
+    uv build --wheel --out-dir bench/toolbench/wheel
+    docker build -t js-toolbench:latest -f bench/toolbench/Dockerfile bench/toolbench
+
+# mine and print the tasks each suite repo yields; no model, no sandbox
+toolbench-mine *args:
+    uv run python bench/toolbench/run.py --mine {{ args }}
+
+# prove the plumbing: RepoRacer's fake agents through the sandbox on one task
+toolbench-smoke *args:
+    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click {{ args }}
+
+# the A/B: default agents (slim vs stock js) on every suite repo
+toolbench *args:
+    uv run python bench/toolbench/run.py {{ args }}
+
+# rebuild the summary of a finished run: just toolbench-report bench/toolbench/results/<stamp>
+toolbench-report dir:
+    uv run python bench/toolbench/run.py --report {{ dir }}

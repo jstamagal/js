@@ -1,0 +1,15 @@
+# js config baked into the bench sandbox. Provider, model, and base URL come
+# from the environment (sandbox.sh forwards JS_*), so this only carries the
+# limits, mirroring the owner's daily jsrc so the bench measures the same js.
+set model.reasoning_effort high
+set limits.max_tool_iterations 99
+set limits.max_bash_output_bytes 40000
+set limits.max_bash_output_ceiling 150000
+set limits.max_tool_result_bytes 262144
+set limits.max_tool_result_inline_bytes 51200
+set limits.max_read_lines 2000
+set limits.max_read_bytes 262144
+set limits.max_tool_results_per_turn_bytes 200000
+set runtime.trace off
+set compact.auto on
+set compact.context_window_fallback 128000

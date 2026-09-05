@@ -1,0 +1,124 @@
+# The tool bench suite: real repositories of different kinds, mined for bug-fix
+# commits that touched source and tests, raced by agents in the sandbox image.
+# `just toolbench-mine` shows what a repo yields before you spend GPU on it.
+
+[defaults]
+work_dir = "/tmp/js-toolbench"          # clones and worktrees; disposable
+results_dir = "bench/toolbench/results"  # one stamped directory per run
+tasks = 4                                # per repo
+timeout_minutes = 20                     # per agent per task
+baseline_check = true                    # tests must pass at the parent commit
+hide_files = true                        # strip the touched-file list from the prompt
+image = "js-toolbench:latest"
+cpus = 2
+memory = "4g"
+
+[model]
+# Resolved to an IP before it reaches the container (Tailscale names do not
+# resolve in there). Override with TOOLBENCH_BASE_URL / TOOLBENCH_MODEL.
+base_url = "http://yoda:42069/v1"
+model = "qwen27B"
+api_key = "x"
+reasoning_effort = "high"
+
+[miner]
+lookback = 400
+min_changed_files = 2                    # source plus test
+max_changed_files = 8
+max_changed_lines = 400
+prefer_messages = ["fix", "bug", "regression", "prevent", "handle", "correct", "wrong", "incorrect"]
+exclude_patterns = [
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
+  "dist/**", "build/**", "coverage/**", ".github/**", "docs/**",
+  "*.md", "*.rst", "*.txt", "CHANGES*", "CHANGELOG*",
+  "*.yml", "*.yaml", "*.toml", "*.cfg", "*.ini", "*.json", "*.lock",
+  "*.png", "*.jpg", "*.gif", "*.svg", "LICENSE*",
+]
+hidden_test_patterns = [
+  "**/*.test.ts", "**/*.spec.ts", "**/*.test.js", "**/*.spec.js", "**/*.test.mjs",
+  "tests/**", "test/**", "**/*_test.py", "**/test_*.py", "**/*_test.go", "**/testdata/**",
+]
+
+# ---- agents -----------------------------------------------------------------
+# kind = "js": runs the baked agent dir in the sandbox with the given description
+# variant. kind = "builtin": RepoRacer's fake agents, for proving the plumbing.
+# kind = "command": any CLI agent, run on the host with RepoRacer's template
+# variables ({{promptFile}} etc.); bring its own sandbox and auth.
+
+[[agents]]
+name = "js-full-slim"
+kind = "js"
+agent = "full"
+descriptions = "slim"
+
+[[agents]]
+name = "js-full-stock"
+kind = "js"
+agent = "full"
+descriptions = "stock"
+
+[[agents]]
+name = "js-shell-slim"
+kind = "js"
+agent = "shell"
+descriptions = "slim"
+default = false
+
+[[agents]]
+name = "js-shell-stock"
+kind = "js"
+agent = "shell"
+descriptions = "stock"
+default = false
+
+[[agents]]
+name = "fake-success"
+kind = "builtin"
+default = false
+
+[[agents]]
+name = "fake-noop"
+kind = "builtin"
+default = false
+
+[[agents]]
+name = "claude"
+kind = "command"
+command = "claude -p < {{promptFile}}"
+default = false
+
+[[agents]]
+name = "codex"
+kind = "command"
+command = "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check - < {{promptFile}}"
+default = false
+
+[[agents]]
+name = "opencode"
+kind = "command"
+command = "opencode run --file {{promptFile}} \"Follow the attached task prompt exactly.\""
+default = false
+
+# ---- repositories -----------------------------------------------------------
+# install and test run inside the sandbox with the worktree at /workspace.
+
+[[repos]]
+name = "click"
+url = "https://github.com/pallets/click"
+category = "python / CLI library"
+install = "uv venv --python 3.12 .reporacer-venv && uv pip install --python .reporacer-venv/bin/python -e . pytest"
+test = ".reporacer-venv/bin/python -m pytest -q -x --no-header -p no:cacheprovider tests"
+
+[[repos]]
+name = "dayjs"
+url = "https://github.com/iamkun/dayjs"
+category = "javascript / date library"
+install = "npm ci --no-audit --no-fund --ignore-scripts"
+test = "npx jest --ci --silent"
+
+[[repos]]
+name = "cobra"
+url = "https://github.com/spf13/cobra"
+category = "go / CLI framework"
+install = "go mod download"
+test = "go test ./..."

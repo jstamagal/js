@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs inside the sandbox: js-bench-agent <agent-dir> <prompt-file>
+# Feeds the task prompt to js in one-shot mode, then prints the session's tool
+# traffic as one TOOLSTATS line so the bench runner can join it onto the result.
+set -u
+agent="$1"
+prompt="$2"
+mkdir -p "$HOME/.config"
+[ -d "$HOME/.config/js" ] || cp -r /opt/js-config/js "$HOME/.config/js"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-/telemetry/js-data}"
+mkdir -p "$XDG_DATA_HOME"
+
+# RepoRacer's prompt lists the files the human touched. Hiding that list makes
+# the agent locate them itself, which is the tool use this bench measures.
+if [ "${TOOLBENCH_HIDE_FILES:-1}" = "1" ]; then
+    text=$(sed '/^Files touched by the historical commit:/,/^$/d' "$prompt")
+else
+    text=$(cat "$prompt")
+fi
+
+start=$(date +%s)
+printf '%s\n' "$text" | js -q -a "$agent" -p
+code=$?
+end=$(date +%s)
+
+python="$(dirname "$(readlink -f "$(command -v js)")")/python"
+"$python" -m js.toolstats --latest --data-dir "$XDG_DATA_HOME/js" --agent "$agent" \
+    --tag TOOLSTATS --extra "wall_s=$((end - start))" --extra "exit=$code" || true
+exit $code
