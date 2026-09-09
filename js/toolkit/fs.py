@@ -1326,43 +1326,33 @@ def tools() -> tuple[Tool, ...]:
                 },
             },
             input_schema={
+                # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a
+                # bare oneOf with no top-level properties (same lesson as meta.py:630).
+                # _apply_edit already rejects mixing the scalar and batch forms.
                 "type": "object",
-                "oneOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {"type": "string", "description": "File path to edit."},
-                            "old_string": {"type": "string", "description": "Exact text to replace."},
-                            "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                            "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
-                        },
-                        "required": ["file_path", "old_string", "new_string"],
-                        "additionalProperties": False,
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {"type": "string", "description": "File path to edit."},
-                            "edits": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "old_string": {"type": "string", "description": "Exact text to replace."},
-                                        "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                                        "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
-                                    },
-                                    "required": ["old_string", "new_string"],
-                                    "additionalProperties": False,
-                                },
-                                "description": "Several replacements validated and applied in order before one final write.",
+                "properties": {
+                    "file_path": {"type": "string", "description": "File path to edit."},
+                    "old_string": {"type": "string", "description": "Exact text to replace. Pair with new_string, or use edits instead."},
+                    "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                    "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
+                    "edits": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string", "description": "Exact text to replace."},
+                                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
+                                "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
                             },
+                            "required": ["old_string", "new_string"],
+                            "additionalProperties": False,
                         },
-                        "required": ["file_path", "edits"],
-                        "additionalProperties": False,
+                        "description": "Several replacements applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
                     },
-                ],
+                },
+                "required": ["file_path"],
+                "additionalProperties": False,
             },
         ),
         Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest snapshot should be restored."}}, required=("path",)),

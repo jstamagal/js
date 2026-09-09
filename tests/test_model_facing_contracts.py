@@ -36,17 +36,19 @@ def test_fs_search_schema_exposes_filename_mode_and_readable_flag_names_only():
 
 def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
     schema = _specs("patch")["patch"]["parameters"]
-    scalar, batch = schema["oneOf"]
+    props = schema["properties"]
 
-    assert scalar["required"] == ["file_path", "old_string", "new_string"]
-    assert scalar["additionalProperties"] is False
-    assert batch["required"] == ["file_path", "edits"]
-    assert batch["properties"]["edits"]["minItems"] == 1
-    assert batch["properties"]["edits"]["items"]["required"] == [
-        "old_string",
-        "new_string",
-    ]
-    assert batch["additionalProperties"] is False
+    # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a bare
+    # oneOf with no top-level properties, so a grammar-constrained model cannot
+    # call patch at all. _apply_edit rejects mixing the two forms in code.
+    assert "oneOf" not in schema
+    assert schema["required"] == ["file_path"]
+    assert schema["additionalProperties"] is False
+
+    assert {"old_string", "new_string", "replace_all"}.issubset(props)
+    assert props["edits"]["minItems"] == 1
+    assert props["edits"]["items"]["required"] == ["old_string", "new_string"]
+    assert props["edits"]["items"]["additionalProperties"] is False
 
 
 def test_todo_item_contract_requires_content_and_defaults_status(tmp_path):
