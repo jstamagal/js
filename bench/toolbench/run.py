@@ -44,6 +44,17 @@ def resolve_base_url(url: str) -> str:
         return url
     except OSError:
         pass
+    # Only private/LAN names need the IP swap. A public https host must keep its
+    # hostname or TLS fails on the bare IP (SNI/cert mismatch), which is how
+    # https://api.deepseek.com became https://<cloudfront-ip> and every task died
+    # with "connection failed".
+    if parts.scheme == "https" and "." in host and not host.endswith(".local"):
+        try:
+            ip = socket.gethostbyname(host)
+            if not ip.startswith(("10.", "192.168.", "127.", "100.")):
+                return url
+        except OSError:
+            return url
     try:
         ip = socket.gethostbyname(host)
     except OSError as exc:
@@ -60,7 +71,9 @@ def model_env(suite: dict) -> dict[str, str]:
         "JS_BASE_URL": resolve_base_url(base_url) if base_url else "",
         "JS_API_KEY": os.environ.get("TOOLBENCH_API_KEY") or model.get("api_key", "x"),
         "JS_MODEL": os.environ.get("TOOLBENCH_MODEL") or model.get("model", ""),
-        "JS_MODEL_REASONING_EFFORT": model.get("reasoning_effort", ""),
+        # js reads JS_REASONING (settings.py model.reasoning_effort); the old
+        # JS_MODEL_REASONING_EFFORT name was never read by anything.
+        "JS_REASONING": os.environ.get("TOOLBENCH_REASONING_EFFORT") or model.get("reasoning_effort", ""),
     }
     return {k: v for k, v in env.items() if v}
 

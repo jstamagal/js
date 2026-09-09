@@ -44,7 +44,7 @@ if [ -n "$telemetry" ]; then
     mkdir -p "$telemetry"
     args+=(-v "$(realpath "$telemetry"):/telemetry")
 fi
-for var in JS_PROVIDER JS_BASE_URL JS_API_KEY JS_MODEL JS_MODEL_REASONING_EFFORT JS_TOOL_DESCRIPTIONS TOOLBENCH_HIDE_FILES; do
+for var in JS_PROVIDER JS_BASE_URL JS_API_KEY JS_MODEL JS_REASONING JS_TOOL_DESCRIPTIONS TOOLBENCH_HIDE_FILES; do
     if [ -n "${!var:-}" ]; then args+=(-e "$var"); fi
 done
 
