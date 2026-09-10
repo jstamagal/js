@@ -219,31 +219,26 @@ class TurnToolSurface:
         mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
         return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
 
-    async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+    async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
+        folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().casefold()
+        if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
+            return "ERROR: kind must be native, skill, or mcp"
         mcp_source = (
             self.mcp_host is not None
             and bool(folded_source)
             and self.mcp_host.is_server_source(source)
         )
-        if self.mcp_host is not None and not load and (
-            str(kind).strip().lower() == "mcp"
-            or mcp_source
-        ):
+        if self.mcp_host is not None and not load and (folded_kind == "mcp" or (not folded_kind and mcp_source)):
             entries = await self.mcp_host.discover(
                 query=query,
                 source="" if folded_source == "mcp" else source,
             )
-            return discovery.compact_result({"results": [
-                {"id": item.id, "kind": item.kind, "name": item.name,
-                 "description": item.description, "source": item.source,
-                 "loadable": item.loadable,
-                 "loaded": item.id in self._loaded_ids}
-                for item in entries
-            ]})
-        return self.discover(query=query, kind=kind, source=source, load=load)
+            # The host has already applied source aliases and MCP query scoping.
+            return discovery.catalog_result(entries, query, self._loaded_ids, offset)
+        return self.discover(query=query, kind=kind, source=source, load=load, offset=offset)
 
-    def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "") -> str:
+    def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
         load_id = str(load).strip()
         if load_id:
             return self._load(load_id)
@@ -251,26 +246,12 @@ class TurnToolSurface:
         folded_source = str(source).strip().lower()
         if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
             return "ERROR: kind must be native, skill, or mcp"
-        terms = str(query).casefold().split()
-        matches = []
-        for item in self.catalog():
-            haystack = f"{item.id} {item.name} {item.description} {item.source}".casefold()
-            if folded_kind and item.kind != folded_kind:
-                continue
-            if folded_source and item.source.casefold() != folded_source:
-                continue
-            if terms and not all(term in haystack for term in terms):
-                continue
-            matches.append({
-                "id": item.id,
-                "kind": item.kind,
-                "name": item.name,
-                "description": item.description,
-                "source": item.source,
-                "loadable": item.loadable,
-                "loaded": item.id in self._loaded_ids,
-            })
-        return discovery.compact_result({"results": matches})
+        entries = (
+            item for item in self.catalog()
+            if (not folded_kind or item.kind == folded_kind)
+            and (not folded_source or item.source.casefold() == folded_source)
+        )
+        return discovery.catalog_result(entries, query, self._loaded_ids, offset)
 
     def _load(self, item_id: str) -> str:
         if self.mcp_host is not None:
