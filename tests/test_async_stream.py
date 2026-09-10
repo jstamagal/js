@@ -4,6 +4,8 @@ instead of each spinning its own throwaway loop (the old asyncio.run-per-call)."
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 
 import ai
 import ai.types.usage
@@ -54,3 +56,70 @@ def test_stream_model_async_runs_concurrently_on_one_loop(monkeypatch):
     assert [r.text for r in results] == ["ok", "ok"]
     # Both STARTED before either ENDED → genuinely concurrent on the one loop.
     assert [o[0] for o in order] == ["start", "start", "end", "end"]
+
+
+@contextlib.asynccontextmanager
+async def _teardown_that_awaits(inner):
+    """httpcore2's `safe_async_iterate`: an @asynccontextmanager whose teardown
+    awaits, so it cannot finish inside the GeneratorExit that closes it."""
+    try:
+        yield inner
+    finally:
+        await asyncio.sleep(0)
+        await inner.aclose()
+
+
+async def _transport_body_iterator():
+    """Stands in for `PoolByteStream.__aiter__` — abandoned suspended at a yield
+    once the SDK has parsed the last event it cared about."""
+
+    async def chunks():
+        yield b"first"
+        yield b"second"
+
+    async with _teardown_that_awaits(chunks()) as iterator:
+        async for chunk in iterator:
+            yield chunk
+
+
+def test_sync_boundary_swallows_only_the_close_protocol_noise(caplog):
+    """A clean `-p` run used to print a RuntimeError traceback after its own
+    telemetry line, from the loop's shutdown_asyncgens pass. It is the reason
+    openai is pinned to 2.x, so it has to stay dead."""
+    abandoned: list[object] = []
+
+    async def turn():
+        body = _transport_body_iterator()
+        abandoned.append(body)  # still suspended when the loop shuts down
+        assert await anext(body) == b"first"
+        return "finish=stop"
+
+    with caplog.at_level(logging.ERROR, logger="asyncio"):
+        assert model_client._run_owning_loop(turn()) == "finish=stop"
+
+    assert [record.getMessage() for record in caplog.records] == []
+
+
+def test_sync_boundary_still_reports_a_real_teardown_failure(caplog):
+    """The filter must not become a blanket mute on asyncgen shutdown: a teardown
+    that fails for a reason of its own still reaches the default handler."""
+    abandoned: list[object] = []
+
+    async def failing_body():
+        try:
+            yield b"first"
+        finally:
+            raise ValueError("boom")
+
+    async def turn():
+        body = failing_body()
+        abandoned.append(body)
+        assert await anext(body) == b"first"
+        return "finish=stop"
+
+    with caplog.at_level(logging.ERROR, logger="asyncio"):
+        assert model_client._run_owning_loop(turn()) == "finish=stop"
+
+    reported = "\n".join(record.getMessage() for record in caplog.records)
+    assert "closing of asynchronous generator" in reported
+    assert any(record.exc_info for record in caplog.records)
