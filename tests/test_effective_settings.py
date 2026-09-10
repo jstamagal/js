@@ -53,6 +53,13 @@ def test_show_lines_effective_annotates_and_masks():
     assert "private-store-key" not in rendered
     assert "stored/model" not in rendered
 
+    overlay["provider.api_key"] = setcmd.LiveValue("masked-login-fixture", "saved-login-fixture")
+    secret = setcmd.show_lines_effective(store, overlay, "provider.api_key")
+    displayed = "\n".join(secret.lines)
+    assert "masked-login-fixture" in displayed
+    assert "saved-login-fixture" in displayed
+    assert "private-store-key" not in displayed
+
     # Values without an overlay still reflect the explicitly supplied store.
     plain = setcmd.show_lines_effective(store, overlay, "provider.id")
     assert "stored-provider" in "\n".join(plain.lines)
