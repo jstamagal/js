@@ -12,4 +12,6 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-With the local-markdown tracker, these strings go in the `Status:` line near the top of each issue file under `.scratch/`.
+Apply these strings as GitHub issue labels in `jstamagal/js`. Use one category
+(`bug` or `enhancement`) and one triage state. A `Status:` line in local
+`.scratch/` notes does not update the shared issue.

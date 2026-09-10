@@ -1,26 +1,40 @@
-# Issue tracker: Local Markdown
+# Issue tracker: GitHub
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+The shared issue tracker is https://github.com/jstamagal/js/issues. Use `gh`
+with `--repo jstamagal/js` so the destination is explicit. Local `.scratch/`
+files are working notes and reproduction artifacts; leaving a report there
+does not publish an issue or make it available on the other machines.
 
 ## Conventions
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- Check open and closed issues and related PRs before filing a duplicate.
+- Verify bug reports against the target branch. Include the tested commit,
+  minimal reproduction, expected and actual behavior, and useful evidence.
+- Put enough context in the GitHub issue for another machine to act on it;
+  a local path alone is not a reproduction. Keep credentials out of reports.
+- Use GitHub labels for category and triage state (see `triage-labels.md`).
+- Link the issue URL from any local notes so its shared status is easy to find.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Create or update the GitHub issue. For a multiline body, write it to a temporary
+file and use `gh issue create --repo jstamagal/js --title ... --body-file ...`
+with the applicable labels. Record the resulting URL. A local Markdown file
+is only a draft until this succeeds.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+Use `gh issue view <number> --repo jstamagal/js --comments`. If the reference
+is a legacy `.scratch/` path, read it and check GitHub for an existing issue.
+When asked to triage that backlog, publish confirmed, still-open bugs that
+have no existing issue; record fixed, duplicate, or unverified reports in the
+triage notes.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
+Used by `/wayfinder` for local research. The **map** is a file with one
+**child** file per research task. These files can remain local; actionable
+project issues discovered through that research belong on GitHub.
 
 - **Map**: `.scratch/<effort>/map.md` — the Notes / Decisions-so-far / Fog body.
 - **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
