@@ -504,8 +504,15 @@ The canonical resource and prompt controls are:
 Controls also load through `tool_discovery`, for example
 `{"load":"mcp:mcp_resource_read"}`. Their `server` argument is the exact
 configured server name returned by discovery. Server tools, controls, and loaded
-schemas last only for the current turn; persistent MCP connections may be reused
-by a session host, but a later turn begins with only `tool_discovery` again.
+schemas stay loaded across turns and when resuming the same session. Visibility
+is recorded separately from messages, so compaction does not reset it. A new or
+reset session starts unloaded. Restoration rechecks current agent/MCP policy and
+reconnects only previously loaded remote-tool sources.
+
+Calling an unloaded tool returns its exact discovery load instruction without
+spending the execution retry budget. A load cannot authorize a sibling call in
+the same response: load first, then call on the next model iteration. Request
+trace headers and prompt events include `tool_names` for the published schema set.
 
 ## Generated Agent Tools
 

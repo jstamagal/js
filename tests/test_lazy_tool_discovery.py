@@ -96,7 +96,8 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
         registry=surface,
         tool_context=ToolContext(cwd=tmp_path),
     )
-    assert rejected.startswith("ERROR: no tool named browser_probe")
+    assert "native:browser_probe" in rejected
+    assert "<retry>" not in rejected
 
 
 def test_discovery_name_is_reserved_from_generated_agents(tmp_path):
@@ -303,8 +304,9 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
 
     tool_results = [message["content"] for message in messages if message.get("role") == "tool"]
     assert json.loads(tool_results[0])["loaded"] == ["browser_probe"]
-    assert tool_results[1].startswith("ERROR: invalid arguments for browser_probe")
-    assert "tool was not published for this model call" in tool_results[1]
+    assert "native:browser_probe" in tool_results[1]
+    assert "same response" in tool_results[1]
+    assert "<retry>" not in tool_results[1]
     assert "browser_probe" not in [tool.name for tool in calls[0]]
     assert "browser_probe" in [tool.name for tool in calls[1]]
 
@@ -337,12 +339,13 @@ def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, 
         tool_context=ToolContext(cwd=tmp_path),
     )
 
-    assert [tool.name for tool in calls[0]] == ["read", "tool_discovery"]
+    assert [tool.name for tool in calls[0]] == ["tool_discovery"]
+    assert "read" not in [tool.name for tool in calls[0]]
     result = next(message["content"] for message in messages if message.get("role") == "tool")
     assert json.loads(result)["results"][0]["id"] == "native:browser_probe"
 
 
-def test_runtime_regenerates_schemas_preserves_alias_history_and_resets_next_turn(monkeypatch, tmp_path):
+def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn(monkeypatch, tmp_path):
     calls: list[list[dict]] = []
     results = iter(
         [
@@ -384,7 +387,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_resets_next_tur
 
     later_messages = [{"role": "user", "content": "again"}]
     runtime.run_turn(cfg, "system", later_messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
-    assert "Probe" not in [tool.name for tool in calls[3]]
+    assert "Probe" in [tool.name for tool in calls[3]]
 
 
 def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, tmp_path):

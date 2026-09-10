@@ -734,6 +734,7 @@ def _emit_request_trace(
             "base_url": provider_base_url or "provider-default",
             "message_count": len(messages),
             "tool_count": len(tools) if tools else 0,
+            "tool_names": [tool.name for tool in tools] if tools else [],
         }
         if params is not None:
             try:

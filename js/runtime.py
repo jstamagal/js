@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import events as event_mod
-from . import model_client
+from . import model_client, memory
 import ai
 from jsonschema import exceptions as jsonschema_exceptions
 from jsonschema import validators as jsonschema_validators
@@ -148,6 +148,7 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
         name=name,
         arg_chunks=list(pc.arg_chunks),
         validation_error=pc.validation_error,
+        unavailable=pc.unavailable,
     )
 
 
@@ -297,6 +298,7 @@ class _PendingToolCall:
     name: str = ""
     arg_chunks: list[str] = field(default_factory=list)
     validation_error: str | None = None
+    unavailable: bool = False
 
     def arguments(self) -> str:
         return "".join(self.arg_chunks)
@@ -320,6 +322,15 @@ def _normalize_tool_call_batch(
     retained: list[_PendingToolCall] = []
     seen: set[tuple[str, str]] = set()
     duplicate = invalid = capped = 0
+    scheduled_loads = set()
+    for call in calls:
+        if _canonical_tool_call_name(call.name, registry) == "tool_discovery":
+            try:
+                args = _repair_jsonish(call.arguments())
+            except ValueError:
+                continue
+            if isinstance(args, dict) and isinstance(args.get("load"), str):
+                scheduled_loads.add(args["load"])
 
     for call in calls:
         tool = registry.resolve(call.name)
@@ -351,8 +362,10 @@ def _normalize_tool_call_batch(
             continue
         seen.add(identity)
 
-        if validation_error is None and tool is None:
-            validation_error = "tool was not published for this model call"
+        if tool is None:
+            validation_error = registry.unavailable_error(canonical_name)
+            if scheduled_loads & {f"native:{canonical_name}", f"mcp:{canonical_name}"}:
+                validation_error += " A load in this same response cannot authorize a sibling call."
         if validation_error is None and schema is not None:
             try:
                 validator_type = jsonschema_validators.validator_for(schema)
@@ -372,6 +385,7 @@ def _normalize_tool_call_batch(
                 name=canonical_name,
                 arg_chunks=[canonical_args],
                 validation_error=validation_error,
+                unavailable=tool is None,
             )
         )
 
@@ -792,9 +806,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
             print(f"  {C.MAGENTA}▸ {trace_name}{C.RESET}", flush=True)
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
-        result = f"ERROR: no tool named {name}; use {active_registry.names()}"
-        if error_tracker is not None:
-            result = error_tracker.record(name, result)
+        result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes)
         if trace:
             _print_trace_result(trace_name, capped, started)
@@ -855,8 +867,10 @@ def _dispatch_tool_calls(
         started = time.time()
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
-        result = f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
-        recorded = error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+        result = pc.validation_error if pc.unavailable else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
+        recorded = _cap_result(result, cap_bytes)
+        if not pc.unavailable:
+            recorded = error_tracker.record(pc.name, recorded)
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
         if trace:
@@ -958,8 +972,8 @@ async def _dispatch_fan_out_async(
         print(line, flush=True)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
-        result = f"ERROR: no tool named {pc.name}; use {registry.names()}"
-        recorded = error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+        result = registry.unavailable_error(pc.name)
+        recorded = _cap_result(result, cap_bytes)
         if trace:
             _print_trace_result(trace_name, recorded, started)
         return pc, args, recorded
@@ -994,7 +1008,7 @@ async def _dispatch_async_tool(
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
-        result = error_tracker.record(pc.name, f"ERROR: no tool named {pc.name}; use {registry.names()}")
+        result = registry.unavailable_error(pc.name)
         if trace:
             print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {_pretty_args(pc.name, args)}{C.RESET}", flush=True)
             _print_trace_result(pc.name, result, started)
@@ -1174,9 +1188,23 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         from .mcp.host import MCPHost
 
         mcp_host = MCPHost(cfg.mcp, telemetry=telemetry)
-    # Lazy state belongs to this invocation only. The selected registry remains
-    # the authorization boundary; discovery can reveal/load only entries in it.
+    # A fresh registry rechecks current policy and aliases while restoring the
+    # session's visibility. Marks survive compaction and process restarts.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
+    surface_file = getattr(cfg, "session_file", None)
+    if surface_file is not None and Path(surface_file).resolve() == Path(os.devnull):
+        surface_file = None
+    surface_scope = {"version": 1, "agent_id": cfg.agent_id, "cwd": str(active_context.cwd.resolve())}
+    prior_surface = memory.load_tool_surface(surface_file) if surface_file is not None else None
+    last_surface = active_registry.snapshot()
+
+    def save_surface(state: dict) -> None:
+        nonlocal last_surface
+        if state != last_surface:
+            if surface_file is not None:
+                memory.append_tool_surface(surface_file, {**surface_scope, **state})
+            last_surface = state
+
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
     active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
@@ -1447,6 +1475,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         return True
 
     try:
+        if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
+            await active_registry.restore(prior_surface)
+        last_surface = active_registry.snapshot()
+        active_registry.on_change = save_surface
         durable_side_effects_started = False
         overflow_recovered = 0
         for _ in range(cfg.max_tool_iterations):
@@ -1479,6 +1511,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         provider_id=provider_id,
                         message_count=len(ai_convo),
                         tool_count=len(specs),
+                        tool_names=[spec["function"]["name"] for spec in specs],
                     )
                     _res = model_client.stream_model_async(
                         model_id=model,

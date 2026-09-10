@@ -279,3 +279,36 @@ def wipe(memory_file: Path) -> Path | None:
             idx += 1
     memory_file.rename(bak)
     return bak
+
+
+def append_tool_surface(memory_file: Path, state: dict) -> None:
+    """Persist session tool visibility independently of compacted messages."""
+    append_mark(memory_file, 'tool_surface:' + json.dumps(state, separators=(',', ':')))
+
+
+def load_tool_surface(memory_file: Path) -> dict | None:
+    """Read the latest surface snapshot after the last session reset."""
+    try:
+        with _open_locked(memory_file, 'r') as stream:
+            lines = stream.readlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get('kind') != 'mark' or record.get('version') != SCHEMA_VERSION:
+            continue
+        marker = record.get('marker')
+        if marker == 'session_reset':
+            return None
+        if not isinstance(marker, str) or not marker.startswith('tool_surface:'):
+            continue
+        try:
+            state = json.loads(marker[len('tool_surface:'):])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(state, dict) and state.get('version') == 1:
+            return state
+    return None
