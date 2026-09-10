@@ -31,6 +31,7 @@ from . import supervisor
 
 from . import attach, codex_auth, colors as C
 from . import compaction
+from . import endpoint_uri
 from . import events
 from . import logins
 from . import memory as M
@@ -2842,6 +2843,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
+    parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
+                        help="reach an endpoint with no saved login in one string: "
+                             "model[:api-key][[shape]][[effort]]@url. Shape is openai "
+                             "(default), responses, or anthropic; effort is the usual "
+                             "off..max ladder; the key defaults to a dummy. "
+                             "e.g. qwen27b@http://foo/v1  |  "
+                             "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
+                             "Desugars to --extra model.id/provider.id/provider.base_url/"
+                             "provider.api_key, so an explicit --extra still wins.")
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
@@ -2890,6 +2900,15 @@ def main(argv: list[str] | None = None) -> int:
                              "Never errors — unknown letters/unwritable paths degrade with a warning.")
     parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
     args = parser.parse_args(argv)
+    if args.url:
+        # Desugar before anything reads args.extras. Prepended, not appended, so
+        # an explicit --extra on the same command line still overrides a field
+        # the spec filled in.
+        try:
+            args.extras = endpoint_uri.parse(args.url).as_settings() + list(args.extras)
+        except endpoint_uri.EndpointSpecError as exc:
+            print(f"{C.ORANGE}error: -u {exc}{C.RESET}", file=sys.stderr)
+            return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
         cd_target = Path(args.cd).expanduser()
