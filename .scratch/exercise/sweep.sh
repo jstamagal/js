@@ -49,13 +49,30 @@ export JS_API_KEY="$KEY"
 # -C runs it as if launched from the project. -d turns on the per-turn trace
 # so stdout carries every "▸ toolname {args}" line — the whole point of the
 # capture. Without it a bench run logs only the model's prose.
-js --bench defaultagent \
-   -C "$WORK" \
-   -r "$EFFORT" \
-   -d \
-   --stats-json "$OUT/stats.json" \
-   --stats-csv  "$OUT/stats.csv" \
-   2>&1 | tee "$OUT/run.log"
+# Throwaway HOME with only the agent profile in it. The jail blocks the real
+# one outright; this gives js somewhere legitimate to look.
+SBHOME="$OUT/home"
+mkdir -p "$SBHOME/.config/js/agents" "$WORK/.tmp"
+cp -r ~/.config/js/agents/toolaudit "$SBHOME/.config/js/agents/"
+
+# Absolute path: ~/.local/bin is not inside the jail, only the uv tool dir is.
+"$HERE/sandbox.sh" "$WORK" "$SBHOME" \
+  "$HOME/.local/share/uv/tools/js/bin/js" --bench toolaudit \
+     -C "$WORK" \
+     -r "$EFFORT" \
+     -d \
+     --stats-json "$OUT/stats.json" \
+     --stats-csv  "$OUT/stats.csv" \
+  2>&1 | tee "$OUT/run.log"
+
+echo
+echo "=== findings the agent filed ==="
+if [ -d "$WORK/.scratch/toolaudit" ]; then
+  cp -r "$WORK/.scratch/toolaudit" "$OUT/findings"
+  ls -la "$OUT/findings"
+else
+  echo "(none filed)"
+fi
 
 echo
 echo "=== files the agent left behind ==="
