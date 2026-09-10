@@ -90,6 +90,44 @@ def test_save_refreshed_login_degrades_gracefully_on_corrupt_logins_file(monkeyp
     assert "logins.toml is broken" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("prefix", ["", "not-a-url\n", "http://localhost:1455/auth/callback?code=bad&state=wrong\n"])
+def test_browser_login_accepts_pasted_callback(monkeypatch, capsys, prefix):
+    import os
+
+    server = codex_auth._CallbackServer(("127.0.0.1", 0), codex_auth._CallbackHandler)
+    monkeypatch.setattr(codex_auth, "_bind_callback_servers", lambda _: [server])
+    monkeypatch.setattr(codex_auth.secrets, "token_urlsafe", lambda _: "expected-state")
+    monkeypatch.setattr(codex_auth, "_pkce_pair", lambda: ("verifier", "challenge"))
+    monkeypatch.setattr(codex_auth.webbrowser, "open", lambda _: False)
+    calls = []
+    monkeypatch.setattr(codex_auth, "exchange_code_for_token", lambda *args: calls.append(args) or "token")
+    monkeypatch.setattr(codex_auth, "login_from_token", lambda token: token)
+    reader, writer = os.pipe()
+    with os.fdopen(reader, "r") as stdin:
+        monkeypatch.setattr(codex_auth.sys, "stdin", stdin)
+        os.write(writer, (prefix + "http://localhost:1455/auth/callback?code=test-code&state=expected-state\n").encode())
+        os.close(writer)
+        assert codex_auth.login_browser(timeout_s=2) == "token"
+    assert calls == [("test-code", "verifier", codex_auth.CALLBACK_REDIRECT_URI)]
+    assert server.fileno() == -1
+    assert "paste the full callback URL" in capsys.readouterr().out
+
+
+def test_browser_login_eof_times_out_and_closes_listener(monkeypatch):
+    import os
+
+    server = codex_auth._CallbackServer(("127.0.0.1", 0), codex_auth._CallbackHandler)
+    monkeypatch.setattr(codex_auth, "_bind_callback_servers", lambda _: [server])
+    monkeypatch.setattr(codex_auth.webbrowser, "open", lambda _: False)
+    reader, writer = os.pipe()
+    os.close(writer)
+    with os.fdopen(reader, "r") as stdin:
+        monkeypatch.setattr(codex_auth.sys, "stdin", stdin)
+        with pytest.raises(RuntimeError, match="timed out"):
+            codex_auth.login_browser(timeout_s=0.01)
+    assert server.fileno() == -1
+
+
 def test_callback_redirect_uri_is_unchanged():
     # The redirect string must match what CLIENT_ID is registered with at
     # OpenAI — any bind-side fix has to leave this exactly alone.

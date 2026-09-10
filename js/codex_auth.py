@@ -346,15 +346,54 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
         server.timeout = 1.0
     print("Opening browser for OpenAI Codex login...")
     print(f"If it does not open, visit:\n{url}")
-    webbrowser.open(url)
+    print("Over SSH or if the callback page cannot connect, paste the full callback URL here and press Enter.")
     deadline = time.monotonic() + timeout_s
     sel = selectors.DefaultSelector()
-    for server in servers:
-        sel.register(server, selectors.EVENT_READ, server)
     winner: _CallbackServer | None = None
+    pasted = bytearray()
     try:
+        for server in servers:
+            sel.register(server, selectors.EVENT_READ, server)
+        try:
+            sel.register(sys.stdin, selectors.EVENT_READ, None)
+        except (OSError, ValueError):
+            pass  # Captured or redirected stdin may not be selectable.
+        webbrowser.open(url)
         while time.monotonic() < deadline and winner is None:
             for key, _events in sel.select(timeout=1.0):
+                if key.data is None:
+                    chunk = os.read(key.fd, 4096)
+                    if not chunk:
+                        sel.unregister(key.fileobj)
+                        continue
+                    pasted.extend(chunk)
+                    while b"\n" in pasted:
+                        line, _, rest = pasted.partition(b"\n")
+                        pasted = bytearray(rest)
+                        try:
+                            callback = urllib.parse.urlsplit(line.decode("utf-8").strip())
+                            query = urllib.parse.parse_qs(callback.query)
+                            if (
+                                callback.scheme != "http"
+                                or callback.netloc != f"localhost:{CALLBACK_PORT}"
+                                or callback.path != CALLBACK_PATH
+                                or callback.fragment
+                                or query.get("state") != [state]
+                                or len(query.get("code", [])) != 1
+                                or "error" in query
+                            ):
+                                raise ValueError("Invalid callback")
+                        except (ValueError, UnicodeError):
+                            print("Invalid callback URL or state mismatch. Paste the URL from this login attempt.")
+                            continue
+                        winner = servers[0]
+                        winner.received_state = state
+                        winner.received_code = query["code"][0]
+                        winner.received_error = None
+                        break
+                    if winner is not None:
+                        break
+                    continue
                 srv = key.data
                 srv.handle_request()
                 if srv.received_code or srv.received_error:
