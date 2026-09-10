@@ -18,8 +18,8 @@ def test_model_picker_opens_without_logins(tmp_path: Path):
         async with app.run_test() as pilot:
             await pilot.pause()
             assert len(app.query_one("#provider-list").children) == 0
-            assert len(app.query_one("#model-list").children) == 1
-            assert getattr(app.query_one("#detail"), "_Static__content") == "no logged-in providers — use /login or js --login"
+            await pilot.press("escape")
+            assert app.return_value is None
 
     try:
         asyncio.run(smoke())

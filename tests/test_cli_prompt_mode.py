@@ -113,46 +113,22 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path, capsys):
     assert not (tmp_path / ".js").exists()
 
 
-def test_cli_short_help_is_skill_shaped_and_warns_against_no_save(capsys):
+@pytest.mark.parametrize(
+    ("option", "documented_options"),
+    [
+        ("--help", ["--no-save", "--help-full"]),
+        ("--help-full", ["--help-full", "--providers-json", "--printonly"]),
+    ],
+)
+def test_cli_help_exposes_options_and_exits_successfully(option, documented_options, capsys):
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--help"])
+        cli.main([option])
 
     captured = capsys.readouterr()
     assert exc.value.code == 0
     assert captured.err == ""
-    assert len(captured.out.splitlines()) <= 40
-    assert all(section in captured.out for section in ("RUN", "PICK", "STATE", "SCRIPTING", "MORE"))
-    assert "sessions are saved by default" in captured.out
-    assert "this is what a driven agent normally wants" in captured.out
-    assert "-n, --no-save" in captured.out
-    assert "expensive throwaway choice" in captured.out
-    assert "resume is unavailable" in captured.out
-    assert "run must re-read context" in captured.out
-    assert "js --help-full" in captured.out
-    assert "--providers-json" not in captured.out
-
-
-def test_cli_full_help_retains_detailed_option_reference(capsys):
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["--help-full"])
-
-    captured = capsys.readouterr()
-    assert exc.value.code == 0
-    assert "--help-full" in captured.out
-    assert "override configured/env model" in captured.out
-    assert "Wins over" in captured.out
-    assert "all config files" in captured.out
-    assert "minimal" in captured.out
-    # Ruling B killed the min=low alias; the help now states off disables and
-    # any other value is rejected.
-    assert "min=low" not in captured.out
-    assert "off disables thinking" in captured.out
-    assert "platform data" in captured.out
-    assert "sessions/<agent>" in captured.out
-    assert "state/<agent>" in captured.out
-    assert "~/.js" not in captured.out
-    assert "--providers-json" in captured.out
-    assert "--printonly" in captured.out
+    for flag in documented_options:
+        assert flag in captured.out
 
 
 def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, capsys):

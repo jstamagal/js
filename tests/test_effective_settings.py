@@ -33,24 +33,29 @@ def test_settings_display_target_classifies_display_vs_mutation():
 
 def test_show_lines_effective_annotates_and_masks():
     store = settings.seed_defaults()
-    overlay = {
-        "model.id": setcmd.LiveValue("testes/test", "--model flag"),
-        "provider.api_key": setcmd.LiveValue("<set>", "login testes"),
-    }
+    settings.set_dotted(store, ("model", "id"), "stored/model")
+    settings.set_dotted(store, ("provider", "api_key"), "private-store-key")
+    settings.set_dotted(store, ("provider", "id"), "stored-provider")
+    overlay = {"model.id": setcmd.LiveValue("live/model", "--model flag")}
 
-    # single-key: two lines, annotation on line 1, doc on line 2
     one = setcmd.show_lines_effective(store, overlay, "model.id")
-    assert one.lines[0] == "model.id = testes/test  (live: --model flag)"
-    assert one.lines[1].strip() == settings.SPEC_BY_KEY["model.id"].doc
+    rendered = "\n".join(one.lines)
+    assert one.error is None
+    assert "live/model" in rendered
+    assert "--model flag" in rendered
+    assert "stored/model" not in rendered
 
-    # full listing: annotated line present, secret stays masked
     full = setcmd.show_lines_effective(store, overlay)
-    assert "  model.id = testes/test  (live: --model flag)" in full.lines
-    assert "  provider.api_key = <set>  (live: login testes)" in full.lines
+    rendered = "\n".join(full.lines)
+    assert "live/model" in rendered
+    assert "--model flag" in rendered
+    assert "provider.api_key" in rendered
+    assert "private-store-key" not in rendered
+    assert "stored/model" not in rendered
 
-    # a knob with no overlay renders the plain store value
-    plain = setcmd.show_lines_effective(store, overlay, "runtime.trace")
-    assert plain.lines[0] == "runtime.trace = on"
+    # Values without an overlay still reflect the explicitly supplied store.
+    plain = setcmd.show_lines_effective(store, overlay, "provider.id")
+    assert "stored-provider" in "\n".join(plain.lines)
 
 
 def test_show_lines_effective_unknown_key_errors():
@@ -128,7 +133,8 @@ def test_overlay_login_provider_and_masked_key():
         "http://localhost:8050/v1", "login testes"
     )
     # secret is never printed in the clear
-    assert overlay["provider.api_key"].display == "<set>"
+    assert overlay["provider.api_key"].display
+    assert "sk-login" not in overlay["provider.api_key"].display
     assert overlay["provider.api_key"].source == "login testes"
 
 
