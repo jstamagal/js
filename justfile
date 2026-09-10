@@ -56,9 +56,10 @@ shell:
 # editable so they track the working tree (no reinstall after a code edit). uv
 # puts the launchers in its tool bin dir — usually ~/.local/bin. Also downloads
 # js's pinned CLI binaries into js/tools and provisions optional interactive
-# helpers (fd/bat/fzf). NOTE: the tool venv is resolved from pyproject
-# constraints, not uv.lock, so its dep versions can drift from `just run`'s
-# env until the next `just install`.
+# helpers (fd/bat/fzf). `uv tool install` resolves from pyproject on its own,
+# so the recipe feeds it uv.lock as a constraints file: the tool venv gets the
+# same versions as `just run`'s env and reuses the wheels `just sync` already
+# cached instead of downloading whatever is newest on PyPI.
 #   just install   then   js -p "hi"   from anywhere
 # put js + wiki on PATH as editable launchers, with pinned tool binaries.
 install:
@@ -72,7 +73,16 @@ install:
         echo "!!   $(dirname "$(git rev-parse --git-common-dir)")" >&2
         exit 1
     fi
-    uv tool install --force --editable "{{ browser-target }}"
+    # pin the tool venv to uv.lock. without this, uv tool install resolves from
+    # pyproject constraints alone and pulls e.g. a fresh 47 MB playwright wheel
+    # on every upstream release — a download the lock-synced cache never needed.
+    constraints="$(mktemp)"
+    trap 'rm -f "$constraints"' EXIT
+    uv export --frozen --no-hashes --no-emit-project --no-dev {{ browser-extra }} \
+        --format requirements.txt --quiet --output-file "$constraints"
+    # large wheels over a flaky link: retry the transfer before giving up.
+    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" \
+        uv tool install --force --editable --constraints "$constraints" "{{ browser-target }}"
     mkdir -p "$HOME/.local/bin"
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
     just install-tool-binaries
