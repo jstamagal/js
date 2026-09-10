@@ -257,14 +257,19 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
 
 def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
     registry = select(["todo_read"])
+    (tmp_path / "note.txt").write_text("unselected tool must not read this", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
 
     _, result = runtime._dispatch(
         "read",
-        '{"path":"x"}',
+        '{"file_path":"note.txt"}',
         runtime.Telemetry(None),
         cap_bytes=4096,
         registry=registry,
-        tool_context=ToolContext(cwd=tmp_path),
+        tool_context=context,
     )
 
-    assert result.startswith("ERROR: no tool named read; use todo_read")
+    assert result.startswith("ERROR:")
+    assert "read" in result
+    assert "unselected tool must not read this" not in result
+    assert context.read_paths == set()
