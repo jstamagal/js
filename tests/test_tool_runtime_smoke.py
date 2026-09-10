@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from tool_loading import after_loading
+
 from js import model_client, runtime, setcmd, settings, tools as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
@@ -661,14 +663,24 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert kind == "tool_ok"
     assert payload["tool"] == "write"
 
+    tracker = runtime.ToolErrorTracker(limit=2)
     _, error = runtime._dispatch(
         "missing_tool",
         "{}",
         TelemetryStub(),
         cap_bytes=4096,
-        error_tracker=runtime.ToolErrorTracker(limit=2),
+        error_tracker=tracker,
     )
-    assert error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
+    assert "unknown tool" in error and "missing_tool" in error
+    assert "tool_discovery" in error
+    assert "<retry>" not in error
+    assert not tracker.limit_reached()
+
+    _, handler_error = runtime._dispatch(
+        "read", '{"file_path":"does-not-exist.txt"}', TelemetryStub(),
+        cap_bytes=4096, error_tracker=tracker, tool_context=context,
+    )
+    assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
 
 
 _TINY_PNG = base64.b64decode(
@@ -1050,7 +1062,7 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
             ),
         )
 
-    monkeypatch.setattr(model_client, "stream_model_async", stream_model_stub)
+    monkeypatch.setattr(model_client, "stream_model_async", after_loading(stream_model_stub, "read"))
 
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
@@ -1083,9 +1095,9 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
     messages: list[dict] = [{"role": "user", "content": "what's in pixel.png?"}]
     runtime.run_turn(cfg, "system", messages, _Tel())
 
-    # Image bytes were sent exactly the turn it was read (2nd call), never the 1st.
+    # After discovery, image bytes appear only in the follow-up to the read.
     assert len(call_messages) == 2
-    # First call: no files (only the user message, no tool result yet)
+    # Before the read: discovery history contains no image files.
     assert not any(msg.files for msg in call_messages[0])
     # Second call: has a direct user FilePart after the dehydrated tool-result stub.
     assert any(

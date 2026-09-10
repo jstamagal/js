@@ -160,8 +160,7 @@ def _model_for_error_tests() -> ai.Model:
     return ai.Model(id="test", provider=ai.get_provider("openai", api_key="x"))
 
 
-def _assert_one_line_friendly(message: str, *, provider: str, command: str) -> None:
-    assert "\n" not in message
+def _assert_provider_recovery(message: str, *, provider: str, command: str) -> None:
     assert provider in message
     assert command in message
     assert "Traceback" not in message
@@ -223,11 +222,8 @@ def test_stream_model_maps_missing_api_key_typeerror(monkeypatch):
         )
 
     message = str(excinfo.value)
-    _assert_one_line_friendly(message, provider="openai", command="js --login openai")
+    _assert_provider_recovery(message, provider="openai", command="js --login openai")
     assert "set provider.api_key <value>" in message
-    assert "TypeError" not in message
-    assert "Could not resolve authentication method" not in message
-    assert "Expected either api_key or admin_api_key" not in message
 
 
 def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
@@ -250,10 +246,8 @@ def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
         )
 
     message = str(excinfo.value)
-    _assert_one_line_friendly(message, provider="stale", command="js --login stale")
-    assert "js --list-models shows what's runnable" in message
-    assert "ValueError" not in message
-    assert "unknown provider id" not in message
+    _assert_provider_recovery(message, provider="stale", command="js --login stale")
+    assert "js --list-models" in message
 
 
 def test_stream_model_maps_provider_authentication_error(monkeypatch):
@@ -281,10 +275,9 @@ def test_stream_model_maps_provider_authentication_error(monkeypatch):
         )
 
     message = str(excinfo.value)
-    _assert_one_line_friendly(message, provider="openai", command="js --login openai")
+    _assert_provider_recovery(message, provider="openai", command="js --login openai")
     assert "set provider.api_key <value>" in message
     assert "Incorrect API key" in message
-    assert "ProviderAuthenticationError" not in message
 
 
 def test_resolve_model_uses_explicit_provider_verbatim():

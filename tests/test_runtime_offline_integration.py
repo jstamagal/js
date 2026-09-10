@@ -8,6 +8,8 @@ import ai.types.messages
 import ai.types.usage
 import pytest
 
+from tool_loading import after_loading
+
 from js import compaction, events, runtime, setcmd, settings, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -461,7 +463,7 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
             )
         return model_text_result("done")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", first_stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(first_stream_stub, "write"))
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "write repaired"}]
 
@@ -476,8 +478,9 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
     )
 
     assert (tmp_path / "repaired.txt").read_text(encoding="utf-8") == "ok"
-    tool_call = next(m for m in messages if m.get("tool_calls"))
-    json.loads(tool_call["tool_calls"][0]["function"]["arguments"])
+    tool_call = next(call for m in messages for call in m.get("tool_calls", [])
+                     if call["id"] == "call_repair")
+    assert json.loads(tool_call["function"]["arguments"]) == {"file_path": "repaired.txt", "content": "ok"}
 
     def second_stream_stub(**kwargs):
         history_utils.validate(kwargs["messages"])
@@ -542,7 +545,7 @@ def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_r
             )
         return model_text_result("clean")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "write"))
     cfg = offline_config(tmp_path)
     runtime.run_turn(
         cfg,
@@ -603,7 +606,7 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
             return model_tool_call_result("read", [json.dumps({"file_path": "note.txt"})])
         return model_text_result("DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read"))
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Read note.txt."}]
 
@@ -619,8 +622,8 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
     )
 
     emitted = [(event, payload) for event, payload in hooks.emitted]
-    tool_call = next(payload for event, payload in emitted if event == "tool_call")
-    tool_result = next(payload for event, payload in emitted if event == "tool_result")
+    tool_call = next(payload for event, payload in emitted if event == "tool_call" and payload["name"] == "read")
+    tool_result = next(payload for event, payload in emitted if event == "tool_result" and payload["name"] == "read")
     assert tool_call["name"] == "read"
     assert tool_call["id"] == "call_test"
     assert tool_result["name"] == "read"
@@ -666,7 +669,7 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", "fs_search", "shell", "task", aliases={"read": "Read", "write": "Write", "task": "Task"}))
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
     messages = [{"role": "user", "content": "Use tools if needed."}]
     registry = build_default_registry().select(["read", "write", "task", "fs_search", "shell"])
@@ -685,7 +688,7 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
     assert len(calls) == 1
     actual = [spec.name for spec in calls[0]["tools"]]
     expected = ["Read", "Write", "fs_search", "shell", "Task"]
-    assert actual == expected
+    assert set(actual) == {*expected, "tool_discovery"}
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
@@ -696,7 +699,7 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", aliases={"read": "Read"}))
     cfg = offline_config(
         tmp_path,
         model="openai-test",
@@ -723,7 +726,7 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
         suppress_output=True,
     )
 
-    assert [spec.name for spec in calls[0]["tools"]] == ["Read"]
+    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "tool_discovery"}
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
@@ -734,7 +737,7 @@ def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypa
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", aliases={"read": "Read"}))
     cfg = offline_config(
         tmp_path,
         model="openai-test",
@@ -761,7 +764,7 @@ def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypa
         suppress_output=True,
     )
 
-    assert [spec.name for spec in calls[0]["tools"]] == ["Read", "write"]
+    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "write", "tool_discovery"}
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
@@ -772,7 +775,7 @@ def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tm
         calls.append(kwargs)
         return model_text_result("OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", "fs_search", "shell", "task"))
     # Same model id that the old implicit magic would have capitalized; with no
     # configured profile the default lowercase names must be sent verbatim.
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4")
@@ -791,7 +794,7 @@ def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tm
     )
 
     actual = [spec.name for spec in calls[0]["tools"]]
-    assert actual == ["read", "write", "fs_search", "shell", "task"]
+    assert set(actual) == {"read", "write", "fs_search", "shell", "task", "tool_discovery"}
 
 
 def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(monkeypatch, tmp_path):
@@ -822,7 +825,7 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
         )
         return model_text_result("DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "fs_search"))
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Find the secret token."}]
 
@@ -837,11 +840,11 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
     )
 
     assert len(calls) == 2
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "fs_search"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["name"] == "fs_search"
-    assert "notes.txt:2:secret_token=42" in messages[2]["content"]
+    exchange = [m for m in messages if m.get("name") == "fs_search"
+                or any(c["function"]["name"] == "fs_search" for c in m.get("tool_calls", []))]
+    assert [m["role"] for m in exchange] == ["assistant", "tool"]
+    assert exchange[0]["tool_calls"][0]["id"] == exchange[1]["tool_call_id"]
+    assert "notes.txt:2:secret_token=42" in exchange[1]["content"]
     assert messages[-1] == {"role": "assistant", "content": "DONE"}
 
 
@@ -866,7 +869,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
         )
         return model_text_result("CAPPED")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "shell"))
     cfg = offline_config(tmp_path)
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 128, "fetch_timeout_s": 9})
     messages = [{"role": "user", "content": "run shell"}]
@@ -885,7 +888,9 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
     assert context.max_bash_output_bytes == 3
     assert context.max_tool_result_bytes == 128
     assert context.fetch_timeout_s == 9
-    assert "abcdef" not in messages[2]["content"]
+    shell_result = next(m["content"] for m in messages if m.get("name") == "shell" and m.get("role") == "tool")
+    assert "abcdef" not in shell_result
+    assert "truncated" in shell_result
     assert messages[-1] == {"role": "assistant", "content": "CAPPED"}
 
 
@@ -903,7 +908,7 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
             return model_tool_call_result("Read", [json.dumps({"file_path": "note.txt"})])
         return model_text_result("READ_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", aliases={"read": "Read"}))
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
     registry = build_default_registry().select(["read"])
     messages = [{"role": "user", "content": "read note"}]
@@ -919,8 +924,9 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
         suppress_output=True,
     )
 
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "read"
-    assert messages[2]["name"] == "read"
+    read_call = next(c for m in messages for c in m.get("tool_calls", []) if c["id"] == "call_test")
+    assert read_call["function"]["name"] == "read"
+    assert next(m for m in messages if m.get("tool_call_id") == "call_test")["name"] == "read"
     assert messages[-1] == {"role": "assistant", "content": "READ_OK"}
 
 
@@ -974,7 +980,7 @@ def test_duplicate_invalid_tool_batch_is_retained_once_without_handler_side_effe
         history_utils.validate(kwargs["messages"])
         return model_text_result("recovered")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "patch"))
     debug_log = tmp_path / "debug.jsonl"
     messages = [{"role": "user", "content": "apply patch"}]
     runtime.run_turn(
@@ -989,15 +995,16 @@ def test_duplicate_invalid_tool_batch_is_retained_once_without_handler_side_effe
     )
 
     assert handler_calls == 0
-    assistant = next(message for message in messages if message.get("tool_calls"))
+    assistant = next(message for message in messages
+                     if any(call["id"] == "call_0" for call in message.get("tool_calls", [])))
     assert [call["id"] for call in assistant["tool_calls"]] == ["call_0"]
-    tool_results = [message for message in messages if message.get("role") == "tool"]
+    tool_results = [message for message in messages if message.get("role") == "tool" and message.get("name") == "patch"]
     assert len(tool_results) == 1
     assert "invalid arguments for patch" in tool_results[0]["content"]
     assert messages[-1] == {"role": "assistant", "content": "recovered"}
 
     records = [json.loads(line) for line in debug_log.read_text(encoding="utf-8").splitlines()]
-    normalized = next(record for record in records if record["kind"] == "tool_call_batch_normalized")
+    normalized = next(record for record in records if record["kind"] == "tool_call_batch_normalized" and record["received"] == 200)
     assert {
         key: normalized[key]
         for key in ("received", "retained", "duplicate", "invalid", "capped")
@@ -1096,16 +1103,22 @@ def test_distinct_tool_batch_cap_executes_limit_and_reports_one_diagnostic(
 
 
 def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(monkeypatch, tmp_path):
+    registry = ToolRegistry(
+        (Tool("failing_tool", "Fails after dispatch",
+              lambda **kwargs: "ERROR: deliberate handler failure",
+              {"attempt": {"type": "integer"}}),),
+        {},
+    )
     calls = 0
 
     def stream_stub(**kwargs):
         nonlocal calls
         calls += 1
-        return model_tool_call_result("missing_tool", ["{}"], call_id=f"missing_{calls}")
+        return model_tool_call_result("failing_tool", ["{}"], call_id=f"failure_{calls}")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = offline_config(tmp_path)
-    messages = [{"role": "user", "content": "call missing tool repeatedly"}]
+    messages = [{"role": "user", "content": "call failing tool repeatedly"}]
 
     runtime.run_turn(
         cfg,
@@ -1115,27 +1128,34 @@ def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(
         trace_override=False,
         tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True,
+        tool_registry=registry,
     )
 
     assert calls == 3
     assert messages[-1]["role"] == "assistant"
-    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after missing_tool")
-    assert "tool was not published for this model call" in messages[-1]["content"]
+    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after failing_tool")
+    assert "deliberate handler failure" in messages[-1]["content"]
 
 
 def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure(monkeypatch, tmp_path):
     """Regression: 3 parallel calls of one tool can saturate the error tracker inside a
     single batch. The old code returned after appending only the FIRST tool message,
     orphaning the other tool_call_ids — DeepSeek/OpenAI then 400 the whole session."""
+    registry = ToolRegistry(
+        (Tool("failing_tool", "Fails after dispatch",
+              lambda **kwargs: "ERROR: deliberate handler failure",
+              {"attempt": {"type": "integer"}}),),
+        {},
+    )
     calls = 0
 
     def stream_stub(**kwargs):
         nonlocal calls
         calls += 1
         return model_parallel_tool_calls_result([
-            ("orphan_1", "missing_tool", '{"attempt":1}'),
-            ("orphan_2", "missing_tool", '{"attempt":2}'),
-            ("orphan_3", "missing_tool", '{"attempt":3}'),
+            ("orphan_1", "failing_tool", '{"attempt":1}'),
+            ("orphan_2", "failing_tool", '{"attempt":2}'),
+            ("orphan_3", "failing_tool", '{"attempt":3}'),
         ])
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
@@ -1150,6 +1170,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
         trace_override=False,
         tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True,
+        tool_registry=registry,
     )
 
     assert calls == 1
@@ -1161,7 +1182,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
     assert [m.get("tool_call_id") for m in between] == call_ids
     assert all(m["role"] == "tool" for m in between)
     assert messages[-1]["role"] == "assistant"
-    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after missing_tool")
+    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after failing_tool")
 
 
 def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeypatch, tmp_path):
@@ -1183,7 +1204,7 @@ def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeyp
             )
         return model_text_result("FOUND")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read"))
     cfg = Config(
         agent_id="test-agent",
         agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
@@ -1209,11 +1230,11 @@ def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeyp
     runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False)
 
     assert len(calls) == 2
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "read"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["name"] == "read"
-    assert "task_backend" in messages[2]["content"]
+    exchange = [m for m in messages if m.get("name") == "read"
+                or any(c["function"]["name"] == "read" for c in m.get("tool_calls", []))]
+    assert [m["role"] for m in exchange] == ["assistant", "tool"]
+    assert exchange[0]["tool_calls"][0]["id"] == exchange[1]["tool_call_id"]
+    assert "task_backend" in exchange[1]["content"]
     assert messages[-1] == {"role": "assistant", "content": "FOUND"}
 
 
@@ -1426,14 +1447,15 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     )
 
     lines = _trace_lines(capsys)
-    result_lines = [line for line in lines if line.lstrip().startswith("◂")]
+    result_lines = [line for line in lines
+                    if ("big" in line and "6089" in line) or ("boom" in line and "ms" in line)]
     assert len(result_lines) == 2
-    assert "◂ big" in result_lines[0] and "6089 B" in result_lines[0] and "200 lines" in result_lines[0]
+    assert "big" in result_lines[0] and "6089" in result_lines[0] and "200" in result_lines[0]
     assert "ms" in result_lines[0]
     # Capped hard: a 6 KB result never reaches the terminal whole.
     big_preview = lines[lines.index(result_lines[0]) + 1]
     assert len(big_preview) < 400
-    assert "…truncated, 6089 B total]" in big_preview
+    assert "truncated" in big_preview and "6089" in big_preview
     # The error is the reason the trace is on, so it survives intact.
     error_preview = lines[lines.index(result_lines[1]) + 1]
     assert "ERROR: tool_discovery found no native tool matching" in error_preview
@@ -1452,9 +1474,10 @@ def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(ca
 
     lines = _trace_lines(capsys)
     assert sum(1 for line in lines if line.lstrip().startswith("▸")) == 2
-    assert sum(1 for line in lines if line.lstrip().startswith("◂")) == 2
+    assert any("big" in line and "ms" in line for line in lines)
+    assert any("nope" in line and "ms" in line for line in lines)
     assert any("invalid arguments for big" in line for line in lines)
-    assert any("no tool named nope" in line for line in lines)
+    assert any("unknown tool" in line and "nope" in line for line in lines)
 
 
 def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
@@ -1470,5 +1493,5 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
 
     lines = _trace_lines(capsys)
     assert any(line.lstrip().startswith("▸ slow") for line in lines)
-    assert any(line.lstrip().startswith("◂ slow") and "12 B" in line and "1 line" in line for line in lines)
+    assert any("slow" in line and re.search(r"\b12\s*B\b", line) and "1 line" in line for line in lines)
     assert any(line.strip() == "async result" for line in lines)

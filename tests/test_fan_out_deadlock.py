@@ -28,6 +28,8 @@ from js.toolkit.registry import build_default_registry
 from js.model_client import ModelStreamResult, ModelToolCall
 import ai
 
+from tool_loading import after_loading
+
 
 def _stop(text: str) -> ModelStreamResult:
     return ModelStreamResult(
@@ -116,7 +118,9 @@ def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
 
     def stub(**kwargs):
         msgs = kwargs["messages"]
-        text = _pending_user_text(msgs)
+        last = msgs[-1]
+        loading = last.role == "tool" and all(getattr(part, "tool_name", None) == "tool_discovery" for part in last.parts)
+        text = _first_user_text(msgs) if loading else _pending_user_text(msgs)
         if text == "root":
             tasks = [f"child-{i}" for i in range(n_children)]
             return _tool("task", json.dumps({"tasks": tasks, "agent_id": "worker"}), "p")
@@ -129,7 +133,7 @@ def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
         # completion is observable up the tree.
         return _stop(f"DONE:{_first_user_text(msgs)}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stub, "task", "todo_write"))
 
     registry = build_default_registry(prompts_root=prompt_root)
     parent_cfg = _make_cfg(tmp_path, "parent", prompt_root / "defaultagent")
