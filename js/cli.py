@@ -2350,7 +2350,7 @@ def _list_models_payload(provider_id: str | None, cfg: Config | None = None) -> 
 def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
     """Models for one provider, cache first (offline-friendly, fast), live on miss."""
     cached = logins.load_model_cache().get(provider_id)
-    if cached:
+    if cached is not None:
         return cached
     if cfg is not None and provider_id == cfg.provider_id:
         return _models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)

@@ -93,6 +93,27 @@ the platform config `agents/`, skills live in `skills/`, and per-agent runtime
 state lives in the platform data `state/`. Session memory is append-only JSONL
 with control marks; see the compaction section for compaction commands.
 
+## Provider Management
+
+`js --login` opens saved providers with their name, source, base URL, masked key,
+headers, and cached model count. Select a provider to update its URL/key/headers,
+manage models, or remove it. Updates save locally without fetching models or
+running a generation test. Enter keeps an existing field; `-` clears it. Header
+input replaces the header map (`Name=value,Other=value`) and is hidden like keys.
+
+`<add custom provider>` is the first row; `<add registry provider>` opens the
+registry login flow. In provider and model menus, `/` starts a case-insensitive
+filter; Enter finishes typing, then arrows and Enter select a result. Escape
+while typing clears the filter. In model checklists, Space toggles a model and
+`a` / `n` select / deselect the matching rows while preserving hidden selections.
+Enter saves the selection to the cache used by `--list-models` and `/model`.
+The Models menu also adds ids to an empty cache or re-fetches the live list;
+failed or cancelled fetches preserve the existing cache. Removed model ids can
+be added again or recovered by re-fetching.
+
+One-shot forms remain available: `js --login <id>`, `js --logout <id>`, and
+`js --models-edit <id>` (offline cached-model curation).
+
 ## Compaction
 
 `/compact [focus]`, `/compact up to here`, and `js --compact <session>` append
