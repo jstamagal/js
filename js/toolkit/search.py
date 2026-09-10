@@ -26,6 +26,52 @@ from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
 
+def _http_body(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    secrets: tuple[str, ...] = (),
+    retry_without_auth_on: tuple[int, ...] = (),
+    timeout: float,
+) -> bytes | str:
+    """Fetch a response body, optionally retrying once without Authorization."""
+    data = None
+    all_headers = {"User-Agent": "js-agent/0.1", **(headers or {})}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        all_headers.setdefault("Content-Type", "application/json")
+
+    retried_without_auth = False
+    while True:
+        req = urllib.request.Request(url, data=data, headers=all_headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            has_authorization = any(name.lower() == "authorization" for name in all_headers)
+            if not retried_without_auth and exc.code in retry_without_auth_on and has_authorization:
+                all_headers = {
+                    name: value
+                    for name, value in all_headers.items()
+                    if name.lower() != "authorization"
+                }
+                retried_without_auth = True
+                continue
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:200]
+            except Exception:  # noqa: BLE001
+                pass
+            for secret in secrets:
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
+            return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail}"
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR: {type(exc).__name__}: {exc}"
+
+
 def _http_json(
     url: str,
     *,
@@ -33,30 +79,21 @@ def _http_json(
     headers: dict[str, str] | None = None,
     payload: dict[str, Any] | None = None,
     secrets: tuple[str, ...] = (),
+    retry_without_auth_on: tuple[int, ...] = (),
     timeout: float,
 ) -> dict[str, Any] | str:
     """One JSON-object round-trip. Returns a mapping, or an ERROR string."""
-    data = None
-    all_headers = {"User-Agent": "js-agent/0.1", **(headers or {})}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        all_headers.setdefault("Content-Type", "application/json")
-    req = urllib.request.Request(url, data=data, headers=all_headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-        except Exception:  # noqa: BLE001
-            pass
-        for secret in secrets:
-            if secret:
-                detail = detail.replace(secret, "[REDACTED]")
-        return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail}"
-    except Exception as exc:  # noqa: BLE001
-        return f"ERROR: {type(exc).__name__}: {exc}"
+    body = _http_body(
+        url,
+        method=method,
+        headers=headers,
+        payload=payload,
+        secrets=secrets,
+        retry_without_auth_on=retry_without_auth_on,
+        timeout=timeout,
+    )
+    if isinstance(body, str):
+        return body
     try:
         parsed = json.loads(body)
     except ValueError:
@@ -253,6 +290,7 @@ def docs_search(
         "https://context7.com/api/v1/search?query=" + urllib.parse.quote(library),
         headers=headers,
         secrets=(key,) if key is not None else (),
+        retry_without_auth_on=(401, 403) if key is not None else (),
         timeout=context.fetch_timeout_s,
     )
     if isinstance(found, str):
@@ -276,14 +314,16 @@ def docs_search(
     if topic:
         params["topic"] = topic
     doc_url = f"https://context7.com/api/v1{library_id}?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(doc_url, headers={"User-Agent": "js-agent/0.1", **headers})
-    try:
-        with urllib.request.urlopen(req, timeout=context.fetch_timeout_s) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        return f"ERROR: HTTP {exc.code} fetching context7 docs for {library_id}"
-    except Exception as exc:  # noqa: BLE001
-        return f"ERROR: {type(exc).__name__}: {exc}"
+    body = _http_body(
+        doc_url,
+        headers=headers,
+        secrets=(key,) if key is not None else (),
+        retry_without_auth_on=(401, 403) if key is not None else (),
+        timeout=context.fetch_timeout_s,
+    )
+    if isinstance(body, str):
+        return body
+    text = body.decode("utf-8", errors="replace")
     if not text.strip():
         suffix = f", topic: {topic}" if topic else ""
         return f"ERROR: context7 returned empty docs for {library_id}{suffix}"

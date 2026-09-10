@@ -225,6 +225,49 @@ def test_docs_empty_body_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert actual == "ERROR: context7 returned empty docs for /tiangolo/fastapi, topic: routing"
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_docs_search_retries_rejected_key_without_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: int,
+) -> None:
+    monkeypatch.setenv("CONTEXT7_API_KEY", "test-key")
+    calls: list[Any] = []
+    responses = iter(
+        [
+            (status, b'{"error":"invalid_api_key"}'),
+            (200, b'{"results":[{"id":"/tiangolo/fastapi"}]}'),
+            (status, b'{"error":"invalid_api_key"}'),
+            (200, b"routing docs"),
+        ]
+    )
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        calls.append(request)
+        response_status, body = next(responses)
+        if response_status in {401, 403}:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                response_status,
+                "Unauthorized",
+                {},
+                io.BytesIO(body),
+            )
+        return _Response(body)
+
+    monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
+
+    actual = search.docs_search("fastapi", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "[context7 /tiangolo/fastapi]\nrouting docs"
+    assert [request.headers.get("Authorization") for request in calls] == [
+        "Bearer test-key",
+        None,
+        "Bearer test-key",
+        None,
+    ]
+
+
 def test_http_error_redacts_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     key = "sk-live-ABC123"
     monkeypatch.setenv("SERPER_API_KEY", key)
