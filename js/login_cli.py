@@ -7,6 +7,7 @@ import curses
 import os
 import sys
 from getpass import getpass
+from dataclasses import replace
 
 import ai
 
@@ -57,45 +58,115 @@ def _use_terminal_colors() -> None:
         curses.use_default_colors()
 
 
-def _curses_menu(stdscr: curses.window, items: list[str], title: str) -> int | None:
+def _curses_picker(
+    stdscr: curses.window,
+    rows: list[tuple[str, str]],
+    title: str,
+    *,
+    preselected: set[int] | None = None,
+    details: list[list[str]] | None = None,
+) -> list[int] | None:
+    """Searchable chooser/checklist; selections always use original row indices.
+
+    / edits the filter, enter returns to navigation, escape clears an in-progress
+    search. Checklist all/none act on matching rows, preserving hidden choices.
+    """
     _use_terminal_colors()
     curses.curs_set(0)
     stdscr.keypad(True)
+    multiple = preselected is not None
+    selected = set(preselected or ())
     idx = 0
+    query = ""
+    searching = False
     while True:
+        matches = [i for i, row in enumerate(rows) if query.casefold() in " ".join(row).casefold()]
+        idx = max(0, min(idx, len(matches) - 1))
         stdscr.clear()
         h, w = stdscr.getmaxyx()
-        stdscr.addstr(0, 0, title[: w - 1])
-        stdscr.addstr(1, 0, "-" * min(w - 1, max(1, len(title))))
-        start = max(0, idx - max(0, h - 6))
-        visible = items[start : start + max(1, h - 4)]
-        for off, item in enumerate(visible):
-            i = start + off
-            line = f"> {item}" if i == idx else f"  {item}"
-            stdscr.addstr(off + 3, 0, line[: w - 1])
-        stdscr.addstr(h - 1, 0, "↑↓/j/k move  pgup/pgdn page  enter select  q/esc cancel"[: w - 1])
+
+        def draw(y: int, text: str) -> None:
+            if 0 <= y < h:
+                with contextlib.suppress(curses.error):
+                    stdscr.addstr(y, 0, text[:max(0, w - 1)])
+
+        draw(0, title)
+        draw(1, f"/{query}" if query or searching else "-" * min(w - 1, len(title)))
+        detail = details[matches[idx]] if details and matches else []
+        detail = detail[:max(0, h - 7)]
+        page = max(1, h - 4 - len(detail) - int(multiple))
+        start = max(0, idx - page + 1)
+        for off, original in enumerate(matches[start:start + page]):
+            label, annotation = rows[original]
+            cursor = ">" if start + off == idx else " "
+            box = ("[x] " if original in selected else "[ ] ") if multiple else ""
+            tag = f"  ({annotation})" if annotation else ""
+            draw(off + 2, f"{cursor} {box}{label}{tag}")
+        if not matches:
+            draw(2, "No matches")
+        for off, line in enumerate(detail):
+            draw(h - 2 - len(detail) + off, line)
+        if multiple:
+            draw(h - 2, f"{len(selected)}/{len(rows)} selected")
+        help_text = "↑↓/jk move  pgup/pgdn page  / search  enter select  q/esc back"
+        if multiple:
+            help_text = "↑↓/jk move  / search  space toggle  a all  n none  enter save  q back"
+        draw(h - 1, "Search: type to filter, enter to navigate, esc clear" if searching else help_text)
         stdscr.refresh()
         try:
             key = stdscr.getch()
         except KeyboardInterrupt:
             return None
-        page = max(1, h - 4)
-        if key in (curses.KEY_UP, ord("k")):
+        if searching:
+            if key in (10, 13, curses.KEY_ENTER):
+                searching = False
+            elif key == 27:
+                query = ""
+                searching = False
+            elif key == 3:
+                return None
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                query = query[:-1]
+            elif 32 <= key < 256 and chr(key).isprintable():
+                query += chr(key)
+            idx = 0
+            continue
+        if key == ord("/"):
+            searching = True
+            query = ""
+        elif key in (curses.KEY_UP, ord("k")):
             idx = max(0, idx - 1)
         elif key in (curses.KEY_DOWN, ord("j")):
-            idx = min(len(items) - 1, idx + 1)
+            idx = min(len(matches) - 1, idx + 1)
         elif key == curses.KEY_PPAGE:
             idx = max(0, idx - page)
         elif key == curses.KEY_NPAGE:
-            idx = min(len(items) - 1, idx + page)
+            idx = min(len(matches) - 1, idx + page)
         elif key == curses.KEY_HOME:
             idx = 0
         elif key == curses.KEY_END:
-            idx = len(items) - 1
-        elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-            return idx
+            idx = len(matches) - 1
+        elif multiple and key == ord(" ") and matches:
+            original = matches[idx]
+            selected.discard(original) if original in selected else selected.add(original)
+        elif multiple and key in (ord("a"), ord("A")):
+            selected.update(matches)
+        elif multiple and key in (ord("n"), ord("N")):
+            selected.difference_update(matches)
+        elif key in (10, 13, curses.KEY_ENTER):
+            if multiple:
+                return sorted(selected)
+            if matches:
+                return [matches[idx]]
         elif key in (ord("q"), 27, 3):
             return None
+
+
+def _curses_menu(
+    stdscr: curses.window, items: list[str], title: str, *, details: list[list[str]] | None = None,
+) -> int | None:
+    chosen = _curses_picker(stdscr, [(item, "") for item in items], title, details=details)
+    return chosen[0] if chosen else None
 
 
 _NPM_DIALECT = {
@@ -142,64 +213,10 @@ def _curses_multiselect(
     *,
     preselected: set[int],
 ) -> list[int] | None:
-    """Spacebar checklist. Returns selected indices, or None on cancel.
-
-    ``rows`` are ``(label, annotation)``; annotation is shown dimmed in parens.
-    """
-    _use_terminal_colors()
-    curses.curs_set(0)
-    stdscr.keypad(True)
-    n = len(rows)
-    if n == 0:
+    """Spacebar checklist with / filtering; None means cancel."""
+    if not rows:
         return []
-    idx = 0
-    selected = set(preselected)
-    while True:
-        stdscr.clear()
-        h, w = stdscr.getmaxyx()
-        stdscr.addstr(0, 0, title[: w - 1])
-        stdscr.addstr(1, 0, "-" * min(w - 1, max(1, len(title))))
-        start = max(0, idx - max(0, h - 7))
-        visible = rows[start : start + max(1, h - 5)]
-        for off, (label, annotation) in enumerate(visible):
-            i = start + off
-            box = "[x]" if i in selected else "[ ]"
-            cursor = ">" if i == idx else " "
-            tag = f"  ({annotation})" if annotation else ""
-            stdscr.addstr(off + 3, 0, f"{cursor} {box} {label}{tag}"[: w - 1])
-        stdscr.addstr(h - 2, 0, f"{len(selected)}/{n} selected"[: w - 1])
-        stdscr.addstr(
-            h - 1, 0,
-            "↑↓/jk move  pgup/pgdn page  space toggle  a all  n none  enter confirm  q cancel"[: w - 1],
-        )
-        stdscr.refresh()
-        try:
-            key = stdscr.getch()
-        except KeyboardInterrupt:
-            return None
-        page = max(1, h - 5)
-        if key in (curses.KEY_UP, ord("k")):
-            idx = max(0, idx - 1)
-        elif key in (curses.KEY_DOWN, ord("j")):
-            idx = min(n - 1, idx + 1)
-        elif key == curses.KEY_PPAGE:
-            idx = max(0, idx - page)
-        elif key == curses.KEY_NPAGE:
-            idx = min(n - 1, idx + page)
-        elif key == curses.KEY_HOME:
-            idx = 0
-        elif key == curses.KEY_END:
-            idx = n - 1
-        elif key == ord(" "):
-            selected.discard(idx) if idx in selected else selected.add(idx)
-        elif key in (ord("a"), ord("A")):
-            selected = set(range(n))
-        elif key in (ord("n"), ord("N")):
-            selected = set()
-        elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-            return sorted(selected)
-        elif key in (ord("q"), 27, 3):
-            return None
+    return _curses_picker(stdscr, rows, title, preselected=preselected)
 
 
 def _select_models_to_cache(
@@ -272,15 +289,14 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
 
 def _select_provider() -> str | None:
     rows = _login_provider_rows()
-    items = [f"{pid:<28} {name} [{source}]" for pid, name, source in rows]
-    items.append("<add custom provider>")
+    items = ["<add custom provider>", *[f"{pid:<28} {name} [{source}]" for pid, name, source in rows]]
     sys.stdout.flush()
     idx = curses.wrapper(_curses_menu, items, "select provider")
     if idx is None:
         return None
-    if idx == len(items) - 1:
+    if idx == 0:
         return "__custom__"
-    return rows[idx][0]
+    return rows[idx - 1][0]
 
 
 def _select_api_shape() -> tuple[str, str] | None:
@@ -543,11 +559,121 @@ def _run_xai_login() -> int:
     return 0
 
 
+def _provider_details(login: Login, model_count: int) -> list[str]:
+    provider = providers.get_provider(login.provider_id)
+    return [
+        f"{login.provider_id} — {provider.display_name if provider else login.provider_id} [saved]",
+        f"Base URL: {login.provider_base_url or '(default)'}",
+        f"API key: {_mask(login.provider_api_key) if login.provider_api_key else '(none)'}",
+        f"{model_count} cached models",
+        "Headers: " + (", ".join(f"{k}={_mask(v)}" for k, v in login.provider_headers.items()) or "(none)"),
+    ]
+
+
+def _edit_saved_provider(login: Login) -> None:
+    """Save local edits without fetching models or changing OAuth metadata."""
+    base = _input("Base URL (enter keeps saved; - clears)", default=login.provider_base_url or "")
+    if base is None:
+        return
+    key = _input("API key (enter keeps saved; - clears)", default="", secret=True)
+    if key is None:
+        return
+    while True:
+        headers = _input("Headers k=v,k=v (enter keeps saved; - clears)", default="", secret=True)
+        if headers is None:
+            return
+        if not headers or headers == "-":
+            parsed = {} if headers == "-" else login.provider_headers
+            break
+        parts = [part.strip() for part in headers.split(",")]
+        if all("=" in part and part.split("=", 1)[0].strip() for part in parts):
+            parsed = {k.strip(): v.strip() for k, v in (part.split("=", 1) for part in parts)}
+            break
+        print("Headers must use k=v,k=v; nothing saved yet.")
+    save_login(replace(
+        login,
+        provider_base_url=None if base == "-" else base or None,
+        provider_api_key=None if key == "-" else key or login.provider_api_key,
+        provider_headers=parsed,
+    ))
+
+
+def _manage_providers() -> int:
+    while True:
+        saved = load_logins()
+        cached = load_model_cache()
+        ids = sorted(saved)
+        items = ["<add custom provider>"]
+        items.extend(_provider_details(saved[pid], len(cached.get(pid, [])))[0] for pid in ids)
+        items.append("<add registry provider>")
+        details = [[], *[_provider_details(saved[pid], len(cached.get(pid, []))) for pid in ids], []]
+        choice = curses.wrapper(_curses_menu, items, "manage providers", details=details)
+        if choice is None:
+            return 0
+        if choice == 0 or choice == len(items) - 1:
+            provider_id = "__custom__" if choice == 0 else _select_provider()
+            if provider_id is not None:
+                _run_login(provider_id)
+            continue
+        provider_id = ids[choice - 1]
+        try:
+            _manage_saved_provider(provider_id)
+        except LoginsCorruptError as exc:
+            print(f"Provider not changed: {exc}", file=sys.stderr)
+            return 1
+
+
+def _manage_models(login: Login) -> None:
+    status = ""
+    while True:
+        cached = load_model_cache().get(login.provider_id, [])
+        actions = ["Select / deselect cached models", "Add model ids", "Re-fetch live model list", "Back"]
+        title = f"models for {login.provider_id}: {len(cached)} cached"
+        choice = curses.wrapper(_curses_menu, actions, f"{title}  {status}")
+        status = ""
+        if choice is None or choice == 3:
+            return
+        if choice == 0:
+            if not cached:
+                status = "Cache empty; add ids or re-fetch first."
+            else:
+                _run_models_edit(login.provider_id)
+        elif choice == 1:
+            extra = _input("Add model ids (comma-separated)", default="")
+            if extra:
+                added = [model.strip() for model in extra.split(",") if model.strip()]
+                cache_models(login.provider_id, list(dict.fromkeys([*cached, *added])))
+        elif choice == 2:
+            print("*** Fetching models...")
+            try:
+                models, metadata = test_login_with_metadata(login)
+            except Exception as exc:  # noqa: BLE001 - keep the existing cache on a failed fetch
+                status = f"Fetch failed ({type(exc).__name__}); cache unchanged."
+                continue
+            curated = _select_models_to_cache(login.provider_id, models, annotate_dialects=False)
+            if curated is not None:
+                cache_models(login.provider_id, curated, metadata=metadata)
+
+
+def _manage_saved_provider(provider_id: str) -> None:
+    while (login := load_logins().get(provider_id)) is not None:
+        details = _provider_details(login, len(load_model_cache().get(provider_id, [])))
+        actions = ["Update URL / API key / headers", "Models", "Back", "Remove provider"]
+        choice = curses.wrapper(_curses_menu, actions, f"manage {provider_id}", details=[details] * len(actions))
+        if choice is None or choice == 2:
+            return
+        if choice == 0:
+            _edit_saved_provider(login)
+        elif choice == 1:
+            _manage_models(login)
+        elif choice == 3:
+            _run_logout(provider_id)
+            return
+
+
 def _run_login(provider_id: str | None = None) -> int:
     if provider_id is None:
-        provider_id = _select_provider()
-        if provider_id is None:
-            return 0
+        return _manage_providers()
     raw_provider_id = provider_id
     provider_id = providers.normalize_provider_id(provider_id) or provider_id
 
