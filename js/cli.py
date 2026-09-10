@@ -2004,7 +2004,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                maxout: int | None, quiet: bool, extras: list[str] | None,
                ignore_local_config: bool, ignore_global_config: bool,
                presets: list[str] | None,
-               stats_json: str | None, stats_csv: str | None) -> int:
+               stats_json: str | None, stats_csv: str | None,
+               debug: bool = False) -> int:
     """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
     context, no session), measuring TTFT / tok-s / turn time. The persona
     (NN-prompt.md + 00-tools.yaml) is rebuilt into each benchmark's head;
@@ -2089,8 +2090,11 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         try:
             sink = io.StringIO() if quiet else None
             with contextlib.redirect_stdout(sink) if sink is not None else contextlib.nullcontext():
+                # -d turns on the per-turn trace here too. Without it a bench run
+                # records only the model's prose, which is its own claim about
+                # what it called, not evidence — useless for measuring tool use.
                 runtime.run_turn(cfg, system, messages, runtime.Telemetry(debug_log=cfg.debug_log),
-                                 trace_override=False, **turn_kwargs)
+                                 trace_override=bool(debug), **turn_kwargs)
         except KeyboardInterrupt:
             interrupted, ok, err = True, False, "interrupted"
         except Exception as e:  # noqa: BLE001
@@ -2839,7 +2843,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
-    parser.add_argument("-d", "--debug", action="store_true", help="in prompt mode, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
+    parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     session_group = parser.add_mutually_exclusive_group()
     session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
@@ -3055,7 +3059,8 @@ def main(argv: list[str] | None = None) -> int:
                           maxout=args.max_out, quiet=args.quiet, extras=args.extras,
                           ignore_local_config=args.ignore_local,
                           ignore_global_config=args.ignore_global, presets=presets,
-                          stats_json=args.stats_json, stats_csv=args.stats_csv)
+                          stats_json=args.stats_json, stats_csv=args.stats_csv,
+                          debug=args.debug)
 
     if args.compact:
         return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
