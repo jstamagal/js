@@ -824,7 +824,17 @@ async def stream_model_async(
     model_name = model_id.lower()
     explicit_provider = provider_id is not None
     is_codex = codex_auth.is_codex_provider(provider_name)
-    is_deepseek = provider_name == "deepseek" or "deepseek" in model_name
+    # Two different questions, and they are not the same question:
+    # The old `is_deepseek` asked "is this a DeepSeek model?" and was used to
+    # decide "does this endpoint take DeepSeek's extras?" — a different question.
+    # A DeepSeek model hosted by someone else answers yes to the first and no to
+    # the second. `nvidia/deepseek-ai/deepseek-v4-pro-0813` is exactly that, and
+    # sending DeepSeek's private extras to NVIDIA is a 400.
+    is_deepseek_wire = provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
+        # Implicit gateway path (`deepseek/deepseek-v3` with no provider): the
+        # caller named no endpoint, so the model id is the only signal there is.
+        not explicit_provider and "deepseek" in model_name
+    )
     is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
 
     output_params = (
@@ -859,12 +869,13 @@ async def stream_model_async(
                 reasoning_params = ai_params.ReasoningParams(effort=effort)
 
     # DeepSeek gets the maximum reasoning budget by default as an extra_body
-    # field. `is_deepseek` matches on provider name OR a "deepseek" substring in
-    # the model id, so this also rides the implicit gateway path (provider_id
-    # None, e.g. `deepseek/deepseek-v3`), not only DeepSeek's own OpenAI-compatible
-    # endpoint — the budget is a harmless passthrough that other gateways forward
-    # or ignore, and both routes are exercised in daily use.
-    if is_deepseek and reasoning_effort != "none":
+    # field. Gated on the WIRE, not the model id: this is DeepSeek's own
+    # extension, and an endpoint that validates its inputs rejects the whole
+    # request rather than dropping the key it does not know. It is not the
+    # harmless passthrough the previous comment here claimed —
+    # `js --model nvidia/deepseek-ai/deepseek-v4-pro-0813 -p foo` returned
+    # 400 Unsupported parameter(s): `max_reasoning_tokens`.
+    if is_deepseek_wire and reasoning_effort != "none":
         extra_body.setdefault("max_reasoning_tokens", 32_000)
 
     # Prompt caching. Every turn resends the whole conversation, so the prefix it
@@ -877,11 +888,23 @@ async def stream_model_async(
     #     holding its prefix, which is what makes the hit rate hold up across turns.
     #   DeepSeek caches on disk automatically from token zero, with no request-side
     #     control at all, so it takes the same key harmlessly.
-    # Anthropic rejects a cache key outright, so the two shapes stay separate.
+    # `prompt_cache_key` is an OpenAI extension, not part of the OpenAI-compatible
+    # shape everyone implements. This used to be a denylist holding one entry —
+    # Anthropic — which meant every other endpoint that validates its inputs got
+    # the key and answered 400 (observed: NVIDIA,
+    # `Unsupported parameter(s): prompt_cache_key`). Allowlist the wires known to
+    # take it instead. Losing the hint on an unlisted gateway costs cache hit
+    # rate; sending it costs the entire request.
     is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
+    _CACHE_KEY_WIRES = {"openai", "deepseek"}
+    accepts_cache_key = (
+        sdk_provider_name in _CACHE_KEY_WIRES
+        or provider_name in _CACHE_KEY_WIRES
+        or is_codex
+    )
     if is_anthropic_wire:
         cache_params = ai_params.CacheParams()
-    elif cache_key:
+    elif cache_key and accepts_cache_key:
         cache_params = ai_params.CacheParams(key=cache_key)
     else:
         cache_params = None
