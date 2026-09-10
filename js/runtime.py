@@ -821,6 +821,17 @@ def _is_task_call(pc: _PendingToolCall) -> bool:
     return pc.name.lower() == "task"
 
 
+@dataclass
+class _DispatchProgress:
+    """Known outcomes survive cancellation; the stop flag gates queued leaves."""
+
+    stopped: threading.Event = field(default_factory=threading.Event)
+    records: dict[str, tuple[_PendingToolCall, dict, Any]] = field(default_factory=dict)
+
+    def record(self, pc: _PendingToolCall, args: dict, result: Any) -> None:
+        self.records[pc.id] = (pc, args, result)
+
+
 def _dispatch_tool_calls(
     tool_calls: list[_PendingToolCall],
     telemetry: Telemetry,
@@ -829,6 +840,7 @@ def _dispatch_tool_calls(
     error_tracker: ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
+    progress: _DispatchProgress | None = None,
 ) -> list[tuple[_PendingToolCall, dict, str]]:
     """Dispatch one assistant batch with Forge-style task parallelism.
 
@@ -852,6 +864,8 @@ def _dispatch_tool_calls(
             print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET}" + (f" {pretty}{C.RESET}" if pretty else ""), flush=True)
             _print_trace_result(pc.name, recorded, started)
         records[idx] = (args, recorded)
+        if progress is not None:
+            progress.record(pc, args, recorded)
     task_indices = [
         idx for idx, pc in enumerate(tool_calls)
         if records[idx] is None and _is_task_call(pc)
@@ -880,8 +894,12 @@ def _dispatch_tool_calls(
                     args = {}
                     result = f"ERROR running task: {type(exc).__name__}: {exc}"
                 records[idx] = (args, error_tracker.record("task", result))
+                if progress is not None:
+                    progress.record(tool_calls[idx], *records[idx])
 
     for idx, pc in enumerate(tool_calls):
+        if progress is not None and progress.stopped.is_set():
+            break
         if records[idx] is not None:
             continue
         records[idx] = _dispatch(
@@ -894,10 +912,13 @@ def _dispatch_tool_calls(
             registry,
             tool_context,
         )
+        if progress is not None:
+            progress.record(pc, *records[idx])
 
     return [
-        (pc, args, result)
-        for pc, (args, result) in zip(tool_calls, records, strict=True)
+        (pc, *record)
+        for pc, record in zip(tool_calls, records, strict=True)
+        if record is not None
     ]
 
 
@@ -1007,123 +1028,97 @@ async def _dispatch_batch(
     registry: ToolRegistry,
     tool_context: ToolContext,
     loop: asyncio.AbstractEventLoop,
-) -> list[tuple[_PendingToolCall, dict, str]]:
-    """Dispatch one assistant batch, keeping the shared dispatch pool free of
-    blocked-on-descendant waiters.
+    progress: _DispatchProgress | None = None,
+) -> list[tuple[_PendingToolCall, dict, Any]]:
+    """Drain running sync leaves on cancel, cancel async work, retain outcomes.
 
-    When a non-blocking supervisor is live AND the batch contains fan-out
-    (task / named-agent) calls, those run ON THE LOOP as cancelable subagent jobs
-    (`_dispatch_fan_out_async`) — so a parent turn awaiting its subtree never
-    parks a bounded js-dispatch thread that its own descendants need for their
-    leaf tool dispatch (the pool-inversion deadlock). Leaf calls in the same
-    batch still run in the executor, concurrently. Without a supervisor (``-p``,
-    bench, tests) the whole batch takes the executor path unchanged."""
+    Fan-out stays on the event loop to avoid blocking descendant dispatch on
+    an ancestor's worker. Mixed async batches retain model order; pure fan-out
+    batches run concurrently with their sync leaves, as before.
+    """
     from . import supervisor
-
     from .toolkit import meta
 
+    progress = progress if progress is not None else _DispatchProgress()
     current_supervisor = supervisor.get_current()
-    async_idx: list[int] = []
-    fan_out_now: set[int] = set()
+    fan_out = set()
+    async_leaves = set()
     for i, pc in enumerate(tool_calls):
-        if pc.validation_error is not None:
-            continue
         tool = registry.resolve(pc.name)
-        if tool is None:
+        if tool is None or pc.validation_error is not None:
             continue
         if current_supervisor is not None and meta.is_fan_out_handler(tool.handler):
-            fan_out_now.add(i)
+            fan_out.add(i)
         elif inspect.iscoroutinefunction(tool.handler):
-            async_idx.append(i)
-    if async_idx:
-        # Mixed batches keep the model's order. Fan-out calls stay on the loop
-        # (sending them to a thread restores the pool-inversion deadlock),
-        # async leaves are awaited in place, and runs of sync leaves go to a
-        # thread together.
-        async_set = set(async_idx)
-        records: list[tuple[_PendingToolCall, dict, Any]] = []
-        pending_sync: list[_PendingToolCall] = []
+            async_leaves.add(i)
 
-        async def flush_sync() -> None:
-            if not pending_sync:
-                return
-            batch = list(pending_sync)
-            pending_sync.clear()
-            records.extend(await asyncio.to_thread(
-                _dispatch_tool_calls, batch, telemetry, cap_bytes, trace,
-                error_tracker, registry, tool_context
-            ))
-
-        for i, pc in enumerate(tool_calls):
-            if i in fan_out_now:
-                await flush_sync()
-                records.append(await _dispatch_fan_out_async(
-                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
-                ))
-            elif i in async_set:
-                await flush_sync()
-                records.append(await _dispatch_async_tool(
-                    pc, telemetry, cap_bytes, trace, error_tracker, registry, tool_context
-                ))
-            else:
-                pending_sync.append(pc)
-        await flush_sync()
-        return records  # type: ignore[return-value]
-
-    fan_out_idx: list[int] = []
-    if current_supervisor is not None:
-        for i, pc in enumerate(tool_calls):
-            if pc.validation_error is not None:
-                continue
-            tool = registry.resolve(pc.name)
-            if tool is not None and meta.is_fan_out_handler(tool.handler):
-                fan_out_idx.append(i)
-
-    if not fan_out_idx:
-        if current_supervisor is None:
-            return _dispatch_tool_calls(
-                tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
-            )
+    async def sync_calls(calls: list[_PendingToolCall]) -> None:
+        if not calls or progress.stopped.is_set():
+            return
+        # A running Python worker cannot be cancelled. Keep its future alive,
+        # stop its queued calls, and collect its result before the caller saves
+        # the interrupted turn. Never block the event loop with shutdown(wait).
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") as executor:
-            future = executor.submit(
-                _dispatch_tool_calls,
-                tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
+            future = loop.run_in_executor(
+                executor, _dispatch_tool_calls, calls, telemetry, cap_bytes,
+                trace, error_tracker, registry, tool_context, progress,
             )
-            return await asyncio.wrap_future(future, loop=loop)
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                progress.stopped.set()
+                while not future.done():
+                    try:
+                        await asyncio.shield(future)
+                    except asyncio.CancelledError:
+                        continue
+                future.result()
+                raise
 
-    fan_out_set = set(fan_out_idx)
-    records: list[tuple[_PendingToolCall, dict, str] | None] = [None] * len(tool_calls)
+    async def async_call(i: int) -> None:
+        if progress.stopped.is_set():
+            return
+        dispatch = _dispatch_fan_out_async if i in fan_out else _dispatch_async_tool
+        record = await dispatch(tool_calls[i], telemetry, cap_bytes, trace,
+                                error_tracker, registry, tool_context)
+        progress.record(*record)
 
-    leaf_calls = [pc for i, pc in enumerate(tool_calls) if i not in fan_out_set]
-    leaf_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") if leaf_calls else None
-    leaf_future = (
-        asyncio.wrap_future(
-            leaf_executor.submit(
-                _dispatch_tool_calls,
-                leaf_calls, telemetry, cap_bytes, trace, error_tracker, registry, tool_context,
-            ),
-            loop=loop,
-        )
-        if leaf_executor is not None else None
-    )
+    jobs: list[asyncio.Task] = []
     try:
-        fan_out_records = await asyncio.gather(*(
-            _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace, error_tracker, registry, tool_context)
-            for i in fan_out_idx
-        ))
-        for i, rec in zip(fan_out_idx, fan_out_records):
-            records[i] = rec
-
-        if leaf_future is not None:
-            leaf_records = iter(await leaf_future)
-            for i in range(len(records)):
-                if records[i] is None:
-                    records[i] = next(leaf_records)
-    finally:
-        if leaf_executor is not None:
-            leaf_executor.shutdown(wait=True)
-
-    return records  # type: ignore[return-value]
+        if async_leaves:
+            pending = []
+            for i, pc in enumerate(tool_calls):
+                if i in fan_out or i in async_leaves:
+                    await sync_calls(pending)
+                    pending = []
+                    await async_call(i)
+                else:
+                    pending.append(pc)
+            await sync_calls(pending)
+        elif fan_out:
+            jobs = [asyncio.create_task(async_call(i)) for i in sorted(fan_out)]
+            jobs.append(asyncio.create_task(sync_calls(
+                [pc for i, pc in enumerate(tool_calls) if i not in fan_out]
+            )))
+            await asyncio.gather(*jobs)
+        elif current_supervisor is None:
+            _dispatch_tool_calls(tool_calls, telemetry, cap_bytes, trace,
+                                 error_tracker, registry, tool_context, progress)
+        else:
+            await sync_calls(tool_calls)
+    except BaseException:
+        progress.stopped.set()
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            drain = asyncio.gather(*jobs, return_exceptions=True)
+            while not drain.done():
+                try:
+                    await asyncio.shield(drain)
+                except asyncio.CancelledError:
+                    continue
+        raise
+    return [progress.records[pc.id] for pc in tool_calls if pc.id in progress.records]
 
 
 # --------------------------------------------------------------------------
@@ -1762,35 +1757,43 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # thread so the shared loop stays free while they execute. Fan-out (task /
             # named-agent) calls are awaited ON the loop instead, so a parent turn
             # never parks a dispatch thread its descendants need (see _dispatch_batch).
-            dispatch_records = await _dispatch_batch(
-                pending_calls,
-                telemetry,
-                cfg.max_tool_result_bytes,
-                trace,
-                error_tracker,
-                dispatch_registry,
-                active_context,
-                asyncio.get_running_loop(),
-            )
-            capped = _cap_batch_results(
-                [r for _, _, r in dispatch_records],
-                getattr(cfg, "max_tool_results_per_turn_bytes", 0),
-            )
-            dispatch_records = [
-                (pc, args, new_result)
-                for (pc, args, _old), new_result in zip(dispatch_records, capped, strict=True)
-            ]
-            for pc, _args, result_value in dispatch_records:
-                canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
-                _emit_event(
-                    "tool_result",
-                    id=pc.id,
-                    name=canonical_pc.name,
-                    result=result_value,
+            progress = _DispatchProgress()
+            try:
+                dispatch_records = await _dispatch_batch(
+                    pending_calls,
+                    telemetry,
+                    cfg.max_tool_result_bytes,
+                    trace,
+                    error_tracker,
+                    dispatch_registry,
+                    active_context,
+                    asyncio.get_running_loop(),
+                    progress,
                 )
-                tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
-                ai_convo.extend(tool_msgs)
-                messages.extend(_history_tool_result_message(canonical_pc, result_value))
+            finally:
+                # Also runs on cancellation, before the REPL persists the turn
+                # and balances genuinely unanswered calls with orphan markers.
+                dispatch_records = [progress.records[pc.id] for pc in pending_calls
+                                    if pc.id in progress.records]
+                capped = _cap_batch_results(
+                    [r for _, _, r in dispatch_records],
+                    getattr(cfg, "max_tool_results_per_turn_bytes", 0),
+                )
+                dispatch_records = [
+                    (pc, args, new_result)
+                    for (pc, args, _old), new_result in zip(dispatch_records, capped, strict=True)
+                ]
+                for pc, _args, result_value in dispatch_records:
+                    canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
+                    _emit_event(
+                        "tool_result",
+                        id=pc.id,
+                        name=canonical_pc.name,
+                        result=result_value,
+                    )
+                    tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
+                    ai_convo.extend(tool_msgs)
+                    messages.extend(_history_tool_result_message(canonical_pc, result_value))
             if error_tracker.limit_reached():
                 name, last_error = next(
                     ((_canonical_tool_call_name(pc.name, active_registry), result_value)
