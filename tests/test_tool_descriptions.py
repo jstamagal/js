@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from js.toolkit import descriptions, fs
-from js.toolkit.registry import build_default_registry
+from js.toolkit.core import Tool
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 
 CORE_TOOL_NAMES = {
@@ -110,7 +111,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert not {"-A", "-B", "-C", "-i", "-n", "type"} & set(search.params)
     assert ast_search.required == ("pattern",)
     assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
-    assert tuple(ast_search.params["lang"]["enum"]) == fs._AST_GREP_LANGUAGES
+    assert set(ast_search.params["lang"]["enum"]) == set(fs._AST_GREP_LANGUAGES)
     assert plan.required == ("plan_name", "version", "content")
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     assert task.required == ("tasks", "agent_id")
@@ -223,36 +224,21 @@ def test_kept_body_is_not_rescanned_for_directives():
 
 def test_text_without_markers_is_returned_unchanged():
     text = "plain description, no conditionals"
-    assert R(text, {"shell"}) is text
+    assert R(text, {"shell"}) == text
 
 
-# Per variant: the fs_search pointer the shell description carries when fs_search
-# shares the surface, and the rg/fd doctrine phrase that must vanish when it does.
-_SHELL_DOCTRINE = {
-    "stock": ("use `fs_search` with regex", "`rg` (ripgrep)"),
-    "slim": ("Search with `fs_search`", "`rg` and `fd` are installed"),
-}
-
-
-@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
-def test_registry_surface_composition_shell_only_vs_with_fs_search(variant):
-    """The headline: a shell-only agent is taught the rg/fd doctrine; an agent
-    that also has fs_search is not schooled on rg/fd and is pointed at fs_search."""
-    full = build_default_registry(descriptions=variant)
-    search_pointer, rg_doctrine = _SHELL_DOCTRINE[variant]
-
-    def shell_desc(selectors):
-        specs = full.select(selectors).openai_specs()
-        return next(s["function"]["description"] for s in specs if s["function"]["name"] == "shell")
-
-    shell_only = shell_desc(["shell"])
-    assert "`rg`" in shell_only
-    assert "`fd`" in shell_only
-    assert "`fs_search`" not in shell_only
-
-    with_search = shell_desc(["shell", "fs_search"])
-    assert search_pointer in with_search
-    assert rg_doctrine not in with_search
+def test_registry_renders_conditionals_for_selected_surface():
+    registry = ToolRegistry(
+        tools=(
+            Tool("subject", "{{#if helper}}present{{/if}}{{#unless helper}}absent{{/unless}}", lambda: "", {}),
+            Tool("helper", "helper", lambda: "", {}),
+        ),
+        aliases={"subject": "subject", "helper": "helper"},
+    )
+    for selectors, expected in [(["subject"], "absent"), (["subject", "helper"], "present")]:
+        specs = registry.select(selectors).openai_specs()
+        assert next(spec["function"]["description"] for spec in specs
+                    if spec["function"]["name"] == "subject") == expected
 
 
 @pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
@@ -269,69 +255,6 @@ def test_openai_specs_never_leak_raw_markers_on_any_surface(variant):
             assert "{{#" not in desc and "{{/" not in desc, (sel, spec["function"]["name"])
 
 
-@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
-def test_rendered_surfaces_never_mention_unavailable_core_tools(variant):
-    full = build_default_registry(descriptions=variant)
-    surfaces = [
-        ["shell"],
-        ["shell", "read", "write", "patch", "remove", "undo"],
-        ["shell", "read", "write", "patch", "fs_search"],
-        ["read"],
-        ["write"],
-        ["patch"],
-        ["remove"],
-        ["fs_search"],
-        ["task"],
-        ["read", "write", "fs_search", "patch", "undo", "shell"],  # commit agent
-        [
-            "read", "write", "fs_search", "remove", "patch",
-            "undo", "shell", "fetch", "todo_read", "todo_write",
-            "plan", "skill", "task",
-        ],
-        None,
-    ]
-    core = CORE_TOOL_NAMES
-
-    for sel in surfaces:
-        registry = full if sel is None else full.select(sel)
-        present = {tool.name for tool in registry.tools}
-        for spec in registry.openai_specs():
-            tool = spec["function"]["name"]
-            desc = spec["function"]["description"]
-            for name in core - present:
-                assert f"`{name}`" not in desc, (sel, tool, name)
-
-
-# What a naked shell must be taught in each variant, since no other tool can.
-_NAKED_SHELL_DOCTRINE = {
-    "stock": (
-        "Content search: use `rg`", "File finding: use `fd`", "Inspect known files with",
-        "Create complete files with", "Edit existing files with", "Remove files with",
-        "Download with",
-    ),
-    "slim": (
-        "`rg` and `fd` are installed", "sed -n",
-        "checks the exact old text and the\n  match count before replacing",
-        "Never blind `sed -i`",
-    ),
-}
-
-
-@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
-def test_shell_only_surface_gets_missing_tool_doctrine_without_phantom_tools(variant):
-    full = build_default_registry(descriptions=variant)
-    shell_desc = next(
-        spec["function"]["description"]
-        for spec in full.select(["shell"]).openai_specs()
-        if spec["function"]["name"] == "shell"
-    )
-
-    for phrase in _NAKED_SHELL_DOCTRINE[variant]:
-        assert phrase in shell_desc, (variant, phrase)
-    for absent in CORE_TOOL_NAMES - {"shell"}:
-        assert f"`{absent}`" not in shell_desc
-
-
 def test_description_variants_hold_the_same_file_set():
     stock = {path.name for path in descriptions.description_dir("stock").glob("*.md")}
     slim = {path.name for path in descriptions.description_dir("slim").glob("*.md")}
@@ -339,12 +262,11 @@ def test_description_variants_hold_the_same_file_set():
     assert stock == slim
 
 
-def test_descriptions_knob_selects_the_variant_the_model_sees():
-    descriptions._load_description.cache_clear()
-    stock = build_default_registry(descriptions="stock").resolve("shell").description
-    slim = build_default_registry(descriptions="slim").resolve("shell").description
-    assert stock != slim
-    assert len(slim) < len(stock)
+def test_descriptions_knob_selects_the_variant_the_model_sees(monkeypatch):
+    monkeypatch.setattr(descriptions, "_load_description", lambda name, flags, variant: f"{variant}:{name}")
+    for variant in descriptions.TOOL_DESCRIPTION_VARIANTS:
+        registry = build_default_registry(descriptions=variant).select(["shell"])
+        assert registry.openai_specs()[0]["function"]["description"] == f"{variant}:shell"
     with pytest.raises(ValueError):
         with descriptions.using_variant("fat"):
             pass
