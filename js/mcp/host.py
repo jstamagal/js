@@ -13,6 +13,7 @@ from typing import Any
 
 from ..mcp_config import MCPConfiguration, MCPServer
 from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
+from ..toolkit.discovery import ranked_entries, search_tokens
 from .client import MCPClient
 from .transports import StdioTransport, StreamableHTTPTransport
 
@@ -387,7 +388,7 @@ class MCPHost:
         )
 
     async def discover(self, query: str = "", source: str = "") -> tuple[CatalogEntry, ...]:
-        terms = [term for term in str(query).casefold().split() if term != "mcp"]
+        terms = search_tokens(query) - {"mcp"}
         servers = [
             server for server in self.config.servers
             if self.config.policy.allows_server(server.name)
@@ -401,7 +402,7 @@ class MCPHost:
         elif terms:
             matching = [
                 server for server in servers
-                if all(term in f"{server.name} {server.normalized_name} {server.transport}".casefold() for term in terms)
+                if terms & search_tokens(f"{server.name} {server.normalized_name} {server.transport}")
             ]
             # A query for remote metadata cannot be resolved before connecting.
             # Narrow only when configured server metadata identifies candidates.
@@ -458,7 +459,6 @@ class MCPHost:
             entries.append(CatalogEntry(f"mcp:{public}", public, description, "mcp", server_name))
         result = []
         for entry in sorted(entries, key=lambda item: item.id):
-            haystack = f"{entry.id} {entry.name} {entry.description} {entry.source}".casefold()
             if source and entry.source.casefold() != source.casefold():
                 server = next(
                     (item for item in self.config.servers if item.name == entry.source),
@@ -466,10 +466,8 @@ class MCPHost:
                 )
                 if server is None or server.normalized_name.casefold() != source.casefold():
                     continue
-            if terms and not all(term in haystack for term in terms):
-                continue
             result.append(entry)
-        return tuple(result)
+        return tuple(ranked_entries(result, " ".join(sorted(terms))))
 
     def _record_server_error(self, server: MCPServer, exc: Exception) -> None:
         message = str(exc).strip() or type(exc).__name__

@@ -77,13 +77,13 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
     allowed = build_default_registry().select(["browser_probe", "terminal_session", "read"])
     surface = allowed.lazy_surface(tmp_path)
 
-    assert _names(surface) == ["read", "tool_discovery"]
+    assert "tool_discovery" in _names(surface)
     results = json.loads(surface.discover(kind="native"))["results"]
-    assert [item["id"] for item in results] == [
-        "native:browser_probe",
-        "native:terminal_session",
-    ]
-    assert [item["loadable"] for item in results] == [True, True]
+    ids = [item["id"] for item in results]
+    assert ids == sorted(ids)
+    assert {"native:browser_probe", "native:terminal_session"} <= set(ids)
+    assert {item["name"] for item in results} | (set(_names(surface)) - {"tool_discovery"}) == set(allowed.by_name)
+    assert all(item["loadable"] for item in results)
     assert json.loads(surface.discover(source="browser"))["results"][0]["name"] == "browser_probe"
     assert json.loads(surface.discover(query="terminal session"))["results"][0]["source"] == "terminal"
     assert surface.discover(load="native:wiki_search").startswith("ERROR: no allowed catalog entry")
@@ -122,7 +122,7 @@ def test_discovery_name_cannot_be_taken_by_an_alias(tmp_path):
     allowed = build_default_registry().select(["read", "browser_probe"])
     surface = allowed.aliased({"read": "tool_discovery"}).lazy_surface(tmp_path)
 
-    assert _spec_names(surface.openai_specs()) == ["read", "tool_discovery"]
+    assert _spec_names(surface.openai_specs()) == _spec_names(allowed.lazy_surface(tmp_path).openai_specs())
     assert surface.resolve("tool_discovery").name == "tool_discovery"
     assert surface.dispatch_registry().resolve("tool_discovery").name == "tool_discovery"
 

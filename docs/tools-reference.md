@@ -478,7 +478,8 @@ surface has lazy native tools, skills, or configured MCP servers.
 
 Parameters:
 
-- `query`: words to match in catalog metadata.
+- `query`: intent or words to search with token matching and ranked partial matches. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
+- `offset`: continue the same query and filters at `next_offset` when `truncated` is true. Each page has at most 40 entries and reports `total`; very large identifiers are omitted with an explicit count rather than shortened into invalid load ids.
 - `kind`: optional `native`, `skill`, or `mcp` filter. Use `mcp` to connect all
   eligible configured servers and fetch their catalogs.
 - `source`: optional exact source. A configured MCP server name or normalized

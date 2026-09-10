@@ -1,6 +1,11 @@
 Search the compact catalog of tools and skills allowed for this agent, or load one result by stable id.
 
-Use `query`, `kind`, and `source` to narrow deterministic results. Call `load`
+An empty `query` returns a compact index capped at 4 KiB. Search accepts intent
+words, ranks token matches, and returns short descriptions capped at 8 KiB.
+Use `kind` or exact `source` to narrow results. When `truncated` is true, repeat
+the same filters with `offset` set to `next_offset` to browse the next page.
+
+Call `load`
 only with the exact `id` of a result whose `loadable` field is `true`.
 Non-loadable MCP server, server-error, and collision results are status messages;
 read them but do not load them. Loading a native tool makes its full schema
