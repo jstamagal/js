@@ -1,0 +1,39 @@
+name: Issue
+description: File a bug, request an enhancement, or ask a question.
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - bug
+        - enhancement
+        - question
+      default: bug
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two lines. What is broken, or what should exist.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro / current vs desired
+      description: |
+        Exact commands and exact output. For enhancements: current behavior and
+        desired behavior. If not reproduced locally, say "Unverified" and list
+        which checks could not be run.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: file:line pointers, error text, affected path.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: js commit (git log -1 --oneline), OS, Python version.
