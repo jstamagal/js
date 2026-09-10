@@ -243,3 +243,6 @@ __marimo__/
 # tool bench
 bench/toolbench/wheel/
 bench/toolbench/results/
+
+# graphify output (17MB of generated graph/cache artifacts)
+graphify-out/
