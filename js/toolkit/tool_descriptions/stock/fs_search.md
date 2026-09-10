@@ -43,8 +43,10 @@ Pattern behavior:
 What is searched:
 - Respects `.gitignore` inside a git repository, and `.ignore` / `.rgignore`
   files anywhere. Ignored paths are not searched.
-- Hidden files and directories (dot-prefixed) are skipped; pass an explicit
-  `path` to a hidden file to search it directly.
+- Hidden files and directories (dot-prefixed) are skipped in every output mode.
+  To reach them, pass an explicit `path` to the hidden file or directory, or
+  write a `pattern`/`glob` that names a dot-prefixed component itself, such as
+  `.env` or `**/.github/*`.
 - Content-search modes skip binary and non-regular files (pipes, sockets,
   devices). `files` may list binary files but still skips non-regular paths.
 - `files` discovers regular files, including the paths needed to understand a

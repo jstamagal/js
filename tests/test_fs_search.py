@@ -228,3 +228,81 @@ def test_fs_read_empty_file_message_uses_resolved_path(tmp_path):
     actual = fs_read(path="empty.txt", context=context)
 
     assert actual == f"{empty} is empty (hash {fs._hash_bytes(b'')})"
+
+
+def _hidden_tree(tmp_path):
+    (tmp_path / "visible.txt").write_text("secret\n", encoding="utf-8")
+    (tmp_path / ".hidden.txt").write_text("secret\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("secret\n", encoding="utf-8")
+    nested = tmp_path / ".hiddendir"
+    nested.mkdir()
+    (nested / "inner.txt").write_text("secret\n", encoding="utf-8")
+    return tmp_path
+
+
+@requires_rg
+def test_fs_search_files_mode_skips_hidden_entries_like_content_mode(tmp_path):
+    """files mode passed `pattern` as a whitelist --glob, which outranks ripgrep's
+    hidden filter — so it behaved like `rg --files --hidden` and dumped .git
+    internals, contradicting the tool description. Every mode skips them now."""
+    _hidden_tree(tmp_path)
+
+    actual = fs_search("*", path=".", output_mode="files", context=ToolContext(cwd=tmp_path))
+
+    assert actual.splitlines() == [str(tmp_path / "visible.txt")]
+
+
+@requires_rg
+def test_fs_search_content_mode_glob_does_not_reopen_hidden_files(tmp_path):
+    """The same whitelist-override hole reached content mode through `glob`."""
+    _hidden_tree(tmp_path)
+
+    actual = fs_search(
+        "secret", path=".", glob="*", output_mode="content", context=ToolContext(cwd=tmp_path)
+    )
+
+    assert str(tmp_path / ".hidden.txt") not in actual
+    assert str(tmp_path / "visible.txt") in actual
+
+
+@requires_rg
+def test_fs_search_dot_leading_glob_still_reaches_hidden_files(tmp_path):
+    """Naming a dot-prefixed component is an explicit ask, in either mode."""
+    _hidden_tree(tmp_path)
+
+    listed = fs_search(".env*", path=".", output_mode="files", context=ToolContext(cwd=tmp_path))
+    matched = fs_search(
+        "secret", path=".", glob=".hidden*", output_mode="content", context=ToolContext(cwd=tmp_path)
+    )
+
+    assert listed.splitlines() == [str(tmp_path / ".env")]
+    assert str(tmp_path / ".hidden.txt") in matched
+
+
+@requires_rg
+def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
+    """The documented escape hatch: point `path` at the hidden file or directory."""
+    _hidden_tree(tmp_path)
+
+    listed = fs_search(
+        "*", path=str(tmp_path / ".hiddendir"), output_mode="files", context=ToolContext(cwd=tmp_path)
+    )
+    matched = fs_search(
+        "secret",
+        path=str(tmp_path / ".hidden.txt"),
+        output_mode="content",
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert listed.splitlines() == [str(tmp_path / ".hiddendir" / "inner.txt")]
+    assert str(tmp_path / ".hidden.txt") in matched
+
+
+def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
+    assert fs._glob_asks_for_hidden(".env")
+    assert fs._glob_asks_for_hidden("**/.github/*")
+    assert fs._glob_asks_for_hidden("!.env")
+    assert not fs._glob_asks_for_hidden("*.py")
+    assert not fs._glob_asks_for_hidden("./src/*.py")
+    assert not fs._glob_asks_for_hidden("../lib/**")
+    assert not fs._glob_asks_for_hidden(None)

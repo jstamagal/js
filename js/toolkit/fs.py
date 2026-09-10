@@ -824,6 +824,28 @@ def _rg_stream(
     return lines, rc, stderr, timed_out
 
 
+# Excludes every dot-prefixed basename, and prunes dot-prefixed directories with
+# it, restoring ripgrep's default hidden behaviour after a whitelist glob has
+# overridden it.
+_HIDDEN_GUARD_GLOB = "!.*"
+
+
+def _glob_asks_for_hidden(pattern: str | None) -> bool:
+    """True when a caller's glob names a dot-prefixed path component itself.
+
+    `.env`, `**/.github/*` and `.git/**` are explicit requests for hidden paths.
+    `.` and `..` are path syntax, not hidden names, so they do not count.
+    """
+    if not pattern:
+        return False
+    text = str(pattern).strip().lstrip("!")
+    return any(
+        part.startswith(".") and part not in (".", "..")
+        for part in text.split("/")
+        if part
+    )
+
+
 def fs_search(
     pattern: str,
     path: str | None = None,
@@ -906,9 +928,22 @@ def fs_search(
         else:
             argv += ["--glob", f"*.{name}"]
     if mode == "files":
-        argv += [glob_flag, pattern, "--", str(root)]
+        argv += [glob_flag, pattern]
     else:
-        argv += ["--regexp", pattern, "--", str(root)]
+        argv += ["--regexp", pattern]
+    # A whitelist --glob outranks ripgrep's hidden-file filter, so every mode that
+    # passes one (files mode always does: `pattern` IS the glob) was silently
+    # behaving like `rg --files --hidden` and dumping .git internals. The guard
+    # goes LAST because overrides are last-match-wins. Skipped when the caller
+    # names a dot-prefixed component themselves — that is an explicit ask, and it
+    # needs --hidden too or the hidden directory is pruned before the glob is
+    # consulted. An explicit `path` to a hidden file still works either way:
+    # ripgrep never applies the hidden filter to a root it was handed.
+    if _glob_asks_for_hidden(glob) or (mode == "files" and _glob_asks_for_hidden(pattern)):
+        argv.append("--hidden")
+    else:
+        argv += ["--glob", _HIDDEN_GUARD_GLOB]
+    argv += ["--", str(root)]
 
     lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
     if timed_out:
