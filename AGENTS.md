@@ -63,4 +63,6 @@ guard; preserve it. Deep dives in `docs/technical-guide.md`.
 - Agent-skill docs: `docs/agents/` (GitHub issue tracker; triage labels;
   single-context domain docs with `CONTEXT.md` + `docs/adr/`). File confirmed
   issues in `jstamagal/js` on GitHub; `.scratch/` holds working notes, not the
-  shared issue backlog.
+  shared issue backlog. After filing a scratch report's confirmed issues with
+  their reproduction evidence, delete the original report. Leave `toolsweep-*`
+  artifacts alone unless explicitly asked to clean them up.

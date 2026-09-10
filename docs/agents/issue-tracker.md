@@ -13,7 +13,12 @@ does not publish an issue or make it available on the other machines.
 - Put enough context in the GitHub issue for another machine to act on it;
   a local path alone is not a reproduction. Keep credentials out of reports.
 - Use GitHub labels for category and triage state (see `triage-labels.md`).
-- Link the issue URL from any local notes so its shared status is easy to find.
+- After a scratch report's confirmed issues are filed with self-contained
+  evidence, delete the original report so it is not repeatedly triaged. For a
+  combined audit, account for every finding before retiring the report. Commit
+  tracked deletions so a future pull does not restore the local backlog.
+- Keep unrelated research notes and `toolsweep-*` artifacts unless cleanup is
+  explicitly requested. Link GitHub issues from any retained research notes.
 
 ## When a skill says "publish to the issue tracker"
 
