@@ -60,5 +60,7 @@ guard; preserve it. Deep dives in `docs/technical-guide.md`.
 ## Docs
 
 - Deep dives live in `docs/` (). `
-- Agent-skill docs: `docs/agents/` (issue tracker — issues as
-markdown under `.scratch/<feature>/`; triage labels; single-context domain docs with `CONTEXT.md` + `docs/adr/`).
+- Agent-skill docs: `docs/agents/` (GitHub issue tracker; triage labels;
+  single-context domain docs with `CONTEXT.md` + `docs/adr/`). File confirmed
+  issues in `jstamagal/js` on GitHub; `.scratch/` holds working notes, not the
+  shared issue backlog.
