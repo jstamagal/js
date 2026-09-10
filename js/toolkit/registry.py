@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from functools import cache
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 import sys
 
@@ -20,6 +20,7 @@ class ToolRegistry:
     tools: tuple[Tool, ...]
     aliases: dict[str, str]
     known_names: frozenset[str] | None = None
+    unavailable_errors: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -27,6 +28,16 @@ class ToolRegistry:
             return self.by_name[trimmed]
         canonical = self.aliases.get(trimmed.lower(), trimmed)
         return self.by_name.get(canonical)
+
+    def unavailable_error(self, name: str) -> str:
+        canonical = self.aliases.get(str(name).strip().lower(), str(name).strip())
+        if canonical in self.unavailable_errors:
+            return self.unavailable_errors[canonical]
+        if canonical in (self.known_names or ()):
+            return (f"ERROR: {canonical} is not allowed by this agent's tool policy. "
+                    "tool_discovery cannot load it here.")
+        return (f"ERROR: unknown tool {canonical}. Use tool_discovery to find an allowed "
+                "tool and load its exact catalog id before calling it.")
 
     @property
     def by_name(self) -> dict[str, Tool]:
@@ -76,10 +87,11 @@ class ToolRegistry:
             existing = merged.get(key)
             if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
-        return ToolRegistry(tools=self.tools, aliases=merged, known_names=self.known_names)
+        return ToolRegistry(tools=self.tools, aliases=merged, known_names=self.known_names,
+                            unavailable_errors=self.unavailable_errors)
 
     def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
-        """Create fresh lazy state for one model turn without changing selection."""
+        """Create a fresh view; the runtime restores session visibility within selection."""
         return TurnToolSurface(self, cwd, mcp_host=mcp_host)
 
 
@@ -104,6 +116,7 @@ class TurnToolSurface:
 
     def __init__(self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None) -> None:
         self.allowed = allowed
+        self.on_change: Callable[[dict], None] | None = None
         self.mcp_host = mcp_host
         self.aliases = {
             alias: canonical
@@ -130,8 +143,7 @@ class TurnToolSurface:
             if source is not None:
                 self._lazy[f"native:{tool.name}"] = tool
                 self._sources[tool.name] = source
-        # Core meta tools stay eager: "skill" is the dispatch tool itself;
-        # only the skill catalog and specialist suites load lazily.
+        # Tools outside the lazy catalog remain eager.
         self._eager = tuple(
             tool for tool in allowed.tools if tool.name not in self._sources
         )
@@ -157,6 +169,7 @@ class TurnToolSurface:
             tools=self.tools,
             aliases=self.aliases,
             known_names=self.allowed.known_names,
+            unavailable_errors=self._unavailable_errors(),
         )
 
     @property
@@ -175,6 +188,68 @@ class TurnToolSurface:
 
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
+
+    def _unavailable_errors(self) -> dict[str, str]:
+        entries = {item.name: item for item in self.catalog() if item.kind != "skill"}
+        errors = {}
+        for item in entries.values():
+            if item.loadable:
+                errors[item.name] = (
+                    f"ERROR: {item.name} is not in the published tool set for this call. "
+                    f'Fix: tool_discovery {{"load":"{item.id}"}} then re-issue on the next model call. '
+                    "Retrying unchanged will fail again."
+                )
+            else:
+                errors[item.name] = f"ERROR: {item.name} is a catalog status entry, not a loadable tool."
+        if self.mcp_host is not None:
+            for name in self.mcp_host.remote_tools:
+                if self.mcp_host.load(f"mcp:{name}") is not None:
+                    errors[name] = (
+                        f'ERROR: {name} is not in the published tool set for this call. '
+                        f'Fix: tool_discovery {{"load":"mcp:{name}"}} then re-issue on the next model call. '
+                        'Retrying unchanged will fail again.'
+                    )
+        return errors
+
+    def unavailable_error(self, name: str) -> str:
+        return self.dispatch_registry().unavailable_error(name)
+
+    def snapshot(self) -> dict:
+        sources = set()
+        if self.mcp_host is not None:
+            for name in self._mcp_loaded:
+                remote = self.mcp_host.remote_tools.get(name)
+                if remote is not None:
+                    sources.add(remote[0])
+        return {"ids": sorted(self._loaded_ids), "mcp_sources": sorted(sources)}
+
+    def _state_changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change(self.snapshot())
+
+    async def restore(self, state: dict) -> None:
+        """Restore visibility through current policy; never replay skill instructions."""
+        ids = state.get("ids", [])
+        if not isinstance(ids, list):
+            return
+        sources = state.get("mcp_sources", [])
+        if self.mcp_host is not None and isinstance(sources, list):
+            for source in sources:
+                if isinstance(source, str) and self.mcp_host.is_server_source(source):
+                    await self.mcp_host.discover(source=source)
+        for item_id in ids:
+            if not isinstance(item_id, str):
+                continue
+            if item_id in self._lazy:
+                self._loaded.add(self._lazy[item_id].name)
+                self._loaded_ids.add(item_id)
+            elif item_id in self._skills:
+                self._loaded_ids.add(item_id)
+            elif item_id.startswith("mcp:") and self.mcp_host is not None:
+                loaded = self.mcp_host.load(item_id)
+                if loaded is not None:
+                    self._mcp_loaded.update(loaded)
+                    self._loaded_ids.add(item_id)
 
     def activate_tools(self, names: Iterable[str]) -> ToolActivationResult:
         """Activate declared native tools without widening selected policy."""
@@ -199,6 +274,7 @@ class TurnToolSurface:
                 if tool.name in self._sources:
                     self._loaded.add(tool.name)
                     self._loaded_ids.add(f"native:{tool.name}")
+        self._state_changed()
         return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
@@ -278,11 +354,13 @@ class TurnToolSurface:
             if loaded is not None:
                 self._mcp_loaded.update(loaded)
                 self._loaded_ids.add(item_id)
+                self._state_changed()
                 return discovery.compact_result({"loaded": loaded, "id": item_id})
         tool = self._lazy.get(item_id)
         if tool is not None:
             self._loaded.add(tool.name)
             self._loaded_ids.add(item_id)
+            self._state_changed()
             return discovery.compact_result({"loaded": [tool.name], "id": item_id})
         skill = self._skills.get(item_id)
         if skill is None:
@@ -294,6 +372,7 @@ class TurnToolSurface:
         if loaded is None:
             return f"ERROR: skill {skill.name!r} instructions could not be read"
         self._loaded_ids.add(item_id)
+        self._state_changed()
         result: dict[str, object] = {
             "id": item_id,
             "instructions": loaded.instructions,
