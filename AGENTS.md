@@ -64,6 +64,5 @@ guard; preserve it. Deep dives in `docs/technical-guide.md`.
   single-context domain docs with `CONTEXT.md` + `docs/adr/`). File confirmed
   issues in `jstamagal/js` on GitHub; `.scratch/` holds working notes, not the
   shared issue backlog. After filing a scratch report's confirmed issues with
-  their reproduction evidence, delete the original report. Preserve
-  `.scratch/lazy-everything.patch` and `toolsweep-*` artifacts unless explicitly
-  asked to clean up those specific files.
+  their reproduction evidence, delete the original report. Leave `toolsweep-*`
+  artifacts alone unless explicitly asked to clean them up.

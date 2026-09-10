@@ -17,9 +17,8 @@ does not publish an issue or make it available on the other machines.
   evidence, delete the original report so it is not repeatedly triaged. For a
   combined audit, account for every finding before retiring the report. Commit
   tracked deletions so a future pull does not restore the local backlog.
-- Preserve `.scratch/lazy-everything.patch`, unrelated research notes, and
-  `toolsweep-*` artifacts unless cleanup of those specific files is explicitly
-  requested. Link GitHub issues from any retained research notes.
+- Keep unrelated research notes and `toolsweep-*` artifacts unless cleanup is
+  explicitly requested. Link GitHub issues from any retained research notes.
 
 ## When a skill says "publish to the issue tracker"
 
