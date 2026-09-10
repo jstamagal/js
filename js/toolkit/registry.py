@@ -83,7 +83,16 @@ class ToolRegistry:
         return TurnToolSurface(self, cwd, mcp_host=mcp_host)
 
 
+# EXPERIMENT (lazy-everything): every native tool is deferred, so the boot surface
+# is tool_discovery alone and the model must find and load what it needs.
+# Revert with: git checkout -- js/toolkit/registry.py
 _LAZY_SUITES = {
+    **{tool.name: "fs" for tool in fs.tools()},
+    **{tool.name: "shell" for tool in process_net.tools()},
+    **{tool.name: "search" for tool in search.tools()},
+    **{tool.name: "meta" for tool in meta.tools()},
+    **{tool.name: "kernel" for tool in kernel.tools()},
+    **{tool.name: "toolbox" for tool in toolbox.tools()},
     **{tool.name: "browser" for tool in browser.tools()},
     **{tool.name: "terminal" for tool in terminal.tools()},
     **{tool.name: "wiki" for tool in wiki.tools()},
