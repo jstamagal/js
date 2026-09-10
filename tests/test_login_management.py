@@ -61,14 +61,14 @@ def test_add_custom_is_first_and_selectable(monkeypatch):
 
 def test_manager_displays_saved_details_with_masked_credentials(monkeypatch):
     logins.save_login(logins.Login("mine", provider_base_url="http://localhost:8000/v1", provider_api_key="private"))
-    logins.cache_models("mine", ["model"])
+    logins.cache_models("mine", [f"model-{i}" for i in range(37)])
     screen = Screen([curses.KEY_DOWN, ord("q")])
     monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(screen, *a, **kw))
     assert login_cli._run_login() == 0
     output = "\n".join(screen.rendered)
     assert "http://localhost:8000/v1" in output
     assert "private" not in output
-    assert re.search(r"\b1\b", output)  # displayed cache count, independent of wording
+    assert re.search(r"\b37\b", output)  # displayed cache count, independent of wording
     assert "saved" in output
     assert "<add custom provider>" in output
 
