@@ -47,7 +47,8 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
 
     assert {"old_string", "new_string", "replace_all"}.issubset(props)
     assert props["edits"]["minItems"] == 1
-    assert set(props["edits"]["items"]["required"]) == {"old_string", "new_string"}
+    # Required names may be reordered, but duplicates make the schema invalid.
+    assert sorted(props["edits"]["items"]["required"]) == ["new_string", "old_string"]
     assert props["edits"]["items"]["additionalProperties"] is False
 
 
