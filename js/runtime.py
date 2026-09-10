@@ -326,12 +326,19 @@ def _normalize_tool_call_batch(
         canonical_name = tool.name if tool is not None else _canonical_tool_call_name(
             call.name, registry
         )
+        schema = tool.openai_spec()["function"]["parameters"] if tool is not None else None
         validation_error: str | None = None
         try:
             arguments = _repair_jsonish(call.arguments())
         except ValueError as exc:
             arguments = {}
             validation_error = f"could not parse arguments: {exc}"
+        else:
+            # Before validation, not after: a container the model serialized as a
+            # JSON string is the right value in the wrong type, and rejecting it
+            # here means the handler never runs (patch's `edits` batch form was
+            # unusable for exactly this reason).
+            arguments = tool_args.coerce_json_containers(arguments, schema)
         canonical_args = json.dumps(
             arguments,
             ensure_ascii=False,
@@ -346,8 +353,7 @@ def _normalize_tool_call_batch(
 
         if validation_error is None and tool is None:
             validation_error = "tool was not published for this model call"
-        if validation_error is None and tool is not None:
-            schema = tool.openai_spec()["function"]["parameters"]
+        if validation_error is None and schema is not None:
             try:
                 validator_type = jsonschema_validators.validator_for(schema)
                 validator_type.check_schema(schema)

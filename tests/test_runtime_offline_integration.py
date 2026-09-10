@@ -1322,3 +1322,64 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
     prior_in_next_call = next(m for m in calls[0]["messages"] if m.role == "assistant")
     assert not prior_in_next_call.reasoning  # stripped by _strip_orphan_reasoning
     assert any(p.kind == "text" and p.text == "INTERIM" for p in prior_in_next_call.parts)
+
+
+def test_container_arguments_serialized_as_strings_are_parsed_before_validation():
+    """The right JSON in the wrong type: only a declared array/object is parsed,
+    only when the string really is that type, and never over a `string` slot."""
+    from js import tool_args
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "edits": {"type": "array", "items": {"type": "object", "properties": {}}},
+            "options": {"type": "object"},
+            "note": {"type": "string"},
+            "either": {"type": ["string", "array"]},
+        },
+    }
+    arguments = {
+        "edits": '[{"old_string": "a", "new_string": "b"}]',
+        "options": '{"replace_all": true}',
+        "note": '["not", "an", "array"]',
+        "either": "[1, 2]",
+        "unknown": '["left", "alone"]',
+    }
+
+    actual = tool_args.coerce_json_containers(arguments, schema)
+
+    assert actual == {
+        "edits": [{"old_string": "a", "new_string": "b"}],
+        "options": {"replace_all": True},
+        "note": '["not", "an", "array"]',
+        "either": "[1, 2]",
+        "unknown": '["left", "alone"]',
+    }
+
+
+def test_container_coercion_leaves_genuinely_wrong_arguments_to_fail_validation():
+    from js import tool_args
+
+    schema = {"type": "object", "properties": {"edits": {"type": "array"}}}
+
+    assert tool_args.coerce_json_containers({"edits": "not json"}, schema) == {"edits": "not json"}
+    assert tool_args.coerce_json_containers({"edits": '{"a": 1}'}, schema) == {"edits": '{"a": 1}'}
+
+
+def test_string_serialized_edits_reach_the_patch_handler_as_an_array(tmp_path):
+    """Regression: patch's batch form was rejected as `is not of type 'array'`
+    before dispatch, so only one replacement per call ever worked."""
+    from js.toolkit import fs
+
+    tool = next(item for item in fs.tools() if item.name == "patch")
+    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+    arguments = json.dumps(
+        {"file_path": str(tmp_path / "f.txt"), "edits": json.dumps([{"old_string": "a", "new_string": "b"}])}
+    )
+
+    normalized, stats = runtime._normalize_tool_call_batch(
+        [runtime._PendingToolCall("call_1", "patch", [arguments])], registry, limit=10
+    )
+
+    assert stats.invalid == 0
+    assert json.loads(normalized[0].arguments())["edits"] == [{"old_string": "a", "new_string": "b"}]

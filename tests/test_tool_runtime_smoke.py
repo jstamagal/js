@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 import shutil
 import sys
@@ -11,7 +12,7 @@ from js import model_client, runtime, setcmd, settings, tools as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
-from js.toolkit.core import ToolResult
+from js.toolkit.core import ToolResult, call_tool
 import ai
 
 
@@ -88,6 +89,32 @@ def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tm
 
     assert result.startswith(f"patched {target} (2 edits, hash ")
     assert target.read_text(encoding="utf-8") == "three\n"
+
+
+def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_path):
+    """Grammar-constrained backends hand back a nested array as an escaped JSON
+    string. The batch form was then rejected by schema validation before `patch`
+    ever ran, so only the scalar form worked."""
+    target, context = _read_file(tmp_path, "serialized.txt", "one\ntwo\n")
+    tool = next(item for item in fs.tools() if item.name == "patch")
+    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+    arguments = json.dumps({
+        "file_path": "serialized.txt",
+        "edits": json.dumps([
+            {"old_string": "one", "new_string": "ONE"},
+            {"old_string": "two", "new_string": "TWO"},
+        ]),
+    })
+
+    normalized, stats = runtime._normalize_tool_call_batch(
+        [runtime._PendingToolCall("call_1", "patch", [arguments])], registry, limit=10
+    )
+
+    assert stats.invalid == 0
+    assert normalized[0].validation_error is None
+    result = call_tool(tool, json.loads(normalized[0].arguments()), context)
+    assert str(result).startswith(f"patched {target} (2 edits, hash ")
+    assert target.read_text(encoding="utf-8") == "ONE\nTWO\n"
 
 
 def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
