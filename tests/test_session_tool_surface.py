@@ -207,8 +207,9 @@ def test_every_request_trace_lists_published_names():
         model_client._emit_request_trace(sink=sink, model_id='offline', provider_id=None,
             provider_base_url=None, params=None, messages=[], tools=tools,
             dump_schemas=schemas, dump_from=0)
-        assert '"tool_names": [' in sink.getvalue()
-        assert '"shell"' in sink.getvalue()
+        output = sink.getvalue()
+        header, _ = json.JSONDecoder().raw_decode(output[output.index("{"):])
+        assert header["tool_names"] == ["shell"]
 
 
 def test_skill_restore_retains_activated_native_tools_without_rereading_body(tmp_path):

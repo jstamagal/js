@@ -17,6 +17,8 @@ from js.toolkit.registry import build_default_registry, select
 from js.model_client import ModelStreamResult, ModelToolCall
 import ai
 
+from tool_loading import after_loading
+
 
 def _fake_stream_result(text: str = "ok"):
     return ModelStreamResult(
@@ -125,7 +127,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SHADOW_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
 
     actual = task(["use the most specific prompt"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -133,7 +135,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     assert "PROJECT SYSTEM" in str(seen["system"])
     assert "GLOBAL SYSTEM" not in str(seen["system"])
     assert "REPO SYSTEM" not in str(seen["system"])
-    assert seen["tools"] == ["todo_read"]
+    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
 
 
 def test_task_requires_named_agent_id(tmp_path):
@@ -180,7 +182,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("UNDO_TEST_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "undo"))
 
     actual = task(["try undo"], agent_id="worker", context=parent)
 
@@ -207,7 +209,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("WRITE_TEST_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "write"))
 
     actual = task(["try overwrite"], agent_id="worker", context=parent)
 
@@ -255,17 +257,20 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("AGENTX_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
 
     actual = task(["hello"], agent_id="workerx", session_id="child-session", context=ToolContext(cwd=tmp_path))
 
     session_file = tmp_path / ".js" / "sessions" / "workerx" / "child-session.jsonl"
     assert "AGENTX_DONE" in actual
-    assert seen["tools"] == ["todo_read"]
+    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
     assert "WORKERX SYSTEM" in str(seen["system"])
     assert "---" not in str(seen["system"])
     assert session_file.exists()
-    assert [m["role"] for m in load_messages(session_file)] == ["user", "assistant"]
+    history = load_messages(session_file)
+    assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
+    assert history[1]["tool_calls"][0]["function"]["name"] == "tool_discovery"
+    assert history[2]["tool_call_id"] == history[1]["tool_calls"][0]["id"]
 
 
 def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path):
@@ -281,7 +286,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("NAMED_AGENT_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
 
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
@@ -290,7 +295,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
     assert "TASK_RESULTS agent=worker" in actual
     assert "NAMED_AGENT_DONE" in actual
     assert "WORKER SYSTEM" in str(seen["system"])
-    assert seen["tools"] == ["todo_read"]
+    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
 
 
 def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path):
@@ -304,7 +309,7 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
         seen_message_counts.append(len(kwargs["messages"]))
         return _fake_stream_result(f"TURN_{len(seen_tools)}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read"))
 
     first = task(["first"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
     second = task(["second"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
@@ -312,9 +317,13 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     session_file = tmp_path / ".js" / "sessions" / "worker" / "resume-me.jsonl"
     assert "TURN_1" in first
     assert "TURN_2" in second
-    assert seen_tools == [["todo_read"], ["todo_read"]]
+    assert len(seen_tools) == 2
+    assert all(set(names) == {"todo_read", "tool_discovery"} for names in seen_tools)
     assert seen_message_counts[1] > seen_message_counts[0]
-    assert [m["role"] for m in load_messages(session_file)] == ["user", "assistant", "user", "assistant"]
+    history = load_messages(session_file)
+    assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
+    # The first turn loads the child tool; resume retains it without reloading.
+    assert sum(m.get("name") == "tool_discovery" and m["role"] == "tool" for m in history) == 1
 
 
 def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
@@ -346,14 +355,14 @@ def test_two_concurrent_workers_have_no_todo_state_bleed(monkeypatch, tmp_path):
 
     def completion_stub(**kwargs):
         last = kwargs["messages"][-1]
-        if last.role == "user":
-            content = last.parts[0].text
+        if not any(m.role == "tool" and any(getattr(p, "tool_name", None) == "todo_write" for p in m.parts) for m in kwargs["messages"]):
+            content = next(m.parts[0].text for m in kwargs["messages"] if m.role == "user")
             return _fake_tool_result("todo_write", f'{{"todos":[{{"content":"{content}","status":"pending"}}]}}')
         with lock:
             tool_results.append(last.parts[0].get_model_input())
         return _fake_stream_result("TODO_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_write"))
 
     actual = task(["left", "right"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -438,12 +447,12 @@ def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SURFACE_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
 
     actual = task(["check tools"], agent_id="worker", context=parent)
 
     assert "SURFACE_OK" in actual
-    assert seen["tools"] == ["todo_read"]
+    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
 
 
 def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path):

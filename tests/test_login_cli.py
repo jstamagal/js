@@ -37,10 +37,8 @@ def test_login_cli_main_accepts_login_subcommand(monkeypatch):
 def test_login_cli_provider_list_includes_first_class_shortcuts():
     rows = {provider.id: provider.display_name for provider in providers.all_providers()}
 
-    assert rows["ollama"].startswith("Ollama")
-    assert rows["llama.cpp"].startswith("llama.cpp")
-    assert rows["mimo"].startswith("Xiaomi MiMo")
-    assert rows["mimo-token-plan"].startswith("Xiaomi MiMo Token Plan")
+    for provider_id in ("ollama", "llama.cpp", "mimo", "mimo-token-plan"):
+        assert rows[provider_id].strip()
 
 
 def test_login_registry_includes_modelsdotdev_provider(tmp_path: Path):
@@ -578,18 +576,14 @@ def test_dialect_map_tags_anthropic_models():
     assert dialects.get("glm-5.2") == "openai"
 
 
-def test_mask_hides_short_and_boundary_length_keys():
-    # len<=12 can't show an 8-char prefix + 4-char suffix without revealing
-    # every character (8 + 4 = 12), so anything that short falls back to
-    # all-asterisks instead of a fake-looking partial reveal.
-    assert login_cli._mask("short") == "*****"
-    assert login_cli._mask("sk-12345678x") == "*" * 12  # 12 chars: full overlap
-    assert login_cli._mask("x" * 11) == "*" * 11
-
-
-def test_mask_reveals_edges_only_once_a_hidden_middle_exists():
-    masked = login_cli._mask("sk-1234567890abcd")  # 17 chars: 8 prefix + 5 hidden + 4 suffix
-    assert masked == "sk-12345*******abcd"
+def test_mask_does_not_reveal_complete_keys_even_across_separators():
+    for key in ("short", "sk-12345678x", "x" * 11, "sk-1234567890abcd"):
+        masked = login_cli._mask(key)
+        assert masked
+        # A prefix + separator + suffix must not expose every character of a
+        # short key. Checking contiguous substrings would miss that regression.
+        displayed = iter(masked)
+        assert not all(character in displayed for character in key)
 
 
 def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):

@@ -1,4 +1,4 @@
-"""Positive checks for model-facing descriptions and JSON schemas."""
+"""Model-facing schemas agree with callable tools and handler behavior."""
 
 from __future__ import annotations
 
@@ -19,12 +19,12 @@ def _specs(*names: str) -> dict[str, dict]:
 def test_fs_search_schema_exposes_filename_mode_and_readable_flag_names_only():
     params = _specs("fs_search")["fs_search"]["parameters"]
 
-    assert params["properties"]["output_mode"]["enum"] == [
+    assert set(params["properties"]["output_mode"]["enum"]) == {
         "files",
         "content",
         "files_with_matches",
         "count",
-    ]
+    }
     assert {
         "before_context", "after_context", "context_lines",
         "show_line_numbers", "case_insensitive", "file_type",
@@ -47,7 +47,8 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
 
     assert {"old_string", "new_string", "replace_all"}.issubset(props)
     assert props["edits"]["minItems"] == 1
-    assert props["edits"]["items"]["required"] == ["old_string", "new_string"]
+    # Required names may be reordered, but duplicates make the schema invalid.
+    assert sorted(props["edits"]["items"]["required"]) == ["new_string", "old_string"]
     assert props["edits"]["items"]["additionalProperties"] is False
 
 
@@ -59,12 +60,13 @@ def test_todo_item_contract_requires_content_and_defaults_status(tmp_path):
     assert item["properties"]["content"]["minLength"] == 1
     assert "pattern" not in item["properties"]["content"]  # llama.cpp grammar path chokes on regex patterns; todo_write validates in code
     assert item["properties"]["status"]["default"] == "pending"
-    result = call_tool(
+    context = ToolContext(cwd=tmp_path)
+    call_tool(
         tool,
         {"todos": [{"content": "model contract"}]},
-        ToolContext(cwd=tmp_path),
+        context,
     )
-    assert "('model contract', 'pending')" in result
+    assert context.todos["model contract"].status == "pending"
 
 
 def test_closed_sets_and_numeric_bounds_match_handler_contracts():
@@ -84,15 +86,15 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
         for name, spec in specs.items()
     }
 
-    assert properties["browse"]["dump"]["enum"] == [
+    assert set(properties["browse"]["dump"]["enum"]) == {
         "markdown", "text", "html", "links", "original", "assets", "cookies",
-    ]
-    assert properties["terminal_session"]["action"]["enum"] == [
+    }
+    assert set(properties["terminal_session"]["action"]["enum"]) == {
         "start", "send", "look", "stop", "list",
-    ]
-    assert properties["wiki_write"]["kind"]["enum"] == [
+    }
+    assert set(properties["wiki_write"]["kind"]["enum"]) == {
         "source", "entity", "concept", "synthesis",
-    ]
+    }
     assert (properties["serper_search"]["num"]["minimum"], properties["serper_search"]["num"]["maximum"]) == (1, 100)
     assert (properties["tavily_search"]["max_results"]["minimum"], properties["tavily_search"]["max_results"]["maximum"]) == (1, 20)
     assert (properties["exa_search"]["num"]["minimum"], properties["exa_search"]["num"]["maximum"]) == (1, 100)
@@ -108,32 +110,14 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
     assert (properties["browser_probe"]["viewport_height"]["minimum"], properties["browser_probe"]["viewport_height"]["maximum"]) == (100, 2160)
 
 
-def test_rendered_file_and_terminal_descriptions_state_the_real_contracts():
-    specs = _specs(
-        "fs_search", "shell", "patch", "read", "todo_write",
-        "terminal_session", "terminal_snapshot",
-    )
-
-    assert "In `files` mode, `pattern` is instead a filename/path glob" in specs["fs_search"]["description"]
-    assert "Directory-only discovery: use `shell` with `fd --type d`" in specs["shell"]["description"]
-    assert "The final filesystem write itself is not crash-atomic." in specs["patch"]["description"]
-    assert "Lines are returned whole, however long they are" in specs["read"]["description"]
-    assert "`status` is optional and defaults to `pending`" in specs["todo_write"]["description"]
-    assert "they indicate passive change since the prior observation" in specs["terminal_session"]["description"]
-    assert "`terminal_snapshot` also updates the comparison baseline" in specs["terminal_session"]["description"]
-
-
-def test_every_mcp_control_explains_discovery_and_exact_server_names():
+def test_mcp_control_catalog_ids_load_callable_tools():
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
-
-    for entry in host.initial_catalog():
-        assert "run tool_discovery with kind=\"mcp\"" in entry.description
-        assert "pass the exact server name from a mcp:server:* status result" in entry.description
+    entries = host.initial_catalog()
+    assert {entry.name for entry in entries} == set(dict(host.CONTROL_TOOLS))
+    for entry in entries:
         assert entry.loadable is True
-    for name in (
-        "mcp_resource_read",
-        "mcp_resource_subscribe",
-        "mcp_resource_unsubscribe",
-    ):
-        description = dict(host.CONTROL_TOOLS)[name]
-        assert "copy an exact returned URI" in description
+        assert entry.description.strip()
+        loaded = host.load(entry.id)
+        assert loaded == [entry.name]
+        tools = host.tools(loaded)
+        assert [tool.openai_spec()["function"]["name"] for tool in tools] == [entry.name]

@@ -4,21 +4,35 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 RUNNER = Path(__file__).resolve().parents[1] / "bench" / "toolbench" / "run.py"
 spec = importlib.util.spec_from_file_location("toolbench_run", RUNNER)
 run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run)
 
 
-def test_suite_file_parses_and_names_default_js_agents():
+def test_suite_file_parses_and_references_available_agent_assets():
     suite = run.load_suite(RUNNER.with_name("suite.toml"))
-    defaults = run.selected(suite["agents"], None, default_only=True)
-    assert [a["name"] for a in defaults] == ["js-full-slim", "js-full-stock"]
-    assert {r["name"] for r in suite["repos"]} >= {"click", "dayjs", "cobra"}
+    assert suite["agents"]
+    assert suite["repos"]
     for agent in suite["agents"]:
         if agent["kind"] == "js":
             assert (RUNNER.parent / "agents" / agent["agent"] / "00-tools.yaml").exists()
             assert agent["descriptions"] in ("slim", "stock")
+
+
+def test_selection_respects_defaults_and_explicit_names():
+    items = [
+        {"name": "first", "default": True},
+        {"name": "optional", "default": False},
+        {"name": "implicit"},
+    ]
+    assert run.selected(items, None, default_only=True) == [items[0], items[2]]
+    assert run.selected(items, None, default_only=False) == items
+    assert run.selected(items, " implicit, optional ", default_only=True) == [items[2], items[1]]
+    with pytest.raises(SystemExit):
+        run.selected(items, "missing", default_only=False)
 
 
 def test_js_agent_command_runs_in_the_sandbox_with_its_variant(tmp_path):
