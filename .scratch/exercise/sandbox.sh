@@ -27,6 +27,19 @@ UV_PY="$HOME/.local/share/uv/python"
 [ -d "$JS_SRC" ]  || { echo "sandbox: no js source at $JS_SRC" >&2; exit 2; }
 [ -d "$UV_TOOL" ] || { echo "sandbox: no uv tool install at $UV_TOOL" >&2; exit 2; }
 
+# Credentials are stripped by default. SANDBOX_KEEP names the ones this run is
+# allowed to carry in -- a login-routed arm authenticates from a provider env
+# var, so blanket-unsetting them locks it out of its own endpoint.
+SECRETS="DEEPSEEK_API_KEY OPENROUTER_API_KEY OPENCODE_GO_API_KEY NINEROUTER_API_KEY
+         HF_TOKEN GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY
+         EXA_API_KEY SERPER_API_KEY TAVILY_API_KEY"
+UNSET_ARGS=""
+for name in $SECRETS; do
+  keep=no
+  for k in ${SANDBOX_KEEP:-}; do [ "$k" = "$name" ] && keep=yes; done
+  [ "$keep" = yes ] || UNSET_ARGS="$UNSET_ARGS --unsetenv $name"
+done
+
 mkdir -p "$SBHOME"
 
 exec bwrap \
@@ -53,13 +66,7 @@ exec bwrap \
   --setenv XDG_DATA_HOME "$SBHOME/.local/share" \
   --setenv XDG_CACHE_HOME "$SBHOME/.cache" \
   --setenv TMPDIR "$WORK/.tmp" \
-  --unsetenv DEEPSEEK_API_KEY \
-  --unsetenv OPENROUTER_API_KEY \
-  --unsetenv OPENCODE_GO_API_KEY \
-  --unsetenv NINEROUTER_API_KEY \
-  --unsetenv HF_TOKEN \
-  --unsetenv GH_TOKEN \
-  --unsetenv GITHUB_TOKEN \
+  $UNSET_ARGS \
   --share-net \
   --die-with-parent \
   --new-session \
