@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ai
+
 from js import compaction, runtime
 
 
@@ -107,3 +109,37 @@ def test_post_compact_rehydration_is_none_without_reads():
         read_paths = set()
 
     assert compaction._post_compact_rehydration(Ctx()) is None
+
+
+# Overflow classification: recovery, microcompaction and the manual /compact path
+# all hang off is_context_overflow_error, so a provider whose phrasing misses
+# every needle gets no recovery at all — which is what happened on llama.cpp, the
+# daily driver, until 4bb7562 added the needles. That fix shipped without a test.
+LLAMACPP_OVERFLOW_MESSAGE = (
+    "Error code: 400 - {'error': {'code': 400, 'message': 'request (97720 tokens) "
+    "exceeds the available context size (89600 tokens), try increasing it', "
+    "'type': 'exceed_context_size_error'}}"
+)
+
+
+def test_llamacpp_overflow_wording_is_classified_as_context_overflow():
+    exc = ai.ProviderAPIError(
+        LLAMACPP_OVERFLOW_MESSAGE,
+        provider="openai",
+        error_type="exceed_context_size_error",
+    )
+
+    assert compaction.is_context_overflow_error(exc) is True
+
+
+def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
+    for message in (
+        "Error code: 401 - invalid api key",
+        "Error code: 400 - unknown model 'gpt-9'",
+        "Error code: 500 - internal server error",
+    ):
+        assert compaction.is_context_overflow_error(ai.ProviderAPIError(message)) is False
+
+
+def test_overflow_classification_ignores_non_provider_exceptions():
+    assert compaction.is_context_overflow_error(RuntimeError("context length exceeded")) is False
