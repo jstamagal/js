@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import ai
 import ai.types.messages
@@ -1383,3 +1384,91 @@ def test_string_serialized_edits_reach_the_patch_handler_as_an_array(tmp_path):
 
     assert stats.invalid == 0
     assert json.loads(normalized[0].arguments())["edits"] == [{"old_string": "a", "new_string": "b"}]
+
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _trace_lines(capsys) -> list[str]:
+    return [ANSI_RE.sub("", line) for line in capsys.readouterr().out.splitlines()]
+
+
+def _trace_registry():
+    def big(**_kwargs):
+        return "\n".join(f"line {index} with some words in it" for index in range(200))
+
+    def boom(**_kwargs):
+        return "ERROR: tool_discovery found no native tool matching 'bash terminal command'"
+
+    async def slow(**_kwargs):
+        return "async result"
+
+    tools = (
+        Tool("big", "big", big, {}),
+        Tool("boom", "boom", boom, {}),
+        Tool("slow", "slow", slow, {}),
+    )
+    return ToolRegistry(tools=tools, aliases={name: name for name in ("big", "boom", "slow")})
+
+
+def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
+    """The trace used to print only the call half of every exchange, so a run
+    could show `tool_discovery {...}` and never whether it returned anything."""
+    registry = _trace_registry()
+    calls = [
+        runtime._PendingToolCall("c1", "big", ["{}"]),
+        runtime._PendingToolCall("c2", "boom", ["{}"]),
+    ]
+
+    runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 256 * 1024, True,
+        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+    )
+
+    lines = _trace_lines(capsys)
+    result_lines = [line for line in lines if line.lstrip().startswith("◂")]
+    assert len(result_lines) == 2
+    assert "◂ big" in result_lines[0] and "6089 B" in result_lines[0] and "200 lines" in result_lines[0]
+    assert "ms" in result_lines[0]
+    # Capped hard: a 6 KB result never reaches the terminal whole.
+    big_preview = lines[lines.index(result_lines[0]) + 1]
+    assert len(big_preview) < 400
+    assert "…truncated, 6089 B total]" in big_preview
+    # The error is the reason the trace is on, so it survives intact.
+    error_preview = lines[lines.index(result_lines[1]) + 1]
+    assert "ERROR: tool_discovery found no native tool matching" in error_preview
+    assert "truncated" not in error_preview
+
+
+def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys):
+    registry = _trace_registry()
+    invalid = runtime._PendingToolCall("c1", "big", ["{}"], validation_error="'path' is a required property")
+    calls = [invalid, runtime._PendingToolCall("c2", "nope", ["{}"])]
+
+    runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 256 * 1024, True,
+        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+    )
+
+    lines = _trace_lines(capsys)
+    assert sum(1 for line in lines if line.lstrip().startswith("▸")) == 2
+    assert sum(1 for line in lines if line.lstrip().startswith("◂")) == 2
+    assert any("invalid arguments for big" in line for line in lines)
+    assert any("no tool named nope" in line for line in lines)
+
+
+def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
+    import asyncio
+
+    registry = _trace_registry()
+
+    asyncio.run(runtime._dispatch_async_tool(
+        runtime._PendingToolCall("c1", "slow", ["{}"]),
+        runtime.Telemetry(None), 256 * 1024, True,
+        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+    ))
+
+    lines = _trace_lines(capsys)
+    assert any(line.lstrip().startswith("▸ slow") for line in lines)
+    assert any(line.lstrip().startswith("◂ slow") and "12 B" in line and "1 line" in line for line in lines)
+    assert any(line.strip() == "async result" for line in lines)

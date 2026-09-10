@@ -502,6 +502,49 @@ def _short_default(args: dict) -> str:
     return s if len(s) <= 80 else s[:77] + "..."
 
 
+# A trace has to carry both halves of an exchange or it is a call log, not a
+# trace. These caps are what keep the response half printable: _cap_result lets
+# a result run to limits.max_tool_results_per_turn_bytes (256 KB by default),
+# and dumping that to the terminal is worse than printing nothing. Errors get a
+# longer budget because a short `ERROR: ...` is usually the entire reason
+# someone turned the trace on.
+_TRACE_PREVIEW_CHARS = 240
+_TRACE_ERROR_PREVIEW_CHARS = 900
+
+
+def _trace_result_text(result: Any) -> tuple[str, bool]:
+    """Flatten one tool result to (text, is_error) for the trace line."""
+    if isinstance(result, ToolResult):
+        return result.dehydrated(), result.is_error
+    text = result if isinstance(result, str) else str(result)
+    return text, text.lstrip().startswith("ERROR")
+
+
+def _print_trace_result(name: str, result: Any, started: float) -> None:
+    """Print the response half of one traced tool exchange, hard-capped.
+
+    Two lines at most: a header carrying elapsed ms, the real byte count and the
+    line count, then a whitespace-collapsed preview with an explicit truncation
+    marker when there is more."""
+    elapsed_ms = int((time.time() - started) * 1000)
+    text, is_error = _trace_result_text(result)
+    size = len(text.encode("utf-8", errors="replace"))
+    lines = text.count("\n") + 1 if text else 0
+    color = C.ORANGE if is_error else C.GREY
+    print(
+        f"  {color}◂ {name}{C.RESET} {C.GREY}{elapsed_ms}ms  {size} B  {lines} line"
+        f"{'' if lines == 1 else 's'}{C.RESET}",
+        flush=True,
+    )
+    preview = " ".join(text.split())
+    if not preview:
+        return
+    budget = _TRACE_ERROR_PREVIEW_CHARS if is_error else _TRACE_PREVIEW_CHARS
+    if len(preview) > budget:
+        preview = preview[:budget] + f" […truncated, {size} B total]"
+    print(f"    {color}{preview}{C.RESET}", flush=True)
+
+
 def _repair_jsonish(raw: str) -> dict:
     return tool_args.repair_jsonish(raw)
 
@@ -723,6 +766,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               registry: ToolRegistry | None = None,
               tool_context: ToolContext | None = None) -> tuple[dict, str]:
     """Parse + execute one tool call. Returns (parsed_args, result_string)."""
+    started = time.time()
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
@@ -732,6 +776,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = f"ERROR: could not parse arguments for {name}: {e}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
+        if trace:
+            _print_trace_result(name, result, started)
         return {}, result
 
     active_registry = registry or T._REGISTRY
@@ -749,7 +795,10 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = f"ERROR: no tool named {name}; use {active_registry.names()}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
-        return args, _cap_result(result, cap_bytes)
+        capped = _cap_result(result, cap_bytes)
+        if trace:
+            _print_trace_result(trace_name, capped, started)
+        return args, capped
 
     started = time.time()
     try:
@@ -762,7 +811,10 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
-    return args, _cap_result(result, cap_bytes)
+    capped = _cap_result(result, cap_bytes)
+    if trace:
+        _print_trace_result(tool.name, capped, started)
+    return args, capped
 
 
 def _is_task_call(pc: _PendingToolCall) -> bool:
@@ -788,10 +840,18 @@ def _dispatch_tool_calls(
     for idx, pc in enumerate(tool_calls):
         if pc.validation_error is None:
             continue
+        started = time.time()
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
         result = f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
-        records[idx] = (args, error_tracker.record(pc.name, _cap_result(result, cap_bytes)))
+        recorded = error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+        # A call rejected before dispatch is still an exchange the model sees.
+        # It used to be invisible in the trace from both ends.
+        if trace:
+            pretty = _pretty_args(pc.name, args)
+            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET}" + (f" {pretty}{C.RESET}" if pretty else ""), flush=True)
+            _print_trace_result(pc.name, recorded, started)
+        records[idx] = (args, recorded)
     task_indices = [
         idx for idx, pc in enumerate(tool_calls)
         if records[idx] is None and _is_task_call(pc)
@@ -856,6 +916,7 @@ async def _dispatch_fan_out_async(
     from a threaded one to the caller."""
     from .toolkit import meta
 
+    started = time.time()
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as e:
@@ -863,7 +924,10 @@ async def _dispatch_fan_out_async(
             print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {pc.name}: {e}"
-        return pc, {}, error_tracker.record(pc.name, result)
+        recorded = error_tracker.record(pc.name, result)
+        if trace:
+            _print_trace_result(pc.name, recorded, started)
+        return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
     trace_name = tool.name if tool is not None else pc.name
@@ -874,7 +938,10 @@ async def _dispatch_fan_out_async(
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = f"ERROR: no tool named {pc.name}; use {registry.names()}"
-        return pc, args, error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+        recorded = error_tracker.record(pc.name, _cap_result(result, cap_bytes))
+        if trace:
+            _print_trace_result(trace_name, recorded, started)
+        return pc, args, recorded
 
     started = time.time()
     try:
@@ -885,21 +952,31 @@ async def _dispatch_fan_out_async(
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
-    return pc, args, error_tracker.record(tool.name, _cap_result(result, cap_bytes))
+    recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
+    if trace:
+        _print_trace_result(tool.name, recorded, started)
+    return pc, args, recorded
 
 
 async def _dispatch_async_tool(
     pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
     error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
 ) -> tuple[_PendingToolCall, dict, Any]:
+    started = time.time()
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
         result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
+        if trace:
+            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
+            _print_trace_result(pc.name, result, started)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
         result = error_tracker.record(pc.name, f"ERROR: no tool named {pc.name}; use {registry.names()}")
+        if trace:
+            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {_pretty_args(pc.name, args)}{C.RESET}", flush=True)
+            _print_trace_result(pc.name, result, started)
         return pc, args, result
     if trace:
         pretty = _pretty_args(tool.name, args)
@@ -916,6 +993,8 @@ async def _dispatch_async_tool(
     result = _cap_result(result, cap_bytes)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
+    if trace:
+        _print_trace_result(tool.name, result, started)
     return pc, args, result
 
 
