@@ -836,7 +836,11 @@ def _rg_types(rg: str) -> frozenset[str]:
 
 
 def _rg_stream(
-    argv: list[str], want: int, timeout: int, input_text: str | None = None
+    argv: list[str],
+    want: int,
+    timeout: int,
+    input_text: str | None = None,
+    cwd: str | None = None,
 ) -> tuple[list[str], int | None, str, bool]:
     """Run rg and collect at most *want* output lines, then stop it.
 
@@ -861,6 +865,7 @@ def _rg_stream(
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=_rg_env(), text=True, encoding="utf-8", errors="replace",
             start_new_session=True,
+            cwd=cwd,
         )
     except OSError as exc:
         return [], 2, str(exc), False
@@ -1048,7 +1053,14 @@ def fs_search(
         argv += ["--glob", _HIDDEN_GUARD_GLOB]
     argv += ["--", str(root)]
 
-    lines, rc, stderr, timed_out = _rg_stream(argv, skip + limit, _RG_TIMEOUT_S)
+    # Run rg from the search root: a glob containing a slash is matched against
+    # the path relative to rg's working directory, so `src/*.py` can never match
+    # under an absolute root unless rg's cwd is that root. Absolute roots still
+    # print absolute paths, so the output shape is unchanged.
+    rg_cwd = str(root) if root.is_dir() else str(root.parent)
+    lines, rc, stderr, timed_out = _rg_stream(
+        argv, skip + limit, _RG_TIMEOUT_S, cwd=rg_cwd
+    )
     if timed_out:
         return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
     # rc None = rg stopped early with a full page of matches; 0 = matches; 1 = no

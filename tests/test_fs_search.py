@@ -80,6 +80,26 @@ def test_fs_search_files_mode_finds_a_filename_without_reading_its_contents(tmp_
 
 
 @requires_rg
+def test_fs_search_slash_glob_is_relative_to_the_search_root(tmp_path):
+    """ripgrep matches a slash-bearing glob against paths relative to its own
+    working directory, so `src/*.py` needs rg's cwd at the absolute search root."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.py").write_text("NEEDLE\n", encoding="utf-8")
+    (repo / "src" / "notes.txt").write_text("NEEDLE\n", encoding="utf-8")
+
+    actual = fs_search(
+        "NEEDLE",
+        path=str(repo),
+        glob="src/*.py",
+        output_mode="content",
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert actual == f"{repo / 'src' / 'app.py'}:1:NEEDLE"
+
+
+@requires_rg
 def test_fs_search_count_mode_reports_per_file_line_counts(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("hit\nhit\nmiss\n", encoding="utf-8")
