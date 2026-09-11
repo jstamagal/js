@@ -153,6 +153,28 @@ def test_patch_batch_aborts_when_an_edit_normalizes_to_a_noop(tmp_path):
     assert not context.snapshots
 
 
+def test_patch_diff_marks_a_missing_final_newline(tmp_path):
+    target = tmp_path / "file.txt"
+    target.write_bytes(b"one\ntwo\nthree")
+    context = ToolContext(cwd=tmp_path)
+    fs.read(str(target), context=context)
+
+    result = fs.patch(str(target), old_string="three", new_string="THREE", context=context)
+
+    body = result.splitlines()
+    start = body.index("@@ -1,3 +1,3 @@")
+    assert body[start:] == [
+        "@@ -1,3 +1,3 @@",
+        " one",
+        " two",
+        "-three",
+        "\\ No newline at end of file",
+        "+THREE",
+        "\\ No newline at end of file",
+    ]
+    assert target.read_bytes() == b"one\ntwo\nTHREE"
+
+
 @pytest.mark.parametrize("operation", ["patch", "write"])
 def test_utf8_edit_under_ascii_locale(tmp_path, operation):
     script = r'''

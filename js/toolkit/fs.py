@@ -545,6 +545,25 @@ def _count_overlapping(text: str, needle: str) -> int:
     return count
 
 
+def _unified_diff(source: str, updated: str, fromfile: str, tofile: str) -> str:
+    """Unified diff with the standard no-final-newline marker.
+
+    difflib never emits ``\\ No newline at end of file``, so the last
+    removed/added line of a file with no trailing newline is concatenated onto
+    the next diff line, producing invalid unified-diff syntax."""
+    chunks: list[str] = []
+    for line in difflib.unified_diff(
+        source.splitlines(keepends=True),
+        updated.splitlines(keepends=True),
+        fromfile=fromfile,
+        tofile=tofile,
+    ):
+        chunks.append(line)
+        if line and not line.endswith("\n"):
+            chunks.append("\n\\ No newline at end of file\n")
+    return "".join(chunks)
+
+
 def _transform_read_ranges(
     ranges: list[tuple[int, int]],
     start: int,
@@ -744,7 +763,7 @@ def patch(
         len(updated.splitlines()),
         whole_file=was_whole,
     )
-    diff = "".join(difflib.unified_diff(source.splitlines(True), updated.splitlines(True), fromfile=str(target), tofile=str(target)))
+    diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
     if batch:
@@ -1199,13 +1218,11 @@ def _ast_rewrite_diff(prepared: dict[Path, tuple[bytes, bytes]]) -> str:
     chunks: list[str] = []
     for target, (source, updated) in prepared.items():
         chunks.append(
-            "".join(
-                difflib.unified_diff(
-                    source.decode("utf-8", errors="replace").splitlines(keepends=True),
-                    updated.decode("utf-8", errors="replace").splitlines(keepends=True),
-                    fromfile=str(target),
-                    tofile=str(target),
-                )
+            _unified_diff(
+                source.decode("utf-8", errors="replace"),
+                updated.decode("utf-8", errors="replace"),
+                str(target),
+                str(target),
             )
         )
     return "".join(chunks).rstrip()
