@@ -80,6 +80,30 @@ separate "call discovery for descriptions" fallback in the shipped path — an
 experimental `DiscoverSkillsTool` / skill search exists behind a feature flag,
 and when it is on the listing is restricted to bundled + MCP skills.
 
+**Budget as published today (code.claude.com, 2026-09-11).** The source
+snapshot above is older than the shipped product. Current documented behaviour
+(`docs/en/skills#skill-descriptions-are-cut-short`,
+`docs/en/settings-reference#skilllistingbudgetfraction`):
+
+| Knob | Default | Notes |
+|---|---|---|
+| `skillListingBudgetFraction` | `0.01` (1% of context window) | settings.json, any scope. `0 < x <= 1`. |
+| `SLASH_COMMAND_TOOL_CHAR_BUDGET` | unset | env var, fixed character count; overrides the fraction |
+| `skillListingMaxDescChars` | `1536` chars | per-entry cap on `description` + `when_to_use` combined (was 250 in the snapshot) |
+| `skillOverrides: {"name": "name-only"}` | — | list a skill with no description to free budget |
+| Overflow policy | drop descriptions **least-invoked first** | not even truncation any more; the skills you use most keep full text, all names always present |
+| Compaction | re-attach most recent invocation of each skill, 5 000 tokens each, 25 000 tokens combined, most-recent-first | invoked bodies only; the listing itself is not re-sent |
+
+In chars at 1% and ~4 chars/token: 200k ctx → 8 000 chars (~2k tokens),
+1M ctx → 40 000 chars (~10k tokens). Your 41 skills are ~7.7 KB name+desc, so
+they fit even the 200k budget with no degradation.
+
+The per-entry cap going from 250 → 1536 is the notable shift: they concluded
+longer descriptions match better and would rather drop whole descriptions of
+unused skills than clip every description evenly. Usage-ranked dropping needs
+an invocation counter persisted across sessions (they surface it via
+`/skill-doctor`).
+
 **Activation.** `Skill` tool, `{skill: string, args?: string}`; `skill` is a free
 string, not an enum. Unknown name → error. `disableModelInvocation: true` in
 frontmatter hides the skill from the model (user can still `/name` it). Result is
@@ -100,7 +124,8 @@ bodies are re-injected, each truncated to 5000 tokens, 25 000 tokens total.
 | Where the catalog goes | system prompt, under a "skills available" heading | first-turn user message in `<system-reminder>`, plus rules in the tool description |
 | When | once per session | once per process; deltas for late-added skills; suppressed on resume |
 | Byte-stable | required | yes for the initial listing (sorted, deterministic), and it is never re-sent on compaction |
-| Over budget | names only + "use discovery for descriptions" | proportional truncation of every description first; names-only only as the last resort. Bundled skills never degrade. |
+| Over budget | names only + "use discovery for descriptions" | snapshot: proportional truncation, names-only last resort, bundled never degrade. **Shipped today:** drop descriptions of least-invoked skills first; every name always listed. |
+| Per-entry description cap | — | snapshot 250 chars; **shipped today 1 536** (`skillListingMaxDescChars`) |
 | Way over budget (names don't fit) | undecided | not handled; all names always listed |
 | Activation arg | — | free string (no enum) |
 | Activation payload | — | base-dir header + body, frontmatter stripped |
@@ -152,11 +177,13 @@ Everything below is disclosure; discovery and activation already exist.
    - tdd: Test-driven development. Use when ...
    ```
 
-   Description cap 250 chars. Budget 1% of the model's context window in
-   chars, 8000 fallback. Over budget → package skills keep descriptions, the
-   rest truncate to an even share; share under ~20 chars → names only plus
-   `Descriptions: tool_discovery {"kind":"skill"}`. If no skills, emit nothing
-   and do not register `skill`.
+   Description cap 1 536 chars (current Claude Code default). Budget 1% of
+   the model's context window in chars, 8 000 fallback, overridable by a
+   fixed char count. Over budget → package skills keep descriptions, then
+   drop descriptions least-used-first if an activation counter exists,
+   otherwise truncate the rest to an even share; share under ~20 chars →
+   names only plus `Descriptions: tool_discovery {"kind":"skill"}`. If no
+   skills, emit nothing and do not register `skill`.
 
 2. **Place it in the system prompt** where `JS.md`/agent prompts are assembled
    (`js/cli.py` → `js/memory.py`), after the operator context. Compute it
