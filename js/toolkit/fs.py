@@ -1005,6 +1005,12 @@ def fs_search(
     if rg is None:
         return _RG_MISSING
 
+    if head_limit is not None and not isinstance(head_limit, bool):
+        try:
+            if int(head_limit) < 1:
+                return "ERROR: head_limit must be at least 1"
+        except (TypeError, ValueError):
+            pass
     skip = int_or_default(offset, 0, minimum=0)
     limit = int_or_default(head_limit, 10_000, minimum=1)
     before = int_or_default(context_lines if context_lines is not None else before_context, 0, minimum=0)
@@ -1016,7 +1022,9 @@ def fs_search(
     elif mode == "files_with_matches":
         argv.append("--files-with-matches")
     elif mode == "count":
-        argv.append("--count")
+        # --with-filename so a single explicit file still prints path:count;
+        # ripgrep omits the path for a lone file otherwise.
+        argv += ["--count", "--with-filename"]
     elif mode == "content":
         argv += ["--no-heading", "--with-filename"]
         argv.append("--line-number" if show_line_numbers else "--no-line-number")
@@ -1067,8 +1075,10 @@ def fs_search(
     # under an absolute root unless rg's cwd is that root. Absolute roots still
     # print absolute paths, so the output shape is unchanged.
     rg_cwd = str(root) if root.is_dir() else str(root.parent)
+    # Ask for one past the page so an exact-fit result is not reported as
+    # truncated; only a genuine extra line proves more matches exist.
     lines, rc, stderr, timed_out = _rg_stream(
-        argv, skip + limit, _RG_TIMEOUT_S, cwd=rg_cwd
+        argv, skip + limit + 1, _RG_TIMEOUT_S, cwd=rg_cwd
     )
     if timed_out:
         return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
@@ -1076,11 +1086,15 @@ def fs_search(
     # matches (clean empty result); anything else = real rg error (bad regex/glob).
     if rc is not None and rc not in (0, 1):
         detail = (stderr or "").strip()
-        first = detail.splitlines()[0] if detail else f"rg exit {rc}"
-        return f"ERROR: {first}"
+        if len(detail) > 2000:
+            detail = detail[:2000] + " …[diagnostic truncated]"
+        return f"ERROR: {detail or f'rg exit {rc}'}"
 
+    truncated = len(lines) > skip + limit
     sliced = lines[skip:skip + limit]
     out = "\n".join(sliced) if sliced else "(no matches)"
+    if truncated:
+        out += f"\n[more matches than head_limit={limit}; continue with offset={skip + limit}]"
     context.search_cache[cache_key] = out
     return out
 
@@ -1461,7 +1475,7 @@ def tools() -> tuple[Tool, ...]:
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
                 "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
                 "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs."},
-                "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset."},
+                "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset; must be at least 1."},
                 "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
             },

@@ -136,6 +136,55 @@ def test_fs_search_count_mode_reports_per_file_line_counts(tmp_path):
 
 
 @requires_rg
+def test_fs_search_count_mode_keeps_the_path_for_a_single_file(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("hit\nhit\n", encoding="utf-8")
+
+    actual = fs_search("hit", path="a.txt", output_mode="count", context=ToolContext(cwd=tmp_path))
+
+    assert actual == f"{target}:2"
+
+
+@requires_rg
+def test_fs_search_rejects_non_positive_head_limit(tmp_path):
+    (tmp_path / "a.txt").write_text("hit\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    assert fs_search("hit", path=".", head_limit=0, context=context) == "ERROR: head_limit must be at least 1"
+    assert fs_search("hit", path=".", head_limit=-3, context=context) == "ERROR: head_limit must be at least 1"
+
+
+@requires_rg
+def test_fs_search_announces_truncation_at_the_default_cap(tmp_path):
+    target = tmp_path / "big.txt"
+    target.write_text("".join(f"hit {index}\n" for index in range(10_001)), encoding="utf-8")
+
+    actual = fs_search(
+        "hit", path="big.txt", output_mode="content", context=ToolContext(cwd=tmp_path)
+    )
+
+    body = actual.splitlines()
+    assert len(body) == 10_001
+    assert body[-1] == "[more matches than head_limit=10000; continue with offset=10000]"
+
+
+@requires_rg
+def test_fs_search_head_limit_exact_fit_is_not_marked_truncated(tmp_path):
+    for index in range(3):
+        (tmp_path / f"f{index}.txt").write_text("hit\n", encoding="utf-8")
+
+    actual = fs_search(
+        "hit",
+        path=".",
+        output_mode="files_with_matches",
+        head_limit=3,
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert set(actual.splitlines()) == {str(tmp_path / f"f{index}.txt") for index in range(3)}
+
+
+@requires_rg
 def test_fs_search_deduplicates_repeated_search(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("token\n", encoding="utf-8")
@@ -165,6 +214,17 @@ def test_fs_search_invalid_regex_degrades_without_traceback(tmp_path):
 
 
 @requires_rg
+def test_fs_search_regex_error_keeps_the_diagnostic_detail(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    (tmp_path / "a.txt").write_text("data\n", encoding="utf-8")
+
+    actual = fs_search("[unclosed", path=".", context=context)
+
+    assert actual.startswith("ERROR:")
+    assert "unclosed character class" in actual
+
+
+@requires_rg
 def test_fs_search_head_limit_and_offset_slice_results(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("m\n" * 5, encoding="utf-8")
@@ -172,8 +232,8 @@ def test_fs_search_head_limit_and_offset_slice_results(tmp_path):
     page = fs_search("m", path="a.txt", output_mode="content", head_limit=2, offset=1, context=context)
 
     lines = page.splitlines()
-    assert len(lines) == 2
-    assert lines[0] == f"{tmp_path / 'a.txt'}:2:m"
+    assert lines[:2] == [f"{tmp_path / 'a.txt'}:2:m", f"{tmp_path / 'a.txt'}:3:m"]
+    assert lines[2] == "[more matches than head_limit=2; continue with offset=3]"
 
 
 @requires_rg
