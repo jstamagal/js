@@ -272,29 +272,37 @@ def exa_search(
 
 
 # Context7's search is best-effort keyword matching: a query that is not a real
-# library still comes back with a real but unrelated project. A hit is only
-# presented as the resolved library when the query shares a word with the hit's
-# own name and, when the API reports one, its relevance score clears this floor.
-_MIN_CONTEXT7_SCORE = 0.5
+# library still comes back with a real but unrelated project. Its `score` is an
+# unbounded relevance number (live payloads run from hundreds to thousands), so
+# it cannot say whether a hit is the requested library. The name can: a hit is
+# only presented when the whole requested name matches the hit's own project
+# name — an id path segment or its title — as a whole word.
+_CONTEXT7_SEPARATORS = re.compile(r"[^a-z0-9]+")
 
 
-def _context7_tokens(text: str) -> set[str]:
-    return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if len(token) > 1}
+def _context7_words(text: str) -> list[str]:
+    """The lowercased alphanumeric words of a name, separators and punctuation gone."""
+    words = _CONTEXT7_SEPARATORS.split(text.lower())
+    # A word of one character repeated (`zzz`) is not a library name.
+    return [word for word in words if word and len(set(word)) > 1]
+
+
+def _context7_names(result: dict[str, Any]) -> set[str]:
+    """Every whole word a hit goes by: its id path segments and its title."""
+    library_id = str(result.get("id") or "").strip().strip("/")
+    names: set[str] = set()
+    for form in (*library_id.split("/"), str(result.get("title") or "")):
+        words = _context7_words(form)
+        names.add("".join(words))
+        names.update(words)
+    return names
 
 
 def _context7_plausible(library: str, result: dict[str, Any]) -> bool:
-    library_id = str(result.get("id") or "").strip()
-    if not library_id:
+    words = _context7_words(library)
+    if not words:
         return False
-    wanted = _context7_tokens(library)
-    name = _context7_tokens(library_id.rstrip("/").rsplit("/", 1)[-1])
-    if wanted and not wanted & name:
-        return False
-    score = result.get("score")
-    if isinstance(score, (int, float)) and not isinstance(score, bool):
-        normalised = float(score) / 100 if float(score) > 1 else float(score)
-        return normalised >= _MIN_CONTEXT7_SCORE
-    return True
+    return "".join(words) in _context7_names(result)
 
 
 def _context7_rank(result: dict[str, Any]) -> tuple[float, int, float]:

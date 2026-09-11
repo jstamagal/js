@@ -217,42 +217,42 @@ def test_docs_token_budget_clamps_to_minimum(
     assert query["tokens"] == [expected]
 
 
-def test_docs_search_rejects_a_hit_whose_name_is_unrelated(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("library", "results"),
+    [
+        # Live shape: a nonsense query whose top hit is a real project named
+        # after the query. Name equality alone would accept it; no score floor can.
+        ("zzz", [{"id": "/tardy-org/zzz", "title": "Zzz", "score": 545.6, "trustScore": 5.9}]),
+        # Live shape: the top hit shares one word (`real`) with the query but is a
+        # different project.
+        (
+            "not-a-real-library",
+            [
+                {"id": "/llmstxt/notjustacar_llms_txt", "title": "Not Just a Car", "score": 434.9},
+                {"id": "/xinntao/real-esrgan", "title": "Real-ESRGAN", "score": 323.7},
+            ],
+        ),
+    ],
+)
+def test_docs_search_rejects_a_hit_that_is_not_the_requested_library(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    library: str,
+    results: list[dict[str, Any]],
 ) -> None:
-    body = json.dumps(
-        {"results": [{"id": "/llmstxt/notjustacar_llms_txt", "title": "Not Just a Car", "score": 0.98}]}
-    ).encode()
-    _responses(monkeypatch, body)
+    _responses(monkeypatch, json.dumps({"results": results}).encode())
 
-    actual = search.docs_search("not-a-real-library", context=ToolContext(cwd=tmp_path))
+    actual = search.docs_search(library, context=ToolContext(cwd=tmp_path))
 
-    assert actual == "no library on context7 matches 'not-a-real-library'"
-
-
-def test_docs_search_rejects_a_name_match_with_low_relevance(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    body = json.dumps(
-        {
-            "results": [
-                {"id": "/tardy-org/zzz", "title": "zzz", "score": 0.02, "trustScore": 3.0, "verified": False}
-            ]
-        }
-    ).encode()
-    _responses(monkeypatch, body)
-
-    actual = search.docs_search("zzz", context=ToolContext(cwd=tmp_path))
-
-    assert actual == "no library on context7 matches 'zzz'"
+    assert actual == f"no library on context7 matches {library!r}"
 
 
 def test_docs_search_picks_the_best_relevant_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     body = json.dumps(
         {
             "results": [
-                {"id": "/other/next", "title": "next", "score": 0.6},
-                {"id": "/vercel/next.js", "title": "Next.js", "score": 0.95, "trustScore": 9.9, "verified": True},
+                {"id": "/other/next", "title": "next", "score": 371.6},
+                {"id": "/vercel/next.js", "title": "Next.js", "score": 1921.8, "trustScore": 10.0, "verified": True},
             ]
         }
     ).encode()
