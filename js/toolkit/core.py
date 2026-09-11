@@ -30,6 +30,10 @@ Snapshot = bytes | None | dict[str, Any]
 _SNAPSHOT_FORMAT_VERSION = 1
 _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
+# Permission bits carried by undo snapshots so a restored file keeps the mode
+# it had before it was removed (issue #90): the rwx group/other bits plus
+# setuid/setgid/sticky.
+_SNAPSHOT_MODE_MASK = 0o7777
 
 
 def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -49,11 +53,22 @@ def _encode_snapshot(path: Path, snapshot: Snapshot) -> bytes:
         payload = {"kind": "file", "data": base64.b64encode(snapshot).decode("ascii")}
     elif snapshot.get("kind") == "symlink":
         payload = {"kind": "symlink", "target": str(snapshot.get("target", ""))}
+    elif snapshot.get("kind") == "file":
+        payload = {"kind": "file", "data": base64.b64encode(snapshot["data"]).decode("ascii")}
+        if "mode" in snapshot:
+            payload["mode"] = snapshot["mode"]
     elif snapshot.get("kind") == "directory":
         entries = []
         for rel, data in snapshot.get("entries", {}).items():
-            encoded = None if data is None else base64.b64encode(data).decode("ascii")
-            entries.append([rel, encoded])
+            if isinstance(data, dict):
+                encoded = base64.b64encode(data["data"]).decode("ascii")
+                entry: list[Any] = [rel, encoded]
+                if "mode" in data:
+                    entry.append(data["mode"])
+            else:
+                encoded = None if data is None else base64.b64encode(data).decode("ascii")
+                entry = [rel, encoded]
+            entries.append(entry)
         payload = {"kind": "directory", "entries": entries}
     else:
         raise ValueError("unsupported snapshot kind")
@@ -81,7 +96,13 @@ def _decode_snapshot(data: bytes, expected_path: Path) -> Snapshot:
         encoded = payload.get("data")
         if not isinstance(encoded, str):
             raise ValueError("file snapshot has no data")
-        return base64.b64decode(encoded, validate=True)
+        data = base64.b64decode(encoded, validate=True)
+        mode = payload.get("mode")
+        if mode is None:
+            return data
+        if not isinstance(mode, int) or mode < 0:
+            raise ValueError("file snapshot has an invalid mode")
+        return {"kind": "file", "data": data, "mode": mode}
     if kind == "symlink":
         target = payload.get("target")
         if not isinstance(target, str):
@@ -91,17 +112,27 @@ def _decode_snapshot(data: bytes, expected_path: Path) -> Snapshot:
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, list):
             raise ValueError("directory snapshot has no entries")
-        entries: dict[str, bytes | None] = {}
+        entries: dict[str, Any] = {}
         for raw_entry in raw_entries:
-            if not isinstance(raw_entry, list) or len(raw_entry) != 2:
+            if not isinstance(raw_entry, list) or not 2 <= len(raw_entry) <= 3:
                 raise ValueError("invalid directory snapshot entry")
-            rel, encoded = raw_entry
+            rel, encoded = raw_entry[0], raw_entry[1]
             rel_path = Path(rel) if isinstance(rel, str) else Path("..")
             if not isinstance(rel, str) or rel_path.is_absolute() or ".." in rel_path.parts:
                 raise ValueError("unsafe directory snapshot path")
             if encoded is not None and not isinstance(encoded, str):
                 raise ValueError("invalid directory snapshot data")
-            entries[rel] = None if encoded is None else base64.b64decode(encoded, validate=True)
+            entry: dict[str, Any] | bytes | None
+            if encoded is None:
+                entry = None
+            else:
+                entry = {"data": base64.b64decode(encoded, validate=True)}
+                if len(raw_entry) == 3:
+                    mode = raw_entry[2]
+                    if not isinstance(mode, int) or mode < 0:
+                        raise ValueError("directory snapshot entry has an invalid mode")
+                    entry["mode"] = mode
+            entries[rel] = entry
         return {"kind": "directory", "entries": entries}
     if kind == "unavailable":
         reason = payload.get("reason")
@@ -116,10 +147,20 @@ def _snapshot_raw_size(snapshot: Snapshot) -> int:
         return len(snapshot)
     if snapshot.get("kind") == "directory":
         return sum(
-            len(str(rel).encode("utf-8")) + (len(data) if isinstance(data, bytes) else 0)
+            len(str(rel).encode("utf-8")) + _snapshot_entry_size(data)
             for rel, data in snapshot.get("entries", {}).items()
         )
+    if snapshot.get("kind") == "file":
+        return len(snapshot.get("data") or b"")
     return len(str(snapshot.get("target", "")).encode("utf-8"))
+
+
+def _snapshot_entry_size(data: Any) -> int:
+    if isinstance(data, bytes):
+        return len(data)
+    if isinstance(data, dict):
+        return len(data.get("data") or b"")
+    return 0
 
 
 @dataclass(frozen=True)
@@ -546,16 +587,30 @@ class ToolContext:
         self.invalidate_search_cache()
         try:
             if path.is_dir():
-                entries: dict[str, bytes | None] = {}
+                entries: dict[str, bytes | dict[str, Any] | None] = {}
                 for child in sorted(path.rglob("*")):
                     rel = child.relative_to(path).as_posix()
                     if child.is_dir():
                         entries[rel + "/"] = None
                     elif child.is_file():
-                        entries[rel] = child.read_bytes()
+                        entry: dict[str, Any] = {"data": child.read_bytes()}
+                        try:
+                            entry["mode"] = child.lstat().st_mode & _SNAPSHOT_MODE_MASK
+                        except OSError:
+                            pass
+                        entries[rel] = entry
                 content: Snapshot = {"kind": "directory", "entries": entries}
             else:
                 content = path.read_bytes() if path.exists() else None
+                if isinstance(content, bytes):
+                    try:
+                        content = {
+                            "kind": "file",
+                            "data": content,
+                            "mode": path.lstat().st_mode & _SNAPSHOT_MODE_MASK,
+                        }
+                    except OSError:
+                        content = {"kind": "file", "data": content}
         except OSError:
             content = None
         self.record_snapshot(path, content)
