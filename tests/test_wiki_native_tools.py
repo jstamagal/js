@@ -365,6 +365,40 @@ def test_wiki_convert_names_the_missing_converters(tmp_path, monkeypatch):
     assert "soffice" in actual
 
 
+def test_wiki_convert_converts_a_spreadsheet_with_the_csv_filter(tmp_path, monkeypatch):
+    sheet = tmp_path / "sample.xlsx"
+    sheet.write_bytes(b"PK\x03\x04 stub")
+    calls: list[list[str]] = []
+
+    def run_stub(cmd, context):
+        calls.append(cmd)
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        (outdir / "sample.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        wiki_convert_module,
+        "_which",
+        lambda name: "/usr/bin/soffice" if name == "soffice" else None,
+    )
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+
+    actual = wiki_convert(str(sheet), context=_ctx(tmp_path))
+
+    assert actual == "a,b\n1,2\n"
+    assert calls[0][calls[0].index("--convert-to") + 1] == "csv"
+
+
+def test_wiki_convert_marks_text_that_hits_the_cap(tmp_path):
+    big = tmp_path / "big.txt"
+    big.write_text("A" * 50_000, encoding="utf-8")
+
+    result = wiki_convert(str(big), context=_ctx(tmp_path, max_bytes=1000))
+
+    assert "truncated" in result
+    assert len(result.encode("utf-8")) <= 1000
+
+
 def test_wiki_convert_fallback_tests_file_description_not_the_path(tmp_path, monkeypatch):
     """`file` prints '<path>: <desc>'. A binary living under a path containing
     "text" (e.g. .../context/...) must classify off the description, not the path."""

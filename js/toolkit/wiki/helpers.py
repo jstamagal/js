@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
+from ...capped_process import truncation_marker
+from ...text_bytes import cap_text
 from ..core import ToolContext
 
 KIND_FOLDER = {
@@ -79,9 +81,10 @@ def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, 
 
 def read_text(path: Path, cap: int) -> str:
     try:
-        return path.read_text("utf-8", errors="replace")[:cap]
+        text = path.read_text("utf-8", errors="replace")
     except OSError as exc:
         return f"ERROR: {exc}"
+    return cap_text(text, cap, truncation_marker(cap, "limits.max_tool_result_bytes"))
 
 
 def copy_to_assets(src: Path, vault_path: Path) -> Path | str:

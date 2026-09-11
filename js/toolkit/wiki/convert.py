@@ -15,12 +15,28 @@ PANDOC_EXT = {".docx", ".odt", ".rtf", ".epub", ".pptx", ".html", ".htm"}
 SOFFICE_EXT = {".doc", ".ppt", ".xls", ".xlsx", ".docx", ".odt", ".rtf", ".pptx", ".html", ".htm"}
 OFFICE_EXT = PANDOC_EXT | SOFFICE_EXT
 _SOFFICE_ONLY_EXT = SOFFICE_EXT - PANDOC_EXT
+_SPREADSHEET_EXT = {".xls", ".xlsx"}
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 AV_EXT = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
 def _which(binary: str) -> str | None:
     return shutil.which(binary)
+
+
+def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
+    # LibreOffice has no plain-text export filter for spreadsheets, so a sheet
+    # goes through the CSV filter and comes back as text.
+    target = "csv" if ext in _SPREADSHEET_EXT else "txt"
+    with TemporaryDirectory(prefix="js-wiki-") as tmp:
+        rc, out, err = run(
+            ["soffice", "--headless", "--convert-to", target, "--outdir", tmp, str(p)],
+            context,
+        )
+        converted = Path(tmp) / f"{p.stem}.{target}"
+        if rc == 0 and converted.is_file():
+            return read_text(converted, cap)
+    return f"ERROR soffice: {err or out}"
 
 
 def _convert_office(p: Path, ext: str, cap: int, context: ToolContext) -> str:
@@ -39,15 +55,7 @@ def _convert_office(p: Path, ext: str, cap: int, context: ToolContext) -> str:
         if not soffice:
             return f"ERROR pandoc: {err}"
     if soffice:
-        with TemporaryDirectory(prefix="js-wiki-") as tmp:
-            rc, out, err = run(
-                ["soffice", "--headless", "--convert-to", "txt", "--outdir", tmp, str(p)],
-                context,
-            )
-            txt = Path(tmp) / f"{p.stem}.txt"
-            if rc == 0 and txt.is_file():
-                return read_text(txt, cap)
-        return f"ERROR soffice: {err or out}"
+        return _convert_with_soffice(p, ext, cap, context)
     if ext in _SOFFICE_ONLY_EXT:
         return (
             f"ERROR: {ext} needs LibreOffice (`soffice`) to convert; install it or "
