@@ -1087,6 +1087,17 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
 
 
 def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, capsys):
+    from js import logins
+
+    # The real picker offers logged-in providers. Its stub must establish the
+    # same prerequisite so restart resolves the saved prefix without relying
+    # on the invoking user's credentials.
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "login-store")
+    logins.save_login(logins.Login(
+        provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api",
+        provider_api_key=None,
+    ))
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"
     config_path.parent.mkdir(parents=True)
