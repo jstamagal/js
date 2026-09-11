@@ -37,20 +37,22 @@ def surface_row(tool, surface: list[str]) -> tuple[int, int, int]:
 
 def render_table(registry: ToolRegistry, surface: list[str]) -> str:
     rows = [(tool.name, *surface_row(tool, surface)) for tool in registry.tools]
-    rows.sort(key=lambda row: row[1] + row[2] + row[3], reverse=True)
+    # The model is charged for the rendered description and the schema; the raw
+    # markdown is a diagnostic column and never counted in the total.
+    rows.sort(key=lambda row: row[2] + row[3], reverse=True)
 
     lines = [
         f"surface: {', '.join(surface)} ({len(surface)} tools)",
         f"{'tool':<20}{'raw.md':>10}{'rendered':>10}{'schema':>10}{'total':>10}",
     ]
     for name, raw, rendered, schema in rows:
-        lines.append(f"{name:<20}{raw:>10}{rendered:>10}{schema:>10}{raw + rendered + schema:>10}")
+        lines.append(f"{name:<20}{raw:>10}{rendered:>10}{schema:>10}{rendered + schema:>10}")
+    total_raw = sum(row[1] for row in rows)
+    total_rendered = sum(row[2] for row in rows)
+    total_schema = sum(row[3] for row in rows)
     lines.append(
-        f"{'TOTAL':<20}"
-        f"{sum(row[1] for row in rows):>10}"
-        f"{sum(row[2] for row in rows):>10}"
-        f"{sum(row[3] for row in rows):>10}"
-        f"{sum(sum(row[1:]) for row in rows):>10}"
+        f"{'TOTAL':<20}{total_raw:>10}{total_rendered:>10}{total_schema:>10}"
+        f"{total_rendered + total_schema:>10}"
     )
     return "\n".join(lines)
 
