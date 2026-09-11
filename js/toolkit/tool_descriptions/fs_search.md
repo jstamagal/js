@@ -7,3 +7,7 @@ absolute paths, and `content` lines are `path:line:text`.
 {{#if shell}}
 For directory-only discovery use `shell` with `fd --type d`.
 {{/if}}
+{{#if task}}
+- Use `task` for open-ended investigations that require multiple search/read
+  rounds or synthesis across several areas.
+{{/if}}

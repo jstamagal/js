@@ -125,16 +125,11 @@ forge__read_file
 
 ## Provider-Facing Names
 
-When `"claude"` appears in the model string, only these schema names change:
+Tool names remain canonical by default. There is no automatic Claude-specific capitalization.
 
-```text
-read  -> Read
-write -> Write
-task  -> Task
-```
+Optional `tools.alias_profiles` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases wins; without a matching profile, names remain unchanged.
 
-The active registry still resolves to canonical lowercase tools, and persisted
-history stores lowercase names.
+The runtime rewrites outgoing tool schema names and backtick-wrapped tool-name references in descriptions. The active registry resolves aliases back to canonical handlers, and tool-call history records canonical names.
 
 ## Dispatch Semantics
 
