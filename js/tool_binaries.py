@@ -110,7 +110,38 @@ DOWNLOAD_TOOLS = (
 
 ARIA2_VERSION = "1.37.0"
 ARIA2_EXECUTABLE = "aria2c"
-SYSTEM_TOOLS = {ARIA2_EXECUTABLE: ARIA2_VERSION}
+
+
+def aria2_release(machine: str | None = None, system: str | None = None) -> DownloadTool:
+    """Pinned static ELF releases, verified without executing foreign code.
+
+    Both files have no PT_INTERP or dynamic section (readelf -l -d), so they
+    require neither a musl loader nor a minimum glibc version.
+    """
+    machine = (machine or platform.machine()).lower()
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    system = system or platform.system()
+    hashes = {
+        "x86_64": (
+            "e0a09b12ef67f35f8a8e4fdddbec851d235b7c31da549d0578bff459032b499a",
+            "80e577dc58348b96da46dd12d326bc99794b5021be395a3e890f2d67c8790c22",
+        ),
+        "aarch64": (
+            "0c681a89a40e0f82d1f5137608e86257eb0af201459c002941ea098f2b8c26b6",
+            "99a057bd383a28f1d5fab6e8cc5f6f3ed4172f5e65c59548242e965454d654c1",
+        ),
+    }
+    if system != "Linux" or machine not in hashes:
+        raise InstallError(f"aria2: no verified release asset for {system} {machine}")
+    asset = f"aria2-{machine}-linux-musl_static.zip"
+    archive_hash, executable_hash = hashes[machine]
+    return DownloadTool(
+        name="aria2", executable=ARIA2_EXECUTABLE, version=ARIA2_VERSION,
+        asset=asset,
+        url=f"https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/{asset}",
+        asset_sha256=archive_hash, archive_member="aria2c",
+        executable_sha256=executable_hash,
+    )
 
 
 class DownloadError(RuntimeError):
@@ -391,7 +422,7 @@ def _require_supported_platform() -> None:
 def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     _require_supported_platform()
     print(f"js tool directory: {tools_dir}")
-    for spec in DOWNLOAD_TOOLS:
+    for spec in (aria2_release(), *DOWNLOAD_TOOLS):
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
@@ -409,17 +440,6 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
             f"{state}: {target} (asset sha256 {spec.asset_sha256}; "
             f"executable sha256 {spec.executable_sha256})"
         )
-
-    for executable, version in SYSTEM_TOOLS.items():
-        binary = resolve_binary(executable)
-        if binary is None:
-            print(
-                f"system: {executable} {version} is unavailable; downloads will visibly "
-                "fall back to urllib"
-            )
-        else:
-            print(f"system: {executable} {version} at {binary}")
-
 
 def main() -> int:
     try:
