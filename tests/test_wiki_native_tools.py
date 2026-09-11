@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from js.toolkit import ToolContext
@@ -19,6 +20,12 @@ def _vault(tmp_path: Path) -> Path:
     vault = tmp_path / "wiki-test"
     vault.mkdir()
     return vault
+
+
+def _git_init(path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "test"], check=True)
 
 
 def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
@@ -203,6 +210,27 @@ def test_wiki_finish_ingest_archives_logs_and_rejects_traversal(tmp_path):
     assert (vault / "Clippings" / "unit.md").read_text() == "raw\n"
     assert "one source" in (vault / "log.md").read_text()
     assert wiki_finish_ingest(str(vault), "../escape", "Bad", context=_ctx(tmp_path)).startswith("ERROR")
+
+
+def test_wiki_finish_ingest_commits_in_a_git_worktree(tmp_path):
+    """A worktree vault carries `.git` as a file, not a directory."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _git_init(main)
+    (main / "seed.txt").write_text("seed\n")
+    subprocess.run(["git", "-C", str(main), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(main), "commit", "-qm", "seed"], check=True)
+
+    vault = tmp_path / "worktree"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(vault)], check=True)
+    assert (vault / ".git").is_file()
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox" / "u1").mkdir(parents=True)
+    (vault / "inbox" / "u1" / "f.txt").write_text("x\n")
+
+    result = wiki_finish_ingest(str(vault), "u1", "Worktree Unit", context=_ctx(tmp_path))
+
+    assert "git: committed " in result
 
 
 def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_path, monkeypatch):

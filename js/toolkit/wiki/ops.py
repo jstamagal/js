@@ -10,7 +10,10 @@ from .helpers import resolve_vault, run, today, vault_lock
 
 
 def _commit(vault: Path, message: str, context: ToolContext) -> str:
-    if not (vault / ".git").is_dir():
+    # Ask git itself whether this is a work tree. A `.git` directory check misses
+    # git worktrees and submodules, where `.git` is a file rather than a directory.
+    rc, out, _ = run(["git", "-C", str(vault), "rev-parse", "--is-inside-work-tree"], context)
+    if rc or out.strip() != "true":
         return "git: no repository"
     rc, _, err = run(["git", "-C", str(vault), "add", "-A"], context)
     if rc:
