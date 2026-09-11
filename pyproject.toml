@@ -58,6 +58,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
+"js" = ["tool_releases.json"]
 "js.toolkit" = ["tool_descriptions/*/*.md"]
 
 # dev tooling for agents hacking this code (and for the justfile quality

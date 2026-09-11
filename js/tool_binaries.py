@@ -14,6 +14,7 @@ import math
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -346,6 +347,10 @@ def _extract_member(
     if spec.asset.endswith(".zip"):
         with zipfile.ZipFile(archive) as bundle:
             try:
+                info = bundle.getinfo(member_name)
+                mode = info.external_attr >> 16
+                if info.is_dir() or stat.S_ISLNK(mode):
+                    raise InstallError(f"{member_name} in {spec.asset} is not a regular file")
                 source = bundle.open(member_name)
             except KeyError as exc:
                 raise InstallError(
@@ -362,6 +367,8 @@ def _extract_member(
                 raise InstallError(
                     f"{spec.asset} did not contain pinned member {member_name}"
                 ) from exc
+            if not member.isfile():
+                raise InstallError(f"{member_name} in {spec.asset} is not a regular file")
             source = bundle.extractfile(member)
             if source is None:
                 raise InstallError(f"{member_name} in {spec.asset} is not a regular file")
@@ -382,19 +389,30 @@ def install_download(
     spec: DownloadTool,
     *,
     tools_dir: Path = TOOLS_DIR,
-    downloader: Callable[[str, Path], None] = _download,
+    downloader: Callable[[str, Path], None] | None = None,
 ) -> str:
     """Install one archive and return ``present`` or ``installed``."""
     tools_dir.mkdir(parents=True, exist_ok=True)
+    if downloader is None:
+        downloader = _download
     target = tools_dir / spec.executable
-    if _is_current(target, spec.executable_sha256):
+    if _is_current(target, spec.executable_sha256) and all(
+        _is_current(tools_dir / name, checksum)
+        for _member, name, checksum in spec.companions
+    ):
         return "present"
 
     with tempfile.TemporaryDirectory(prefix=f".{spec.executable}-", dir=tools_dir) as raw_temp:
         temp = Path(raw_temp)
-        archive = temp / spec.asset
+        cache = tools_dir / ".archives"
+        cache.mkdir(exist_ok=True)
+        archive = cache / f"{spec.asset_sha256}-{spec.asset}"
         extracted = temp / spec.executable
-        downloader(spec.url, archive)
+        if not archive.is_file() or _sha256(archive) != spec.asset_sha256:
+            staged_archive = temp / spec.asset
+            downloader(spec.url, staged_archive)
+            _verify(staged_archive, spec.asset_sha256, spec.asset)
+            os.replace(staged_archive, archive)
         _verify(archive, spec.asset_sha256, spec.asset)
         _extract_member(spec, archive, extracted, spec.archive_member)
         _verify(extracted, spec.executable_sha256, f"{spec.name} executable")
@@ -404,25 +422,69 @@ def install_download(
             _extract_member(spec, archive, companion, member)
             _verify(companion, checksum, f"{spec.name} companion {installed_name}")
             companion.chmod(0o755)
-            os.replace(companion, tools_dir / installed_name)
+        # Validate the entire release before publishing any of its files.
+        for _member, installed_name, _checksum in spec.companions:
+            os.replace(temp / installed_name, tools_dir / installed_name)
         os.replace(extracted, target)
     return "installed"
 
 
-def _require_supported_platform() -> None:
+def release_plan() -> tuple[list[DownloadTool], list[str]]:
+    """Select verified native assets; never substitute a compatibility layer."""
     system = platform.system()
-    machine = platform.machine()
-    if system != "Linux" or machine != "x86_64":
-        raise InstallError(
-            f"js tool binaries need Linux x86_64; found {system or 'unknown'} "
-            f"{machine or 'unknown'}"
-        )
+    machine = platform.machine().lower()
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    libc, version = platform.libc_ver()
+    specs: list[DownloadTool] = []
+    missing: list[str] = []
+    try:
+        specs.append(aria2_release(machine, system))
+    except InstallError as exc:
+        missing.append(str(exc))
+    rows = json.loads(Path(__file__).with_name("tool_releases.json").read_text())
+    for name in ("rg", "fd", "bat", "fzf", "ast-grep"):
+        row = next((r for r in rows if r["executable"] == name
+                    and r["system"] == system and r["machine"] == machine), None)
+        if row is None:
+            missing.append(f"{name}: no verified release asset for {system} {machine}")
+            continue
+        minimum = row["minimum_glibc"]
+        if minimum and (libc != "glibc" or not version or
+                        tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))):
+            missing.append(f"{name}: {row['asset']} requires glibc >= {minimum}; "
+                           f"found {libc or 'unknown libc'} {version}; no verified musl asset")
+            continue
+        specs.append(DownloadTool(**{k: v for k, v in row.items()
+                                     if k not in ("system", "machine", "minimum_glibc")}))
+    if system == "Linux" and machine == "x86_64" and libc == "glibc" and version and (
+        tuple(map(int, version.split("."))) >= (2, 35)
+    ):
+        specs.append(next(s for s in DOWNLOAD_TOOLS if s.name == "obscura"))
+    else:
+        missing.append(f"obscura: no verified compatible release for {system} {machine} "
+                       f"{libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; "
+                       "ARM64 Linux/macOS archives await content verification")
+    return specs, missing
 
 
 def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
-    _require_supported_platform()
+    specs, missing = release_plan()
+
+    def download(url: str, destination: Path) -> None:
+        managed = tools_dir / ARIA2_EXECUTABLE
+        aria_spec = next((s for s in specs if s.executable == ARIA2_EXECUTABLE), None)
+        if aria_spec is not None and _is_current(managed, aria_spec.executable_sha256):
+            download_with_aria2(str(managed), url, destination, timeout_s=120,
+                                headers={"User-Agent": "js-tool-installer/0.1"})
+        else:
+            # Bootstrap is independent of PATH (including unrelated system aria2).
+            request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+            with urllib.request.urlopen(request, timeout=120) as response:
+                with destination.open("wb") as output:
+                    shutil.copyfileobj(response, output)
+
     print(f"js tool directory: {tools_dir}")
-    for spec in (aria2_release(), *DOWNLOAD_TOOLS):
+    for spec in specs:
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
@@ -435,11 +497,13 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
             continue
         print(f"download: {spec.name} {spec.version} ({spec.asset})")
         print(f"  {spec.url}")
-        state = install_download(spec, tools_dir=tools_dir)
+        state = install_download(spec, tools_dir=tools_dir, downloader=download)
         print(
             f"{state}: {target} (asset sha256 {spec.asset_sha256}; "
             f"executable sha256 {spec.executable_sha256})"
         )
+    if missing:
+        raise InstallError("toolkit incomplete:\n" + "\n".join(missing))
 
 def main() -> int:
     try:

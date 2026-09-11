@@ -26,7 +26,44 @@ No Darwin aria2 asset is pinned. Unsupported targets fail explicitly; Android
 assets are not substitutes for Linux releases. No system packages, compatibility
 layers, or source builds are part of this contract.
 
-The remaining toolkit still needs platform-specific release verification; the
-current top-level installer retains its legacy platform restriction until that
-selection is implemented. This aria2 repair alone does not establish portable
-installation of the entire toolkit.
+## Release selection and incomplete targets
+
+`just install-tool-binaries` and `just ensure-tools` use the same managed
+installer. `just install` invokes it; none invokes a system package manager.
+System copies never satisfy provisioning. Python urllib bootstraps aria2,
+then the managed aria2 performs subsequent downloads. Runtime resolution and
+startup checks prefer managed executables over PATH.
+
+`js/tool_releases.json` pins archive and executable SHA-256 digests for ripgrep
+15.2.0, fd 10.3.0, bat 0.25.0, fzf 0.65.2, and ast-grep 0.45.1. Linux x86_64
+and aarch64 musl binaries for the first four were inspected using readelf:
+no PT_INTERP or NEEDED entries. They work without a libc compatibility layer.
+Darwin ARM64 archives are pinned but not executed on Linux. Digests were
+compared to GitHub release API digests where published; bat's digests were
+computed from the release downloads.
+
+Ast-grep publishes no musl release in 0.45.1. Its GNU binaries require glibc
+2.34 (x86_64) or 2.18 (aarch64). They are not selected for musl or an unknown
+libc. The pinned Obscura 0.2.0 x86_64 stealth launcher requires glibc 2.35;
+the worker requires 2.34, and both require libgcc_s. Neither is static.
+Obscura ARM64 Linux and ARM64 macOS stealth assets exist, but their executable
+hashes and dependency requirements are not verified here. Darwin aria2 is not
+available from the pinned aria2 release. Unsupported/missing components are
+reported individually and installation exits unsuccessfully after provisioning
+the verified subset. An incomplete toolkit is never reported as complete.
+
+## Integrity, repair, and publication
+
+Archives are retained in `js/tools/.archives` under their SHA-256 plus asset
+name, verified before reuse. This avoids downloading large releases again to
+repair a worker. Executable and companion hashes and executable permissions
+are checked on every install. Missing/corrupt companions trigger repair even
+when the launcher is intact. Only explicitly named regular archive members
+are copied; archive paths and links are never extracted into the filesystem.
+All files are verified before publication; each file is replaced atomically.
+Multi-file publication is not a transaction across process termination or disk
+failure: rerunning detects and repairs a partial companion update.
+
+No native ARM64 or Darwin execution is claimed. Full portable provisioning is
+blocked on the missing/unverified assets above, not silently substituted with
+source builds or compatibility layers.
