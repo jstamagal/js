@@ -26,8 +26,8 @@ The prefix is a display anchor, not file content. Do not include it in `patch`
 strings.
 
 Images return either a vision-disabled text stub or an internal image marker
-that the runtime expands for vision models. PDFs use `pdftotext`, and both images
-and PDFs are refused above the file-size and whole-file read byte caps.
+that the runtime expands for vision models. PDFs use `pdftotext`. Both are
+refused when the file exceeds `limits.max_file_bytes`.
 
 ### `write`
 

@@ -139,9 +139,11 @@ def test_tools_reference_fs_search_section_matches_the_published_schema():
     search = build_default_registry().resolve("fs_search")
 
     assert documented == set(search.params)
-    assert {"files", "files_with_matches", "content", "count"}.issubset(
-        set(re.findall(r"`(files_with_matches|files|content|count)`", section))
+    modes = set(
+        search.openai_spec()["function"]["parameters"]["properties"]["output_mode"]["enum"]
     )
+    assert modes
+    assert modes.issubset(set(re.findall(r"`([a-z_]+)`", section)))
 
 
 def test_named_agent_tools_are_generated_from_prompt_dirs():
