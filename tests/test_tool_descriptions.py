@@ -283,6 +283,6 @@ def test_descriptions_knob_env_and_setting_coercion(monkeypatch):
     monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "slim")
     assert descriptions.active_variant() == "slim"
     monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "nonsense")
-    assert descriptions.active_variant() == "stock"
+    assert descriptions.active_variant() == "slim"
     with descriptions.using_variant("slim"):
         assert descriptions.active_variant() == "slim"

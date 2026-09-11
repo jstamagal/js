@@ -57,7 +57,7 @@ DEFAULT_KERNEL_VERBOSITY = "normal"
 # Which js/toolkit/tool_descriptions/<variant> set the model sees. `stock` is the
 # full text; `slim` is cut to what the model can act on. Same file set in both.
 TOOL_DESCRIPTION_VARIANTS = ("stock", "slim")
-DEFAULT_TOOL_DESCRIPTIONS = "stock"
+DEFAULT_TOOL_DESCRIPTIONS = "slim"
 DEFAULT_KERNEL_RENDER_MAX_LINES = 24
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
