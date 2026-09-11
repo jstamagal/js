@@ -775,6 +775,24 @@ def test_fs_read_pdf_uses_pdftotext(tmp_path):
     assert not result.startswith("IMAGE_RESULT")
 
 
+def test_fs_read_pdf_honors_file_and_read_caps(tmp_path):
+    """A PDF is read whole, so both ceilings refuse it before pdftotext runs."""
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(_simple_pdf_bytes("Hello PDF Text"))
+    size = pdf.stat().st_size
+
+    over_file_cap = ToolContext(cwd=tmp_path, max_file_bytes=size - 1, max_read_bytes=size)
+    refused_file = fs.fs_read("sample.pdf", context=over_file_cap)
+
+    over_read_cap = ToolContext(cwd=tmp_path, max_file_bytes=size, max_read_bytes=size - 1)
+    refused_read = fs.fs_read("sample.pdf", context=over_read_cap)
+
+    assert refused_file == (
+        f"ERROR: file size ({size} bytes) exceeds the maximum allowed size of {size - 1} bytes"
+    )
+    assert refused_read.startswith(f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({size - 1})")
+
+
 def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch):
     calls: list[dict] = []
 
