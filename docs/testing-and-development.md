@@ -6,14 +6,26 @@ runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, a
 ## Install Test Dependencies
 
 ```bash
-pip install -e ".[test,browser]"
+UV_PROJECT_ENVIRONMENT=/tmp/js-private-venv just sync
 ```
 
 Playwright does not publish musllinux wheels. On Alpine or another musl system,
 omit `browser`; the browser-probe integration test skips while the rest of the
 suite remains available.
 
-or:
+Use a distinct `UV_PROJECT_ENVIRONMENT` for each checkout/audit, including on
+subsequent uv/just commands. Sharing an editable environment lets another
+checkout redirect imports and console scripts. Do not provision toolkit
+executables with pip; those belong to the managed toolkit installer.
+
+Offline tests use an autouse profile fixture: HOME is temporary, inherited XDG
+overrides and JS configuration overrides are removed, and the runtime directory
+is private. Tests can set explicit temporary overrides after fixture setup.
+Subprocesses inherit this isolation. Also isolate HOME/XDG in the invoking shell
+to protect import-time code before fixtures run; never use real session paths
+to reproduce an inherited-path failure.
+
+For example:
 
 ```bash
 uv run pytest --version
