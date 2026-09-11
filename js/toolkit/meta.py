@@ -31,11 +31,22 @@ _DEFAULT_SUBAGENT_MAX_WORKERS = 8
 
 def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
     assert context is not None
+    # Issue #43: an empty batch used to fall through and report "todos updated"
+    # with identical before/after — nothing told the caller the list was
+    # untouched. Say so explicitly instead.
+    if not todos:
+        return "todos unchanged (empty batch): no changes applied"
     before = [(todo.content, todo.status) for todo in context.todos.values()]
     # Validate the whole batch BEFORE touching the list. Rejecting item 3 after
     # items 1-2 were already applied left the model with an ERROR and a silently
     # half-updated list.
     validated: list[tuple[str, str]] = []
+    # Cancelling a key that is not on the list (and is not added earlier in this
+    # same batch) is a no-op masquerading as success; reject it up front so the
+    # caller learns the key was not found instead of the list silently staying
+    # the same. `known` tracks keys that will exist by the time each item is
+    # applied, so add-then-cancel within one batch still works.
+    known = set(context.todos)
     for item in todos:
         content = str(item.get("content", "")).strip()
         status = str(item.get("status", "pending")).strip().lower()
@@ -43,6 +54,10 @@ def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
             return "ERROR: Todo content cannot be empty"
         if status not in _ALLOWED_STATUS:
             return f"ERROR: invalid todo status {status!r}; use pending, in_progress, completed, or cancelled"
+        if status == "cancelled" and content not in known:
+            return f"ERROR: todo {content!r} not found; nothing was changed"
+        if status != "cancelled":
+            known.add(content)
         validated.append((content, status))
     for content, status in validated:
         if status == "cancelled":
