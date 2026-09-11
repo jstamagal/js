@@ -120,6 +120,14 @@ Declared in `pyproject.toml`:
 - `e2e`: complete user-visible runtime path.
 - `ai_provider`: requires configured `ai-python` provider credentials or local endpoint.
 - `vision`: requires local vision model and Pillow.
+
+## Quality Gate
+
+`just check` runs `lint` and the dependency-freshness gate: it fails once
+`uv.lock` is five or more commits behind HEAD, with a prompt to run `just upgrade`,
+rerun the suites, and bump the version in `pyproject.toml`. Raise the limit for
+a one-off run with `just --set deps-stale-limit 20 check`.
+
 ## Current Coverage Areas
 
 The offline suite covers:

@@ -198,6 +198,9 @@ test-wiki:
 # dynamic codebase (ToolContext dynamic attrs, **kwargs splats, implicit
 # optionals) with ~115 unactionable errors — not a useful gate here.
 
+# commits since uv.lock last changed; at this many the freshness gate fails.
+deps-stale-limit := "5"
+
 # ruff check: errors + pyflakes (defaults) + pyupgrade.
 lint:
     uv run {{ browser-extra }} ruff check .
@@ -216,8 +219,31 @@ fix:
 format:
     uv run {{ browser-extra }} ruff format .
 
-# quality gate = lint. stops at the first failure.
-check: lint
+# fail once uv.lock trails HEAD by deps-stale-limit commits.
+deps-fresh:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    limit="{{ deps-stale-limit }}"
+    # an empty hash means uv.lock has never been committed: stale by definition.
+    base="$(git log -1 --format=%H -- uv.lock 2>/dev/null || true)"
+    if [ -z "$base" ]; then
+        n="$(git rev-list --count HEAD 2>/dev/null || printf '%s' 0)"
+        stale=1
+    else
+        n="$(git rev-list --count "$base..HEAD")"
+        stale=""
+        if [ "$n" -ge "$limit" ]; then
+            stale=1
+        fi
+    fi
+    if [ -n "$stale" ]; then
+        echo "uv.lock is $n commits stale (limit $limit): run \`just upgrade\`, then run the suites and bump the version in pyproject.toml." >&2
+        exit 1
+    fi
+    echo "deps fresh ($n commits since uv.lock changed)."
+
+# quality gate = lint + dependency freshness. stops at the first failure.
+check: lint deps-fresh
     @echo "quality ok."
 
 # ── diagnostics ──────────────────────────────────────────────────────────────
@@ -240,6 +266,10 @@ lock:
 # relock and bump every dep to the latest allowed by pyproject constraints.
 upgrade:
     uv lock --upgrade
+
+# show what an upgrade would change, without changing anything.
+deps-outdated:
+    uv lock --upgrade --dry-run
 
 # remove all generated/local build state (all of it is gitignored).
 clean:
