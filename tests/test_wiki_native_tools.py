@@ -365,16 +365,20 @@ def test_wiki_convert_names_the_missing_converters(tmp_path, monkeypatch):
     assert "soffice" in actual
 
 
-def test_wiki_convert_converts_a_spreadsheet_with_the_csv_filter(tmp_path, monkeypatch):
-    sheet = tmp_path / "sample.xlsx"
+def test_wiki_convert_exports_every_sheet_of_a_spreadsheet(tmp_path, monkeypatch):
+    """A multi-sheet workbook must not come back as only its first sheet."""
+    sheet = tmp_path / "book.xlsx"
     sheet.write_bytes(b"PK\x03\x04 stub")
     calls: list[list[str]] = []
 
     def run_stub(cmd, context):
         calls.append(cmd)
         outdir = Path(cmd[cmd.index("--outdir") + 1])
-        (outdir / "sample.csv").write_text("a,b\n1,2\n", encoding="utf-8")
-        return 0, "", ""
+        first = outdir / "book-First.csv"
+        second = outdir / "book-Second.csv"
+        first.write_text("a,b\n1,2\n", encoding="utf-8")
+        second.write_text("c,d\n3,4\n", encoding="utf-8")
+        return 0, f"Writing sheet First -> {first}\nWriting sheet Second -> {second}\n", ""
 
     monkeypatch.setattr(
         wiki_convert_module,
@@ -385,8 +389,12 @@ def test_wiki_convert_converts_a_spreadsheet_with_the_csv_filter(tmp_path, monke
 
     actual = wiki_convert(str(sheet), context=_ctx(tmp_path))
 
-    assert actual == "a,b\n1,2\n"
-    assert calls[0][calls[0].index("--convert-to") + 1] == "csv"
+    assert "1,2" in actual
+    assert "3,4" in actual
+    # The CSV filter must ask for every sheet (the trailing -1), not just the first.
+    filter_option = calls[0][calls[0].index("--convert-to") + 1]
+    assert filter_option.startswith("csv:")
+    assert filter_option.endswith(",-1")
 
 
 def test_wiki_convert_marks_text_that_hits_the_cap(tmp_path):

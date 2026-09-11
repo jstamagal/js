@@ -1,10 +1,13 @@
 """wiki_convert: turn any file into text, or a media embed."""
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ...capped_process import truncation_marker
+from ...text_bytes import cap_text
 from ..core import ToolContext
 from .helpers import run, read_text, resolve_vault, find_vault, copy_to_assets
 
@@ -24,15 +27,53 @@ def _which(binary: str) -> str | None:
     return shutil.which(binary)
 
 
+# LibreOffice has no plain-text export filter for spreadsheets; the CSV filter
+# takes a trailing -1 to write every sheet instead of only the first, one
+# `<stem>-<sheet>.csv` each.
+_SPREADSHEET_FILTER = "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false,-1"
+_SHEET_LOG = re.compile(r"^Writing sheet (?P<name>.+?) -> (?P<path>.+)$", re.MULTILINE)
+
+
+def _soffice_sheets(out: str, tmp: Path) -> list[tuple[str, Path]]:
+    """(sheet name, csv path) for every sheet soffice wrote, in sheet order.
+
+    LibreOffice names each sheet it writes on stdout; a runner that prints
+    nothing falls back to whatever CSV files are on disk.
+    """
+    sheets = [
+        (match.group("name").strip(), Path(match.group("path").strip()))
+        for match in _SHEET_LOG.finditer(out)
+    ]
+    sheets = [(name, path) for name, path in sheets if path.is_file()]
+    if sheets:
+        return sheets
+    return [(path.stem, path) for path in sorted(tmp.glob("*.csv"))]
+
+
+def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
+    sheets = _soffice_sheets(out, tmp)
+    if not sheets:
+        return "ERROR soffice: wrote no sheet"
+    blocks = []
+    for name, path in sheets:
+        try:
+            text = path.read_text("utf-8", errors="replace")
+        except OSError as exc:
+            return f"ERROR: {exc}"
+        blocks.append(f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text)
+    return cap_text("\n".join(blocks), cap, truncation_marker(cap, "limits.max_tool_result_bytes"))
+
+
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
-    # LibreOffice has no plain-text export filter for spreadsheets, so a sheet
-    # goes through the CSV filter and comes back as text.
-    target = "csv" if ext in _SPREADSHEET_EXT else "txt"
+    spreadsheet = ext in _SPREADSHEET_EXT
+    target = _SPREADSHEET_FILTER if spreadsheet else "txt"
     with TemporaryDirectory(prefix="js-wiki-") as tmp:
         rc, out, err = run(
             ["soffice", "--headless", "--convert-to", target, "--outdir", tmp, str(p)],
             context,
         )
+        if spreadsheet and rc == 0:
+            return _spreadsheet_text(out, Path(tmp), cap)
         converted = Path(tmp) / f"{p.stem}.{target}"
         if rc == 0 and converted.is_file():
             return read_text(converted, cap)
