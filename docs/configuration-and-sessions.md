@@ -53,7 +53,7 @@ as `<set>`.
 | `limits.max_tool_iterations` | `50` | Max tool calls per turn before the loop gives up. |
 | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
+| `limits.fetch_timeout_s` | `15` | Whole-request deadline for unsaved fetch() calls, in seconds. |
 | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
 | `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
 | `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |

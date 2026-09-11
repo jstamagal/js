@@ -62,6 +62,23 @@ def test_registered_tools_and_description_files_match():
             assert descriptions.load_description(tool.name) == tool.description
 
 
+def test_fetch_description_discloses_inline_ceiling_and_request_deadline():
+    description = descriptions.load_description("fetch")
+
+    assert "32 MiB inline-read ceiling" in description
+    assert "use `save`" in description
+    assert "whole unsaved request" in description
+
+
+def test_browse_description_discloses_settle_window_and_original_decoding():
+    description = " ".join(descriptions.load_description("browse").split())
+
+    assert "five-second post-load settle window" in description
+    assert "changes scheduled later than that may be absent" in description
+    assert "decoded as UTF-8 text" in description
+    assert "`fetch(save=...)` when exact bytes matter" in description
+
+
 
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()

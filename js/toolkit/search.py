@@ -324,6 +324,7 @@ def _fit_truncation_marker(text: str, cap: int) -> str:
 
 
 _BROWSE_DUMPS = ("markdown", "text", "html", "links", "original", "assets", "cookies")
+_BROWSE_SETTLE_SECONDS = 5
 
 # obscura emits hrefs exactly as the page authored them, so `[Login](/login)` reaches
 # the model with nothing to resolve against. Rewriting them against the fetched URL is
@@ -417,6 +418,11 @@ def browse(
     # user agent from here would contradict the TLS handshake it presents, which
     # is precisely the mismatch bot detection looks for.
     argv = [binary, "--stealth", "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    if dump != "original":
+        # obscura's adaptive default can call a page quiescent while a timer is
+        # still pending. A fixed window captures common delayed SPA updates and
+        # gives browse a concrete, documented readiness boundary.
+        argv += ["--wait", str(_BROWSE_SETTLE_SECONDS)]
     shot_path: Path | None = None
     screenshot = text_or_default(screenshot, "").strip()
     if screenshot:
@@ -453,7 +459,7 @@ def browse(
     else:
         code, raw_out, raw_err = result
         out_truncated = False
-    stdout = raw_out.decode("utf-8", errors="replace").strip()
+    stdout = raw_out.decode("utf-8", errors="replace")
     stderr = raw_err.decode("utf-8", errors="replace").strip()
     if code != 0:
         return f"ERROR: obscura exited {code}: {stderr[-300:] or stdout[-300:]}"
@@ -469,6 +475,8 @@ def browse(
             "obscura returns either a picture or a dump, never both. "
             "Call browse again without screenshot to read this page's content."
         )
+    if dump != "original":
+        stdout = stdout.strip()
     if dump == "markdown":
         stdout = _absolutize(stdout, url)
     if out_truncated:
@@ -538,7 +546,8 @@ def tools() -> tuple[Tool, ...]:
                     "default": "markdown",
                     "description": (
                         "What to return: readable markdown, plain text, rendered HTML, the link "
-                        "list, the raw response body, the sub-resource URLs, or the cookie jar."
+                        "list, the raw response body decoded as UTF-8 text, the sub-resource "
+                        "URLs, or the cookie jar."
                     ),
                 },
                 "screenshot": {

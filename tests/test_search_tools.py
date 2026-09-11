@@ -316,6 +316,8 @@ def test_browse_sets_obscura_timeout_below_process_backstop(monkeypatch: pytest.
             "markdown",
             "--timeout",
             "14",
+            "--wait",
+            "5",
             "https://example.com",
         ],
         "timeout": 15,
@@ -338,6 +340,23 @@ def test_browse_truncation_marker_fits_result_cap(monkeypatch: pytest.MonkeyPatc
     expected = "x" * (cap - len(marker.encode()) - 1) + "\n" + marker
     assert actual == expected
     assert len(actual.encode()) == cap
+
+
+def test_browse_original_preserves_valid_utf8_whitespace_and_line_endings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def run(_argv: list[str], **_kwargs: object) -> CappedProcessResult:
+        return CappedProcessResult(0, b"  hello \r\n", b"")
+
+    _browse_stub(monkeypatch, run)
+
+    actual = search.browse(
+        "https://example.com/padded.txt",
+        dump="original",
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert actual == "  hello \r\n"
 
 
 @pytest.mark.parametrize("dump", [" markdown ", "MARKDOWN", " Markdown\n"])

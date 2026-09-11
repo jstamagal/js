@@ -189,6 +189,18 @@ def _html_to_text(raw: str, base_url: str) -> str:
 # which defaults to unlimited. A 6GB ISO is a normal thing to fetch(save=...).
 _DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024
 _STREAM_CHUNK = 1024 * 1024
+_INLINE_READ_CHUNK = 64 * 1024
+
+
+class _FetchTimeoutError(Exception):
+    pass
+
+
+def _inline_read_limit_error() -> str:
+    return (
+        f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte inline read limit; "
+        "use save= to stream the full response to disk"
+    )
 
 
 def _download_limit(context: ToolContext) -> int | None:
@@ -494,8 +506,38 @@ def _format_payload(
     return text
 
 
-def _read_response(resp: Any, limit: int) -> tuple[bytes, bool]:
-    data = resp.read(limit + 1)
+def _response_socket(resp: Any) -> Any | None:
+    """Return urllib's underlying socket when its response exposes one."""
+    stream = getattr(resp, "fp", None)
+    raw = getattr(stream, "raw", None)
+    return getattr(raw, "_sock", None)
+
+
+def _read_response(
+    resp: Any, limit: int, *, deadline: float | None = None
+) -> tuple[bytes, bool]:
+    if deadline is None or not hasattr(resp, "read1"):
+        data = resp.read(limit + 1)
+        return data, len(data) > limit
+
+    chunks: list[bytes] = []
+    retained = 0
+    sock = _response_socket(resp)
+    while retained <= limit:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _FetchTimeoutError
+        if sock is not None:
+            sock.settimeout(remaining)
+        try:
+            chunk = resp.read1(min(_INLINE_READ_CHUNK, limit + 1 - retained))
+        except TimeoutError as exc:
+            raise _FetchTimeoutError from exc
+        if not chunk:
+            break
+        chunks.append(chunk)
+        retained += len(chunk)
+    data = b"".join(chunks)
     return data, len(data) > limit
 
 
@@ -617,6 +659,7 @@ def fetch(
         # A download is bounded by size and by download_timeout_s, not by page-load
         # latency; sharing fetch_timeout_s silently demanded ~2 MB/s to move anything large.
         timeout_s = context.download_timeout_s if save_target else context.fetch_timeout_s
+        request_deadline = time.monotonic() + timeout_s if save_target is None else None
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             content_type = _header_value(resp.headers, "content-type")
             if save_target is not None:
@@ -637,16 +680,18 @@ def fetch(
                 truncated = True
             elif aria2c is not None:
                 payload, truncated = _read_response(
-                    resp, min(limit, _DOWNLOAD_MAX_BYTES)
+                    resp, min(limit, _DOWNLOAD_MAX_BYTES), deadline=request_deadline
                 )
             else:
-                payload, too_large = _read_response(resp, _DOWNLOAD_MAX_BYTES)
+                payload, too_large = _read_response(
+                    resp, _DOWNLOAD_MAX_BYTES, deadline=request_deadline
+                )
                 truncated = len(payload) > limit
                 is_transfer = truncated or not _is_text_response(content_type, payload)
                 if is_transfer:
                     warn_urllib_fallback("fetch() response transfer")
                 if too_large and is_transfer:
-                    return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
+                    return _inline_read_limit_error()
             response_url = str(getattr(resp, "geturl", lambda: url)() or url)
         if aria2c is not None and (
             transfer_from_headers
@@ -654,7 +699,7 @@ def fetch(
             or not _is_text_response(content_type, payload)
         ):
             if response_length is not None and response_length > _DOWNLOAD_MAX_BYTES:
-                return f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte download limit"
+                return _inline_read_limit_error()
             return _aria_payload(
                 aria2c,
                 url,
@@ -672,6 +717,8 @@ def fetch(
             truncated=truncated,
             base_url=response_url,
         )
+    except _FetchTimeoutError:
+        return f"ERROR: fetch timed out after {context.fetch_timeout_s} seconds"
     except DownloadError as exc:
         return f"ERROR: {exc}"
     except Exception as exc:  # noqa: BLE001

@@ -2,8 +2,10 @@ Read a web page the way a browser sees it, JavaScript included.
 
 Use this when you have a URL and want its content: docs pages, blog posts,
 dashboards, single-page apps. It drives obscura, a self-contained browser
-engine, so pages that build themselves in JavaScript come back with their real
-content where a plain HTTP request returns an empty shell.
+engine, so pages that build themselves in JavaScript come back with their
+rendered content where a plain HTTP request returns an empty shell. Rendered
+dumps use a fixed five-second post-load settle window; changes scheduled later
+than that may be absent.
 
 Parameters:
 - `url` (required): the page to read. Private, loopback, and link-local IP
@@ -17,8 +19,9 @@ Parameters:
   - `text` — plain text, no link targets.
   - `html` — the rendered DOM after scripts have run, not the served source.
   - `links` — one link per line as URL, tab, anchor text.
-  - `original` — the raw HTTP response body, byte-exact, bypassing the browser
-    layer. Use for JSON, CSS, JS, images, or anything that is not a document.
+  - `original` — the raw HTTP response body decoded as UTF-8 text, bypassing the
+    browser layer. Valid UTF-8 whitespace and line endings are preserved, but
+    invalid bytes are replaced. Use `fetch(save=...)` when exact bytes matter.
   - `assets` — one JSON object per line for every sub-resource the rendered page
     references: scripts, stylesheets, images, iframes, media, embeds.
   - `cookies` — the whole cookie jar as JSON, including HttpOnly cookies that
@@ -33,7 +36,8 @@ Choosing a dump:
 - Reading a page for its content: `markdown`.
 - Harvesting every outbound URL to decide what to read next: `links`.
 - Inspecting markup, attributes, or a specific element: `html`.
-- Pulling a JSON API or downloading a file verbatim: `original`.
+- Inspecting a textual JSON API or source response: `original`. For a verbatim
+  download, use `fetch(save=...)`.
 - Auditing what a page loads, or replaying its resources yourself: `assets`.
 
 Status:

@@ -6,6 +6,9 @@ capped, and when it is cut the full text is written to a file whose path is in
 the result. `save` streams the body to that path instead of returning it, with
 no size limit and resumable, so large downloads belong there. Binary responses
 come back as a descriptor; images come back as images when the model has vision.
+Unsaved responses have a 32 MiB inline-read ceiling; use `save` to stream a
+larger body in full. `limits.fetch_timeout_s` bounds the whole unsaved request,
+including a response that continues to trickle bytes.
 {{#if browse}}
 Use `browse` for pages that only render with JavaScript; this tool does not run
 scripts.
