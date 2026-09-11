@@ -25,6 +25,21 @@ Subprocesses inherit this isolation. Also isolate HOME/XDG in the invoking shell
 to protect import-time code before fixtures run; never use real session paths
 to reproduce an inherited-path failure.
 
+Playwright's Python package does not include its browser executable. Provision
+the matching browser revision explicitly into a private managed cache (this is
+a large download; obtain approval in resource-constrained environments):
+
+```bash
+UV_PROJECT_ENVIRONMENT=/tmp/js-private-venv \
+PLAYWRIGHT_BROWSERS_PATH=/tmp/js-private-browsers \
+uv run --extra browser python -m playwright install chromium --only-shell
+```
+
+Use that same `PLAYWRIGHT_BROWSERS_PATH` on browser test commands. An existing
+matching cache can instead be copied into the private directory without a
+download. Do not use `--with-deps` or install system packages. A missing browser
+is a setup failure, not a reason to remove assertions or skip browser coverage.
+
 For example:
 
 ```bash
