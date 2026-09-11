@@ -237,6 +237,29 @@ def test_fs_search_head_limit_and_offset_slice_results(tmp_path):
 
 
 @requires_rg
+def test_fs_search_offset_pages_cover_every_entry_once(tmp_path):
+    repo = tmp_path / "m"
+    repo.mkdir()
+    for index in range(50):
+        (repo / f"f{index:03d}.txt").write_text("hit\n", encoding="utf-8")
+    context = ToolContext(cwd=repo)
+
+    seen: list[str] = []
+    for offset in range(0, 50, 10):
+        page = fs_search(
+            pattern="hit",
+            path=str(repo),
+            output_mode="files_with_matches",
+            head_limit=10,
+            offset=offset,
+            context=context,
+        )
+        seen += [line for line in page.splitlines() if line.startswith(str(repo))]
+
+    assert sorted(seen) == [str(repo / f"f{index:03d}.txt") for index in range(50)]
+
+
+@requires_rg
 def test_fs_search_respects_gitignore_in_git_repo(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")

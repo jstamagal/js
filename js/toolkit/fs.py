@@ -1016,7 +1016,11 @@ def fs_search(
     before = int_or_default(context_lines if context_lines is not None else before_context, 0, minimum=0)
     after = int_or_default(context_lines if context_lines is not None else after_context, 0, minimum=0)
 
-    argv = [rg, "--color=never", "--no-messages"]
+    # `--sort path` makes ripgrep walk and print in a stable single-threaded
+    # order. Offset paging slices the captured stream, and ripgrep's parallel
+    # output order is not stable, so without this consecutive pages overlap and
+    # some entries are never returned.
+    argv = [rg, "--color=never", "--no-messages", "--sort", "path"]
     if mode == "files":
         argv.append("--files")
     elif mode == "files_with_matches":
