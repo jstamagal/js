@@ -61,19 +61,21 @@ _NAMESPACE_PROBE = """
 def __js_probe():
     import inspect, json
     noise = %(noise)r
-    found = {}
+    callables = {}
+    names = []
     for name, value in list(globals().items()):
         if name.startswith('_') or name in noise:
             continue
+        names.append(name)
         if not (inspect.isfunction(value) or inspect.isclass(value)):
             continue
         if getattr(value, '__module__', None) not in (None, '__main__'):
             continue
         try:
-            found[name] = name + str(inspect.signature(value))
+            callables[name] = name + str(inspect.signature(value))
         except (ValueError, TypeError):
-            found[name] = name + '(...)'
-    return json.dumps(found, sort_keys=True)
+            callables[name] = name + '(...)'
+    return json.dumps({'callables': callables, 'names': sorted(names)}, sort_keys=True)
 print('__JS_NS__' + __js_probe())
 del __js_probe
 """
@@ -266,6 +268,7 @@ class KernelSession:
     executions: int = 0
     artifact_seq: int = 0
     namespace: dict[str, str] = field(default_factory=dict)
+    visible_names: set[str] = field(default_factory=set)
     log_handle: Any = None
 
     @property
@@ -320,6 +323,7 @@ class KernelSession:
         self.client.start_channels()
         self.client.wait_for_ready(timeout=60)
         self.namespace = {}
+        self.visible_names = set()
         # IPython's own `In[n]` counter restarts too. Letting ours run on would
         # print "kernel cell 9" beside a traceback that says "Cell In[1]".
         self.executions = 0
@@ -516,23 +520,34 @@ def run_cell(session: KernelSession, code: str, timeout: int, *,
 
 
 def refresh_namespace(session: KernelSession) -> tuple[list[str], list[str]]:
-    """Re-derive live callables FROM THE KERNEL. Returns (added, removed) names.
+    """Re-derive the live namespace FROM THE KERNEL. Returns (added, removed).
 
     The listing is never accumulated across calls. Whatever the kernel says now
     is the whole truth: a name the agent deleted stops being advertised, and a
     name it defined appears without anything having to record the definition.
+    `session.namespace` holds the callables and their signatures; `added` and
+    `removed` cover every visible name, so an import or a plain value is
+    reported as defined even though it is not callable.
     """
     probe = _NAMESPACE_PROBE % {"noise": set(_IPYTHON_NOISE)}
     result = run_cell(session, probe, timeout=20, store_history=False, marker="__JS_NS__")
     if result.timed_out or result.died or not result.marker:
         return [], []
     try:
-        current = json.loads(result.marker)
+        payload = json.loads(result.marker)
     except json.JSONDecodeError:
         return [], []
-    added = sorted(set(current) - set(session.namespace))
-    removed = sorted(set(session.namespace) - set(current))
-    session.namespace = current
+    if not isinstance(payload, dict):
+        return [], []
+    callables = payload.get("callables")
+    names = payload.get("names")
+    if not isinstance(callables, dict) or not isinstance(names, list):
+        return [], []
+    visible = set(names)
+    added = sorted(visible - session.visible_names)
+    removed = sorted(session.visible_names - visible)
+    session.namespace = callables
+    session.visible_names = visible
     return added, removed
 
 
@@ -584,7 +599,7 @@ def kernel(
         render_event(context, level, "kernel restarted — namespace cleared", style="yellow")
         notes.append("kernel restarted; the namespace is empty")
         if not code.strip():
-            return "\n".join(notes)
+            return "\n".join([*notes, "NAMESPACE (none)"])
 
     if not code.strip():
         added, removed = refresh_namespace(session)
@@ -606,13 +621,15 @@ def kernel(
         return message
 
     if result.died or not session.alive():
+        session.namespace = {}
+        session.visible_names = set()
         message = (
             f"ERROR: the kernel died during execution (cell {session.executions}). "
             "Everything defined in this session is gone; call again with restart=true "
             "and rebuild."
         )
         render_event(context, level, message, style="bold red")
-        return "\n".join([*notes, message])
+        return "\n".join([*notes, message, "NAMESPACE (none)"])
 
     added, removed = refresh_namespace(session)
 
@@ -632,14 +649,15 @@ def kernel(
         )
     body = result.text()
     parts.append(body.rstrip("\n") if body.strip() else "(no output)")
+    # Images are reported before the footer so every result really does end with
+    # the NAMESPACE line the description promises.
+    for image in result.images:
+        parts.append(f"IMAGE {image}")
     if added:
         parts.append("DEFINED " + ", ".join(session.namespace.get(name, name) for name in added))
     if removed:
         parts.append("GONE " + ", ".join(removed))
-    if session.namespace:
-        parts.append("NAMESPACE " + ", ".join(sorted(session.namespace)))
-    for image in result.images:
-        parts.append(f"IMAGE {image}")
+    parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
     return cap_for_model("\n".join(parts), context)
 
 

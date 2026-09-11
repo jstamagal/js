@@ -400,7 +400,8 @@ def test_restart_clears_the_namespace_and_says_so(ctx):
 
     report = kmod.kernel(restart=True, context=ctx)
 
-    assert report == "kernel restarted; the namespace is empty"
+    assert "kernel restarted; the namespace is empty" in report
+    assert report.splitlines()[-1] == "NAMESPACE (none)"
     assert kmod.kernel(code="", context=ctx) == "NAMESPACE (none)"
 
 
@@ -546,3 +547,105 @@ def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shad
     assert "return 'g1'" in archived.read_text(encoding="utf-8")
     assert "return 'g2'" in (global_dir / "summarise.py").read_text(encoding="utf-8")
     assert "return 'p1'" in (project_dir / "summarise.py").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# footer contract, offline (a stub kernel session, no kernel process)
+# ---------------------------------------------------------------------------
+
+
+class _OfflineKernel:
+    """KernelSession stand-in that serves a canned namespace probe."""
+
+    def __init__(self) -> None:
+        self.cwd = Path("/tmp")
+        self.executions = 0
+        self.namespace: dict[str, str] = {}
+        self.visible_names: set[str] = set()
+
+    def alive(self) -> bool:
+        return True
+
+    def restart(self) -> None:
+        self.executions = 0
+        self.namespace = {}
+        self.visible_names = set()
+
+
+def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=True):
+    session = _OfflineKernel()
+    probe = {"callables": dict(callables or {}), "names": list(names)}
+
+    def fake_run_cell(sess, code, timeout=120, *, store_history=True, marker=""):
+        if "__js_probe" in code:
+            return kmod.CellOutput(marker=json.dumps(probe))
+        return output if output is not None else kmod.CellOutput()
+
+    monkeypatch.setattr(kmod, "get_session", lambda context: (session, "", False))
+    monkeypatch.setattr(kmod, "run_cell", fake_run_cell)
+    if not alive:
+        session.alive = lambda: False  # type: ignore[method-assign]
+    return session
+
+
+def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
+    _offline_kernel(monkeypatch, kmod.CellOutput(stdout="hello\n"), names=["x"])
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+
+    result = kmod.kernel(code="x = 41", context=context)
+
+    assert "hello" in result
+    assert "DEFINED x" in result
+    assert result.splitlines()[-1] == "NAMESPACE (none)"
+
+
+def test_kernel_footer_reports_an_import_only_cell(tmp_path, monkeypatch):
+    _offline_kernel(monkeypatch, kmod.CellOutput(), names=["math"])
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+
+    result = kmod.kernel(code="import math", context=context)
+
+    assert "DEFINED math" in result
+    assert result.splitlines()[-1] == "NAMESPACE (none)"
+
+
+def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
+    image = tmp_path / "cell.png"
+    image.write_bytes(b"\x89PNG")
+    _offline_kernel(
+        monkeypatch,
+        kmod.CellOutput(stdout="done\n", images=[image]),
+        names=["f"],
+        callables={"f": "f()"},
+    )
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+
+    result = kmod.kernel(code="def f(): pass", context=context)
+
+    lines = result.splitlines()
+    assert lines[-1] == "NAMESPACE f"
+    assert any(line.startswith("IMAGE ") for line in lines)
+    assert next(i for i, line in enumerate(lines) if line.startswith("IMAGE ")) < len(lines) - 1
+
+
+def test_kernel_restart_with_empty_code_still_ends_with_the_footer(tmp_path, monkeypatch):
+    _offline_kernel(monkeypatch)
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+
+    result = kmod.kernel(restart=True, context=context)
+
+    assert "kernel restarted; the namespace is empty" in result
+    assert result.splitlines()[-1] == "NAMESPACE (none)"
+
+
+def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
+    session = _offline_kernel(
+        monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
+    )
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+
+    result = kmod.kernel(code="import os\nos._exit(1)", context=context)
+
+    assert result.startswith("ERROR: the kernel died during execution (cell 1)")
+    assert result.splitlines()[-1] == "NAMESPACE (none)"
+    assert session.namespace == {}
