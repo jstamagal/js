@@ -113,9 +113,9 @@ def _capture_flags(monkeypatch) -> list[tuple[str, ...]]:
     seen: list[tuple[str, ...]] = []
     real = registry_mod.build_default_registry
 
-    def spy(prompts_root=None, flags=("model_override",), descriptions=None):
+    def spy(prompts_root=None, flags=("model_override",)):
         seen.append(tuple(flags))
-        return real(prompts_root, flags=flags, descriptions=descriptions)
+        return real(prompts_root, flags=flags)
 
     monkeypatch.setattr(registry_mod, "build_default_registry", spy)
     return seen

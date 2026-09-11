@@ -94,7 +94,7 @@ def agent_entry(agent: dict, telemetry_dir: Path) -> dict:
     if kind == "js":
         command = (
             f"{SANDBOX} --prompt {{{{promptFile}}}} --telemetry {telemetry_dir / name} -- "
-            f"env JS_TOOL_DESCRIPTIONS={agent['descriptions']} js-bench-agent {agent['agent']} /prompt.md"
+            f"js-bench-agent {agent['agent']} /prompt.md"
         )
         return {"name": name, "command": command, "enabled": True}
     if kind == "command":

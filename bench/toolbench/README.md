@@ -1,7 +1,6 @@
 # Tool bench
 
-Races js against itself (slim vs stock tool descriptions, full vs shell-only
-surface) and against other CLI agents on bug-fix tasks mined from real
+Races js against itself (full vs shell-only surface) and against other CLI agents on bug-fix tasks mined from real
 repositories, and reports how each one used its tools.
 
 - **Tasks**: [RepoRacer](https://github.com/HabrielStark/RepoRacer) mines each
@@ -23,8 +22,8 @@ just toolbench-image                # build the sandbox (once, and after js chan
 just toolbench-mine                 # what tasks each repo yields; no model needed
 just toolbench-smoke                # fake agents through the sandbox on one task
 just toolbench                      # slim vs stock on every repo in the suite
-just toolbench --agents js-shell-slim,js-shell-stock --repos click --tasks 2
-just toolbench --agents claude,js-full-slim
+just toolbench --agents js-shell --repos click --tasks 2
+just toolbench --agents claude,js-full
 ```
 
 Model server: `suite.toml` `[model]` or `TOOLBENCH_BASE_URL` / `TOOLBENCH_MODEL`.

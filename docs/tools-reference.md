@@ -1,9 +1,8 @@
 # Tools Reference
 
 This file describes the public tool surface. The exact model-facing contract
-text lives in `js/toolkit/tool_descriptions/<variant>/*.md`: `stock` is the
-full text, `slim` is cut to what the model can act on, and the
-`tools.descriptions` knob (`JS_TOOL_DESCRIPTIONS`) picks the one the model sees.
+text lives in `js/toolkit/tool_descriptions/*.md`, cut to what the model can
+act on.
 
 ## Core Filesystem Tools
 

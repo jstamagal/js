@@ -1,17 +1,8 @@
-"""Markdown-backed model-facing tool descriptions, in two variants, with
-conditional sections.
+"""Markdown-backed model-facing tool descriptions with conditional sections.
 
-Descriptions live under ``tool_descriptions/<variant>/<tool>.md``. The two
-variants hold the same file set and differ only in how much they say:
-
-- ``stock`` — the full text as it has always shipped.
-- ``slim`` — cut to what a modern model can act on: contracts it cannot infer,
-  cross-references to co-present tools, nothing the schema already carries.
-
-The active variant is the ``tools.descriptions`` knob (``JS_TOOL_DESCRIPTIONS``
-in the environment). A registry build passes it down through ``using_variant``;
-outside a build the environment decides, so ``JS_TOOL_DESCRIPTIONS=slim`` also
-steers ad-hoc callers such as ``js.tooldiag``.
+Descriptions live under ``tool_descriptions/<tool>.md``, cut to what a model
+can act on: contracts it cannot infer, cross-references to co-present tools,
+nothing the schema already carries.
 
 Two independent conditional axes flip parts of a description on and off:
 
@@ -44,25 +35,13 @@ Two independent conditional axes flip parts of a description on and off:
 """
 from __future__ import annotations
 
-import os
 import re
 import sys
-from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
-from ..settings import DEFAULT_TOOL_DESCRIPTIONS, TOOL_DESCRIPTION_VARIANTS
-
 _DESCRIPTIONS_ROOT = Path(__file__).with_name("tool_descriptions")
-
-# Env names the knob answers to, alias first (settings.env_names_for order).
-_VARIANT_ENV_NAMES = ("JS_TOOL_DESCRIPTIONS", "JS_TOOLS_DESCRIPTIONS")
-
-# Set for the duration of a registry build so every module's tools() reads the
-# same variant without threading a parameter through ten call sites.
-_forced_variant: ContextVar[str | None] = ContextVar("js_tool_description_variant", default=None)
 
 _IF_BLOCK = re.compile(r"[ \t]*<!--if:([A-Za-z0-9_]+)-->\n?(.*?)\n?[ \t]*<!--endif-->\n?", re.DOTALL)
 
@@ -95,62 +74,21 @@ def _warn_once(message: str) -> None:
     print(f"warning: tool description: {message}", file=sys.stderr)
 
 
-def normalize_variant(raw: object) -> str | None:
-    """``"Slim "`` -> ``"slim"``; anything that is not a known variant -> None."""
-    if raw is None:
-        return None
-    value = str(raw).strip().lower()
-    return value if value in TOOL_DESCRIPTION_VARIANTS else None
-
-
-def description_dir(variant: str) -> Path:
-    return _DESCRIPTIONS_ROOT / variant
-
-
-def active_variant() -> str:
-    """The variant `load_description` reads right now: the one a registry build
-    forced, else the environment knob, else the default."""
-    forced = _forced_variant.get()
-    if forced is not None:
-        return forced
-    for name in _VARIANT_ENV_NAMES:
-        value = normalize_variant(os.environ.get(name))
-        if value is not None:
-            return value
-    return DEFAULT_TOOL_DESCRIPTIONS
-
-
-@contextmanager
-def using_variant(variant: str | None) -> Iterator[str]:
-    """Make `load_description` read ``variant`` for the duration of the block.
-    ``None`` leaves the ambient choice (environment, then default) in force."""
-    if variant is None:
-        yield active_variant()
-        return
-    resolved = normalize_variant(variant)
-    if resolved is None:
-        raise ValueError(
-            f"unknown tool description variant {variant!r}; "
-            f"expected one of {', '.join(TOOL_DESCRIPTION_VARIANTS)}"
-        )
-    token = _forced_variant.set(resolved)
-    try:
-        yield resolved
-    finally:
-        _forced_variant.reset(token)
+def description_dir() -> Path:
+    return _DESCRIPTIONS_ROOT
 
 
 def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) -> str:
-    """Load a non-empty markdown description from the active variant, keeping only
-    the build-time flag blocks whose flag is in ``flags``. Co-present-tool-name
-    blocks ({{#if}}/{{#unless}}) are left intact here and resolved later at the
+    """Load a non-empty markdown description, keeping only the build-time flag
+    blocks whose flag is in ``flags``. Co-present-tool-name blocks
+    ({{#if}}/{{#unless}}) are left intact here and resolved later at the
     registry boundary."""
-    return _load_description(name, tuple(flags), active_variant())
+    return _load_description(name, tuple(flags))
 
 
 @cache
-def _load_description(name: str, flags: tuple[str, ...], variant: str) -> str:
-    path = description_dir(variant) / f"{name}.md"
+def _load_description(name: str, flags: tuple[str, ...]) -> str:
+    path = _DESCRIPTIONS_ROOT / f"{name}.md"
     try:
         text = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:

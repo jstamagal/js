@@ -121,12 +121,7 @@ def _registry_for(cfg) -> object:
     # when the operator has locked subagent model selection it is dropped from both the
     # schema and the description rather than merely ignored.
     flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
-    # `tools.descriptions` picks the stock or slim description set the model sees.
-    return registry_for_roots(
-        getattr(cfg, "prompt_roots", ()) or (),
-        flags=flags,
-        descriptions=getattr(cfg, "tool_descriptions", None),
-    )
+    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags)
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -449,7 +444,6 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 # kernel call, so it rides the same live-settings path as the numeric knobs.
 _LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
     ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
-    ("tool_descriptions", ("tools", "descriptions"), settings.TOOL_DESCRIPTION_VARIANTS),
 )
 
 _LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (

@@ -74,13 +74,11 @@ No selected tools means no tools are exposed.
 Model-facing descriptions live in:
 
 ```text
-js/toolkit/tool_descriptions/<variant>/<tool>.md
+js/toolkit/tool_descriptions/<tool>.md
 ```
 
-Two variants hold the same file set: `stock` is the full text, `slim` is cut to
-what the model can act on. The `tools.descriptions` knob (`JS_TOOL_DESCRIPTIONS`,
-`set tools.descriptions slim`, `--extra tools.descriptions=slim`) picks the one
-the model sees; `just tool-bytes --compare` shows what each costs.
+Descriptions are cut to what the model can act on; `just tool-bytes` shows
+what each costs.
 
 The filename must match the registered tool name for core/wiki tools.
 Generated agent tools build descriptions at runtime.

@@ -40,35 +40,19 @@ hidden_test_patterns = [
 ]
 
 # ---- agents -----------------------------------------------------------------
-# kind = "js": runs the baked agent dir in the sandbox with the given description
-# variant. kind = "builtin": RepoRacer's fake agents, for proving the plumbing.
+# kind = "js": runs the baked agent dir in the sandbox. kind = "builtin": RepoRacer's fake agents, for proving the plumbing.
 # kind = "command": any CLI agent, run on the host with RepoRacer's template
 # variables ({{promptFile}} etc.); bring its own sandbox and auth.
 
 [[agents]]
-name = "js-full-slim"
+name = "js-full"
 kind = "js"
 agent = "bench-full"
-descriptions = "slim"
 
 [[agents]]
-name = "js-full-stock"
-kind = "js"
-agent = "bench-full"
-descriptions = "stock"
-
-[[agents]]
-name = "js-shell-slim"
+name = "js-shell"
 kind = "js"
 agent = "bench-shell"
-descriptions = "slim"
-default = false
-
-[[agents]]
-name = "js-shell-stock"
-kind = "js"
-agent = "bench-shell"
-descriptions = "stock"
 default = false
 
 [[agents]]

@@ -35,25 +35,22 @@ def _prompt_agent_names() -> set[str]:
 def test_description_loader_rejects_missing_and_empty_files(tmp_path, monkeypatch):
     monkeypatch.setattr(descriptions, "_DESCRIPTIONS_ROOT", tmp_path)
     descriptions._load_description.cache_clear()
-    (tmp_path / "stock").mkdir()
 
-    with descriptions.using_variant("stock"):
-        with pytest.raises(FileNotFoundError):
-            descriptions.load_description("missing")
+    with pytest.raises(FileNotFoundError):
+        descriptions.load_description("missing")
 
-        (tmp_path / "stock" / "empty.md").write_text("\n", encoding="utf-8")
-        with pytest.raises(ValueError):
-            descriptions.load_description("empty")
+    (tmp_path / "empty.md").write_text("\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        descriptions.load_description("empty")
 
     descriptions._load_description.cache_clear()
 
 
-@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
-def test_registered_tools_and_description_files_match(variant):
+def test_registered_tools_and_description_files_match():
     descriptions._load_description.cache_clear()
-    registry = build_default_registry(descriptions=variant)
+    registry = build_default_registry()
     registered = {tool.name for tool in registry.tools}
-    files = {path.stem for path in descriptions.description_dir(variant).glob("*.md")}
+    files = {path.stem for path in descriptions.description_dir().glob("*.md")}
     generated_agent_tools = _prompt_agent_names() - files
     turn_scoped_tools = {"tool_discovery"}
 
@@ -62,8 +59,7 @@ def test_registered_tools_and_description_files_match(variant):
     for tool in registry.tools:
         assert tool.description.strip()
         if tool.name in files:
-            with descriptions.using_variant(variant):
-                assert descriptions.load_description(tool.name) == tool.description
+            assert descriptions.load_description(tool.name) == tool.description
 
 
 
@@ -241,9 +237,8 @@ def test_registry_renders_conditionals_for_selected_surface():
                     if spec["function"]["name"] == "subject") == expected
 
 
-@pytest.mark.parametrize("variant", descriptions.TOOL_DESCRIPTION_VARIANTS)
-def test_openai_specs_never_leak_raw_markers_on_any_surface(variant):
-    full = build_default_registry(descriptions=variant)
+def test_openai_specs_never_leak_raw_markers_on_any_surface():
+    full = build_default_registry()
     surfaces = [
         ["shell"], ["read"], ["fs_search"], ["shell", "read"],
         ["read", "fs_search", "patch", "write", "task"], None,
@@ -253,36 +248,3 @@ def test_openai_specs_never_leak_raw_markers_on_any_surface(variant):
         for spec in registry.openai_specs():
             desc = spec["function"]["description"]
             assert "{{#" not in desc and "{{/" not in desc, (sel, spec["function"]["name"])
-
-
-def test_description_variants_hold_the_same_file_set():
-    stock = {path.name for path in descriptions.description_dir("stock").glob("*.md")}
-    slim = {path.name for path in descriptions.description_dir("slim").glob("*.md")}
-    assert stock
-    assert stock == slim
-
-
-def test_descriptions_knob_selects_the_variant_the_model_sees(monkeypatch):
-    monkeypatch.setattr(descriptions, "_load_description", lambda name, flags, variant: f"{variant}:{name}")
-    for variant in descriptions.TOOL_DESCRIPTION_VARIANTS:
-        registry = build_default_registry(descriptions=variant).select(["shell"])
-        assert registry.openai_specs()[0]["function"]["description"] == f"{variant}:shell"
-    with pytest.raises(ValueError):
-        with descriptions.using_variant("fat"):
-            pass
-
-
-def test_descriptions_knob_env_and_setting_coercion(monkeypatch):
-    from js import settings as _settings
-
-    spec = next(spec for spec in _settings.REGISTRY if spec.key == "tools.descriptions")
-    assert _settings.coerce_value(spec, " Slim ") == ("slim", None)
-    value, error = _settings.coerce_value(spec, "fat")
-    assert value is None and "stock" in error
-
-    monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "slim")
-    assert descriptions.active_variant() == "slim"
-    monkeypatch.setenv("JS_TOOL_DESCRIPTIONS", "nonsense")
-    assert descriptions.active_variant() == "slim"
-    with descriptions.using_variant("slim"):
-        assert descriptions.active_variant() == "slim"

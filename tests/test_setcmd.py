@@ -387,9 +387,6 @@ def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
     if spec.key == "provider.id":
         # validated domain: must name a known provider or saved login.
         return "deepseek", "deepseek"
-    if spec.key == "tools.descriptions":
-        # validated domain: one of the tool_descriptions/<variant> directories.
-        return "slim", "slim"
     if spec.key == "provider.base_url":
         # validated domain: must carry an http(s) scheme.
         return "http://env.test/v1", "http://env.test/v1"
