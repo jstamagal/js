@@ -1845,7 +1845,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 )
                 reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
                 for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
-                    _reconcile_read_delivery(pc.name, args, old_result, new_result, active_context)
+                    _reconcile_read_delivery(
+                        _canonical_tool_call_name(pc.name, active_registry),
+                        args,
+                        old_result,
+                        new_result,
+                        active_context,
+                    )
                     reconciled.append((pc, args, new_result))
                 dispatch_records = reconciled
                 for pc, _args, result_value in dispatch_records:

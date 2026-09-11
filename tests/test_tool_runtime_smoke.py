@@ -721,6 +721,53 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_overwrite(tmp_path,
     assert target.read_text(encoding="utf-8").endswith("L02999 filler\n")
 
 
+def test_a_clipped_read_does_not_revoke_an_earlier_read(tmp_path, monkeypatch):
+    """A later clip narrows that read's coverage without erasing lines an
+    earlier read already delivered in full."""
+    context = ToolContext(cwd=tmp_path)
+    context.max_read_lines = 50_000
+    context.max_read_bytes = 0
+    context.max_tool_result_inline_bytes = 2000
+    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    real_spill = runtime.spill_oversized_result
+    monkeypatch.setattr(
+        runtime,
+        "spill_oversized_result",
+        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
+    )
+    target = tmp_path / "big.txt"
+    target.write_text("".join(f"L{index:05d} filler\n" for index in range(30000)), encoding="utf-8")
+
+    _args, page = runtime._dispatch(
+        "read",
+        json.dumps({"file_path": str(target), "start_line": 2500, "end_line": 2510}),
+        runtime.Telemetry(None),
+        cap_bytes=0,
+        tool_context=context,
+    )
+    assert "L02505 filler" in page
+
+    _args, delivered = runtime._dispatch(
+        "read",
+        json.dumps({"file_path": str(target)}),
+        runtime.Telemetry(None),
+        cap_bytes=0,
+        tool_context=context,
+    )
+    assert len(delivered.encode("utf-8")) < target.stat().st_size
+    assert target.resolve() not in context.fully_read_paths
+
+    earlier = fs.patch(
+        file_path=str(target), old_string="L02505 filler\n", new_string="changed\n", context=context
+    )
+    unseen = fs.patch(
+        file_path=str(target), old_string="L20000 filler\n", new_string="changed\n", context=context
+    )
+
+    assert earlier.startswith("patched ")
+    assert unseen.startswith("ERROR:")
+
+
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )

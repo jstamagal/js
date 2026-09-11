@@ -287,6 +287,9 @@ class ToolContext:
     last_incomplete_reason: str | None = None
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
+    _coverage_before_read: dict[Path, tuple[list[tuple[int, int]], bool]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def resolve_path(self, raw: str | os.PathLike[str]) -> Path:
         path = Path(os.path.expanduser(str(raw)))
@@ -310,6 +313,13 @@ class ToolContext:
         read. Text readers pass their rendered window explicitly, including when
         an implicit max-lines page made a nominal whole-file read partial.
         """
+        # The runtime can clip this read's text after the handler returns, and
+        # the correction in record_delivered_read must not erase what earlier
+        # reads delivered, so stash the coverage that predates this read.
+        self._coverage_before_read[path] = (
+            list(self.read_ranges.get(path, [])),
+            path in self.fully_read_paths,
+        )
         previous_hash = self.file_hashes.get(path)
         if previous_hash is not None and previous_hash != content_hash:
             self.read_ranges.pop(path, None)
@@ -416,11 +426,19 @@ class ToolContext:
             if separator and head.isdigit():
                 number = int(head)
                 seen.append((number, number))
-        if seen:
-            self.read_ranges[path] = _merge_line_ranges(seen)
+        # Restrict only this read's contribution: keep the ranges and the
+        # whole-file flag that predate it, so a clip cannot revoke lines an
+        # earlier read delivered in full.
+        prior_ranges, prior_whole = self._coverage_before_read.get(path, ([], False))
+        merged = _merge_line_ranges([*prior_ranges, *seen])
+        if merged:
+            self.read_ranges[path] = merged
         else:
             self.read_ranges.pop(path, None)
-        self.fully_read_paths.discard(path)
+        if prior_whole:
+            self.fully_read_paths.add(path)
+        else:
+            self.fully_read_paths.discard(path)
 
     def configure_snapshot_store(
         self,
