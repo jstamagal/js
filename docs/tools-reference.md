@@ -391,8 +391,8 @@ Parameters:
 - `restart`: kill and restart, destroying every definition.
 - `verbosity`: `quiet`, `normal`, or `verbose` for this call's terminal render.
 
-Every result carries a `NAMESPACE` line naming the callables live in the kernel
-*right now*, re-derived from the kernel on every call rather than remembered.
+Every result carries a `NAMESPACE` line naming the functions and classes this
+session defined, re-derived from the kernel on every call rather than remembered.
 That is what makes the tool survive compaction: the transcript that defined
 `parse_log` may be gone, the listing is not. New definitions also get a `DEFINED`
 line, deletions a `GONE` line.

@@ -12,9 +12,9 @@ spent the session building.
 
 THE AGENT CAN STILL SEE WHAT IT BUILT. After compaction the transcript that
 defined `parse_log` may be gone while the kernel still holds the function. So
-every result carries a NAMESPACE line listing the callables that are live right
-now, re-derived from the kernel on every call. Never a remembered record — the
-kernel is the ground truth and the listing is regenerated from it.
+every result carries a NAMESPACE line listing the functions and classes the
+session defined, re-derived from the kernel on every call. Never a remembered
+record — the kernel is the ground truth and the listing is regenerated from it.
 
 This module has no opinion about tool persistence. It does not save, load, or
 version anything, and it does not import `toolbox`. The learning layer sits on

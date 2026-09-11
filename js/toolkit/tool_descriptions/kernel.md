@@ -16,12 +16,12 @@ Parameters:
 - `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view
   of this one call. It changes nothing about what you receive.
 
-Every result ends with a `NAMESPACE` line listing the callables that are live in
-the kernel right now (`NAMESPACE (none)` when nothing is callable), and a
-`DEFINED` line for anything this cell added — functions, imports, and values
-alike. That listing is re-derived from the kernel itself on every call, so it is
-accurate even when the conversation that defined a function is no longer in your
-context. Read it. It is the record of what you have already built.
+Every result ends with a `NAMESPACE` line listing the callables you defined in
+this session (`NAMESPACE (none)` when you have defined none), and a `DEFINED`
+line for anything this cell added — functions, imports, and values alike. That
+listing is re-derived from the kernel itself on every call, so it is accurate
+even when the conversation that defined a function is no longer in your context.
+Read it. It is the record of what you have already built.
 
 Output behavior:
 - stdout, stderr, `repr` results, and tracebacks all come back. A cell that
