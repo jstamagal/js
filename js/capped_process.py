@@ -21,6 +21,26 @@ class CappedProcessResult:
     stderr_truncated: bool = False
 
 
+class CappedProcessTimeout(subprocess.TimeoutExpired):
+    """Timeout carrying the killed status and capped-stream metadata."""
+
+    def __init__(
+        self,
+        cmd: list[str],
+        timeout: int,
+        *,
+        returncode: int,
+        output: bytes,
+        stderr: bytes,
+        stdout_truncated: bool,
+        stderr_truncated: bool,
+    ) -> None:
+        super().__init__(cmd, timeout, output=output, stderr=stderr)
+        self.returncode = returncode
+        self.stdout_truncated = stdout_truncated
+        self.stderr_truncated = stderr_truncated
+
+
 class _StreamCapture:
     """Capped accumulator the reader thread feeds INCREMENTALLY.
 
@@ -153,10 +173,16 @@ def _run_capped(
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         finish_readers()
-        stdout, _ = captures["stdout"].snapshot()
-        stderr, _ = captures["stderr"].snapshot()
-        raise subprocess.TimeoutExpired(
-            argv, timeout, output=stdout, stderr=stderr
+        stdout, stdout_truncated = captures["stdout"].snapshot()
+        stderr, stderr_truncated = captures["stderr"].snapshot()
+        raise CappedProcessTimeout(
+            argv,
+            timeout,
+            returncode=proc.returncode,
+            output=stdout,
+            stderr=stderr,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
         ) from None
     finish_readers()
     stdout, stdout_truncated = captures["stdout"].snapshot()

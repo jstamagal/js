@@ -7,7 +7,6 @@ import json
 import mimetypes
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
@@ -18,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from .. import settings as _settings
-from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
+from ..capped_process import (
+    CappedProcessResult,
+    CappedProcessTimeout,
+    _run_capped,
+    truncation_marker,
+)
 from ..tool_binaries import (
     ARIA2_EXECUTABLE,
     DownloadError,
@@ -69,6 +73,10 @@ def shell(
     safe_env = {key: os.environ[key] for key in allowed if key in os.environ}
     shell_path = _default_shell()
     shell_arg = "/C" if sys.platform == "win32" else "-c"
+    cap = int(context.max_bash_output_bytes)
+    ceiling = int(getattr(context, "max_bash_output_ceiling", 0) or 0)
+    if ceiling > 0:
+        cap = min(cap, ceiling)
     # A command can create/edit/delete anything, so memoized fs_search results are
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
@@ -78,27 +86,38 @@ def shell(
             timeout=timeout,
             cwd=str(workdir),
             env=safe_env,
-            cap=context.max_bash_output_bytes,
+            cap=cap,
         )
         if isinstance(result, CappedProcessResult):
             returncode, raw_stdout, raw_stderr = result.returncode, result.stdout, result.stderr
         else:
             returncode, raw_stdout, raw_stderr = result
-    except subprocess.TimeoutExpired as expired:
+    except CappedProcessTimeout as expired:
         # _run_capped attaches whatever the process had already written. Throwing
         # it away told the model nothing about a build that printed 200 lines and
         # then hung -- the last lines before the hang are the whole diagnosis.
-        parts = [f"ERROR: command timed out after {timeout}s"]
-        for label, raw in (("stdout", expired.output), ("stderr", expired.stderr)):
-            if not raw:
+        parts = [
+            f"ERROR: command timed out after {timeout}s",
+            f"shell={shell_path}",
+            f"exit={expired.returncode}",
+        ]
+        streams = (
+            ("stdout", expired.output, expired.stdout_truncated),
+            ("stderr", expired.stderr, expired.stderr_truncated),
+        )
+        for label, raw, truncated in streams:
+            if not raw and not truncated:
                 continue
             text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
             if not keep_ansi:
                 text = _ANSI_RE.sub("", text)
             text = text.strip()
+            if truncated:
+                marker = truncation_marker(cap)
+                text = f"{text}\n{marker}" if text else marker
             if text:
                 parts.append(f"--- {label} before the timeout ---\n{text}")
-        if len(parts) == 1:
+        if len(parts) == 3:
             parts.append("(the command produced no output before it was killed)")
         return "\n".join(parts)
     except OSError as exc:
@@ -110,7 +129,7 @@ def shell(
         stdout = _ANSI_RE.sub("", stdout)
         stderr = _ANSI_RE.sub("", stderr)
     if isinstance(result, CappedProcessResult):
-        marker = truncation_marker(context.max_bash_output_bytes)
+        marker = truncation_marker(cap)
         if result.stdout_truncated:
             stdout = f"{stdout}\n{marker}" if stdout else marker
         if result.stderr_truncated:

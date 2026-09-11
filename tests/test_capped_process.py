@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import os
 import signal
-import subprocess
 import sys
 import threading
 
 import pytest
 
 from js import capped_process
-from js.capped_process import _run_capped
+from js.capped_process import CappedProcessTimeout, _run_capped
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix process-group behavior")
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
-    with pytest.raises(subprocess.TimeoutExpired) as raised:
+    with pytest.raises(CappedProcessTimeout) as raised:
         _run_capped(
             [
                 "/bin/sh",
@@ -30,6 +29,24 @@ def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     assert raised.value.output == b"IMPORTANT_PROGRESS_LINE\n"
     assert raised.value.stdout == b"IMPORTANT_PROGRESS_LINE\n"
     assert raised.value.stderr == b"IMPORTANT_ERROR_LINE\n"
+    assert raised.value.returncode == -signal.SIGKILL
+    assert raised.value.stdout_truncated is False
+    assert raised.value.stderr_truncated is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix process-group behavior")
+def test_run_capped_timeout_retains_truncation_metadata():
+    with pytest.raises(CappedProcessTimeout) as raised:
+        _run_capped(
+            ["/bin/sh", "-c", "head -c 4096 /dev/zero; sleep 30"],
+            timeout=0.2,
+            cwd=None,
+            cap=64,
+        )
+
+    assert raised.value.output == b"\0" * 64
+    assert raised.value.stdout_truncated is True
+    assert raised.value.stderr_truncated is False
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix inherited-pipe behavior")
