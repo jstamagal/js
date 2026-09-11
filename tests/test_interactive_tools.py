@@ -463,6 +463,26 @@ def test_terminal_snapshot_writes_png_and_uses_image_result(tmp_path):
         close_terminal_sessions(context)
 
 
+def test_terminal_snapshot_draws_the_cursor_and_cell_decorations(tmp_path):
+    import pyte
+
+    from js.toolkit.terminal import _draw_screen
+
+    def render(text: str, cursor_col: int, name: str) -> bytes:
+        screen = pyte.Screen(20, 3)
+        pyte.Stream(screen).feed(text)
+        screen.cursor.x = cursor_col
+        target = tmp_path / name
+        _draw_screen(screen, target)
+        return target.read_bytes()
+
+    # Two screens that differ only in cursor position must not render the same.
+    assert render("hello", 5, "cursor-5.png") != render("hello", 1, "cursor-1.png")
+
+    # An underlined cell must not render the same as a plain one.
+    assert render("plain", 0, "plain.png") != render("\x1b[4mplain\x1b[0m", 0, "under.png")
+
+
 def test_local_probe_server_returns_empty_favicon(tmp_path):
     target = tmp_path / "index.html"
     target.write_text("<p>clean</p>", encoding="utf-8")

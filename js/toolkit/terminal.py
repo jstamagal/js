@@ -81,6 +81,7 @@ _ANSI_RGB = {
 
 _BACKGROUND = (12, 12, 12)
 _FOREGROUND = (222, 222, 222)
+_CURSOR_COLOUR = (255, 255, 255)
 _LIVE_CHILDREN: set[Any] = set()
 
 
@@ -386,7 +387,34 @@ def _draw_screen(screen: Any, path: Path) -> None:
                     [px, py, px + cell_width, py + cell_height], fill=background
                 )
             if char != " ":
-                draw.text((px, py), char, font=font, fill=foreground)
+                bold = bool(getattr(cell, "bold", False))
+                draw.text(
+                    (px, py),
+                    char,
+                    font=font,
+                    fill=foreground,
+                    stroke_width=1 if bold else 0,
+                    stroke_fill=foreground if bold else None,
+                )
+                if getattr(cell, "underscore", False):
+                    draw.line(
+                        [px, py + cell_height - 2, px + cell_width - 1, py + cell_height - 2],
+                        fill=foreground,
+                    )
+                if getattr(cell, "strikethrough", False):
+                    draw.line(
+                        [px, py + cell_height // 2, px + cell_width - 1, py + cell_height // 2],
+                        fill=foreground,
+                    )
+    if not getattr(screen.cursor, "hidden", False):
+        cursor_x, cursor_y = screen.cursor.x, screen.cursor.y
+        if 0 <= cursor_x < screen.columns and 0 <= cursor_y < screen.lines:
+            px, py = 4 + cursor_x * cell_width, 4 + cursor_y * cell_height
+            draw.rectangle(
+                [px, py, px + cell_width - 1, py + cell_height - 1],
+                outline=_CURSOR_COLOUR,
+                width=2,
+            )
     image.save(path, format="PNG")
 
 
