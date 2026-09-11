@@ -16,6 +16,7 @@ import os
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ def _encode_snapshot(path: Path, snapshot: Snapshot) -> bytes:
         payload = {"kind": "file", "data": base64.b64encode(snapshot).decode("ascii")}
     elif snapshot.get("kind") == "symlink":
         payload = {"kind": "symlink", "target": str(snapshot.get("target", ""))}
+    elif snapshot.get("kind") == "unavailable":
+        payload = {"kind": "unavailable", "reason": str(snapshot["reason"])}
     elif snapshot.get("kind") == "directory":
         entries = []
         for rel, data in snapshot.get("entries", {}).items():
@@ -531,6 +534,16 @@ class ToolContext:
     def discard_snapshot(self, path: Path) -> None:
         self.pop_snapshot(path)
 
+    @contextmanager
+    def restoring_snapshot(self, path: Path):
+        """Consume the latest entry only on normal exit; retain it on restore errors."""
+        with self._snapshot_lock:
+            stack = self.snapshots.get(path) or []
+            found = bool(stack)
+            yield found, stack[-1] if found else None
+            if found:
+                self.pop_snapshot(path)
+
     def invalidate_search_cache(self) -> None:
         """Drop memoized fs_search results after anything may have changed the tree.
 
@@ -556,8 +569,10 @@ class ToolContext:
                 content: Snapshot = {"kind": "directory", "entries": entries}
             else:
                 content = path.read_bytes() if path.exists() else None
-        except OSError:
-            content = None
+        except OSError as exc:
+            reason = f"could not capture undo snapshot for {path}: {exc}"
+            content = {"kind": "unavailable", "reason": reason}
+            self._notice_snapshot(reason)
         self.record_snapshot(path, content)
 
 

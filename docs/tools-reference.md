@@ -79,14 +79,18 @@ Snapshots the prior file bytes or directory tree for `undo`.
 
 ### `undo`
 
-Restores the latest in-process snapshot for a path.
+Restores the latest snapshot for a path.
 
 Parameters:
 
 - `path`
 
-Can restore files, created-file nonexistence, and directory snapshots. Snapshots
-do not persist across process restarts.
+Can restore files, symlinks, created-file nonexistence, and directory snapshots.
+Successful restoration consumes one entry; a filesystem error retains the
+snapshot for retry. Unusable entries (including failed captures) are discarded
+one at a time with an error, without changing the path. Retry to reach older
+history. Saved sessions persist snapshots across restarts, subject to the
+bounded store's retention and size limits.
 
 ### `fs_search`
 

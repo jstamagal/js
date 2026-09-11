@@ -409,47 +409,47 @@ def undo(path: str, context: ToolContext | None = None) -> str:
         no_follow = _resolve_path_no_follow(context, path)
         if context.snapshots.get(no_follow):
             target = no_follow
-    found, previous = context.pop_snapshot(target)
-    if not found:
-        return f"ERROR: no snapshot available for {target}"
     try:
-        if isinstance(previous, dict) and previous.get("kind") in {"corrupt", "unavailable"}:
-            reason = str(previous.get("reason", "snapshot data is unavailable"))
-            return f"ERROR: discarded unusable snapshot for {target}: {reason}; retry undo for an older entry"
-        if isinstance(previous, dict) and previous.get("kind") == "symlink":
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target)
+        with context.restoring_snapshot(target) as (found, previous):
+            if not found:
+                return f"ERROR: no snapshot available for {target}"
+            if isinstance(previous, dict) and previous.get("kind") in {"corrupt", "unavailable"}:
+                reason = str(previous.get("reason", "snapshot data is unavailable"))
+                return f"ERROR: discarded unusable snapshot for {target}: {reason}; retry undo for an older entry"
+            if isinstance(previous, dict) and previous.get("kind") == "symlink":
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(previous["target"])
+                return f"restored symlink {target}"
+            if isinstance(previous, dict) and previous.get("kind") == "directory":
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+                target.mkdir(parents=True, exist_ok=True)
+                entries = previous.get("entries", {})
+                for rel, data in entries.items():
+                    child = target / rel.rstrip("/")
+                    if rel.endswith("/"):
+                        child.mkdir(parents=True, exist_ok=True)
+                    else:
+                        child.parent.mkdir(parents=True, exist_ok=True)
+                        child.write_bytes(data or b"")
+                return f"restored directory {target}"
+            if previous is None:
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+                return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.symlink_to(previous["target"])
-            return f"restored symlink {target}"
-        if isinstance(previous, dict) and previous.get("kind") == "directory":
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target)
-            target.mkdir(parents=True, exist_ok=True)
-            entries = previous.get("entries", {})
-            for rel, data in entries.items():
-                child = target / rel.rstrip("/")
-                if rel.endswith("/"):
-                    child.mkdir(parents=True, exist_ok=True)
-                else:
-                    child.parent.mkdir(parents=True, exist_ok=True)
-                    child.write_bytes(data or b"")
-            return f"restored directory {target}"
-        if previous is None:
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target)
-            return f"restored deletion state for {target}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(previous)
-        content_hash = _hash_bytes(previous)
-        context.file_hashes[target] = content_hash
-        return f"restored {target} (hash {content_hash})"
+            target.write_bytes(previous)
+            content_hash = _hash_bytes(previous)
+            context.file_hashes[target] = content_hash
+            return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
 

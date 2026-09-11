@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from js.toolkit import ToolContext, build_default_registry, call_tool
 from js.toolkit import core, fs
 
@@ -12,6 +16,84 @@ def _persistent_context(tmp_path, session_name: str) -> ToolContext:
         state_dir=tmp_path / "state",
     )
     return context
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("directory", [False, True])
+def test_capture_failure_never_authorizes_deletion(tmp_path, monkeypatch, restart, directory):
+    target = tmp_path / "target"
+    if directory:
+        target.mkdir()
+    file = target / "child" if directory else target
+    file.write_text("original")
+    context = _persistent_context(tmp_path, "capture")
+    context.snapshot(target)
+    file.write_text("must survive")
+    real_read = Path.read_bytes
+
+    def failing_read(path):
+        if path == file:
+            raise PermissionError("injected capture failure")
+        return real_read(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", failing_read)
+        context.snapshot(target)
+    if restart:
+        context = _persistent_context(tmp_path, "capture")
+
+    result = fs.undo(str(target), context=context)
+    assert result.startswith("ERROR: discarded unusable snapshot")
+    assert "injected capture failure" in result
+    assert file.read_text() == "must survive"
+    assert fs.undo(str(target), context=context).startswith("restored")
+    assert file.read_text() == "original"
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink", "missing"])
+def test_failed_undo_retains_snapshot_for_retry(tmp_path, monkeypatch, restart, kind):
+    target = tmp_path / "target"
+    context = _persistent_context(tmp_path, "retry")
+    if kind == "file":
+        target.write_text("original")
+    elif kind == "directory":
+        target.mkdir()
+        (target / "child").write_text("original")
+    elif kind == "symlink":
+        target.symlink_to("original")
+    fs._snapshot_remove_target(context, target)
+    if kind == "directory":
+        (target / "child").write_text("changed")
+    else:
+        if kind == "symlink":
+            target.unlink()
+        target.write_text("changed")
+    entries = list(context.snapshot_files[target])
+    method = {"file": "write_bytes", "directory": "write_bytes", "symlink": "symlink_to", "missing": "unlink"}[kind]
+
+    def fail(*args, **kwargs):
+        raise PermissionError("injected restore failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, method, fail)
+        assert fs.undo(str(target), context=context) == "ERROR: injected restore failure"
+    assert len(context.snapshots[target]) == 1
+    assert context.snapshot_files[target] == entries
+    assert all(entry.is_file() for entry in entries)
+    if restart:
+        context = _persistent_context(tmp_path, "retry")
+    assert fs.undo(str(target), context=context).startswith("restored")
+    if kind == "missing":
+        assert not target.exists()
+    elif kind == "symlink":
+        assert target.is_symlink()
+        assert target.readlink() == Path("original")
+    else:
+        assert (target / "child" if kind == "directory" else target).read_text() == "original"
+    assert not context.snapshots[target]
+    assert all(not entry.exists() for entry in entries)
+    assert not _persistent_context(tmp_path, "retry").snapshots.get(target)
 
 
 def test_undo_restores_a_patch_after_context_restart(tmp_path):
