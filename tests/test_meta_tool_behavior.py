@@ -89,6 +89,18 @@ def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):
     assert target.read_text(encoding="utf-8") == "first"
 
 
+def test_plan_rejects_a_name_over_the_filename_limit(tmp_path):
+    import os
+
+    context = ToolContext(cwd=tmp_path)
+
+    result = meta.plan(plan_name="p" * 300, version="v1", content="x", context=context)
+
+    assert result.startswith("ERROR:")
+    assert str(os.pathconf(tmp_path, "PC_NAME_MAX")) in result
+    assert not (tmp_path / "plans").exists()
+
+
 def _write_skill(root: Path, name: str, text: str) -> Path:
     path = root / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)

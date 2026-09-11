@@ -75,6 +75,15 @@ def todo_read(context: ToolContext | None = None) -> str:
     return "\n".join(f"- [{todo.status}] {todo.content}" for todo in context.todos.values())
 
 
+def _filename_limit(directory: Path) -> int:
+    """Longest single filename component this filesystem accepts, in bytes."""
+    try:
+        limit = os.pathconf(directory, "PC_NAME_MAX")
+    except (OSError, ValueError):
+        return 255
+    return limit if limit > 0 else 255
+
+
 def plan(
     plan_name: str,
     version: str,
@@ -85,7 +94,14 @@ def plan(
     assert context is not None
     safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in plan_name).strip("-.") or "plan"
     safe_version = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in version).strip("-.") or "v1"
-    target = context.resolve_path(Path("plans") / f"{safe_name}-{safe_version}.md")
+    filename = f"{safe_name}-{safe_version}.md"
+    limit = _filename_limit(context.cwd)
+    if len(filename.encode("utf-8")) > limit:
+        return (
+            f"ERROR: plan filename is {len(filename.encode('utf-8'))} bytes, over this "
+            f"filesystem's {limit}-byte limit for one name; shorten plan_name or version"
+        )
+    target = context.resolve_path(Path("plans") / filename)
     existed = target.exists()
     if existed and not overwrite:
         return f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"
