@@ -280,6 +280,23 @@ def test_fs_search_dot_leading_glob_still_reaches_hidden_files(tmp_path):
 
 
 @requires_rg
+def test_fs_search_negated_glob_does_not_reopen_hidden_files(tmp_path):
+    """A negated glob filters results; it never broadens the search to hidden
+    paths the caller did not ask for."""
+    _hidden_tree(tmp_path)
+
+    actual = fs_search(
+        "secret",
+        path=".",
+        glob="!.nope",
+        output_mode="files_with_matches",
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert actual.splitlines() == [str(tmp_path / "visible.txt")]
+
+
+@requires_rg
 def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
     """The documented escape hatch: point `path` at the hidden file or directory."""
     _hidden_tree(tmp_path)
@@ -301,7 +318,8 @@ def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
 def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
     assert fs._glob_asks_for_hidden(".env")
     assert fs._glob_asks_for_hidden("**/.github/*")
-    assert fs._glob_asks_for_hidden("!.env")
+    assert not fs._glob_asks_for_hidden("!.env")
+    assert not fs._glob_asks_for_hidden("!.git/**")
     assert not fs._glob_asks_for_hidden("*.py")
     assert not fs._glob_asks_for_hidden("./src/*.py")
     assert not fs._glob_asks_for_hidden("../lib/**")

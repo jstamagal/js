@@ -934,10 +934,14 @@ def _glob_asks_for_hidden(pattern: str | None) -> bool:
 
     `.env`, `**/.github/*` and `.git/**` are explicit requests for hidden paths.
     `.` and `..` are path syntax, not hidden names, so they do not count.
+    A negated glob (``!.env``) filters results; it never broadens the search to
+    hidden paths, so it is not an explicit request.
     """
     if not pattern:
         return False
-    text = str(pattern).strip().lstrip("!")
+    text = str(pattern).strip()
+    if text.startswith("!"):
+        return False
     return any(
         part.startswith(".") and part not in (".", "..")
         for part in text.split("/")
