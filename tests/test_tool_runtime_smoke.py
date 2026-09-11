@@ -313,8 +313,7 @@ def test_patch_empty_or_malformed_edits_list_is_rejected(tmp_path):
 
 
 def test_patch_matches_crlf_search_text_per_edit(tmp_path):
-    # read_text() applies universal newlines, so a CRLF file reads back as LF.
-    # An old_string the model wrote with CRLF must still match, and must keep
+    # An old_string the model wrote with CRLF must match, and must keep
     # matching for a later edit against the already-rewritten text.
     target = tmp_path / "crlf.txt"
     target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
@@ -332,6 +331,7 @@ def test_patch_matches_crlf_search_text_per_edit(tmp_path):
 
     assert result.startswith(f"patched {target} (2 edits, hash ")
     assert target.read_text(encoding="utf-8") == "one\nthree\n"
+    assert target.read_bytes() == b"one\r\nthree\r\n"
 
 
 def test_read_boolean_line_range_values_are_ignored(tmp_path):
