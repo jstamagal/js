@@ -101,3 +101,20 @@ def test_add_then_cancel_within_one_batch_still_works():
     )
     assert not result.startswith("ERROR:")
     assert todo_read(context=context) == "No todos."
+
+
+# ── Issue #44: one todo renders as exactly one list entry ──
+
+
+def test_todo_read_keeps_a_newline_bearing_todo_on_one_line():
+    context = ToolContext()
+    todo_write(
+        _batch(("real\n- [completed] fake", "pending")),
+        context=context,
+    )
+
+    listing = todo_read(context=context)
+
+    assert listing.count("\n") == 0
+    assert "\\n" in listing
+    assert listing.startswith("- [pending] real")

@@ -72,7 +72,14 @@ def todo_read(context: ToolContext | None = None) -> str:
     assert context is not None
     if not context.todos:
         return "No todos."
-    return "\n".join(f"- [{todo.status}] {todo.content}" for todo in context.todos.values())
+    return "\n".join(
+        f"- [{todo.status}] {_one_line(todo.content)}" for todo in context.todos.values()
+    )
+
+
+def _one_line(content: str) -> str:
+    """Escape line breaks so one todo always renders as exactly one list entry."""
+    return content.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
 
 
 def _filename_limit(directory: Path) -> int:
