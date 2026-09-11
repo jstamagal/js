@@ -165,7 +165,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Hard cap on any tool result string.",
                 env="JS_MAX_TOOL_RESULT_BYTES"),
     SettingSpec("limits.fetch_timeout_s", "int", DEFAULT_FETCH_TIMEOUT_S,
-                "fetch() per-request timeout in seconds, and the timeout for the "
+                "fetch() whole-request deadline in seconds, and the per-call timeout for the "
                 "web-search backends' JSON calls.",
                 env="JS_FETCH_TIMEOUT"),
     SettingSpec("limits.shell_env_allow", "json", list(DEFAULT_SHELL_ENV_ALLOW),
