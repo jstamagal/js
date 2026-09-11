@@ -252,6 +252,24 @@ def test_wiki_finish_ingest_refuses_to_commit_into_an_ancestor_repository(tmp_pa
     assert log.stdout.strip() == ""
 
 
+def test_wiki_finish_ingest_reports_a_failed_commit_as_an_error(tmp_path):
+    from js.runtime import ToolErrorTracker
+
+    vault = _vault(tmp_path)
+    _git_init(vault)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox" / "u1").mkdir(parents=True)
+    (vault / "inbox" / "u1" / "f.txt").write_text("x\n")
+    # A stale index lock fails `git add` while the repository itself stays valid.
+    (vault / ".git" / "index.lock").write_text("")
+
+    result = wiki_finish_ingest(str(vault), "u1", "Mixed", context=_ctx(tmp_path))
+
+    # ToolErrorTracker.record is where the runtime decides a result is an error.
+    assert ToolErrorTracker().record("wiki_finish_ingest", result).startswith("ERROR")
+    assert "archived:" in result
+
+
 def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_path, monkeypatch):
     vault = _vault(tmp_path)
     note = tmp_path / "note.md"

@@ -67,6 +67,8 @@ def wiki_finish_ingest(
     if dest.exists():
         return f"ERROR: already archived: {dest}"
 
+    archived_line = f"archived: inbox/{unit} -> Clippings/{unit}"
+    logged_line = f"logged: [{today()}] ingest | {title}"
     with vault_lock(vp):
         (vp / "Clippings").mkdir(exist_ok=True)
         try:
@@ -80,4 +82,11 @@ def wiki_finish_ingest(
             return f"ERROR: close-out failed and archive rolled back: {exc}"
         git = _commit(vp, f"ingest: {title}", context)
 
-    return f"archived: inbox/{unit} -> Clippings/{unit}\nlogged: [{today()}] ingest | {title}\n{git}"
+    if git.lstrip().startswith("ERROR"):
+        # The runtime classifies a tool result by whether it starts with ERROR, so
+        # a failed commit has to lead even though the archive and log already landed.
+        return (
+            f"{git}\n{archived_line}\n{logged_line}\n"
+            "The unit is archived and logged; resolve the git error and commit the vault."
+        )
+    return f"{archived_line}\n{logged_line}\n{git}"
