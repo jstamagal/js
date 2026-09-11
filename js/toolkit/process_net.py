@@ -527,8 +527,14 @@ def _read_response(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise _FetchTimeoutError
+        # http.client closes the socket itself once Content-Length bytes have
+        # arrived; a settimeout on that closed socket raises EBADF, which used
+        # to surface as "ERROR: OSError: [Errno 9]" on every complete response.
         if sock is not None:
-            sock.settimeout(remaining)
+            try:
+                sock.settimeout(remaining)
+            except OSError:
+                sock = None
         try:
             chunk = resp.read1(min(_INLINE_READ_CHUNK, limit + 1 - retained))
         except TimeoutError as exc:
