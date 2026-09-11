@@ -104,6 +104,55 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
     assert context.read_ranges == ranges
 
 
+def test_patch_refuses_an_ambiguous_overlapping_match(tmp_path):
+    target = tmp_path / "file.txt"
+    original = "ababa\n"
+    target.write_text(original)
+    context = ToolContext(cwd=tmp_path)
+    fs.read(str(target), context=context)
+
+    result = fs.patch(str(target), old_string="aba", new_string="X", context=context)
+
+    assert result.startswith("ERROR: Multiple matches found")
+    assert target.read_text() == original
+    assert not context.snapshots
+
+
+def test_patch_replace_all_rewrites_non_overlapping_occurrences(tmp_path):
+    target = tmp_path / "file.txt"
+    target.write_text("ababa\n")
+    context = ToolContext(cwd=tmp_path)
+    fs.read(str(target), context=context)
+
+    result = fs.patch(
+        str(target), old_string="aba", new_string="X", replace_all=True, context=context
+    )
+
+    assert result.startswith("patched ")
+    assert target.read_text() == "Xba\n"
+
+
+def test_patch_batch_aborts_when_an_edit_normalizes_to_a_noop(tmp_path):
+    target = tmp_path / "file.txt"
+    original = b"alpha\nbeta\n"
+    target.write_bytes(original)
+    context = ToolContext(cwd=tmp_path)
+    fs.read(str(target), context=context)
+
+    result = fs.patch(
+        str(target),
+        edits=[
+            {"old_string": "alpha\n", "new_string": "ALPHA\n"},
+            {"old_string": "beta\r\n", "new_string": "beta\n"},
+        ],
+        context=context,
+    )
+
+    assert result.startswith("ERROR: edit 2:")
+    assert target.read_bytes() == original
+    assert not context.snapshots
+
+
 @pytest.mark.parametrize("operation", ["patch", "write"])
 def test_utf8_edit_under_ascii_locale(tmp_path, operation):
     script = r'''

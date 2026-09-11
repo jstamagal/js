@@ -521,6 +521,20 @@ def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
     return start_line, min(end_line, total_lines)
 
 
+def _count_overlapping(text: str, needle: str) -> int:
+    """Occurrences of *needle* in *text*, counting overlapping ones.
+
+    ``str.count`` advances past each match, so ``"ababa".count("aba")`` is 1 even
+    though ``aba`` starts at both offset 0 and offset 2. Uniqueness must be
+    judged on the real set of possible matches."""
+    count = 0
+    start = text.find(needle)
+    while start != -1:
+        count += 1
+        start = text.find(needle, start + 1)
+    return count
+
+
 def _transform_read_ranges(
     ranges: list[tuple[int, int]],
     start: int,
@@ -567,19 +581,27 @@ def _apply_edit(
     new_norm = _normalize_line_endings(new, line_ending)
     if not old_norm:
         return f"ERROR: {label}old_string cannot be empty"
-    count = text.count(old_norm)
-    if count == 0:
+    if old_norm == new_norm:
+        return (
+            f"ERROR: {label}old_string and new_string are identical after "
+            "line-ending normalization, so this edit would not change the file"
+        )
+    occurrences = _count_overlapping(text, old_norm)
+    if occurrences == 0:
         return f"ERROR: {label}Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
-    if count > 1 and not replace_all:
+    if occurrences > 1 and not replace_all:
         return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
     positions: list[tuple[int, int]] = []
     cursor = 0
-    wanted = count if replace_all else 1
-    for _index in range(wanted):
+    while True:
         start = text.find(old_norm, cursor)
+        if start < 0:
+            break
         end = start + len(old_norm)
         positions.append((start, end))
         cursor = end
+        if not replace_all:
+            break
     line_ranges = [_line_span(text, start, end) for start, end in positions]
     guard = context.require_read(
         target,
@@ -596,7 +618,7 @@ def _apply_edit(
         start_line, end_line = _line_span(updated, start, end)
         updated = updated[:start] + new_norm + updated[end:]
         transformed = _transform_read_ranges(transformed, start_line, end_line, line_delta)
-    return updated, count, transformed
+    return updated, len(positions), transformed
 
 
 def patch(
