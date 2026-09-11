@@ -54,14 +54,35 @@ frontmatter picks the tool surface). Config layers jsrc < `.js/jsrc` <
 `.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
-guard; preserve it. Deep dives in `docs/technical-guide.md`.
+guard; preserve it. Deep dives belong in `docs/technical-guide.md`.
 
 ## Docs
 
-- Deep dives live in `docs/` (). `
-- Agent-skill docs: `docs/agents/` (GitHub issue tracker; triage labels;
-  single-context domain docs with `CONTEXT.md` + `docs/adr/`). File confirmed
-  issues in `jstamagal/js` on GitHub; `.scratch/` holds working notes, not the
-  shared issue backlog. After filing a scratch report's confirmed issues with
-  their reproduction evidence, delete the original report. Leave `toolsweep-*`
-  artifacts alone unless explicitly asked to clean them up.
+Deep dives belong in `docs/`: reference material, benchmark results, design
+write-ups. If you produce that kind of thing, it goes there.
+
+Trust code over docs. Docs go stale; the code is what runs every day, and
+nobody here rereads `docs/` to keep it current. When a page in `docs/`
+disagrees with the code, the code is right. If you are changing the area a
+stale page describes, correct or delete the stale text in the same change.
+
+`tool_descriptions/*.md` is not docs. It is the model-facing schema, and code
+and description have to agree. When they disagree the tool is broken and one
+side has to change: fix the code when the described behavior is useful and
+buildable, narrow the description when it promised something the underlying
+tool cannot deliver. Say which side was wrong in the commit message.
+
+Issues go in `jstamagal/js` on GitHub. `.scratch/` holds working notes, not the
+shared issue backlog. After filing a scratch report's confirmed issues with
+their reproduction evidence, delete the original report. Leave `toolsweep-*`
+artifacts alone unless explicitly asked to clean them up.
+
+## Tests and comments
+
+Tests pin behavior, not opinions. Do not assert on prose wording,
+presentation, or styling that could change without anything being wrong.
+
+Comments state what is objectively true about the code. Do not record a
+passing preference of the owner's as fact, and do not gate or disable
+behavior because of a one-off remark. Do not mention things the code does not
+do or alternatives nobody asked about; describe what is there.
