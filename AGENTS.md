@@ -17,6 +17,9 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    venv — `uv.lock` is the truth, so package changes go through uv; a
    `pip install` into `.venv` gets erased by the next `just sync`. Run js
    through `just run`, not `.venv/bin/js` (which goes stale).
+   Dependencies are not hard-pinned with `==`. Keeping them current is a
+   recurring chore: bump them, relock, run the suites, bump the version. An
+   upper bound needs the incompatibility it guards against named beside it.
 2. **Env feels broken? → `just sync`.** It is the real fix.
 3. **Make the change.**
 4. **Run the tests that cover it.** Green before done.
