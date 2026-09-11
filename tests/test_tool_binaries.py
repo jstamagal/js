@@ -124,15 +124,13 @@ def test_resolve_binary_falls_back_to_path_before_install(tmp_path: Path, monkey
     assert tool_binaries.resolve_binary("rg") == "/path/bin/rg"
 
 
-def test_platform_error_names_required_and_detected_platform(monkeypatch) -> None:
+def test_platform_error_names_missing_assets(monkeypatch) -> None:
     monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "arm64")
-
-    with pytest.raises(
-        tool_binaries.InstallError,
-        match="js tool binaries need Linux x86_64; found Darwin arm64",
-    ):
-        tool_binaries._require_supported_platform()
+    specs, missing = tool_binaries.release_plan()
+    assert {s.executable for s in specs} == {"rg", "fd", "bat", "fzf", "ast-grep"}
+    assert any("aria2" in m and "Darwin aarch64" in m for m in missing)
+    assert any("obscura" in m and "verification" in m for m in missing)
 
 
 def test_obscura_is_pinned_to_the_stealth_release_asset() -> None:
@@ -185,3 +183,79 @@ def test_obscura_installs_the_worker_it_cannot_run_without(tmp_path: Path) -> No
     assert (tools_dir / "obscura").read_bytes() == main
     assert (tools_dir / "obscura-worker").read_bytes() == worker
     assert (tools_dir / "obscura-worker").stat().st_mode & stat.S_IXUSR == stat.S_IXUSR
+
+    # An intact launcher must not mask a missing or damaged worker.
+    for damage in (None, b"corrupt"):
+        worker_path = tools_dir / "obscura-worker"
+        if damage is None:
+            worker_path.unlink()
+        else:
+            worker_path.write_bytes(damage)
+        assert tool_binaries.install_download(
+            spec, tools_dir=tools_dir, downloader=fake_download
+        ) == "installed"
+        assert worker_path.read_bytes() == worker
+    assert tool_binaries.install_download(
+        spec, tools_dir=tools_dir, downloader=lambda *_: pytest.fail("redundant download")
+    ) == "present"
+
+
+@pytest.mark.parametrize("machine", ["amd64", "arm64"])
+def test_musl_plan_never_selects_glibc_binaries(monkeypatch, machine):
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tool_binaries.platform, "machine", lambda: machine)
+    monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("musl", "1.2.5"))
+    specs, missing = tool_binaries.release_plan()
+    assert {s.executable for s in specs} == {"aria2c", "rg", "fd", "bat", "fzf"}
+    assert any("ast-grep" in m for m in missing)
+    assert any("obscura" in m for m in missing)
+
+
+def test_rejects_tar_link_without_replacing_existing_binary(tmp_path):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+        member = tarfile.TarInfo("fixture-1.2.3/fixture")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "/etc/passwd"
+        bundle.addfile(member)
+    archive = buffer.getvalue()
+    spec = _spec(archive, b"new")
+    target = tmp_path / "fixture"
+    target.write_bytes(b"old")
+    with pytest.raises(tool_binaries.InstallError, match="not a regular file"):
+        tool_binaries.install_download(
+            spec, tools_dir=tmp_path, downloader=lambda _, p: p.write_bytes(archive)
+        )
+    assert target.read_bytes() == b"old"
+
+
+def test_install_all_bootstraps_without_system_tools_and_reuses_managed_aria2(
+    monkeypatch, tmp_path
+):
+    payload = b"managed binary"
+    archive = _tar_gz("fixture-1.2.3/fixture", payload)
+    aria = replace(_spec(archive, payload), executable="aria2c")
+    helper = replace(_spec(archive, payload), executable="fd", asset="helper.tar.gz")
+    monkeypatch.setattr(tool_binaries, "release_plan", lambda: ([aria, helper], []))
+    monkeypatch.setenv("PATH", "")
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append(request.full_url)
+        assert timeout == 120
+        return io.BytesIO(archive)
+
+    transfers = []
+
+    def transfer(binary, url, destination, **kwargs):
+        assert binary == str(tmp_path / "aria2c")
+        transfers.append(url)
+        destination.write_bytes(archive)
+
+    monkeypatch.setattr(tool_binaries.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(tool_binaries, "download_with_aria2", transfer)
+    tool_binaries.install_all(tools_dir=tmp_path)
+    tool_binaries.install_all(tools_dir=tmp_path)
+    assert requests == [aria.url]
+    assert transfers == [helper.url]
+    assert (tmp_path / "fd").read_bytes() == payload

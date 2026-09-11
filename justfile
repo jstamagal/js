@@ -76,7 +76,6 @@ install:
     mkdir -p "$HOME/.local/bin"
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
     just install-tool-binaries
-    just ensure-tools
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
     repo="$(pwd -P)"
@@ -101,53 +100,13 @@ install:
     esac
 
 # Download js's pinned, checksummed subprocess binaries into js/tools. The
-# system aria2c performs the release-asset transfers.
+# managed aria2c performs transfers after urllib bootstraps it.
 # download js's pinned, checksummed CLI binaries into js/tools.
 install-tool-binaries:
     uv run {{ browser-extra }} python -m js.tool_binaries
 
-# ensure optional interactive CLI helpers are present, installing any that are
-# missing via the detected package manager. fd, bat, and fzf back file-finding
-# and interactive helpers. idempotent and safe to run on its own.
-# ensure fd/bat/fzf exist, installing via the system package manager.
-ensure-tools:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    have() { command -v "$1" >/dev/null 2>&1; }
-    need=()
-    have fd  || have fdfind || need+=(fd)
-    have bat || have batcat || need+=(bat)
-    have fzf || need+=(fzf)
-    if [ ${#need[@]} -eq 0 ]; then
-      echo "interactive cli tools present: fd bat fzf"
-      exit 0
-    fi
-    echo "provisioning missing cli tools: ${need[*]}"
-    if   have pacman;  then MGR=pacman; INSTALL=(sudo pacman -S --needed --noconfirm)
-    elif have apt-get; then MGR=apt;    INSTALL=(sudo apt-get install -y)
-    elif have dnf;     then MGR=dnf;    INSTALL=(sudo dnf install -y)
-    elif have zypper;  then MGR=zypper; INSTALL=(sudo zypper install -y)
-    elif have apk;     then MGR=apk;    INSTALL=(sudo apk add)
-    elif have brew;    then MGR=brew;   INSTALL=(brew install)
-    else
-      echo "!! no supported package manager found (pacman/apt/dnf/zypper/apk/brew)."
-      echo "!! install these yourself, then re-run 'just install': ${need[*]}"
-      exit 0
-    fi
-    pkgs=()
-    for b in "${need[@]}"; do
-      case "$b:$MGR" in
-        fd:apt|fd:dnf) pkgs+=(fd-find) ;;
-        fd:*)        pkgs+=(fd) ;;
-        bat:*)       pkgs+=(bat) ;;
-        fzf:*)       pkgs+=(fzf) ;;
-      esac
-    done
-    echo "+ ${INSTALL[*]} ${pkgs[*]}"
-    "${INSTALL[@]}" "${pkgs[@]}" || {
-      echo "!! auto-install failed; run manually: ${INSTALL[*]} ${pkgs[*]}"
-      exit 0
-    }
+# Provision managed binaries even when system copies exist; never use a package manager.
+ensure-tools: install-tool-binaries
 
 # remove the installed js launchers and the wiki symlink `just install` made.
 uninstall:
