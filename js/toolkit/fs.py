@@ -95,6 +95,28 @@ def _delete_target_no_follow(target: Path) -> None:
         target.unlink()
 
 
+def _snapshot_data_and_mode(snapshot: object) -> tuple[bytes | None, int | None]:
+    """Split a file snapshot into its bytes and permission bits.
+
+    Snapshots made before issue #90 was fixed hold bare bytes; those return
+    ``(bytes, None)`` and undo restores the bytes without touching the mode.
+    Snapshots made by the current ``ToolContext.snapshot`` hold
+    ``{"kind": "file", "data": bytes, "mode": int}`` (mode optional), and
+    directory entries may hold ``{"data": bytes, "mode": int}`` as a child's value.
+    """
+    if isinstance(snapshot, dict):
+        data = snapshot.get("data")
+        if not isinstance(data, bytes):
+            return None, None
+        mode = snapshot.get("mode")
+        if isinstance(mode, int) and 0 <= mode <= 0o7777:
+            return data, mode
+        return data, None
+    if isinstance(snapshot, bytes):
+        return snapshot, None
+    return None, None
+
+
 def _trash_target(target: Path, context: ToolContext) -> str | None:
     command = _trash_command()
     if not command:
@@ -437,7 +459,10 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     child.mkdir(parents=True, exist_ok=True)
                 else:
                     child.parent.mkdir(parents=True, exist_ok=True)
-                    child.write_bytes(data or b"")
+                    child_data, child_mode = _snapshot_data_and_mode(data)
+                    child.write_bytes(child_data or b"")
+                    if child_mode is not None:
+                        os.chmod(child, child_mode)
             return f"restored directory {target}"
         if previous is None:
             if target.is_symlink() or target.is_file():
@@ -446,8 +471,11 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                 shutil.rmtree(target)
             return f"restored deletion state for {target}"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(previous)
-        content_hash = _hash_bytes(previous)
+        previous_data, previous_mode = _snapshot_data_and_mode(previous)
+        target.write_bytes(previous_data or b"")
+        if previous_mode is not None:
+            os.chmod(target, previous_mode)
+        content_hash = _hash_bytes(previous_data or b"")
         context.file_hashes[target] = content_hash
         return f"restored {target} (hash {content_hash})"
     except OSError as exc:

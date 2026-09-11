@@ -74,7 +74,7 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
     assert snaps is not None
     # Two writes -> two snapshots; the first recorded a nonexistent file (None).
     assert snaps[0] is None
-    assert snaps[1] == b"first"
+    assert (snaps[1]["data"] if isinstance(snaps[1], dict) else snaps[1]) == b"first"
 
 
 def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):

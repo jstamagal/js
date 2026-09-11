@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import shutil
+import stat
 import sys
 
 import pytest
@@ -416,6 +418,58 @@ def test_remove_directory_snapshot_can_be_restored_by_undo(tmp_path):
     assert undo_result == f"restored directory {root}"
     assert (root / "top.txt").read_text(encoding="utf-8") == "top\n"
     assert (nested / "child.txt").read_text(encoding="utf-8") == "child\n"
+
+
+def test_undo_restores_removed_file_mode(tmp_path):
+    # Issue #90: undo recreated the file fresh, so a 0600 secrets file came
+    # back 0644. The snapshot must carry the mode and undo must re-apply it.
+    context = ToolContext(cwd=tmp_path)
+    target = tmp_path / "secrets.txt"
+    target.write_text("hush\n", encoding="utf-8")
+    os.chmod(target, 0o600)
+
+    remove_result = fs.remove("secrets.txt", permanent=True, context=context)
+    undo_result = fs.undo("secrets.txt", context=context)
+
+    assert remove_result == f"removed {target}"
+    assert undo_result.startswith(f"restored {target} (hash ")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_text(encoding="utf-8") == "hush\n"
+
+
+def test_undo_restores_mode_of_child_inside_removed_directory(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "script.sh").write_text("echo hi\n", encoding="utf-8")
+    os.chmod(root / "script.sh", 0o750)
+
+    remove_result = fs.remove("tree", permanent=True, context=context)
+    undo_result = fs.undo("tree", context=context)
+
+    assert remove_result == f"removed {root}"
+    assert undo_result == f"restored directory {root}"
+    child = root / "script.sh"
+    assert child.read_text(encoding="utf-8") == "echo hi\n"
+    assert stat.S_IMODE(child.stat().st_mode) == 0o750
+
+
+def test_undo_of_a_mode_change_still_reverts_the_bytes(tmp_path):
+    # undo of a write/patch snapshots the pre-write state, then the write keeps
+    # the file in place — the restored bytes must land on the existing file
+    # without disturbing its current mode.
+    context = ToolContext(cwd=tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("before\n", encoding="utf-8")
+    os.chmod(target, 0o640)
+
+    fs.read("notes.txt", context=context)
+    fs.patch(file_path="notes.txt", old_string="before", new_string="after", context=context)
+    undo_result = fs.undo("notes.txt", context=context)
+
+    assert undo_result.startswith(f"restored {target} (hash ")
+    assert target.read_text(encoding="utf-8") == "before\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
 
 def test_remove_small_file_uses_trash_by_default(tmp_path, monkeypatch):
