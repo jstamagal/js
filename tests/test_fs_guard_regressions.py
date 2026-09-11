@@ -1,5 +1,10 @@
 """Read coverage must authorize only content actually displayed."""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from js.toolkit import fs
@@ -37,3 +42,41 @@ def test_patch_refuses_unsupported_line_coordinates(tmp_path, separator):
     assert result.startswith("ERROR: unsupported line separator")
     assert target.read_text() == original
     assert not context.snapshots
+
+
+def test_patch_refuses_a_fifo_without_blocking(tmp_path):
+    """A FIFO with no writer parks open() forever. The guard must reject it by
+    type before reading, so the call runs in a subprocess where a regression
+    fails on the timeout instead of hanging the whole suite."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("mkfifo is unavailable on this platform")
+    fifo = tmp_path / "p.fifo"
+    os.mkfifo(fifo)
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from js.toolkit import fs\n"
+        "from js.toolkit.core import ToolContext\n"
+        "target = Path(sys.argv[1])\n"
+        "context = ToolContext(cwd=target.parent)\n"
+        "result = fs.patch(str(target), old_string='a', new_string='b', context=context)\n"
+        "assert result.startswith('ERROR:'), result\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(fifo)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_patch_refuses_a_device_target(tmp_path):
+    device = Path("/dev/null")
+    if not device.exists():
+        pytest.skip("/dev/null is unavailable on this platform")
+    context = ToolContext(cwd=tmp_path)
+
+    result = fs.patch(str(device), old_string="a", new_string="b", context=context)
+
+    assert result == f"ERROR: not a regular file: {device}"

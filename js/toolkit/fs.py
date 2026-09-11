@@ -662,8 +662,14 @@ def patch(
             pending.append(normalized)
 
     target = context.resolve_path(raw_path)
+    # Reject a non-regular target by type before any read: opening a FIFO with
+    # no writer parks in open() forever, so read_bytes() never returns.
+    if not target.exists():
+        return f"ERROR: no such file: {target}"
+    if not target.is_file():
+        return f"ERROR: not a regular file: {target}"
     try:
-        source_bytes = target.read_bytes()
+        source_bytes = _read_regular_bytes(target)
         source = source_bytes.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
