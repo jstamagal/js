@@ -84,12 +84,33 @@ def read_text(path: Path, cap: int) -> str:
         return f"ERROR: {exc}"
 
 
-def copy_to_assets(src: Path, vault_path: Path) -> Path:
+def copy_to_assets(src: Path, vault_path: Path) -> Path | str:
+    """Copy a media file into <vault>/assets and return the destination path.
+
+    A missing vault or an existing same-named file with different bytes comes
+    back as an "ERROR: ..." string instead of an exception escaping the tool.
+    """
+    if not vault_path.is_dir():
+        return f"ERROR: no vault at {vault_path}"
     assets = vault_path / "assets"
-    assets.mkdir(exist_ok=True)
+    try:
+        assets.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"ERROR: could not create asset directory {assets}: {exc}"
     dest = assets / src.name
-    if dest.exists() and dest.read_bytes() != src.read_bytes():
-        raise FileExistsError(f"asset name collision: {dest}")
-    if not dest.exists():
+    if dest.exists():
+        try:
+            identical = dest.read_bytes() == src.read_bytes()
+        except OSError as exc:
+            return f"ERROR: could not compare {src} with {dest}: {exc}"
+        if not identical:
+            return (
+                f"ERROR: asset name collision at {dest}: a different file already "
+                f"uses that name; rename {src.name} and convert again"
+            )
+        return dest
+    try:
         shutil.copy2(src, dest)
+    except OSError as exc:
+        return f"ERROR: could not copy {src} to {dest}: {exc}"
     return dest

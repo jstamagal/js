@@ -70,7 +70,13 @@ def wiki_finish_ingest(
     archived_line = f"archived: inbox/{unit} -> Clippings/{unit}"
     logged_line = f"logged: [{today()}] ingest | {title}"
     with vault_lock(vp):
-        (vp / "Clippings").mkdir(exist_ok=True)
+        clippings = vp / "Clippings"
+        if clippings.exists() and not clippings.is_dir():
+            return f"ERROR: {clippings} exists and is not a directory"
+        try:
+            clippings.mkdir(exist_ok=True)
+        except OSError as exc:
+            return f"ERROR: could not create {clippings}: {exc}"
         try:
             shutil.move(str(src), str(dest))
             entry = f"\n## [{today()}] ingest | {title}\n{note}\n\nArchived: {unit} -> Clippings/{unit}\n"

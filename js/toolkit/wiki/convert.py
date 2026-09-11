@@ -62,12 +62,22 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     # media → copy to vault assets, return an Obsidian embed
     vault_path = resolve_vault(vault, context) if vault else find_vault(p)
     if ext in IMG_EXT:
-        embed = f"![[{copy_to_assets(p, vault_path).name}]]" if vault_path else "(pass vault= to copy into assets/)"
+        embed = "(pass vault= to copy into assets/)"
+        if vault_path:
+            copied = copy_to_assets(p, vault_path)
+            if isinstance(copied, str):
+                return copied
+            embed = f"![[{copied.name}]]"
         rc, out, err = run(["tesseract", str(p), "stdout"], context)
         ocr = f"\n--- OCR (tesseract) ---\n{out.strip()}" if rc == 0 and out.strip() else ""
         return f"MEDIA image. embed: {embed}{ocr}"
     if ext in AV_EXT:
-        embed = f"![[{copy_to_assets(p, vault_path).name}]]" if vault_path else "(pass vault= to copy into assets/)"
+        embed = "(pass vault= to copy into assets/)"
+        if vault_path:
+            copied = copy_to_assets(p, vault_path)
+            if isinstance(copied, str):
+                return copied
+            embed = f"![[{copied.name}]]"
         rc, out, err = run(["ffprobe", "-v", "error", "-show_entries", "format=duration:format=size", "-of", "default=nw=1", str(p)], context)
         return (f"MEDIA audio/video. embed: {embed}\n{out.strip()}\n"
                 f"NOTE transcribe: whisper '{p}' --model small --output_format txt --output_dir /tmp")

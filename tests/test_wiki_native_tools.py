@@ -337,3 +337,41 @@ def test_wiki_convert_soffice_failure_does_not_return_stale_tmp_output(tmp_path,
         assert actual.startswith("ERROR soffice:")
     finally:
         stale.unlink(missing_ok=True)
+
+
+def test_wiki_convert_reports_a_missing_vault_instead_of_raising(tmp_path):
+    image = tmp_path / "page-1.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = wiki_convert(
+        str(image), vault=str(tmp_path / "missing" / "vault"), context=_ctx(tmp_path)
+    )
+
+    assert result.startswith("ERROR:")
+    assert "missing" in result
+
+
+def test_wiki_convert_reports_an_asset_name_collision(tmp_path):
+    vault = _vault(tmp_path)
+    (vault / "assets").mkdir()
+    (vault / "assets" / "page-1.png").write_bytes(b"already here")
+    source = tmp_path / "page-1.png"
+    source.write_bytes(b"different bytes")
+
+    result = wiki_convert(str(source), vault=str(vault), context=_ctx(tmp_path))
+
+    assert result.startswith("ERROR:")
+    assert "page-1.png" in result
+
+
+def test_wiki_finish_ingest_reports_clippings_as_a_file(tmp_path):
+    vault = _vault(tmp_path)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox" / "u1").mkdir(parents=True)
+    (vault / "inbox" / "u1" / "f.txt").write_text("x\n")
+    (vault / "Clippings").write_text("not a directory\n")
+
+    result = wiki_finish_ingest(str(vault), "u1", "Unit", context=_ctx(tmp_path))
+
+    assert result.startswith("ERROR:")
+    assert "Clippings" in result
