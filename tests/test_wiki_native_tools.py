@@ -375,3 +375,15 @@ def test_wiki_finish_ingest_reports_clippings_as_a_file(tmp_path):
 
     assert result.startswith("ERROR:")
     assert "Clippings" in result
+
+
+def test_wiki_write_rejects_a_blank_or_working_directory_vault(tmp_path):
+    context = _ctx(tmp_path)
+
+    blank = wiki_write("", "concept", "hello", slug="x", context=context)
+    dot = wiki_write(".", "concept", "hello", slug="x", context=context)
+
+    assert blank.startswith("ERROR:")
+    assert dot.startswith("ERROR:")
+    assert not (tmp_path / "concepts").exists()
+    assert not (tmp_path / ".wiki.lock").exists()

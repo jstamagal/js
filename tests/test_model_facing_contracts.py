@@ -95,6 +95,7 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
     assert set(properties["wiki_write"]["kind"]["enum"]) == {
         "source", "entity", "concept", "synthesis",
     }
+    assert properties["wiki_write"]["vault"]["minLength"] == 1
     assert (properties["serper_search"]["num"]["minimum"], properties["serper_search"]["num"]["maximum"]) == (1, 100)
     assert (properties["tavily_search"]["max_results"]["minimum"], properties["tavily_search"]["max_results"]["maximum"]) == (1, 20)
     assert (properties["exa_search"]["num"]["minimum"], properties["exa_search"]["num"]["maximum"]) == (1, 100)
