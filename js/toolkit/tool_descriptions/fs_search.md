@@ -7,7 +7,9 @@ files mode) is a ripgrep whitelist that overrides those ignore rules, so it can
 return an ignored file; a negated glob only filters. `file_type` and a positive
 glob cannot be intersected, so passing both is rejected. Results are absolute
 paths, and `content` lines are `path:line:text`. Bytes that are not valid UTF-8
-are shown as `\xNN` escapes.
+are shown as `\xNN` escapes. The walk stays on the filesystem `path` is on and
+does not enter mount points below it; to search a mounted share, name it as
+`path`.
 {{#if shell}}
 For directory-only discovery use `shell` with `fd --type d`.
 {{/if}}

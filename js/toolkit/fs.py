@@ -1045,7 +1045,9 @@ def fs_search(
     # order. Offset paging slices the captured stream, and ripgrep's parallel
     # output order is not stable, so without this consecutive pages overlap and
     # some entries are never returned.
-    argv = [rg, "--color=never", "--no-messages", "--sort", "path"]
+    # `--one-file-system` keeps the walk on the filesystem the root is on: a
+    # mount point under the root (an NFS share, an automount) is not entered.
+    argv = [rg, "--color=never", "--no-messages", "--sort", "path", "--one-file-system"]
     if mode == "files":
         argv.append("--files")
     elif mode == "files_with_matches":

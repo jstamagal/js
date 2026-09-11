@@ -498,3 +498,19 @@ def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
     assert not fs._glob_asks_for_hidden("./src/*.py")
     assert not fs._glob_asks_for_hidden("../lib/**")
     assert not fs._glob_asks_for_hidden(None)
+
+
+def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch):
+    seen: list[list[str]] = []
+
+    def fake_stream(argv, *args, **kwargs):
+        seen.append(list(argv))
+        return [], 1, "", False
+
+    monkeypatch.setattr(fs, "_rg_stream", fake_stream)
+    context = ToolContext(cwd=tmp_path)
+    for mode in ("files", "files_with_matches", "content", "count"):
+        fs.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
+
+    assert len(seen) == 4
+    assert all("--one-file-system" in argv for argv in seen)
