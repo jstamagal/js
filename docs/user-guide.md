@@ -9,9 +9,16 @@ runtime loops until the model returns a final answer or hits a stop condition.
 pip install -e ".[test,browser]"
 ```
 
-The `browser` extra enables `browser_probe`. Playwright does not publish
-musllinux wheels, so omit that extra on Alpine and other musl systems; all other
-js tools remain available.
+The `browser` extra installs the Playwright Python package. The browser itself
+is a separate download, so `browser_probe` cannot launch until you also run:
+
+```bash
+just install-browser
+```
+
+`just install` and `just sync` already do this for you. Playwright does not
+publish musllinux wheels, so omit that extra on Alpine and other musl systems;
+all other js tools remain available.
 
 The package exposes two scripts:
 

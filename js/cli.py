@@ -31,6 +31,7 @@ from . import supervisor
 
 from . import attach, codex_auth, colors as C
 from . import compaction
+from . import dotenv
 from . import endpoint_uri
 from . import events
 from . import logins
@@ -2813,6 +2814,12 @@ def _printonly_run(args, cli_agent, presets) -> int:
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Handle login/logout before argparse so they don't require a valid agent/config.
+    # None of them take -C, so the cwd is already final and .env can load here;
+    # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
+    if dispatch_argv and dispatch_argv[0] in (
+        "--login", "login", "--logout", "logout", "--models-edit", "models-edit"
+    ):
+        dotenv.load()
     if dispatch_argv and dispatch_argv[0] in ("--login", "login"):
         from . import login_cli
         return login_cli.main(dispatch_argv[1:])
@@ -2908,6 +2915,10 @@ def main(argv: list[str] | None = None) -> int:
         # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+    # Fill unset env names from .env, cwd upward, then ~/.config/js/.env. The
+    # real environment always wins. `just run` already did this via the
+    # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
+    dotenv.load()
     if args.json and not args.list:
         print(f"{C.ORANGE}error: --json only works with --list{C.RESET}", file=sys.stderr)
         return 2
