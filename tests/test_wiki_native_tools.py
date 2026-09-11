@@ -270,7 +270,7 @@ def test_wiki_finish_ingest_reports_a_failed_commit_as_an_error(tmp_path):
     assert "archived:" in result
 
 
-def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_path, monkeypatch):
+def test_wiki_convert_reads_text_and_structured_files_and_copies_media(tmp_path, monkeypatch):
     vault = _vault(tmp_path)
     note = tmp_path / "note.md"
     data = tmp_path / "data.json"
@@ -292,12 +292,22 @@ def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_pat
 
     assert text_actual == "plain text\n"
     assert '{"line": 0}' in structured_actual
-    assert '{"line": 39}' in structured_actual
-    assert '{"line": 40}' not in structured_actual
-    assert "--- (45 lines total; first 40 shown) ---" in structured_actual
+    assert '{"line": 44}' in structured_actual
+    assert "lines total" not in structured_actual
     assert image_actual == "MEDIA image. embed: ![[photo.png]]\n--- OCR (tesseract) ---\nocr words"
     assert (vault / "assets" / "photo.png").read_bytes() == b"fake-png-bytes"
     assert run_calls == [["tesseract", str(image), "stdout"]]
+
+
+def test_wiki_convert_reads_a_long_jsonl_file_in_full(tmp_path):
+    dump = tmp_path / "dump.jsonl"
+    dump.write_text("".join(f'{{"i": {i}}}\n' for i in range(100)), encoding="utf-8")
+
+    result = wiki_convert(str(dump), context=_ctx(tmp_path, max_bytes=100_000))
+
+    assert '{"i": 0}' in result
+    assert '{"i": 99}' in result
+    assert "lines total" not in result
 
 
 def test_wiki_convert_fallback_tests_file_description_not_the_path(tmp_path, monkeypatch):

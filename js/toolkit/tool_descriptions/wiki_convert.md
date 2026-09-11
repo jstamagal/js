@@ -1,7 +1,8 @@
 Convert a source file into text or a vault media embed for ingestion.
 
 Usage:
-- Text and code are read directly.
+- Text, code, and structured text (JSON, JSONL, CSV, TSV, YAML, XML) are read
+  directly.
 - PDFs use `pdftotext`; office and ebook formats use available converters.
 - Images and audio/video can be copied into vault assets when `vault` is
   supplied; the vault directory must already exist.

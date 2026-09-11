@@ -9,23 +9,11 @@ from .helpers import run, read_text, resolve_vault, find_vault, copy_to_assets
 
 TEXT_EXT = {".md", ".markdown", ".txt", ".rst", ".org", ".tex", ".srt", ".vtt", ".log", ".toml", ".ini", ".cfg"}
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".sh", ".bash", ".c", ".h", ".cpp", ".hpp", ".java", ".rb", ".php", ".lua", ".sql", ".css"}
+STRUCTURED_TEXT_EXT = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml", ".xml"}
 PANDOC_EXT = {".docx", ".odt", ".rtf", ".epub", ".pptx", ".html", ".htm"}
 SOFFICE_EXT = {".doc", ".ppt", ".xls", ".xlsx"}
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 AV_EXT = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".mp4", ".mkv", ".mov", ".webm", ".avi"}
-
-
-def _peek(path: Path, n: int, cap: int) -> str:
-    try:
-        lines, total = [], 0
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for i, line in enumerate(fh):
-                total = i + 1
-                if i < n:
-                    lines.append(line.rstrip("\n"))
-        return ("\n".join(lines) + f"\n--- ({total} lines total; first {n} shown) ---")[:cap]
-    except OSError as exc:
-        return f"ERROR: {exc}"
 
 
 def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str:
@@ -36,12 +24,8 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     ext = p.suffix.lower()
     cap = context.max_tool_result_bytes
 
-    if ext in TEXT_EXT or ext in CODE_EXT:
+    if ext in TEXT_EXT or ext in CODE_EXT or ext in STRUCTURED_TEXT_EXT:
         return read_text(p, cap)
-    if ext in {".jsonl", ".ndjson"}:
-        return _peek(p, 5, cap)
-    if ext in {".json", ".csv", ".tsv", ".yaml", ".yml", ".xml"}:
-        return _peek(p, 40, cap)
     if ext == ".pdf":
         rc, out, err = run(["pdftotext", str(p), "-"], context)
         if rc == 0 and out.strip():
