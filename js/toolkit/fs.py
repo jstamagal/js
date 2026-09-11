@@ -1196,6 +1196,19 @@ def _ast_match_output(records: list[dict], context: ToolContext) -> str:
     return "\n".join(blocks) if blocks else "(no matches)"
 
 
+def _ast_warning(stderr: str) -> str:
+    """Promote ast-grep's first stderr line into a model-visible note.
+
+    ast-grep prints ``Warning: Pattern contains an ERROR node …`` while exiting
+    0 or 1, so without this a pattern it could not parse as the chosen language
+    is indistinguishable from a genuine no-match."""
+    for line in stderr.splitlines():
+        detail = line.strip()
+        if detail:
+            return f"WARNING: {detail.removeprefix('Warning: ').strip()}"
+    return ""
+
+
 def _prepare_ast_rewrite(
     records: list[dict], context: ToolContext
 ) -> dict[Path, tuple[bytes, bytes]] | str:
@@ -1304,11 +1317,15 @@ def ast_search(
         first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
         return f"ERROR: {first}"
 
+    warning = _ast_warning(stderr)
     overflow = len(records) > limit
     visible = records[:limit]
     if rewrite is None:
-        out = _ast_match_output(visible, context)
-        out = _cap_ast_output(out, context)
+        out = _cap_ast_output(_ast_match_output(visible, context), context)
+        if overflow:
+            out += "\n[additional matches omitted; increase max_results to see them]"
+        if warning:
+            out = f"{warning}\n{out}"
         context.search_cache[cache_key] = out
         return out
 
@@ -1320,6 +1337,8 @@ def ast_search(
         suffix = "\n[additional matches omitted; increase max_results to preview them]" if overflow else ""
         out = f"DRY RUN: no files changed. Pass apply=true to apply.\n{diff}{suffix}"
         out = _cap_ast_output(out, context)
+        if warning:
+            out = f"{warning}\n{out}"
         context.search_cache[cache_key] = out
         return out
     if overflow:
@@ -1365,7 +1384,10 @@ def ast_search(
         prepared[target] = (source, updated)
     diff = _ast_rewrite_diff(prepared) or "(no changes)"
     summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"
-    return _cap_ast_output(f"{summary}\n{diff}", context)
+    out = _cap_ast_output(f"{summary}\n{diff}", context)
+    if warning:
+        out = f"{warning}\n{out}"
+    return out
 
 
 def list_dir(path: str, recursive: bool = False, context: ToolContext | None = None) -> str:

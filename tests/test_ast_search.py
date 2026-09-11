@@ -111,7 +111,8 @@ def test_ast_search_limits_and_deduplicates_results(tmp_path):
     first = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
     second = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
 
-    assert first == f"{target}:1\n1:{fs._line_hash('foo(1)')}|foo(1)"
+    assert first.startswith(f"{target}:1\n1:{fs._line_hash('foo(1)')}|foo(1)")
+    assert "[additional matches omitted" in first
     assert second == first + "\n[deduplicated repeated search]"
 
 
@@ -140,6 +141,31 @@ def test_ast_search_reports_no_matches_and_failures_cleanly(tmp_path):
     assert invalid_pattern == "ERROR: Error: Cannot parse query as a valid pattern."
     assert invalid_language == "ERROR: unsupported ast-grep language: Brainfuck"
     assert missing_path == f"ERROR: Path does not exist: {tmp_path / 'missing.py'}"
+
+
+@requires_ast_grep
+def test_ast_search_surfaces_a_parse_warning_instead_of_a_clean_no_match(tmp_path):
+    """ast-grep exits 0 with a stderr warning when the pattern parses to an ERROR
+    node for the chosen language; that must not look like a genuine no-match."""
+    (tmp_path / "a.c").write_text("int main(void){ return 0; }\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    actual = ast_search("def $F(): pass", path="a.c", lang="C", context=context)
+
+    assert actual.startswith("WARNING: ")
+    assert actual.endswith("(no matches)")
+
+
+@requires_ast_grep
+def test_ast_search_marks_results_truncated_at_max_results(tmp_path):
+    target = tmp_path / "code.py"
+    target.write_text("".join(f"foo({index})\n" for index in range(5)), encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    actual = ast_search("foo($A)", path="code.py", lang="Python", max_results=2, context=context)
+
+    assert actual.count(f"{target}:") == 2
+    assert "[additional matches omitted" in actual
 
 
 @requires_ast_grep
