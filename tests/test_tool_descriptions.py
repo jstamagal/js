@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,18 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     assert task.required == ("tasks", "agent_id")
     assert set(task.params) == {"tasks", "agent_id", "session_id", "model"}
+
+
+def test_tools_reference_fs_search_section_matches_the_published_schema():
+    page = (Path(__file__).resolve().parents[1] / "docs" / "tools-reference.md").read_text(encoding="utf-8")
+    section = page.split("### `fs_search`", 1)[1].split("\n### ", 1)[0]
+    documented = set(re.findall(r"^- `([a-z_]+)`", section, flags=re.MULTILINE))
+    search = build_default_registry().resolve("fs_search")
+
+    assert documented == set(search.params)
+    assert {"files", "files_with_matches", "content", "count"}.issubset(
+        set(re.findall(r"`(files_with_matches|files|content|count)`", section))
+    )
 
 
 def test_named_agent_tools_are_generated_from_prompt_dirs():

@@ -19,14 +19,15 @@ Parameters:
 Text output lines are prefixed like:
 
 ```text
-12ab|line content
+12:ab|line content
 ```
 
 The prefix is a display anchor, not file content. Do not include it in `patch`
 strings.
 
 Images return either a vision-disabled text stub or an internal image marker
-that the runtime expands for vision models. PDFs use `pdftotext`.
+that the runtime expands for vision models. PDFs use `pdftotext`, and both images
+and PDFs are refused above the file-size and whole-file read byte caps.
 
 ### `write`
 
@@ -56,7 +57,9 @@ Parameters:
 
 Requires a prior `read`. Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals
-`new_string`.
+`new_string` (also after line-ending normalization, which would leave the file
+unchanged). Overlapping occurrences count as separate matches, so `aba` in
+`ababa` needs `replace_all=true` (which then rewrites non-overlapping matches).
 
 `edits` applies its replacements in order, each seeing the previous one's
 result, and is atomic: any failure writes nothing and the error names the
@@ -97,23 +100,32 @@ bounded store's retention and size limits.
 
 ### `fs_search`
 
-Regex search over local files.
+Regex search over local files, backed by ripgrep.
 
 Parameters:
 
-- `pattern`
-- `path`
-- `glob`
-- `output_mode`: `files_with_matches`, `content`, `count`
-- `-A`, `-B`, `-C`
-- `-n`
-- `-i`
-- `type`
-- `head_limit`
-- `offset`
-- `multiline`
+- `pattern`: required; a content regex, or a filename glob when `output_mode`
+  is `files`.
+- `path`: file or directory, default the current working directory.
+- `glob`: optional filename filter. A positive glob is a ripgrep whitelist that
+  overrides ignore rules; a negated glob only filters.
+- `output_mode`: `files`, `files_with_matches` (default), `content`, or `count`.
+- `before_context`: lines before each match in `content` mode.
+- `after_context`: lines after each match in `content` mode.
+- `context_lines`: lines before and after each match in `content` mode.
+- `show_line_numbers`: default true.
+- `case_insensitive`: default false.
+- `file_type`: ripgrep type name or bare extension, e.g. `rust` or `py`. Cannot
+  be combined with a positive glob.
+- `head_limit`: maximum entries returned after `offset`; at least 1.
+- `offset`: entries to skip.
+- `multiline`: allow the regex to span line breaks.
 
-Skips common dependency/cache dirs and binary files.
+Ignored paths follow ripgrep's rules (`.gitignore`, `.ignore`, `.rgignore`) and
+hidden paths are skipped unless named by `path` or a dot-leading glob; binary
+files are skipped in content modes. Results are absolute paths, `content` lines
+are `path:line:text`, and bytes that are not valid UTF-8 render as `\xNN`. When
+more matches exist than `head_limit`, the result ends with a continuation note.
 
 ### `ast_search`
 
@@ -133,7 +145,9 @@ Parameters:
 
 Search output uses absolute path headings and the same anchored source lines as
 `read`. Applying a rewrite snapshots every affected file for `undo`, clears the
-shared search cache, and refuses match sets larger than `max_results`.
+shared search cache, and refuses match sets larger than `max_results`. Search
+results mark the matches omitted past `max_results`, and an ast-grep parse
+warning about the pattern is reported above the result.
 
 ## Process And Network
 
