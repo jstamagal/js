@@ -274,6 +274,36 @@ def test_terminal_zero_wait_polls_output_that_is_already_ready(tmp_path):
         close_terminal_sessions(context)
 
 
+def test_terminal_renders_a_multibyte_code_point_split_across_reads(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    try:
+        _payload(
+            terminal_session(
+                action="start",
+                session="split",
+                # The two halves of U+1F98D (the gorilla emoji) arrive in separate
+                # writes with a pause between them, so a per-read decode sees a
+                # trailing partial sequence.
+                command="printf '\\360\\237'; sleep 0.5; printf '\\246\\215\\n'; sleep 5",
+                wait_ms=200,
+                context=context,
+            )
+        )
+
+        first = _payload(
+            terminal_session(action="look", session="split", wait_ms=0, context=context)
+        )
+        assert not any("🦍" in line for line in first["lines"])
+
+        rest = _payload(
+            terminal_session(action="look", session="split", wait_ms=800, context=context)
+        )
+        assert any("🦍" in line for line in rest["lines"])
+        assert not any("\ufffd" in line for line in rest["lines"])
+    finally:
+        close_terminal_sessions(context)
+
+
 def test_terminal_snapshot_validates_path_before_drain_or_numbering(tmp_path):
     context = ToolContext(cwd=tmp_path)
     try:

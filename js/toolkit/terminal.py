@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import codecs
 import json
 import os
 import re
@@ -125,9 +126,14 @@ def _drain(state: dict[str, Any], wait_ms: int) -> None:
         except pexpect.TIMEOUT:
             continue
         except (pexpect.EOF, OSError):
+            tail = state["decoder"].decode(b"", final=True)
+            if tail:
+                state["stream"].feed(tail)
             break
         if chunk:
-            state["stream"].feed(chunk.decode("utf-8", errors="replace"))
+            text = state["decoder"].decode(chunk)
+            if text:
+                state["stream"].feed(text)
 
 
 def _observe(
@@ -293,6 +299,10 @@ def terminal_session(
             "child": child,
             "screen": screen,
             "stream": pyte.Stream(screen),
+            # One incremental decoder per session: a code point split across two
+            # read_nonblocking chunks is carried into the next chunk instead of
+            # being replaced.
+            "decoder": codecs.getincrementaldecoder("utf-8")(errors="replace"),
             "command": command,
             "cwd": workdir,
             "snapshot_n": 0,
