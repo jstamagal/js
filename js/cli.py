@@ -1710,12 +1710,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
 
 
 def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
-    """Apply the agent's `max_tokens:` (00-tools.yaml) as the per-call cap, but
-    only when nothing higher-priority set one — config/env/`--max-out` win."""
-    agent_max = getattr(prompt_spec, "max_output_tokens", None) if prompt_spec is not None else None
-    if agent_max is None or cfg.max_output_tokens is not None:
-        return cfg
-    return replace(cfg, max_output_tokens=agent_max)
+    return P.apply_agent_max_tokens(cfg, prompt_spec)
 
 
 def _format_prompt_load_error(cfg, exc: Exception) -> str:

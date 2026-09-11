@@ -189,8 +189,9 @@ def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
 def test_inline_python_snippet_does_not_litter_cwd(tmp_path, monkeypatch):
     # Running in the invocation cwd must not leave the snippet file behind there.
     monkeypatch.chdir(tmp_path)
+    before = set(tmp_path.iterdir())
     expand_prompt("!{python print(1)}", allow_code=True)
-    assert list(tmp_path.iterdir()) == []
+    assert set(tmp_path.iterdir()) == before
 
 
 @pytest.mark.skipif(not (shutil.which("cc") or shutil.which("gcc")), reason="no C compiler")

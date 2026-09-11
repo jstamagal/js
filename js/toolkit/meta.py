@@ -233,32 +233,14 @@ async def _run_one_task_async(
     # Validate before reserving a session or changing its latest pointer.
     prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     try:
-        prompt_spec = P.load_prompt_spec(_select_agent_prompt_dir(agent, prompt_roots))
+        prompt_spec = P.load_configured_prompt_spec(replace(
+            parent_cfg, agent_id=agent,
+            prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
+        ))
     except (FileNotFoundError, ValueError) as exc:
         return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
 
-    cfg = _agent_cfg(parent_cfg, agent, task_session_id)
-    try:
-        if getattr(cfg, "agents_files", ()):
-            parts = [
-                p.read_text(encoding="utf-8").rstrip()
-                for p in cfg.agents_files
-                if p.is_file() and p.read_text(encoding="utf-8").strip()
-            ]
-            if parts:
-                system = "\n\n".join([*parts, prompt_spec.system.rstrip()])
-                system = system.rstrip() + "\n"
-                prompt_spec = P.PromptSpec(
-                    system=system,
-                    tool_selectors=prompt_spec.tool_selectors,
-                    sampling=prompt_spec.sampling,
-                    model=prompt_spec.model,
-                    secondary_model=prompt_spec.secondary_model,
-                    reasoning_effort=prompt_spec.reasoning_effort,
-                    max_output_tokens=prompt_spec.max_output_tokens,
-                )
-    except (FileNotFoundError, ValueError) as exc:
-        return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
+    cfg = P.apply_agent_max_tokens(_agent_cfg(parent_cfg, agent, task_session_id), prompt_spec)
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >

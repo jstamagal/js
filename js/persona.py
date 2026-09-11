@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -317,6 +317,14 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         max_output_tokens=max_output_tokens,
     )
 
+
+
+def apply_agent_max_tokens(cfg, prompt_spec):
+    """Apply the persona default only when config/env/CLI did not set a cap."""
+    agent_max = getattr(prompt_spec, "max_output_tokens", None)
+    if agent_max is None or cfg.max_output_tokens is not None:
+        return cfg
+    return replace(cfg, max_output_tokens=agent_max)
 
 
 def load_configured_prompt_spec(cfg) -> PromptSpec:

@@ -21,6 +21,12 @@ import pytest
 from tool_loading import after_loading
 
 
+@pytest.fixture(autouse=True)
+def offline_model_metadata(monkeypatch):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
+
+
 def _fake_stream_result(text: str = "ok"):
     return ModelStreamResult(
         text=text,
@@ -143,6 +149,38 @@ def test_task_requires_named_agent_id(tmp_path):
     actual = task(["work"], context=ToolContext(cwd=tmp_path))
 
     assert actual == "ERROR: task requires agent_id"
+
+
+@pytest.mark.parametrize("parent_cap", [None, 777])
+def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch, tmp_path, parent_cap):
+    prompts = prompt_dir(tmp_path, "worker", "tools: []\nmax_tokens: 123\n",
+                         "VALUE={{CHILD_VALUE}}\nINJECT={{CHILD_INJECT}}\n")
+    included = tmp_path / "included.txt"
+    included.write_text("included {{CHILD_VALUE}}")
+    rules = tmp_path / "AGENTS.md"
+    rules.write_text("RULE={{CHILD_VALUE}}\n" + f"!{{file {included}}}\n")
+    cfg = replace(make_cfg(tmp_path, "parent", prompts.parent / "parent"),
+                  agents_files=(rules,), max_output_tokens=parent_cap)
+    context = ToolContext(cwd=tmp_path)
+    context.config = cfg
+    monkeypatch.setenv("CHILD_VALUE", "expanded")
+    monkeypatch.setenv("CHILD_INJECT", "{{CHILD_VALUE}}")
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs)
+        return _fake_stream_result("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert "ok" in task(["work"], agent_id="worker", context=context)
+    assert len(seen) == 1
+    system = seen[0]["messages"][0].parts[0].text
+    assert "VALUE=expanded" in system
+    assert "RULE=expanded" in system
+    assert "INJECT={{CHILD_VALUE}}" in system
+    assert "included {{CHILD_VALUE}}" in system
+    assert seen[0]["max_output_tokens"] == (123 if parent_cap is None else parent_cap)
 
 
 @pytest.mark.parametrize("async_dispatch", [False, True])
