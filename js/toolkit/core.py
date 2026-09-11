@@ -91,7 +91,8 @@ def _decode_snapshot(data: bytes, expected_path: Path) -> Snapshot:
             raise ValueError("file snapshot has no data")
         decoded = base64.b64decode(encoded, validate=True)
         if "mode" in payload:
-            return {"kind": "file", "data": decoded, "mode": _snapshot_mode(payload["mode"])}
+            return {"kind": "file", "data": decoded, "mode": _snapshot_mode(payload["mode"]),
+                    "read_coverage": payload.get("read_coverage")}
         return decoded
     if kind == "symlink":
         target = payload.get("target")
@@ -617,6 +618,11 @@ class ToolContext:
                         "kind": "file",
                         "data": path.read_bytes(),
                         "mode": stat.S_IMODE(path.stat().st_mode),
+                        "read_coverage": {
+                            "hash": self.file_hashes.get(path),
+                            "ranges": self.read_ranges.get(path, []),
+                            "whole": path in self.fully_read_paths,
+                        },
                     }
         except OSError as exc:
             reason = f"could not capture undo snapshot for {path}: {exc}"
