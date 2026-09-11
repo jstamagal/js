@@ -558,6 +558,9 @@ def task(
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
     results = _fan_out(indexed_items, coro_factory)
+    # A subagent runs with its own ToolContext and can write anything under any
+    # root, so the parent's memoized fs_search results are no longer trustworthy.
+    context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
 
 
@@ -583,6 +586,7 @@ async def task_async(
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
     results = await _fan_out_async(indexed_items, coro_factory)
+    context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
 
 

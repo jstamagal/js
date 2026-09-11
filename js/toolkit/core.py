@@ -611,12 +611,16 @@ class ToolContext:
     def invalidate_search_cache(self) -> None:
         """Drop memoized fs_search results after anything may have changed the tree.
 
-        The dedup cache is keyed only on the search arguments, so without this a
-        model that edits a file and re-runs the same search gets the PRE-EDIT hit
-        list back, labelled `[deduplicated repeated search]` — it looks like a
-        confirmation that nothing changed. Every mutating fs tool funnels through
-        `snapshot()`; `shell` clears it directly because a command can touch
-        anything."""
+        A `fs_search` entry is keyed on the search arguments plus the root's
+        `(mtime_ns, size, inode)` when the root is a regular file; a directory
+        root is not memoized at all, because a directory's own stat does not move
+        when a nested file changes. The `ast_search` memo is keyed on its
+        arguments only. Without invalidation a model that edits a file and
+        re-runs the same search gets the PRE-EDIT hit list back, labelled
+        `[deduplicated repeated search]` — it looks like a confirmation that
+        nothing changed. Every mutating fs tool funnels through `snapshot()`;
+        `shell` clears it directly because a command can touch anything, and
+        `task` clears it when a subagent returns for the same reason."""
         self.search_cache.clear()
 
     def snapshot(self, path: Path) -> None:

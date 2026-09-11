@@ -422,6 +422,22 @@ def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
     assert "deduplicated repeated search" not in tool_results[0]
 
 
+def test_task_return_clears_the_parent_search_cache(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools: []\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
+    parent = ToolContext(cwd=tmp_path)
+    fs.fs_search("needle", path="needle.txt", context=parent)
+    assert parent.search_cache
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("CACHE_TEST_DONE"))
+
+    actual = task(["work"], agent_id="worker", context=parent)
+
+    assert "CACHE_TEST_DONE" in actual
+    assert parent.search_cache == {}
+
+
 def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - todo_read\n", "WORKERX SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)

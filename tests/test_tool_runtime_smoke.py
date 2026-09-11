@@ -497,14 +497,12 @@ def test_fs_search_boolean_head_limit_is_ignored(tmp_path):
 
 def test_fs_search_repeated_query_is_deduplicated(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
-    (tmp_path / "two.txt").write_text("hay\nneedle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    first = fs.fs_search("needle", path=".", output_mode="files_with_matches", context=context)
-    second = fs.fs_search("needle", path=".", output_mode="files_with_matches", context=context)
+    first = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
+    second = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
 
     assert str(tmp_path / "one.txt") in first
-    assert str(tmp_path / "two.txt") in first
     assert second == first + "\n[deduplicated repeated search]"
 
 

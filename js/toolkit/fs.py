@@ -1016,8 +1016,14 @@ def fs_search(
             "ERROR: file_type cannot be combined with a positive glob; ripgrep "
             "would apply the glob and drop file_type. Pass one filter."
         )
-    cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, _stat_stamp(root)))
-    if cache_key in context.search_cache:
+    # A directory's own stat does not move when a nested file changes, so the
+    # stamp cannot vouch for a directory-root result: skip the memo for
+    # directory roots. A regular-file root's stamp does establish what the hit
+    # described (st_ino catches a rename-over that preserves size and mtime).
+    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    stamp = _stat_stamp(root) if memoized else None
+    cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, stamp))
+    if memoized and cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
     rg = _rg_binary()
@@ -1118,7 +1124,8 @@ def fs_search(
     out = "\n".join(sliced) if sliced else "(no matches)"
     if truncated:
         out += f"\n[more matches than head_limit={limit}; continue with offset={skip + limit}]"
-    context.search_cache[cache_key] = out
+    if memoized:
+        context.search_cache[cache_key] = out
     return out
 
 

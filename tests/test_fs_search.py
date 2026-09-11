@@ -189,8 +189,8 @@ def test_fs_search_deduplicates_repeated_search(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("token\n", encoding="utf-8")
 
-    first = fs_search("token", path=".", output_mode="content", context=context)
-    second = fs_search("token", path=".", output_mode="content", context=context)
+    first = fs_search("token", path="a.txt", output_mode="content", context=context)
+    second = fs_search("token", path="a.txt", output_mode="content", context=context)
 
     assert second == first + "\n[deduplicated repeated search]"
 

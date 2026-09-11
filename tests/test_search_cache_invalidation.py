@@ -1,9 +1,11 @@
 """The fs_search dedup cache must not outlive the tree it describes.
 
-The cache is keyed only on the search arguments. Without invalidation, a model
-that edits a file and re-runs the same search gets the PRE-EDIT hit list back
-labelled `[deduplicated repeated search]`, which reads as confirmation that
-nothing changed.
+Only a regular-file root is memoized, keyed on the search arguments plus the
+root's stat; a directory root is never memoized, because its own stat does not
+move when a nested file changes. Without invalidation, a model that edits a file
+and re-runs the same search gets the PRE-EDIT hit list back labelled
+`[deduplicated repeated search]`, which reads as confirmation that nothing
+changed.
 """
 from __future__ import annotations
 
@@ -85,3 +87,32 @@ def test_an_external_write_makes_the_next_identical_search_see_it(tmp_path):
 
     assert "deduplicated" not in again
     assert "before" not in again
+
+
+@requires_rg
+def test_a_directory_root_is_not_memoized(tmp_path):
+    (tmp_path / "a.txt").write_text("NEEDLE\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    first = fs_search("NEEDLE", path=str(tmp_path), output_mode="content", context=context)
+    second = fs_search("NEEDLE", path=str(tmp_path), output_mode="content", context=context)
+
+    assert "NEEDLE" in first
+    assert "deduplicated" not in second
+
+
+@requires_rg
+def test_a_nested_external_write_makes_a_directory_root_search_see_it(tmp_path):
+    target = tmp_path / "sub" / "a.txt"
+    target.parent.mkdir()
+    target.write_text("NEEDLE before\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    first = fs_search("NEEDLE before", path=str(tmp_path), output_mode="content", context=context)
+    assert "NEEDLE before" in first
+
+    target.write_text("gone\n", encoding="utf-8")
+
+    again = fs_search("NEEDLE before", path=str(tmp_path), output_mode="content", context=context)
+    assert "deduplicated" not in again
+    assert "NEEDLE before" not in again

@@ -51,9 +51,9 @@ def test_toolkit_exercises_grounded_file_lifecycle_and_search(tmp_path):
     assert actual_patch.startswith(f"patched {target}")
     assert target.read_text(encoding="utf-8") == "class TaskRunner:\n    def run_task(self):\n        return 'new'\n"
 
-    actual_search = fs_search("TaskRunner", path=".", output_mode="content", context=context)
+    actual_search = fs_search("TaskRunner", path=str(target), output_mode="content", context=context)
     assert f"{target}:1:class TaskRunner:" in actual_search
-    actual_search_again = fs_search("TaskRunner", path=".", output_mode="content", context=context)
+    actual_search_again = fs_search("TaskRunner", path=str(target), output_mode="content", context=context)
     assert actual_search_again == actual_search + "\n[deduplicated repeated search]"
 
     created = write("created.txt", "created\n", context=context)
