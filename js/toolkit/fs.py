@@ -460,8 +460,10 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                 return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
             mode = None
+            coverage = None
             if isinstance(previous, dict):
                 mode = previous["mode"]
+                coverage = previous.get("read_coverage")
                 previous = previous["data"]
                 if not target.exists():
                     target.touch(mode=0o600)
@@ -469,7 +471,15 @@ def undo(path: str, context: ToolContext | None = None) -> str:
             if mode is not None:
                 target.chmod(mode)
             content_hash = _hash_bytes(previous)
-            context.file_hashes[target] = content_hash
+            # Legacy snapshots have no evidence of what was displayed. Never
+            # carry transformed coverage from the edited version across undo.
+            valid = isinstance(coverage, dict) and coverage.get("hash") == content_hash
+            context.replace_read_coverage(
+                target, content_hash,
+                [tuple(span) for span in coverage["ranges"]] if valid else [],
+                len(previous.decode("utf-8", errors="replace").splitlines()),
+                whole_file=bool(valid and coverage["whole"]),
+            )
             return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
@@ -542,6 +552,8 @@ def _apply_edit(
     and its match count, or an ERROR string. Line endings are normalised per edit
     against the text as it stands *now*, so a later edit sees an earlier one's result."""
     line_ending = _detect_line_ending(text)
+    if any(char in text or char in new for char in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
+        return f"ERROR: {label}unsupported line separator; patch requires LF, CRLF, or CR lines"
     old_norm = _normalize_line_endings(old, line_ending)
     new_norm = _normalize_line_endings(new, line_ending)
     if not old_norm:

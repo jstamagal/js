@@ -112,6 +112,11 @@ DOWNLOAD_TOOLS = (
 ARIA2_VERSION = "1.37.0"
 ARIA2_EXECUTABLE = "aria2c"
 
+# Executables js provisions itself, keyed by name, with the pinned version the
+# installer verifies. aria2c is the transfer engine every other download rides
+# on, so it is installed first and never resolved through an unrelated PATH copy.
+SYSTEM_TOOLS: dict[str, str] = {ARIA2_EXECUTABLE: ARIA2_VERSION}
+
 
 def aria2_release(machine: str | None = None, system: str | None = None) -> DownloadTool:
     """Pinned static ELF releases, verified without executing foreign code.
@@ -467,8 +472,48 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     return specs, missing
 
 
+def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
+    """macOS: no verified static release exists, so aria2 comes from Homebrew.
+
+    Returns the installed executable path, or None when brew cannot provide it.
+    """
+    brew = shutil.which("brew")
+    if brew is None:
+        return None
+    candidate = shutil.which(ARIA2_EXECUTABLE)
+    if candidate is None:
+        try:
+            subprocess.run([brew, "install", "aria2"], check=True, timeout=600)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            return None
+        candidate = shutil.which(ARIA2_EXECUTABLE)
+    if candidate is None:
+        prefix = subprocess.run([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
+        brewed = Path(prefix) / "bin" / ARIA2_EXECUTABLE
+        candidate = str(brewed) if brewed.is_file() else None
+    if candidate is None:
+        return None
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    target = tools_dir / ARIA2_EXECUTABLE
+    if target.is_symlink() or target.exists():
+        target.unlink()
+    target.symlink_to(candidate)
+    return str(target)
+
+
 def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     specs, missing = release_plan()
+
+    if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
+        brewed = _provision_aria2_via_brew(tools_dir)
+        if brewed is not None:
+            print(f"present: aria2 (Homebrew) at {brewed}")
+            missing = [m for m in missing if not m.startswith("aria2:")]
+        else:
+            missing = [m for m in missing if not m.startswith("aria2:")] + [
+                "aria2: Homebrew unavailable or `brew install aria2` failed; "
+                "install Homebrew (https://brew.sh) and rerun `just install`"
+            ]
 
     def download(url: str, destination: Path) -> None:
         managed = tools_dir / ARIA2_EXECUTABLE
