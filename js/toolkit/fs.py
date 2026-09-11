@@ -863,7 +863,7 @@ def _rg_stream(
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE if input_text is not None else None,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=_rg_env(), text=True, encoding="utf-8", errors="replace",
+            env=_rg_env(),
             start_new_session=True,
             cwd=cwd,
         )
@@ -892,7 +892,7 @@ def _rg_stream(
 
         def write_stdin() -> None:
             try:
-                proc.stdin.write(input_text)
+                proc.stdin.write(input_text.encode("utf-8"))
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
@@ -901,8 +901,13 @@ def _rg_stream(
         writer.start()
     assert proc.stdout is not None
     try:
-        for line in proc.stdout:
-            lines.append(line.rstrip("\n"))
+        # Split the raw bytes on b"\n" only. Text-mode universal newlines would
+        # turn a bare CR inside a matched line (a file with CR line endings) into
+        # a break, splitting one match into several lines; decoding with
+        # backslashreplace renders bytes that are not valid UTF-8 as \xNN escapes
+        # instead of dropping them to U+FFFD.
+        for raw in proc.stdout:
+            lines.append(raw.rstrip(b"\n").decode("utf-8", errors="backslashreplace"))
             if len(lines) >= want:
                 stopped_early = True
                 break
@@ -916,7 +921,11 @@ def _rg_stream(
                 _kill_group()
                 proc.wait()
     timed_out = expired.is_set()
-    stderr = proc.stderr.read() if proc.stderr is not None else ""
+    stderr = (
+        proc.stderr.read().decode("utf-8", errors="replace")
+        if proc.stderr is not None
+        else ""
+    )
     for stream in (proc.stdout, proc.stderr):
         if stream is not None:
             stream.close()

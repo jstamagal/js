@@ -100,6 +100,32 @@ def test_fs_search_slash_glob_is_relative_to_the_search_root(tmp_path):
 
 
 @requires_rg
+def test_fs_search_content_keeps_a_bare_cr_inside_one_match_line(tmp_path):
+    """A bare CR in a matched line is file content, not a line break; the result
+    stays one `path:line:text` line."""
+    target = tmp_path / "cr_only.txt"
+    target.write_bytes(b"alpha\rbravo\rgamma\r")
+
+    actual = fs_search(
+        "alpha", path=str(target), output_mode="content", context=ToolContext(cwd=tmp_path)
+    )
+
+    assert actual == f"{target}:1:alpha\rbravo\rgamma\r"
+
+
+@requires_rg
+def test_fs_search_content_renders_invalid_utf8_as_escapes(tmp_path):
+    target = tmp_path / "latin1.txt"
+    target.write_bytes(b"caf\xe9 needle\n")
+
+    actual = fs_search(
+        "needle", path=str(target), output_mode="content", context=ToolContext(cwd=tmp_path)
+    )
+
+    assert actual == f"{target}:1:caf\\xe9 needle"
+
+
+@requires_rg
 def test_fs_search_count_mode_reports_per_file_line_counts(tmp_path):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("hit\nhit\nmiss\n", encoding="utf-8")
