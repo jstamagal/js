@@ -310,6 +310,61 @@ def test_wiki_convert_reads_a_long_jsonl_file_in_full(tmp_path):
     assert "lines total" not in result
 
 
+def test_wiki_convert_uses_soffice_for_docx_when_pandoc_is_absent(tmp_path, monkeypatch):
+    doc = tmp_path / "notes.docx"
+    doc.write_bytes(b"PK\x03\x04 stub")
+    calls: list[list[str]] = []
+
+    def run_stub(cmd, context):
+        calls.append(cmd)
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        (outdir / "notes.txt").write_text("converted docx\n", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        wiki_convert_module,
+        "_which",
+        lambda name: "/usr/bin/soffice" if name == "soffice" else None,
+    )
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+
+    actual = wiki_convert(str(doc), context=_ctx(tmp_path))
+
+    assert actual == "converted docx\n"
+    assert calls[0][0] == "soffice"
+
+
+def test_wiki_convert_prefers_pandoc_when_both_converters_are_installed(tmp_path, monkeypatch):
+    doc = tmp_path / "notes.docx"
+    doc.write_bytes(b"PK\x03\x04 stub")
+    calls: list[list[str]] = []
+
+    def run_stub(cmd, context):
+        calls.append(cmd)
+        return 0, "# converted\n", ""
+
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(wiki_convert_module, "run", run_stub)
+
+    actual = wiki_convert(str(doc), context=_ctx(tmp_path))
+
+    assert actual == "# converted\n"
+    assert calls[0][0] == "pandoc"
+
+
+def test_wiki_convert_names_the_missing_converters(tmp_path, monkeypatch):
+    doc = tmp_path / "notes.docx"
+    doc.write_bytes(b"PK\x03\x04 stub")
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda name: None)
+    monkeypatch.setattr(wiki_convert_module, "run", lambda cmd, context: (127, "", "command not found"))
+
+    actual = wiki_convert(str(doc), context=_ctx(tmp_path))
+
+    assert actual.startswith("ERROR")
+    assert "pandoc" in actual
+    assert "soffice" in actual
+
+
 def test_wiki_convert_fallback_tests_file_description_not_the_path(tmp_path, monkeypatch):
     """`file` prints '<path>: <desc>'. A binary living under a path containing
     "text" (e.g. .../context/...) must classify off the description, not the path."""
@@ -340,6 +395,9 @@ def test_wiki_convert_soffice_failure_does_not_return_stale_tmp_output(tmp_path,
     def run_stub(cmd, context):
         return 1, "", "source file could not be loaded"   # soffice fails, writes nothing
 
+    monkeypatch.setattr(
+        wiki_convert_module, "_which", lambda name: f"/usr/bin/{name}" if name == "soffice" else None
+    )
     monkeypatch.setattr(wiki_convert_module, "run", run_stub)
     try:
         actual = wiki_convert(str(doc), context=_ctx(tmp_path))
