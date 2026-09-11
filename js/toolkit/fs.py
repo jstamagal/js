@@ -423,6 +423,9 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
 
 def undo(path: str, context: ToolContext | None = None) -> str:
     assert context is not None
+    # A restore rewrites bytes outside the write/patch path, so drop memoized
+    # searches rather than let a directory-root result outlive the restore.
+    context.invalidate_search_cache()
     # write/patch key snapshots under resolve_path (follows symlinks); remove keys
     # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
     target = context.resolve_path(path)
@@ -963,6 +966,17 @@ def _glob_asks_for_hidden(pattern: str | None) -> bool:
     )
 
 
+def _stat_stamp(path: Path) -> tuple[int, int, int] | None:
+    """Identity of the file a search described, so the dedup cache stops
+    describing a tree that moved underneath it: any edit, external write, or
+    undo restore changes at least mtime or size."""
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size, info.st_ino)
+
+
 def fs_search(
     pattern: str,
     path: str | None = None,
@@ -1008,7 +1022,7 @@ def fs_search(
             "ERROR: file_type cannot be combined with a positive glob; ripgrep "
             "would apply the glob and drop file_type. Pass one filter."
         )
-    cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline))
+    cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, _stat_stamp(root)))
     if cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
