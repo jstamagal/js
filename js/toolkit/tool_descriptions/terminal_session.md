@@ -14,8 +14,8 @@ as typed. `cols` and `rows` are accepted with `start` only.
 
 Each result has the rendered screen, cursor position, and process state.
 `lines_changed` and `screen_responded` compare against the previous
-observation: after `send`, change caused by the keys; after `look`, passive
-change since last time.
+observation: after `send`, change during the wait window after the keys (not
+proof the keys caused it); after `look`, passive change since last time.
 {{#if terminal_snapshot}}
 `terminal_snapshot` renders the screen as a PNG when text cannot show spacing,
 colour, borders, or clipping, and also resets that comparison baseline.

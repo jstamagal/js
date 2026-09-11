@@ -165,8 +165,9 @@ def _observe(
     payload["reading"] = (
         "lines is the rendered terminal screen. nonblank_lines=0 means the user sees "
         "nothing. lines_changed and screen_responded compare this screen with the "
-        "most recent observation: for send they describe change after the sent keys; "
-        "for look they describe passive change since the prior observation. "
+        "most recent observation: for send they describe change during the wait window "
+        "after the sent keys, not proof the keys caused it; for look they describe "
+        "passive change since the prior observation. "
         "terminal_snapshot updates that comparison baseline before a later send. "
         "still_running is normal for a TUI and suspicious for a one-shot command. "
         "Use terminal_snapshot to inspect layout and colour."
@@ -326,6 +327,10 @@ def terminal_session(
     if action == "send":
         if not state["child"].isalive():
             return f"ERROR: terminal session {session!r} has exited"
+        # Flush output that had already arrived before the keys so the comparison
+        # the caller reads covers only what lands after the send.
+        _drain(state, 0)
+        state["previous_lines"] = _render_lines(state["screen"])
         sent: list[str] = []
         for raw_token in keys.split(","):
             if not raw_token:

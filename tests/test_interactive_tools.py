@@ -345,6 +345,40 @@ def test_terminal_send_types_tokens_verbatim_including_whitespace(tmp_path):
         close_terminal_sessions(context)
 
 
+def test_terminal_send_does_not_credit_output_that_was_already_pending(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    try:
+        _payload(
+            terminal_session(
+                action="start",
+                session="pending",
+                # Echo off so the keystroke itself never reaches the screen, and a
+                # long sleep so the child cannot have read the key before the
+                # comparison. PENDING_OUTPUT is written before the send.
+                command="stty -echo; sleep 0.4; printf 'PENDING_OUTPUT\\n'; sleep 5",
+                wait_ms=0,
+                context=context,
+            )
+        )
+        time.sleep(0.7)
+
+        sent = _payload(
+            terminal_session(
+                action="send",
+                session="pending",
+                keys="x",
+                wait_ms=0,
+                context=context,
+            )
+        )
+
+        assert any("PENDING_OUTPUT" in line for line in sent["lines"])
+        assert sent["lines_changed"] == 0
+        assert sent["screen_responded"] is False
+    finally:
+        close_terminal_sessions(context)
+
+
 def test_terminal_snapshot_validates_path_before_drain_or_numbering(tmp_path):
     context = ToolContext(cwd=tmp_path)
     try:
