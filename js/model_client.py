@@ -109,25 +109,9 @@ def _friendly_provider_error(
             f"run `js --login {provider}` or `set provider.api_key <value>`"
         )
 
-    if isinstance(exc, ai.ProviderConnectionError):
-        return FriendlyProviderError(
-            f"provider {provider!r} connection failed; detail: {detail}; "
-            "`set provider.base_url <url>` or check the endpoint"
-        )
-
-    if isinstance(exc, ai.ProviderStatusError):
-        return FriendlyProviderError(
-            f"provider {provider!r} request failed; detail: {detail}; "
-            f"run `js --login {provider}`, `set provider.api_key <value>`, "
-            "or `set provider.base_url <url>`"
-        )
-
-    if isinstance(exc, ai.ProviderAPIError):
-        return FriendlyProviderError(
-            f"provider {provider!r} request failed; detail: {detail}; "
-            f"run `js --login {provider}` or check `set provider.base_url <url>`"
-        )
-
+    # Keep request failures intact: runtime and summary recovery consume the
+    # SDK type, retryability and structured overflow fields. The SDK diagnostic
+    # is also more useful here than suggesting login for an oversized request.
     return None
 
 
