@@ -151,6 +151,48 @@ def test_task_requires_named_agent_id(tmp_path):
     assert actual == "ERROR: task requires agent_id"
 
 
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, outcome):
+    from js.toolkit.meta import _run_one_task_async
+    from js.toolkit.terminal import terminal_session, close_terminal_sessions
+
+    prompts = prompt_dir(tmp_path, "worker")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    parent = ToolContext(cwd=tmp_path)
+    children = []
+    processes = []
+
+    async def turn(cfg, system, messages, telemetry, *, tool_context, **kwargs):
+        children.append(tool_context)
+        terminal_session(action="start", session="owned", command="sleep 300", context=tool_context)
+        process = tool_context.terminal_sessions["owned"]["child"]
+        processes.append(process)
+        assert process.isalive()
+        if outcome == "error":
+            raise ValueError("failed turn")
+        if outcome == "cancel":
+            raise asyncio.CancelledError()
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    try:
+        call = _run_one_task_async(1, 1, "work", parent, cfg, build_default_registry(), "worker", None)
+        if outcome == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                asyncio.run(call)
+        else:
+            result = asyncio.run(call)
+            assert ("done" if outcome == "success" else "ERROR ValueError: failed turn") in result
+        assert len(processes) == 1
+        assert not processes[0].isalive()
+        assert processes[0].closed
+        assert children[0].terminal_sessions == {}
+        assert parent.terminal_sessions == {}
+    finally:
+        for child in children:
+            close_terminal_sessions(child)
+
+
 @pytest.mark.parametrize("parent_cap", [None, 777])
 def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch, tmp_path, parent_cap):
     prompts = prompt_dir(tmp_path, "worker", "tools: []\nmax_tokens: 123\n",

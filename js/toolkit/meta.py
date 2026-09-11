@@ -223,6 +223,7 @@ async def _run_one_task_async(
     from ..runtime import Telemetry, run_turn_async
     from ..sampling import Sampling
     from .. import routing
+    from .terminal import close_terminal_sessions
 
     prompt = _task_text(item)
     if not prompt:
@@ -311,6 +312,8 @@ async def _run_one_task_async(
     except Exception as exc:  # noqa: BLE001
         messages[:] = messages[:before_len]
         return f"{idx}. ERROR {type(exc).__name__}: {exc}"
+    finally:
+        close_terminal_sessions(child_context)
 
     for new_message in messages[before_len:]:
         M.append_message(cfg.session_file, new_message)
