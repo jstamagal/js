@@ -115,6 +115,91 @@ frontmatter hides the skill from the model (user can still `/name` it). Result i
 **Compaction.** Invoked skills are tracked per agent; after compaction their
 bodies are re-injected, each truncated to 5000 tokens, 25 000 tokens total.
 
+## How Codex does it
+
+Source: `~/vader/Repos/agents/codex/codex-rs` — `ext/skills/src/{render,catalog_prompt,fragments,extension,host_roots,invocation}.rs`,
+`skills/src/`, `core/src/context/world_state/`.
+
+**Discovery roots.** `~/.agents/skills` (user), `$CODEX_HOME/skills` (user,
+deprecated), `<project-config>/skills` (repo), **`.agents/skills` in every
+directory from the project root down to cwd** (repo), a system cache root, and
+an admin root. Layout `<root>/<name>/SKILL.md`. It honours `.agents`; Claude
+Code does not.
+
+**Disclosure — a developer-role block, always present.** The catalog is a
+`<skills_instructions>` fragment with `role = "developer"`. It is contributed
+in two places:
+
+- `contribute_thread_context` → the `DeveloperCapabilities` slot of the
+  session's developer message (session start).
+- `contribute_turn_input` → every turn, unless the catalog has moved into the
+  *world state* section, in which case it is SHA-1 fingerprinted and only a
+  `## Skills update` diff is re-sent when the set changes.
+
+Shape:
+
+```
+## Skills
+A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and ... path ...
+### Available skills
+- tdd: Test-driven development. Use when ... (file: /home/x/.agents/skills/tdd/SKILL.md)
+- code-review: ... (file: /home/x/js/.agents/skills/code-review/SKILL.md)
+### How to use skills
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. ...
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, the main agent must ... open and read its `SKILL.md` completely before taking task actions.
+  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the directory containing that `SKILL.md` ...
+  3) ... Do not delegate reading, summarizing, or interpreting skill instructions to a subagent.
+- Coordination: Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+```
+
+The `### How to use skills` section is gated per model
+(`include_skills_usage_instructions` in `models.json`): **on** for
+gpt-5.2/5.4/5.5, **off** for the gpt-5.6 line. Newer models have the rules
+trained in; older ones get them in prose.
+
+**Activation — there is no skill tool.** Every listing line carries the
+absolute path to `SKILL.md`. The model activates a skill by reading that file
+with the shell/file tool it already trusts. The harness watches exec commands
+(`detect_implicit_skill_invocation`: `cat …/SKILL.md`, `scripts/*` runs under
+a skill dir) purely for telemetry. Two extras:
+
+- `$skill-name` in the user's message → the harness injects the body itself
+  that turn as a user fragment: `<skill>\n<name>…</name>\n<path>…</path>\n<body>\n</skill>`.
+  Body capped at 8 000 bytes.
+- An experimental lexical pre-selector (BM25 / char n-gram / LRU variants in
+  `dynamic_skill_selector/`) that scores skills against the user query.
+  Shadow-mode only; it measures, it does not yet change what is sent.
+
+**Budget.** 2% of the context window in tokens (~4 bytes/token), 8 000 chars
+if the window is unknown. Per-description cap 1 024 chars + `...`. Allocation:
+
+1. Everything fits → send as-is.
+2. Names+paths fit but descriptions don't → **round-robin one character at a
+   time across every description** until the budget is spent. Strictly fair;
+   no skill starves another.
+3. Even names don't fit → keep lines from the top until full, then
+   `- N additional skills omitted from this bounded skills list.`
+
+If the absolute paths are what's blowing the budget, it re-renders with a
+`### Skill roots` alias table (`r1 = /home/x/.agents/skills`) and short paths,
+and keeps whichever render lists more skills / truncates fewer chars.
+
+**Why Codex agents actually pick skills up, and Claude Code's don't.**
+
+1. The rule is *"you must use that skill for that turn"* + *"if you skip an
+   obvious skill, say why"*. Claude Code's rule is "invoke when relevant".
+   One is an obligation with a visible cost for ignoring it; the other is a
+   suggestion.
+2. Activation is `cat <path>` — a tool the model calls fifty times a session
+   anyway. No dedicated Skill tool to remember, no name-matching, no
+   enum. The path is right there in the line it just read.
+3. The block is developer-role (system-adjacent) and present on every turn
+   (or fingerprint-diffed), not a one-shot user message on turn 1 that scrolls
+   out of attention.
+4. The listing has the *description* budgeted at 1 024 chars, so trigger
+   phrases survive.
+
 ## Your spec vs Claude Code
 
 | | Yours | Claude Code |
