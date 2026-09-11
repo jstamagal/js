@@ -374,11 +374,13 @@ def test_wiki_convert_exports_every_sheet_of_a_spreadsheet(tmp_path, monkeypatch
     def run_stub(cmd, context):
         calls.append(cmd)
         outdir = Path(cmd[cmd.index("--outdir") + 1])
-        first = outdir / "book-First.csv"
-        second = outdir / "book-Second.csv"
-        first.write_text("a,b\n1,2\n", encoding="utf-8")
-        second.write_text("c,d\n3,4\n", encoding="utf-8")
-        return 0, f"Writing sheet First -> {first}\nWriting sheet Second -> {second}\n", ""
+        written = {"First": "a,b\n1,2\n", "Second": "c,d\n3,4\n", "A -> B": "e,f\n5,6\n"}
+        log = []
+        for name, text in written.items():
+            path = outdir / f"book-{name}.csv"
+            path.write_text(text, encoding="utf-8")
+            log.append(f"Writing sheet {name} -> {path}")
+        return 0, "\n".join(log) + "\n", ""
 
     monkeypatch.setattr(
         wiki_convert_module,
@@ -391,6 +393,8 @@ def test_wiki_convert_exports_every_sheet_of_a_spreadsheet(tmp_path, monkeypatch
 
     assert "1,2" in actual
     assert "3,4" in actual
+    # A sheet named "A -> B" is lost if the stdout log is split on the arrow.
+    assert "5,6" in actual
     # The CSV filter must ask for every sheet (the trailing -1), not just the first.
     filter_option = calls[0][calls[0].index("--convert-to") + 1]
     assert filter_option.startswith("csv:")

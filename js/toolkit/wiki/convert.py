@@ -37,17 +37,20 @@ _SHEET_LOG = re.compile(r"^Writing sheet (?P<name>.+?) -> (?P<path>.+)$", re.MUL
 def _soffice_sheets(out: str, tmp: Path) -> list[tuple[str, Path]]:
     """(sheet name, csv path) for every sheet soffice wrote, in sheet order.
 
-    LibreOffice names each sheet it writes on stdout; a runner that prints
-    nothing falls back to whatever CSV files are on disk.
+    LibreOffice names each sheet it writes on stdout. Whenever that log
+    accounts for fewer files than soffice actually wrote — a sheet name the
+    log parse cannot split, or a runner that prints nothing — the CSV files on
+    disk are the source of truth, so no sheet is silently dropped.
     """
     sheets = [
         (match.group("name").strip(), Path(match.group("path").strip()))
         for match in _SHEET_LOG.finditer(out)
     ]
     sheets = [(name, path) for name, path in sheets if path.is_file()]
-    if sheets:
+    written = sorted(tmp.glob("*.csv"))
+    if len(sheets) == len(written):
         return sheets
-    return [(path.stem, path) for path in sorted(tmp.glob("*.csv"))]
+    return [(path.stem, path) for path in written]
 
 
 def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
