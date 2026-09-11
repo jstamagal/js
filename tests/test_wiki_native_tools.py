@@ -479,7 +479,7 @@ def test_wiki_finish_ingest_reports_clippings_as_a_file(tmp_path):
     assert "Clippings" in result
 
 
-def test_wiki_write_rejects_a_blank_or_working_directory_vault(tmp_path):
+def test_wiki_write_rejects_a_blank_or_dot_vault(tmp_path):
     context = _ctx(tmp_path)
 
     blank = wiki_write("", "concept", "hello", slug="x", context=context)
@@ -489,3 +489,12 @@ def test_wiki_write_rejects_a_blank_or_working_directory_vault(tmp_path):
     assert dot.startswith("ERROR:")
     assert not (tmp_path / "concepts").exists()
     assert not (tmp_path / ".wiki.lock").exists()
+
+
+def test_wiki_write_accepts_an_absolute_vault_that_is_the_working_directory(tmp_path):
+    # An explicit path is deliberate even when it resolves to the cwd, unlike a
+    # blank or "." vault, so it is written rather than refused.
+    written = wiki_write(str(tmp_path), "concept", "hello", slug="x", context=_ctx(tmp_path))
+
+    assert written.startswith("wrote ")
+    assert (tmp_path / "concepts" / "x.md").exists()

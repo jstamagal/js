@@ -80,9 +80,12 @@ def wiki_write(
     if k not in KIND_FOLDER:
         return f"ERROR: kind must be source|entity|concept|synthesis (got {raw_kind!r})"
     vp = resolve_vault(vault, context)
-    # A blank vault resolves to the process working directory (and so does "."),
-    # which would write pages and the lock file into the tree js is running in.
-    if not text_or_default(vault).strip() or vp == context.cwd.resolve():
+    # A blank vault resolves to the process working directory (and so does an
+    # explicit "."), which would write pages and the lock file into the tree js
+    # is running in. An explicit path is a deliberate choice even when it
+    # resolves to the working directory, so only the spelling is refused.
+    raw_vault = text_or_default(vault).strip()
+    if not raw_vault or Path(raw_vault) == Path("."):
         return (
             f"ERROR: vault must name a vault directory, not {vault!r}; a blank or "
             "'.' vault would write into the working directory"
