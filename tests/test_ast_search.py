@@ -34,6 +34,48 @@ def test_ast_search_resolves_the_managed_binary_and_reports_a_missing_one(tmp_pa
     assert seen == ["/managed/ast-grep"]
 
 
+def test_ast_argv_attaches_hyphen_leading_pattern_and_rewrite(tmp_path):
+    """A `- $A` pattern is a YAML sequence item or Markdown bullet; ast-grep's
+    clap parser reads a separated hyphen-leading token as another option, so the
+    value must ride the same argv token as its flag."""
+    argv = fs._ast_argv("/managed/ast-grep", "- $A", tmp_path, "Yaml", "- $B")
+
+    assert "--pattern=- $A" in argv
+    assert "--rewrite=- $B" in argv
+    assert "- $A" not in argv
+    assert "- $B" not in argv
+
+
+@requires_ast_grep
+def test_ast_search_matches_and_rewrites_hyphen_leading_yaml_pattern(tmp_path):
+    target = tmp_path / "tools.yaml"
+    original = "tools:\n  - read\n  - shell\n"
+    target.write_text(original, encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    matched = ast_search("- $TOOL", path="tools.yaml", lang="Yaml", context=context)
+
+    assert matched.splitlines() == [
+        f"{target}:2",
+        f"2:{fs._line_hash('  - read')}|  - read",
+        f"{target}:3",
+        f"3:{fs._line_hash('  - shell')}|  - shell",
+    ]
+
+    dry_run = ast_search(
+        "- $TOOL",
+        path="tools.yaml",
+        lang="Yaml",
+        rewrite="* $TOOL",
+        context=context,
+    )
+
+    assert dry_run.startswith("DRY RUN: no files changed.")
+    assert "-  - read" in dry_run
+    assert "+  * read" in dry_run
+    assert target.read_text(encoding="utf-8") == original
+
+
 @requires_ast_grep
 def test_ast_search_matches_calls_across_layout_but_only_parsed_code(tmp_path):
     target = tmp_path / "calls.txt"

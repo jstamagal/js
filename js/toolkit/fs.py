@@ -1021,8 +1021,10 @@ def _ast_argv(
     argv = [
         binary,
         "run",
-        "--pattern",
-        pattern,
+        # Attached form: ast-grep's clap parser reads a hyphen-leading token after
+        # a separated flag as another option, so `- $A` (a YAML block sequence or
+        # Markdown bullet) never reaches the matcher.
+        f"--pattern={pattern}",
         "--json=stream",
         "--color",
         "never",
@@ -1030,7 +1032,7 @@ def _ast_argv(
     if lang:
         argv += ["--lang", lang]
     if rewrite is not None:
-        argv += ["--rewrite", rewrite]
+        argv.append(f"--rewrite={rewrite}")
     if stdin:
         argv.append("--stdin")
     else:
