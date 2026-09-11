@@ -22,11 +22,8 @@ DEFAULT_ROWS = 36
 
 _KEY_SEQUENCES = {
     "enter": "\r",
-    "return": "\r",
     "tab": "\t",
-    "space": " ",
     "esc": "\x1b",
-    "escape": "\x1b",
     "backspace": "\x7f",
     "up": "\x1b[A",
     "down": "\x1b[B",
@@ -36,7 +33,6 @@ _KEY_SEQUENCES = {
     "end": "\x1b[F",
     "pgup": "\x1b[5~",
     "pgdn": "\x1b[6~",
-    "insert": "\x1b[2~",
     "delete": "\x1b[3~",
     "ctrl-c": "\x03",
     "ctrl-d": "\x04",
@@ -332,14 +328,13 @@ def terminal_session(
             return f"ERROR: terminal session {session!r} has exited"
         sent: list[str] = []
         for raw_token in keys.split(","):
-            token = raw_token.strip()
-            if not token:
+            if not raw_token:
                 continue
-            value = "," if token.lower() == "comma" else _KEY_SEQUENCES.get(
-                token.lower(), token
+            value = "," if raw_token.lower() == "comma" else _KEY_SEQUENCES.get(
+                raw_token.lower(), raw_token
             )
             state["child"].send(value.encode("utf-8"))
-            sent.append(token)
+            sent.append(raw_token)
             time.sleep(0.06)
         return _observe(state, session, f"sent {sent}", wait, context)
 

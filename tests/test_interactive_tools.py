@@ -304,6 +304,47 @@ def test_terminal_renders_a_multibyte_code_point_split_across_reads(tmp_path):
         close_terminal_sessions(context)
 
 
+def test_terminal_send_types_tokens_verbatim_including_whitespace(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    try:
+        _payload(
+            terminal_session(
+                action="start",
+                session="literal",
+                # `cat -A` marks the end of each line with `$`, so leading and
+                # trailing spaces survive the screen's own right-trim.
+                command="stty -echo; cat -A; sleep 5",
+                wait_ms=300,
+                context=context,
+            )
+        )
+
+        padded = _payload(
+            terminal_session(
+                action="send",
+                session="literal",
+                keys="  hi  ,enter",
+                wait_ms=300,
+                context=context,
+            )
+        )
+        assert any("  hi  $" in line for line in padded["lines"])
+
+        # `space` is not a named key, so the word itself must reach the child.
+        word = _payload(
+            terminal_session(
+                action="send",
+                session="literal",
+                keys="space,enter",
+                wait_ms=300,
+                context=context,
+            )
+        )
+        assert any("space$" in line for line in word["lines"])
+    finally:
+        close_terminal_sessions(context)
+
+
 def test_terminal_snapshot_validates_path_before_drain_or_numbering(tmp_path):
     context = ToolContext(cwd=tmp_path)
     try:
