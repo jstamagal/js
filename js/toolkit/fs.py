@@ -209,19 +209,21 @@ def _format_numbered_lines(lines: list[str], start_line: int) -> str:
 
 
 def _detect_line_ending(text: str) -> str:
-    return "\r\n" if "\r\n" in text else "\n"
+    if "\r\n" in text:
+        return "\r\n"
+    return "\r" if "\r" in text and "\n" not in text else "\n"
 
 
 def _normalize_line_endings(text: str, target: str) -> str:
-    normalized = text.replace("\r\n", "\n")
-    return normalized.replace("\n", target) if target == "\r\n" else normalized
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", target)
 
 
 def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes:
     line_ending = "\n"
     if path.exists():
         try:
-            existing = path.read_text()
+            existing = path.read_bytes().decode("utf-8")
             line_ending = _detect_line_ending(existing)
         except UnicodeDecodeError:
             line_ending = "\n"
@@ -494,8 +496,8 @@ def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
 
 
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
-    start_line = text.count("\n", 0, start) + 1
-    end_line = text.count("\n", 0, end) + 1
+    start_line = _normalize_line_endings(text[:start], "\n").count("\n") + 1
+    end_line = _normalize_line_endings(text[:end], "\n").count("\n") + 1
     total_lines = max(1, len(text.splitlines()))
     return start_line, min(end_line, total_lines)
 
@@ -568,7 +570,7 @@ def _apply_edit(
         return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
     updated = text
     transformed = seen_ranges
-    line_delta = new_norm.count("\n") - old_norm.count("\n")
+    line_delta = new_norm.count(line_ending) - old_norm.count(line_ending)
     for start, end in reversed(positions):
         start_line, end_line = _line_span(updated, start, end)
         updated = updated[:start] + new_norm + updated[end:]
@@ -641,7 +643,7 @@ def patch(
     target = context.resolve_path(raw_path)
     try:
         source_bytes = target.read_bytes()
-        source = target.read_text()
+        source = source_bytes.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
     source_hash = _hash_bytes(source_bytes)
@@ -672,9 +674,9 @@ def patch(
         updated, count, seen_ranges = applied
         replacements += count if edit_replace_all else 1
 
-    context.snapshot(target)
-    target.write_text(updated)
     data = updated.encode("utf-8")
+    context.snapshot(target)
+    target.write_bytes(data)
     content_hash = _hash_bytes(data)
     context.replace_read_coverage(
         target,
