@@ -860,8 +860,8 @@ def test_fs_read_pdf_uses_pdftotext(tmp_path):
     assert not result.startswith("IMAGE_RESULT")
 
 
-def test_fs_read_pdf_honors_the_file_cap_only(tmp_path):
-    """A PDF is gauged by max_file_bytes; max_read_bytes has no ranged escape here."""
+def test_fs_read_pdf_honors_the_file_cap(tmp_path):
+    """A PDF is gauged by max_file_bytes before any bytes are loaded."""
     pdf = tmp_path / "sample.pdf"
     pdf.write_bytes(_simple_pdf_bytes("Hello PDF Text"))
     size = pdf.stat().st_size
@@ -869,12 +869,21 @@ def test_fs_read_pdf_honors_the_file_cap_only(tmp_path):
     over_file_cap = ToolContext(cwd=tmp_path, max_file_bytes=size - 1, max_read_bytes=size)
     refused_file = fs.fs_read("sample.pdf", context=over_file_cap)
 
-    over_read_cap = ToolContext(cwd=tmp_path, max_file_bytes=size, max_read_bytes=size - 1)
-    read_result = fs.fs_read("sample.pdf", context=over_read_cap)
-
     assert refused_file == (
         f"ERROR: file size ({size} bytes) exceeds the maximum allowed size of {size - 1} bytes"
     )
+
+
+@pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext is not installed")
+def test_fs_read_pdf_over_the_read_cap_still_reads(tmp_path):
+    """max_read_bytes bounds delivered text, and PDFs have no ranged alternative."""
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(_simple_pdf_bytes("Hello PDF Text"))
+    size = pdf.stat().st_size
+
+    over_read_cap = ToolContext(cwd=tmp_path, max_file_bytes=size, max_read_bytes=size - 1)
+    read_result = fs.fs_read("sample.pdf", context=over_read_cap)
+
     assert "Hello PDF Text" in read_result
 
 
