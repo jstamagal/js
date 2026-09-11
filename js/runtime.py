@@ -662,7 +662,8 @@ def _result_size(result: Any) -> int:
 
 
 def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> ToolResult:
-    return ToolResult.text(cap_text(result.dehydrated(), budget, marker))
+    # Even a short media placeholder must disclose the payload was removed.
+    return ToolResult.text(cap_text(result.dehydrated() + marker, budget, marker))
 
 
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:

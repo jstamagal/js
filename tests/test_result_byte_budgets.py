@@ -41,3 +41,10 @@ def test_batch_caps_multibyte_and_structured_text():
 
 def test_cap_text_zero_means_no_share_not_unlimited():
     assert cap_text("overflow", 0, "[truncated]") == ""
+
+
+def test_removed_media_discloses_truncation_even_with_short_placeholder():
+    result = ToolResult([{"type": "image", "data": "x" * 5000, "mimeType": "image/png"}])
+    capped = runtime._cap_result(result, 1000)
+    assert "truncated" in capped.dehydrated()
+    assert len(capped.dehydrated().encode()) <= 1000
