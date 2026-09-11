@@ -1,5 +1,8 @@
 Restore one path to its latest snapshot. Every tool that changes a file
 snapshots it first.
+Restores file/directory permission modes and symlink targets within removed
+trees. Ownership, timestamps, and extended attributes are not restored; older
+snapshots without modes restore content only.
 {{#if patch}}
 One multi-edit `patch` call is one snapshot.
 {{/if}}

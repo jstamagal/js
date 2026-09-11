@@ -4,7 +4,7 @@ from pathlib import Path
 
 from js.skills import ToolActivationResult
 from js.toolkit import ToolContext
-from js.toolkit import meta
+from js.toolkit import fs, meta
 from js.toolkit.registry import select
 
 
@@ -74,7 +74,8 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
     assert snaps is not None
     # Two writes -> two snapshots; the first recorded a nonexistent file (None).
     assert snaps[0] is None
-    assert snaps[1] == b"first"
+    assert fs.undo(str(target), context=context).startswith("restored")
+    assert target.read_text() == "first"
 
 
 def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):

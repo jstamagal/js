@@ -430,14 +430,25 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                 elif target.is_dir():
                     shutil.rmtree(target)
                 target.mkdir(parents=True, exist_ok=True)
+                modes = previous.get("modes", {})
                 entries = previous.get("entries", {})
                 for rel, data in entries.items():
                     child = target / rel.rstrip("/")
-                    if rel.endswith("/"):
+                    if isinstance(data, dict):
+                        child.parent.mkdir(parents=True, exist_ok=True)
+                        child.symlink_to(data["target"])
+                    elif rel.endswith("/"):
                         child.mkdir(parents=True, exist_ok=True)
                     else:
                         child.parent.mkdir(parents=True, exist_ok=True)
+                        if rel in modes:
+                            child.touch(mode=0o600)
                         child.write_bytes(data or b"")
+                        if rel in modes:
+                            child.chmod(modes[rel])
+                for rel in sorted(modes, key=lambda rel: len(Path(rel).parts), reverse=True):
+                    if rel == "." or rel.endswith("/"):
+                        (target / rel).chmod(modes[rel])
                 return f"restored directory {target}"
             if previous is None:
                 if target.is_symlink() or target.is_file():
@@ -446,7 +457,15 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     shutil.rmtree(target)
                 return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
+            mode = None
+            if isinstance(previous, dict):
+                mode = previous["mode"]
+                previous = previous["data"]
+                if not target.exists():
+                    target.touch(mode=0o600)
             target.write_bytes(previous)
+            if mode is not None:
+                target.chmod(mode)
             content_hash = _hash_bytes(previous)
             context.file_hashes[target] = content_hash
             return f"restored {target} (hash {content_hash})"

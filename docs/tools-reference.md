@@ -86,6 +86,9 @@ Parameters:
 - `path`
 
 Can restore files, symlinks, created-file nonexistence, and directory snapshots.
+New snapshots preserve file/directory permission modes and symlink targets
+inside directory trees. Ownership, timestamps, and extended attributes are not
+restored; older snapshots without modes restore content only.
 Successful restoration consumes one entry; a filesystem error retains the
 snapshot for retry. Unusable entries (including failed captures) are discarded
 one at a time with an error, without changing the path. Retry to reach older

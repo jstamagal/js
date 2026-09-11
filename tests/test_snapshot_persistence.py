@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -16,6 +17,91 @@ def _persistent_context(tmp_path, session_name: str) -> ToolContext:
         state_dir=tmp_path / "state",
     )
     return context
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_removed_tree_preserves_links_and_modes(tmp_path, restart):
+    tree = tmp_path / "tree"
+    nested = tree / "real" / "nested"
+    nested.mkdir(parents=True)
+    secret = nested / "secret"
+    secret.write_bytes(b"private")
+    secret.chmod(0o600)
+    nested.chmod(0o750)
+    tree.chmod(0o700)
+    links = {"file-link": "real/nested/secret", "dir-link": "real", "broken": "missing", "real/back": ".."}
+    for name, destination in links.items():
+        (tree / name).symlink_to(destination)
+    context = _persistent_context(tmp_path, "metadata")
+    assert fs.remove(str(tree), permanent=True, context=context).startswith("removed")
+    if restart:
+        context = _persistent_context(tmp_path, "metadata")
+    assert fs.undo(str(tree), context=context).startswith("restored directory")
+    for name, destination in links.items():
+        assert (tree / name).is_symlink()
+        assert (tree / name).readlink() == Path(destination)
+    assert secret.read_bytes() == b"private"
+    for path, mode in [(secret, 0o600), (nested, 0o750), (tree, 0o700)]:
+        assert stat.S_IMODE(path.stat().st_mode) == mode
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("mode", [0o600, 0o751])
+def test_removed_file_preserves_mode(tmp_path, restart, mode):
+    target = tmp_path / "secret"
+    target.write_bytes(b"private")
+    target.chmod(mode)
+    context = _persistent_context(tmp_path, "mode")
+    assert fs.remove(str(target), permanent=True, context=context).startswith("removed")
+    if restart:
+        context = _persistent_context(tmp_path, "mode")
+    assert fs.undo(str(target), context=context).startswith("restored")
+    assert target.read_bytes() == b"private"
+    assert stat.S_IMODE(target.stat().st_mode) == mode
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_mode_restore_failure_retains_persisted_snapshot(tmp_path, monkeypatch, directory):
+    target = tmp_path / "target"
+    if directory:
+        target.mkdir()
+    secret = target / "secret" if directory else target
+    secret.write_bytes(b"private")
+    secret.chmod(0o600)
+    context = _persistent_context(tmp_path, "chmod-retry")
+    fs.remove(str(target), permanent=True, context=context)
+
+    def fail(*args, **kwargs):
+        raise PermissionError("injected chmod failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "chmod", fail)
+        assert fs.undo(str(target), context=context) == "ERROR: injected chmod failure"
+    assert stat.S_IMODE(secret.stat().st_mode) == 0o600
+    context = _persistent_context(tmp_path, "chmod-retry")
+    assert fs.undo(str(target), context=context).startswith("restored")
+    assert secret.read_bytes() == b"private"
+    assert stat.S_IMODE(secret.stat().st_mode) == 0o600
+
+
+def test_legacy_directory_snapshot_still_restores(tmp_path):
+    target = tmp_path / "tree"
+    context = _persistent_context(tmp_path, "legacy")
+    context.record_snapshot(target, {"kind": "directory", "entries": {"nested/": None, "nested/file": b"old"}})
+    context = _persistent_context(tmp_path, "legacy")
+    assert fs.undo(str(target), context=context).startswith("restored directory")
+    assert (target / "nested/file").read_bytes() == b"old"
+
+
+def test_persisted_tree_rejects_writes_through_symlink(tmp_path):
+    target = tmp_path / "tree"
+    context = _persistent_context(tmp_path, "unsafe")
+    context.record_snapshot(target, {"kind": "directory", "entries": {
+        "link": {"kind": "symlink", "target": str(tmp_path)}, "link/escaped": b"bad",
+    }})
+    context = _persistent_context(tmp_path, "unsafe")
+    assert fs.undo(str(target), context=context).startswith("ERROR: discarded unusable snapshot")
+    assert not (tmp_path / "escaped").exists()
 
 
 @pytest.mark.parametrize("restart", [False, True])
