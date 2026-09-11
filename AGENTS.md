@@ -22,6 +22,12 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 4. **Run the tests that cover it.** Green before done.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
+   Commits are authored by whoever made them. The owner is
+   `John Stamagal <jstamagal@gmail.com>` and that is the global config. A model
+   commits as itself, name and vendor, set per command with
+   `-c user.name=... -c user.email=...`: `Claude Fable 5.1 <claude@anthropic>`,
+   `Qwen <qwen@alibaba>`. The commit agent is
+   `js commit agent <jstamagal+agent@gmail.com>`.
 7. **Merge it.** A branch nobody merged is organized forgetting — the work is
    not done while it sits unmerged. Merge to main when green; if main moved
    underneath, review then merge. Never park work on a branch silently: 28
@@ -56,6 +62,11 @@ compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
 guard; preserve it. Deep dives belong in `docs/technical-guide.md`.
 
+Anything settable is a registered knob (`js/settings.py`). `/set` with no
+argument dumps every settable knob, `/set <key> <value>` sets one, and
+`/save` rewrites jsrc from the full live state, no confirmation. A setting
+reachable only through an env var or a hardcoded default is not finished.
+
 ## Docs
 
 Deep dives belong in `docs/`: reference material, benchmark results, design
@@ -66,12 +77,6 @@ nobody here rereads `docs/` to keep it current. When a page in `docs/`
 disagrees with the code, the code is right. If you are changing the area a
 stale page describes, correct or delete the stale text in the same change.
 
-`tool_descriptions/*.md` is not docs. It is the model-facing schema, and code
-and description have to agree. When they disagree the tool is broken and one
-side has to change: fix the code when the described behavior is useful and
-buildable, narrow the description when it promised something the underlying
-tool cannot deliver. Say which side was wrong in the commit message.
-
 Issues go in `jstamagal/js` on GitHub. `.scratch/` holds working notes, not the
 shared issue backlog. After filing a scratch report's confirmed issues with
 their reproduction evidence, delete the original report. Leave `toolsweep-*`
@@ -79,10 +84,10 @@ artifacts alone unless explicitly asked to clean them up.
 
 ## Tests and comments
 
-Tests pin behavior, not opinions. Do not assert on prose wording,
-presentation, or styling that could change without anything being wrong.
+Tests pin what must be true for the code to be correct. Do not assert on
+wording, presentation, or styling that could change without anything being
+wrong.
 
-Comments state what is objectively true about the code. Do not record a
-passing preference of the owner's as fact, and do not gate or disable
-behavior because of a one-off remark. Do not mention things the code does not
-do or alternatives nobody asked about; describe what is there.
+Comments state what is true about the code. Do not turn something someone
+said once into a rule in the code, and do not describe what the code does not
+do or alternatives nobody asked about. Describe what is there.
