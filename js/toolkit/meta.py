@@ -11,6 +11,7 @@ import secrets
 import time
 from typing import Any
 
+from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Todo, Tool, ToolContext
 from .descriptions import load_description
@@ -333,10 +334,12 @@ async def _run_one_task_async(
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
     budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
-    cap = budget // max(1, total) if budget else 0
-    if cap and len(final) > cap:
-        final = final[:cap] + f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]"
-    return f"{idx}. {final}"
+    final = f"{idx}. {final}"
+    if budget > 0:
+        cap = budget // max(1, total)
+        final = cap_text(final, cap, f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]")
+    return final
+
 
 
 def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:

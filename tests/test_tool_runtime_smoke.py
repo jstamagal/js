@@ -1210,7 +1210,8 @@ def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(blo
     assert isinstance(capped, ToolResult)
     assert len(capped.blocks) == 1
     assert capped.blocks[0]["type"] == "text"
-    assert f"limits.max_tool_result_bytes ({cap - 1}) reached" in capped.dehydrated()
+    assert "[truncated]" in capped.dehydrated()
+    assert len(capped.dehydrated().encode("utf-8")) <= cap - 1
     assert all(item.get("type") not in {"image", "audio", "resource", "structured"} for item in capped.blocks)
 
 
@@ -1232,7 +1233,8 @@ def test_batch_cap_preserves_tool_result_at_boundary_and_dehydrates_when_over(bl
 
     assert isinstance(capped[0], ToolResult)
     assert capped[0].blocks[0]["type"] == "text"
-    assert f"limits.max_tool_results_per_turn_bytes ({size - 1}) reached" in capped[0].dehydrated()
+    assert "[truncated]" in capped[0].dehydrated()
+    assert len(capped[0].dehydrated().encode("utf-8")) <= size - 1
 
 
 def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():

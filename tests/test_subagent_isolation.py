@@ -630,13 +630,14 @@ def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp
     assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
 
 
-def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path):
+@pytest.mark.parametrize("body", ["X", "é", "😀"])
+def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path, body):
     prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
 
     def completion_stub(**kwargs):
-        return _fake_stream_result("X" * 500)
+        return _fake_stream_result(body * 500)
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
@@ -645,6 +646,9 @@ def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp
     # Single child: fair share == full budget (64 // 1), marker still fires.
     assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
     assert "X" * 65 not in actual
+    child_result = actual.split("1. ", 1)[1]
+    assert len(("1. " + child_result).encode("utf-8")) <= 64
+    assert "�" not in actual
 
 
 def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):

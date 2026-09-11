@@ -277,9 +277,10 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
 def test_cap_result_marks_only_when_it_shortens():
     assert runtime._cap_result("short", 100) == "short"           # untouched
     assert runtime._cap_result("x" * 100, 0) == "x" * 100          # 0 == unlimited
-    clipped = runtime._cap_result("x" * 100, 10)
-    assert clipped.startswith("x" * 10)
-    assert "[truncated: limits.max_tool_result_bytes (10) reached]" in clipped
+    clipped = runtime._cap_result("x" * 100, 64)
+    assert clipped.startswith("x")
+    assert len(clipped.encode("utf-8")) <= 64
+    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in clipped
 
 
 def test_dispatch_marks_truncated_leaf_result():
@@ -292,7 +293,8 @@ def test_dispatch_marks_truncated_leaf_result():
     registry = ToolRegistry(tools=(tool,), aliases={})
     _args, result = runtime._dispatch(
         "bigtool", "{}", runtime.Telemetry(debug_log=None),
-        cap_bytes=50, registry=registry, tool_context=ToolContext(),
+        cap_bytes=64, registry=registry, tool_context=ToolContext(),
     )
-    assert result.startswith("Z" * 50)
-    assert "[truncated: limits.max_tool_result_bytes (50) reached]" in result
+    assert result.startswith("Z")
+    assert len(result.encode("utf-8")) <= 64
+    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in result

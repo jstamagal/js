@@ -26,6 +26,7 @@ from jsonschema import validators as jsonschema_validators
 
 from . import colors as C
 from . import context_budget
+from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
 from . import settings as _settings
 from . import tools as T
@@ -639,32 +640,29 @@ def _tool_result_content_size(result: ToolResult) -> int:
     for block in result.blocks:
         kind = str(block.get("type", "unknown"))
         if kind == "text":
-            size += len(str(block.get("text", "")))
+            size += byte_size(str(block.get("text", "")))
         elif kind == "structured":
-            size += len(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), default=str))
+            size += byte_size(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), default=str))
         elif kind in {"image", "audio"}:
-            size += len(str(block.get("data", "")))
+            size += byte_size(str(block.get("data", "")))
         elif kind == "resource":
             resource = block.get("resource")
             if isinstance(resource, dict):
                 payload = resource.get("text", resource.get("blob", ""))
-                size += len(str(payload))
+                size += byte_size(str(payload))
         elif kind == "resource_link":
-            size += len(str(block.get("name", ""))) + len(str(block.get("uri", "")))
+            size += byte_size(str(block.get("name", ""))) + byte_size(str(block.get("uri", "")))
         else:
-            size += len(json.dumps(block, ensure_ascii=False, separators=(",", ":"), default=str))
+            size += byte_size(json.dumps(block, ensure_ascii=False, separators=(",", ":"), default=str))
     return size
 
 
 def _result_size(result: Any) -> int:
-    return _tool_result_content_size(result) if isinstance(result, ToolResult) else len(result)
+    return _tool_result_content_size(result) if isinstance(result, ToolResult) else byte_size(result)
 
 
-def _dehydrate_capped_result(result: ToolResult, keep: int, marker: str) -> ToolResult:
-    text = result.dehydrated()
-    if len(text) > keep:
-        text = text[:keep]
-    return ToolResult.text(text + marker)
+def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> ToolResult:
+    return ToolResult.text(cap_text(result.dehydrated(), budget, marker))
 
 
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
@@ -691,8 +689,8 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
         inline_cap = int(getattr(T.DEFAULT_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
-    if cap_bytes > 0 and len(result) > cap_bytes:
-        return result[:cap_bytes] + f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
+    if cap_bytes > 0:
+        return cap_text(result, cap_bytes, f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]")
     return result
 
 
@@ -710,7 +708,7 @@ def spill_oversized_result(
     does not know it existed. Spilling keeps every byte addressable: the model
     reads the file with an offset if it needs the rest. 0 or less disables.
     """
-    if inline_cap <= 0 or (not force and len(result) <= inline_cap):
+    if inline_cap <= 0 or (not force and byte_size(result) <= inline_cap):
         return result
     target_dir = spill_dir or (Path(os.path.expanduser("~")) / "oldinbox" / "js-tool-results")
     try:
@@ -718,15 +716,19 @@ def spill_oversized_result(
         digest = hashlib.sha256(result.encode("utf-8", "replace")).hexdigest()[:16]
         path = target_dir / f"result-{digest}.txt"
         if not path.exists():
-            path.write_text(result, encoding="utf-8")
+            path.write_bytes(result.encode("utf-8"))
     except OSError:
         return result  # cannot spill -> the byte cap downstream still applies
-    head = result[: max(0, inline_cap // 2)]
-    return (
-        f"{head}\n\n[result was {len(result)} bytes, over "
+    notice = (
+        f"[result was {byte_size(result)} bytes, over "
         f"{limit_name} ({inline_cap}); the full text is at "
         f"{path} — read it with start_line/end_line for the rest]"
     )
+    # Inline is a spill threshold, not the hard backstop. Keep a usable pointer
+    # even when the notice alone exceeds it; the downstream hard cap still wins.
+    head = byte_prefix(result, min(inline_cap // 2, max(0, inline_cap - byte_size(notice) - 2)))
+    return f"{head}\n\n{notice}" if head else notice
+
 
 
 def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
@@ -762,15 +764,14 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     allowance = _fair_share_ceiling(sizes, cap_bytes)
     if allowance < 0:
         return results
-    keep = max(0, allowance - len(marker))
     capped: list[Any] = []
     for result, size in zip(results, sizes, strict=True):
         if size <= allowance:
             capped.append(result)
         elif isinstance(result, ToolResult):
-            capped.append(_dehydrate_capped_result(result, keep, marker))
+            capped.append(_dehydrate_capped_result(result, allowance, marker))
         else:
-            capped.append(result[:keep] + marker)
+            capped.append(cap_text(result, allowance, marker))
     return capped
 
 
