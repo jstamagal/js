@@ -39,4 +39,4 @@ def test_whole_file_byte_cap_still_refuses_with_a_range_hint(tmp_path):
     out = fs.read("big.txt", context=context)
 
     assert out.startswith("ERROR:")
-    assert "start_line/end_line" in out
+    assert 'range={"start_line"' in out

@@ -300,7 +300,7 @@ def fs_read(
     if not ranged and read_cap > 0 and size > read_cap:
         return (
             f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}) "
-            f"for a whole-file read. Pass start_line/end_line to read a range instead — "
+            f"for a whole-file read. Pass range={{\"start_line\": N, \"end_line\": M}} to read a range instead — "
             f"ranged reads are not subject to this cap."
         )
 
@@ -347,7 +347,7 @@ def fs_read(
     body = _format_numbered_lines(selected, start) if show_line_numbers else "\n".join(selected)
     suffix = ""
     if end < total:
-        suffix = f"\n[{total} total lines; read {target} with start_line={end + 1} to continue]"
+        suffix = f'\n[{total} total lines; read {target} with range={{"start_line": {end + 1}}} to continue]'
     return f"{body}{suffix}"
 
 

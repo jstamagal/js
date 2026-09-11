@@ -61,6 +61,50 @@ def test_an_oversized_range_is_clamped_rather_than_rejected(tmp_path):
     assert len(_numbered_lines(body)) == 10
 
 
+def _read_schema():
+    from js.toolkit import fs
+
+    return next(t for t in fs.tools() if t.name == "read").openai_spec()["function"]["parameters"]
+
+
+def _hinted_arguments(hint: str) -> dict:
+    """Parse `read <path> with range={...} to continue` back into call arguments."""
+    import json
+    import re
+
+    match = re.search(r"read (.+?) with range=(\{.*?\}) to continue", hint)
+    assert match, hint
+    return {"file_path": match.group(1), "range": json.loads(match.group(2))}
+
+
+def test_continue_hint_is_accepted_by_the_public_schema(tmp_path):
+    """#18: the pagination hint must name arguments the model-facing schema allows."""
+    from jsonschema import Draft202012Validator
+
+    target = tmp_path / "file.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, max_read_lines=1)
+
+    body = fs_read(str(target), context=context)
+    args = _hinted_arguments(body)
+    assert args["range"] == {"start_line": 2}
+    assert not list(Draft202012Validator(_read_schema()).iter_errors(args))
+
+    follow_up = fs_read(args["file_path"], range=args["range"], context=context)
+    assert _numbered_lines(follow_up) == [2]
+
+
+def test_size_limit_hint_names_the_range_argument(tmp_path):
+    target = tmp_path / "big.txt"
+    target.write_text("x" * 200, encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, max_read_bytes=100)
+
+    body = fs_read(str(target), context=context)
+    assert body.startswith("ERROR:")
+    assert 'range={"start_line"' in body
+    assert "start_line/end_line" not in body
+
+
 @requires_rg
 def test_a_ripgrep_type_name_matches_that_type_not_a_literal_extension(tmp_path):
     (tmp_path / "hit.rs").write_text("fn marker_delta() {}\n", encoding="utf-8")
