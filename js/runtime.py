@@ -731,6 +731,25 @@ def spill_oversized_result(
     return f"{head}\n\n{notice}" if head else notice
 
 
+def _reconcile_read_delivery(
+    tool_name: str, args: dict, raw: Any, delivered: Any, context: ToolContext
+) -> None:
+    """Match read coverage to what the model actually received.
+
+    A clipping cap (inline spill, per-result cap, or the per-turn batch cap) runs
+    after the read handler returned the full text and recorded whole-file
+    coverage. Without this, write(overwrite=true) is authorized against content
+    the model never saw."""
+    if tool_name != "read" or not isinstance(raw, str) or not isinstance(delivered, str):
+        return
+    if delivered == raw:
+        return
+    raw_path = args.get("file_path") or args.get("path")
+    if not isinstance(raw_path, str):
+        return
+    context.record_delivered_read(context.resolve_path(raw_path), raw, delivered)
+
+
 
 def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
     """Largest per-result allowance L where sum(min(size, L)) <= budget.
@@ -826,6 +845,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes)
+    _reconcile_read_delivery(tool.name, args, result, capped, context)
     if trace:
         _print_trace_result(tool.name, capped, started)
     return args, capped
@@ -1027,7 +1047,9 @@ async def _dispatch_async_tool(
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
         result = f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"
+    raw_result = result
     result = _cap_result(result, cap_bytes)
+    _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
@@ -1821,10 +1843,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     [r for _, _, r in dispatch_records],
                     getattr(cfg, "max_tool_results_per_turn_bytes", 0),
                 )
-                dispatch_records = [
-                    (pc, args, new_result)
-                    for (pc, args, _old), new_result in zip(dispatch_records, capped, strict=True)
-                ]
+                reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
+                for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
+                    _reconcile_read_delivery(pc.name, args, old_result, new_result, active_context)
+                    reconciled.append((pc, args, new_result))
+                dispatch_records = reconciled
                 for pc, _args, result_value in dispatch_records:
                     canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
                     _emit_event(

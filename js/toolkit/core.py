@@ -397,6 +397,31 @@ class ToolContext:
         else:
             self.fully_read_paths.discard(path)
 
+    def record_delivered_read(self, path: Path, raw: str, delivered: str) -> None:
+        """Reconcile coverage after the runtime clipped a read result.
+
+        The read handler recorded coverage for the whole text it returned, but
+        the runtime clips or spills that text before the model sees it. Keep only
+        the numbered lines fully present in the shared prefix, so a later edit or
+        overwrite is never authorized against bytes the model never received."""
+        limit = 0
+        upper = min(len(raw), len(delivered))
+        while limit < upper and raw[limit] == delivered[limit]:
+            limit += 1
+        # A clip can land mid-line; that line's content was only partly shown.
+        complete = raw[:limit].rsplit("\n", 1)[0]
+        seen: list[tuple[int, int]] = []
+        for line in complete.splitlines():
+            head, separator, _text = line.partition(":")
+            if separator and head.isdigit():
+                number = int(head)
+                seen.append((number, number))
+        if seen:
+            self.read_ranges[path] = _merge_line_ranges(seen)
+        else:
+            self.read_ranges.pop(path, None)
+        self.fully_read_paths.discard(path)
+
     def configure_snapshot_store(
         self,
         agent_id: str,

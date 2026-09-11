@@ -474,12 +474,12 @@ def test_remove_symlink_does_not_follow_target_and_undo_restores_link(tmp_path):
     assert link.is_symlink()
     assert link.readlink() == outside
 
-def test_fs_search_negative_bounds_are_ignored(tmp_path):
+def test_fs_search_negative_offset_and_context_are_ignored(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.fs_search("needle", path=".", head_limit=-1, offset=-1, context_lines=-1, context=context)
+    actual = fs.fs_search("needle", path=".", offset=-1, context_lines=-1, context=context)
 
     assert str(tmp_path / "one.txt") in actual
     assert str(tmp_path / "two.txt") in actual
@@ -681,6 +681,46 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
         cap_bytes=4096, error_tracker=tracker, tool_context=context,
     )
     assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
+
+
+def test_a_read_clipped_by_the_inline_cap_does_not_authorize_overwrite(tmp_path, monkeypatch):
+    """The read handler records coverage for its full text, but the runtime
+    clips the result before the model sees it. Only the delivered preview may
+    count as read."""
+    context = ToolContext(cwd=tmp_path)
+    context.max_read_lines = 5000
+    context.max_read_bytes = 0
+    context.max_tool_result_inline_bytes = 2000
+    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    real_spill = runtime.spill_oversized_result
+    monkeypatch.setattr(
+        runtime,
+        "spill_oversized_result",
+        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
+    )
+    target = tmp_path / "big.txt"
+    target.write_text("".join(f"L{index:05d} filler\n" for index in range(3000)), encoding="utf-8")
+
+    _args, delivered = runtime._dispatch(
+        "read",
+        json.dumps({"file_path": str(target)}),
+        runtime.Telemetry(None),
+        cap_bytes=0,
+        tool_context=context,
+    )
+
+    assert len(delivered.encode("utf-8")) < target.stat().st_size
+    assert target.resolve() not in context.fully_read_paths
+
+    overwrite = fs.write(file_path=str(target), content="X\n", overwrite=True, context=context)
+    late_line = fs.patch(
+        file_path=str(target), old_string="L02000 filler\n", new_string="changed\n", context=context
+    )
+
+    assert overwrite.startswith("ERROR:")
+    assert late_line.startswith("ERROR:")
+    assert target.read_text(encoding="utf-8").startswith("L00000")
+    assert target.read_text(encoding="utf-8").endswith("L02999 filler\n")
 
 
 _TINY_PNG = base64.b64decode(
