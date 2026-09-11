@@ -217,6 +217,53 @@ def test_docs_token_budget_clamps_to_minimum(
     assert query["tokens"] == [expected]
 
 
+def test_docs_search_rejects_a_hit_whose_name_is_unrelated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body = json.dumps(
+        {"results": [{"id": "/llmstxt/notjustacar_llms_txt", "title": "Not Just a Car", "score": 0.98}]}
+    ).encode()
+    _responses(monkeypatch, body)
+
+    actual = search.docs_search("not-a-real-library", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "no library on context7 matches 'not-a-real-library'"
+
+
+def test_docs_search_rejects_a_name_match_with_low_relevance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body = json.dumps(
+        {
+            "results": [
+                {"id": "/tardy-org/zzz", "title": "zzz", "score": 0.02, "trustScore": 3.0, "verified": False}
+            ]
+        }
+    ).encode()
+    _responses(monkeypatch, body)
+
+    actual = search.docs_search("zzz", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "no library on context7 matches 'zzz'"
+
+
+def test_docs_search_picks_the_best_relevant_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    body = json.dumps(
+        {
+            "results": [
+                {"id": "/other/next", "title": "next", "score": 0.6},
+                {"id": "/vercel/next.js", "title": "Next.js", "score": 0.95, "trustScore": 9.9, "verified": True},
+            ]
+        }
+    ).encode()
+    calls = _responses(monkeypatch, body, b"next docs")
+
+    actual = search.docs_search("next.js", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "[context7 /vercel/next.js]\nnext docs"
+    assert "/vercel/next.js" in calls[1][0].full_url
+
+
 def test_docs_empty_body_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _responses(monkeypatch, b'{"results":[{"id":"/tiangolo/fastapi"}]}', b" \n\t")
 

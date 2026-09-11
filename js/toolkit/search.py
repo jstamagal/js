@@ -271,6 +271,42 @@ def exa_search(
     return _cap(_numbered(results, url_key="url", body_key="text"), context)
 
 
+# Context7's search is best-effort keyword matching: a query that is not a real
+# library still comes back with a real but unrelated project. A hit is only
+# presented as the resolved library when the query shares a word with the hit's
+# own name and, when the API reports one, its relevance score clears this floor.
+_MIN_CONTEXT7_SCORE = 0.5
+
+
+def _context7_tokens(text: str) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if len(token) > 1}
+
+
+def _context7_plausible(library: str, result: dict[str, Any]) -> bool:
+    library_id = str(result.get("id") or "").strip()
+    if not library_id:
+        return False
+    wanted = _context7_tokens(library)
+    name = _context7_tokens(library_id.rstrip("/").rsplit("/", 1)[-1])
+    if wanted and not wanted & name:
+        return False
+    score = result.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        normalised = float(score) / 100 if float(score) > 1 else float(score)
+        return normalised >= _MIN_CONTEXT7_SCORE
+    return True
+
+
+def _context7_rank(result: dict[str, Any]) -> tuple[float, int, float]:
+    score = result.get("score")
+    trust = result.get("trustScore")
+    return (
+        float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0,
+        1 if result.get("verified") else 0,
+        float(trust) if isinstance(trust, (int, float)) and not isinstance(trust, bool) else 0.0,
+    )
+
+
 def docs_search(
     library: str,
     topic: str | None = "",
@@ -302,9 +338,17 @@ def docs_search(
         return f"ERROR: expected search results to be an array, got {_json_kind(results)}"
     if not results:
         return f"no library on context7 matches {library!r}"
-    best = results[0]
-    if not isinstance(best, dict):
-        return f"ERROR: expected search result 1 to be an object, got {_json_kind(best)}"
+    first = results[0]
+    if not isinstance(first, dict):
+        return f"ERROR: expected search result 1 to be an object, got {_json_kind(first)}"
+    matches = [
+        result
+        for result in results
+        if isinstance(result, dict) and _context7_plausible(library, result)
+    ]
+    if not matches:
+        return f"no library on context7 matches {library!r}"
+    best = max(matches, key=_context7_rank)
     library_id = str(best.get("id") or "").strip()
     if not library_id:
         return f"no library on context7 matches {library!r}"
