@@ -298,9 +298,10 @@ def fs_read(
 
     read_cap = int(getattr(context, "max_read_bytes", 0) or 0)
     if not ranged and read_cap > 0 and size > read_cap:
+        example = _read_call(target, 1, context.max_read_lines)
         return (
             f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}) "
-            f"for a whole-file read. Pass range={{\"start_line\": N, \"end_line\": M}} to read a range instead — "
+            f"for a whole-file read. Read a range instead, e.g. {example} — "
             f"ranged reads are not subject to this cap."
         )
 
@@ -347,8 +348,16 @@ def fs_read(
     body = _format_numbered_lines(selected, start) if show_line_numbers else "\n".join(selected)
     suffix = ""
     if end < total:
-        suffix = f'\n[{total} total lines; read {target} with range={{"start_line": {end + 1}}} to continue]'
+        suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
     return f"{body}{suffix}"
+
+
+def _read_call(target: Path, start_line: int, end_line: int | None = None) -> str:
+    """JSON arguments for a follow-up `read` call, in the public schema's shape."""
+    rng: dict[str, int] = {"start_line": start_line}
+    if end_line is not None:
+        rng["end_line"] = end_line
+    return json.dumps({"file_path": str(target), "range": rng})
 
 
 read = fs_read
