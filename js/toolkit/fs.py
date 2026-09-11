@@ -289,15 +289,9 @@ def fs_read(
 
     if mime == "application/pdf":
         # A PDF is read whole — pdftotext extracts the entire document and has no
-        # ranged mode — so both caps apply before the bytes are loaded.
+        # ranged mode — so the file cap applies before the bytes are loaded.
         if size > context.max_file_bytes:
             return f"ERROR: file size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
-        read_cap = int(getattr(context, "max_read_bytes", 0) or 0)
-        if read_cap > 0 and size > read_cap:
-            return (
-                f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}); "
-                "PDF reads are whole-file and have no ranged alternative."
-            )
         try:
             text, data = _read_pdf_text(target, context)
         except OSError as exc:
