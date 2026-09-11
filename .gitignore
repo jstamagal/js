@@ -1,6 +1,7 @@
 .commandcode/
 .reasonix/
 *.html
+.env
 *.yaml1
 my_*
 /TODO.md

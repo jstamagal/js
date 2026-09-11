@@ -43,10 +43,12 @@ commit:
 
 # sync the project env from uv.lock, including the test extra. idempotent —
 # run after a fresh clone, after pulling changed deps, or any time the env
-# feels off.
+# feels off. Also fetches the Chromium build, since a synced env whose
+# browser_probe cannot launch is not actually synced.
 # rebuild the env from uv.lock — the real fix for a broken venv.
 sync:
     uv sync --extra test {{ browser-extra }}
+    just install-browser
 
 # drop into a shell with the project env active (uv owns the venv).
 shell:
@@ -76,6 +78,7 @@ install:
     mkdir -p "$HOME/.local/bin"
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
     just install-tool-binaries
+    just install-browser
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
     repo="$(pwd -P)"
@@ -107,6 +110,21 @@ install-tool-binaries:
 
 # Provision managed binaries even when system copies exist; never use a package manager.
 ensure-tools: install-tool-binaries
+
+# The `browser` extra installs the playwright PYTHON package; the browser
+# itself is a separate ~114MB download into ~/.cache/ms-playwright. Without it
+# browser_probe fails at runtime with "Executable doesn't exist" even though
+# the import succeeds. Idempotent: re-running with the browser present exits
+# immediately. Skipped on musl, where the extra is not installed at all.
+# download the Chromium build browser_probe drives.
+install-browser:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{ browser-extra }}" ]; then
+        echo "musl system: browser extra not installed, skipping chromium download"
+        exit 0
+    fi
+    uv run {{ browser-extra }} python -m playwright install chromium
 
 # remove the installed js launchers and the wiki symlink `just install` made.
 uninstall:
