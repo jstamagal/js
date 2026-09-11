@@ -3,16 +3,14 @@ Load local skill instructions by name.
 Use this when a specialized local workflow is relevant to the operator's
 request.
 
-Skills are layered last-match-wins: project overrides global, and global
-overrides the package catalog. Within the project, `./skills/` overrides
-`./.skills/`. Within every root, the layout precedence is:
-- `<root>/<name>.md`
-- `<root>/<name>/README.md`
-- `<root>/<name>/SKILL.md`
+A skill is a directory holding a `SKILL.md` (the Agent Skills format):
+`<root>/<name>/SKILL.md`. Roots, lowest layer to highest:
+- package: `js/skills/`
+- global: `~/.agents/skills/`, then `~/.config/js/skills/`
+- project: `./.agents/skills/`, then `./.js/skills/`
 
-The roots, from lowest to highest layer, are the package `js/skills/` directory,
-the platform config directory (`~/.config/js/skills/` by default), then project
-`./.skills/` and `./skills/`.
+Later layers override earlier ones by name; within a layer the js-native
+directory wins.
 
 Rules:
 - Only load skills that are relevant to the current task.
