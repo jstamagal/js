@@ -274,6 +274,51 @@ def test_fs_search_respects_gitignore_in_git_repo(tmp_path):
 
 
 @requires_rg
+def test_fs_search_positive_glob_overrides_gitignore(tmp_path):
+    """A positive glob is a ripgrep whitelist that outranks ignore rules; the
+    description states this instead of pretending the two intersect."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("secret.txt\n", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("NEEDLE\n", encoding="utf-8")
+    (tmp_path / "kept.txt").write_text("NEEDLE\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    actual = fs_search("NEEDLE", path=".", glob="*.txt", output_mode="content", context=context)
+
+    assert str(tmp_path / "secret.txt") in actual
+    assert str(tmp_path / "kept.txt") in actual
+
+
+@requires_rg
+def test_fs_search_rejects_a_positive_glob_with_file_type(tmp_path):
+    (tmp_path / "a.txt").write_text("NEEDLE\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("NEEDLE\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    content = fs_search(
+        "NEEDLE", path=".", glob="*.txt", file_type="py", output_mode="content", context=context
+    )
+    files = fs_search("*.txt", path=".", file_type="py", output_mode="files", context=context)
+
+    assert content.startswith("ERROR:")
+    assert files.startswith("ERROR:")
+
+
+@requires_rg
+def test_fs_search_negated_glob_with_file_type_still_filters(tmp_path):
+    (tmp_path / "a.py").write_text("NEEDLE\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("NEEDLE\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    actual = fs_search(
+        "NEEDLE", path=".", glob="!*.txt", file_type="py", output_mode="content", context=context
+    )
+
+    assert str(tmp_path / "a.py") in actual
+    assert str(tmp_path / "a.txt") not in actual
+
+
+@requires_rg
 def test_fs_search_respects_dot_ignore_file_without_git(tmp_path):
     (tmp_path / ".ignore").write_text("ignored.txt\n", encoding="utf-8")
     (tmp_path / "kept.txt").write_text("needle\n", encoding="utf-8")

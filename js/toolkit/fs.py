@@ -997,6 +997,17 @@ def fs_search(
     if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
         return f"ERROR: not a regular file or directory: {root}"
     mode = output_mode or "files_with_matches"
+    if file_type and (
+        (glob and not str(glob).strip().startswith("!"))
+        or (mode == "files" and pattern and not str(pattern).strip().startswith("!"))
+    ):
+        # ripgrep resolves a positive --glob ahead of --type, so a whitelist glob
+        # makes file_type a no-op. The two cannot be intersected; name the
+        # conflict instead of silently applying one.
+        return (
+            "ERROR: file_type cannot be combined with a positive glob; ripgrep "
+            "would apply the glob and drop file_type. Pass one filter."
+        )
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline))
     if cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
@@ -1478,7 +1489,7 @@ def tools() -> tuple[Tool, ...]:
                 "context_lines": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
                 "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
-                "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs."},
+                "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs. Cannot be combined with a positive glob."},
                 "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset; must be at least 1."},
                 "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
