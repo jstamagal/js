@@ -233,6 +233,25 @@ def test_wiki_finish_ingest_commits_in_a_git_worktree(tmp_path):
     assert "git: committed " in result
 
 
+def test_wiki_finish_ingest_refuses_to_commit_into_an_ancestor_repository(tmp_path):
+    outer = tmp_path / "outer"
+    vault = outer / "vault"
+    (vault / "inbox" / "u1").mkdir(parents=True)
+    _git_init(outer)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox" / "u1" / "f.txt").write_text("x\n")
+    # A broken `.git` inside the vault makes git's discovery walk up to `outer`.
+    (vault / ".git").mkdir()
+
+    result = wiki_finish_ingest(str(vault), "u1", "Leaked Unit", context=_ctx(tmp_path))
+
+    assert "not the root of a git work tree" in result
+    log = subprocess.run(
+        ["git", "-C", str(outer), "log", "--oneline"], capture_output=True, text=True
+    )
+    assert log.stdout.strip() == ""
+
+
 def test_wiki_convert_reads_text_peeks_structured_files_and_copies_media(tmp_path, monkeypatch):
     vault = _vault(tmp_path)
     note = tmp_path / "note.md"

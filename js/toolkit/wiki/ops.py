@@ -15,6 +15,18 @@ def _commit(vault: Path, message: str, context: ToolContext) -> str:
     rc, out, _ = run(["git", "-C", str(vault), "rev-parse", "--is-inside-work-tree"], context)
     if rc or out.strip() != "true":
         return "git: no repository"
+    # Bound the commit to the vault. A broken `.git` inside the vault makes git's
+    # discovery walk up, so without this the vault's files (and the lock file)
+    # would be committed into an unrelated enclosing repository.
+    rc, out, err = run(["git", "-C", str(vault), "rev-parse", "--show-toplevel"], context)
+    if rc:
+        return f"ERROR: git rev-parse failed: {err.strip()}"
+    root = Path(out.strip()).resolve()
+    if root != vault.resolve():
+        return (
+            f"ERROR: {vault} is not the root of a git work tree (the enclosing "
+            f"repository is {root}); refusing to commit the vault into another repository"
+        )
     rc, _, err = run(["git", "-C", str(vault), "add", "-A"], context)
     if rc:
         return f"ERROR: git add failed: {err.strip()}"
