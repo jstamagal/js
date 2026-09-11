@@ -217,34 +217,39 @@ def test_docs_token_budget_clamps_to_minimum(
     assert query["tokens"] == [expected]
 
 
-@pytest.mark.parametrize(
-    ("library", "results"),
-    [
-        # Live shape: a nonsense query whose top hit is a real project named
-        # after the query. Name equality alone would accept it; no score floor can.
-        ("zzz", [{"id": "/tardy-org/zzz", "title": "Zzz", "score": 545.6, "trustScore": 5.9}]),
-        # Live shape: the top hit shares one word (`real`) with the query but is a
-        # different project.
-        (
-            "not-a-real-library",
-            [
+def test_docs_search_rejects_a_hit_that_is_not_the_requested_library(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Live shape: the top hit shares one word (`real`) with the query but is a
+    # different project.
+    body = json.dumps(
+        {
+            "results": [
                 {"id": "/llmstxt/notjustacar_llms_txt", "title": "Not Just a Car", "score": 434.9},
                 {"id": "/xinntao/real-esrgan", "title": "Real-ESRGAN", "score": 323.7},
-            ],
-        ),
-    ],
-)
-def test_docs_search_rejects_a_hit_that_is_not_the_requested_library(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    library: str,
-    results: list[dict[str, Any]],
+            ]
+        }
+    ).encode()
+    _responses(monkeypatch, body)
+
+    actual = search.docs_search("not-a-real-library", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "no library on context7 matches 'not-a-real-library'"
+
+
+def test_docs_search_resolves_a_hit_named_after_the_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _responses(monkeypatch, json.dumps({"results": results}).encode())
+    # Live shape: the query is the hit's own project name, so it resolves.
+    body = json.dumps(
+        {"results": [{"id": "/tardy-org/zzz", "title": "Zzz", "score": 545.6, "trustScore": 5.9}]}
+    ).encode()
+    calls = _responses(monkeypatch, body, b"zzz docs")
 
-    actual = search.docs_search(library, context=ToolContext(cwd=tmp_path))
+    actual = search.docs_search("zzz", context=ToolContext(cwd=tmp_path))
 
-    assert actual == f"no library on context7 matches {library!r}"
+    assert actual == "[context7 /tardy-org/zzz]\nzzz docs"
+    assert "/tardy-org/zzz" in calls[1][0].full_url
 
 
 def test_docs_search_picks_the_best_relevant_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

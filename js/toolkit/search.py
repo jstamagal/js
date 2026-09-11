@@ -282,9 +282,7 @@ _CONTEXT7_SEPARATORS = re.compile(r"[^a-z0-9]+")
 
 def _context7_words(text: str) -> list[str]:
     """The lowercased alphanumeric words of a name, separators and punctuation gone."""
-    words = _CONTEXT7_SEPARATORS.split(text.lower())
-    # A word of one character repeated (`zzz`) is not a library name.
-    return [word for word in words if word and len(set(word)) > 1]
+    return [word for word in _CONTEXT7_SEPARATORS.split(text.lower()) if word]
 
 
 def _context7_names(result: dict[str, Any]) -> set[str]:
