@@ -230,10 +230,15 @@ async def _run_one_task_async(
 
     agent = agent_id
     task_session_id = global_session_id
-    cfg = _agent_cfg(parent_cfg, agent, task_session_id)
-
+    # Validate before reserving a session or changing its latest pointer.
+    prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     try:
-        prompt_spec = P.load_prompt_spec(cfg.prompts_dir)
+        prompt_spec = P.load_prompt_spec(_select_agent_prompt_dir(agent, prompt_roots))
+    except (FileNotFoundError, ValueError) as exc:
+        return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
+
+    cfg = _agent_cfg(parent_cfg, agent, task_session_id)
+    try:
         if getattr(cfg, "agents_files", ()):
             parts = [
                 p.read_text(encoding="utf-8").rstrip()
@@ -252,9 +257,7 @@ async def _run_one_task_async(
                     reasoning_effort=prompt_spec.reasoning_effort,
                     max_output_tokens=prompt_spec.max_output_tokens,
                 )
-    except FileNotFoundError:
-        prompt_spec = P.PromptSpec(system="", tool_selectors=())
-    except ValueError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
 
     # Subagent model precedence (operator-locked order):

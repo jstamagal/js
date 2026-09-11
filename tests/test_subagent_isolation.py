@@ -16,6 +16,7 @@ from js.toolkit.meta import task, todo_read, todo_write
 from js.toolkit.registry import build_default_registry, select
 from js.model_client import ModelStreamResult, ModelToolCall
 import ai
+import pytest
 
 from tool_loading import after_loading
 
@@ -142,6 +143,100 @@ def test_task_requires_named_agent_id(tmp_path):
     actual = task(["work"], context=ToolContext(cwd=tmp_path))
 
     assert actual == "ERROR: task requires agent_id"
+
+
+@pytest.mark.parametrize("async_dispatch", [False, True])
+@pytest.mark.parametrize("session_id", [None, "existing"])
+def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_path, async_dispatch, session_id):
+    from js.toolkit.meta import task_async
+
+    cfg = make_cfg(tmp_path, "parent", tmp_path / "prompts" / "parent")
+    context = ToolContext(cwd=tmp_path)
+    context.config = cfg
+    agent_dir = cfg.agent_dir.parent / "misspelled-worker"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "existing.jsonl").write_text("existing session\n")
+    (agent_dir / "latest.json").write_text('{"session_file":"existing.jsonl"}')
+    before = {p: p.read_bytes() for p in agent_dir.iterdir()}
+    calls = []
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs)
+        return _fake_stream_result("SHOULD_NOT_RUN")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
+    kwargs = dict(tasks=["work"], agent_id="misspelled-worker", session_id=session_id, context=context)
+    actual = asyncio.run(task_async(**kwargs)) if async_dispatch else task(**kwargs)
+
+    assert "ERROR could not load agent 'misspelled-worker'" in actual
+    assert calls == []
+    assert {p: p.read_bytes() for p in agent_dir.iterdir()} == before
+
+
+@pytest.mark.parametrize("stale_context", [False, True])
+def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeypatch, tmp_path, stale_context):
+    import js.config as config
+
+    prompts = prompt_dir(tmp_path, "worker", "tools: [todo_read]\n", "WORKER RULES\n")
+    rules = tmp_path / "AGENTS.md"
+    rules.write_text("SHARED RULES\n")
+    cfg = replace(
+        make_cfg(tmp_path, "parent", prompts.parent / "parent"),
+        agents_files=(rules,), prompt_roots=(prompts.parent,),
+        lock_subagent_model=True, prefer_inherit=True, max_read_bytes=12345,
+    )
+    context = ToolContext(cwd=tmp_path)
+    if stale_context:
+        context.config = replace(cfg, model="stale-context-model")
+    env_calls = []
+
+    def forbidden_env(**kwargs):
+        env_calls.append(kwargs)
+        raise AssertionError("task must not reload environment config")
+
+    monkeypatch.setattr(config, "from_env", forbidden_env)
+    real_run = runtime.run_turn_async
+    children = []
+
+    async def capture_child(child_cfg, system, messages, telemetry, **kwargs):
+        children.append((child_cfg, system, kwargs["tool_registry"]))
+        messages.append({"role": "assistant", "content": "CHILD_OK"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", capture_child)
+    calls = 0
+
+    def stream_stub(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _fake_tool_result("task", '{"tasks":["work"],"agent_id":"worker"}')
+        return _fake_stream_result("PARENT_OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "task"))
+    asyncio.run(real_run(
+        cfg, "PARENT", [{"role": "user", "content": "delegate"}], runtime.Telemetry(debug_log=None),
+        tool_context=context, tool_registry=build_default_registry().select(["task"]),
+        model_override="effective-model", provider_id_override="openai",
+        provider_base_url_override="https://offline.invalid/v1", provider_api_key_override="test-key",
+        reasoning_effort_override="low", max_output_override=321, suppress_output=True,
+    ))
+
+    assert env_calls == []
+    assert len(children) == 1
+    child, system, registry = children[0]
+    for field in ("agents_files", "prompt_roots", "lock_subagent_model", "prefer_inherit", "max_read_bytes"):
+        assert getattr(child, field) == getattr(cfg, field)
+    assert child.model == "effective-model"
+    assert child.provider_id == "openai"
+    assert child.provider_base_url == "https://offline.invalid/v1"
+    assert child.provider_api_key == "test-key"
+    assert child.reasoning_effort == "low"
+    assert child.max_output_tokens == 321
+    assert "SHARED RULES" in system and "WORKER RULES" in system
+    assert registry.resolve("todo_read") is not None
+    assert child.agent_id == "worker"
+    assert child.session_file != cfg.session_file
+    assert cfg.model == "offline-test-model"
 
 
 def test_task_rejects_non_string_task_items(tmp_path):

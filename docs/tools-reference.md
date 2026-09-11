@@ -354,6 +354,10 @@ Parameters:
 - `session_id`: optional child session id
 
 Tasks inside one call run concurrently. Results are returned in input order.
+Workers inherit the parent turn's effective configuration and shared instruction
+files, subject to worker persona and model-selection rules. A missing agent
+returns an error naming it without starting a worker or creating/resuming its
+session.
 
 ## Persistent Kernel Tools
 

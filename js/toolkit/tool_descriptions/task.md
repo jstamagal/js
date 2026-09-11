@@ -38,6 +38,8 @@ Inputs:
 - `tasks` is required and should contain clear, detailed, self-contained prompts.
 - Each task is a string prompt.
 - `agent_id` is required and selects the worker persona and selected tools.
+- Workers inherit the parent turn's effective configuration and shared instruction
+  files; worker persona and model-selection rules still apply.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
   context. When omitted, a fresh worker session is created.
 - `tasks` is what the worker reads. The worker's routing — model, agent_id,
@@ -67,6 +69,8 @@ Prompting guidance:
 - If asking multiple workers to compare areas, make their scopes non-overlapping.
 
 Failure behavior:
+- A missing agent returns an error naming it, without starting a worker or
+  creating/resuming its session.
 - One worker failure returns that worker's error without discarding sibling
   results.
 - A task recursion limit prevents unbounded worker spawning.

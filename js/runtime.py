@@ -1183,6 +1183,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     base_registry = tool_registry or T._REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.DEFAULT_CONTEXT
+    # Delegation inherits this turn's effective settings, not a fresh env load
+    # or a stale config left on a reused context. Do not mutate the caller's cfg.
+    active_context.config = replace(
+        cfg, model=model, provider_id=provider_id,
+        provider_base_url=provider_base_url, provider_api_key=provider_api_key,
+        reasoning_effort=effort, max_output_tokens=max_out,
+    )
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
