@@ -1139,9 +1139,6 @@ async def _dispatch_batch(
                 [pc for i, pc in enumerate(tool_calls) if i not in fan_out]
             )))
             await asyncio.gather(*jobs)
-        elif current_supervisor is None:
-            _dispatch_tool_calls(tool_calls, telemetry, cap_bytes, trace,
-                                 error_tracker, registry, tool_context, progress)
         else:
             await sync_calls(tool_calls)
     except BaseException:

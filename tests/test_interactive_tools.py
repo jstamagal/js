@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import time
@@ -9,11 +10,13 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from js import runtime
 from js.toolkit import browser as browser_module
 from js.toolkit.browser import browser_probe
 from js.toolkit.core import ToolContext
 from js.toolkit.registry import build_default_registry
 from js.toolkit.terminal import close_terminal_sessions, terminal_session, terminal_snapshot
+from test_lazy_tool_discovery import _cfg, _result
 
 
 def _chromium_is_installed() -> bool:
@@ -688,3 +691,38 @@ def test_browser_probe_caps_errors_and_returns_parseable_json(tmp_path):
     assert report["webgl"]
     assert len(report["console_errors"]) <= 50
     assert len(report["console_errors"]) + report["console_errors_dropped"] == 200
+
+
+@_needs_chromium
+def test_browser_probe_runs_when_the_runtime_dispatches_it_on_a_live_loop(
+    tmp_path, monkeypatch
+):
+    """The runtime runs sync leaf handlers off the loop thread. Playwright's sync
+    API refuses to start on the loop thread, so dispatching there used to return
+    an empty `browser probe failed` report."""
+    target = tmp_path / "index.html"
+    target.write_text(
+        "<html><body style='background:rgb(10,20,30)'>probe</body></html>",
+        encoding="utf-8",
+    )
+    streamed = iter([
+        _result(("c1", "tool_discovery", json.dumps({"load": "native:browser_probe"}))),
+        _result(("c2", "browser_probe", json.dumps({"target": str(target), "settle_ms": 0}))),
+        _result(text="done"),
+    ])
+    monkeypatch.setattr(
+        runtime.model_client, "stream_model_async", lambda **_kwargs: next(streamed)
+    )
+    messages = [{"role": "user", "content": "probe the page"}]
+
+    asyncio.run(runtime.run_turn_async(
+        _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+        tool_registry=build_default_registry(),
+        tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+    ))
+
+    probe = next(message for message in messages if message.get("tool_call_id") == "c2")
+    assert not probe["content"].startswith("ERROR"), probe["content"]
+    report = json.loads(probe["content"])
+    assert report["frames"]
+    assert report["frames"][0]["dimensions"]
