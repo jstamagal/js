@@ -80,6 +80,13 @@ def test_browse_description_discloses_settle_window_and_original_decoding():
     assert "`fetch(save=...)` when exact bytes matter" in description
 
 
+def test_ast_search_description_says_the_walk_crosses_mount_points():
+    description = " ".join(descriptions.load_description("ast_search").split())
+
+    assert "mount" in description
+    assert "--one-file-system" in description
+
+
 
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()
