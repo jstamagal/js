@@ -72,7 +72,9 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-# giant prompt-string template builder; linting it is pure noise.
+# .scratch holds working notes and benchmark artifacts, not code that ships;
+# ruff walking it fails the gate on whatever a sweep happened to leave there.
+exclude = [".scratch"]
 
 [tool.ruff.lint]
 # defaults already cover E (errors) + F (pyflakes); add pyupgrade.
