@@ -412,6 +412,29 @@ def test_a_cell_awaits_at_top_level_without_a_loop_patch_and_has_no_nest_asyncio
 
 
 @needs_kernel
+def test_waiting_on_the_kernels_own_loop_never_completes_but_await_does(ctx):
+    """A cell body runs on the loop, so blocking for that loop cannot finish.
+
+    The coroutine here returns immediately, so a TimeoutError proves the wait
+    itself is the defect rather than anything slow: the thread that would run
+    the coroutine is the one the cell blocked. `await` runs the same coroutine.
+    """
+    ctx.kernel_wait_seconds = 1
+    kmod.kernel(code=(
+        "import asyncio\n"
+        "loop = asyncio.get_running_loop()\n"
+        "async def q():\n"
+        "    return 7\n"
+        "print(asyncio.run_coroutine_threadsafe(q(), loop).result(timeout=3))\n"
+    ), context=ctx)
+    blocked = kmod.kernel(action="wait", timeout=30, context=ctx)
+    awaited = kmod.kernel(code="print(await q())", context=ctx)
+
+    assert "TimeoutError" in blocked
+    assert "7" in awaited
+
+
+@needs_kernel
 def test_a_cell_blocked_on_the_kernels_own_loop_returns_a_handle_and_recovers(ctx):
     """The #101 wedge shape: a sync wrapper waiting on this kernel's own loop."""
     ctx.kernel_wait_seconds = 1

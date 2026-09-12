@@ -57,12 +57,22 @@ Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
 that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that
 submitted the cell — stops the cell exactly like Ctrl-C in a notebook: the
 namespace and everything in it survive, and the result carries the traceback.
-A cell that waits on the kernel's own loop — `run_coroutine_threadsafe(...)
+A cell body runs ON the loop, so a cell that blocks waiting for that same loop
+to finish something never completes. `run_coroutine_threadsafe(coro, loop)
 .result()` is the usual shape, and a nested `loop.run_until_complete(...)` under
-a loop patch does the same — blocks until it is interrupted, but it cannot wedge
-the tool: the submitting call returns a handle, the next `code` is refused with
-`the previous cell is still running`, `action="interrupt"` stops it, and the next
-cell's `await` is served.
+a loop patch is the same mistake: the thread that would run `coro` is the thread
+you just blocked. This is not a slow call and not a timeout you can raise your
+way out of — an instant `async def q(): return 7` hangs exactly as long as a
+60-second download, and `.result(timeout=n)` reports `TimeoutError` after `n`
+seconds whatever the coroutine does. `await` is the only form that runs: it
+yields the loop instead of blocking it. A sync wrapper around an async client
+fails here for this reason even when the server is healthy, so call the async
+method directly rather than reaching for the library's sync shim.
+
+The tool stays usable throughout: the submitting call returns a handle, the next
+`code` is refused with `the previous cell is still running`,
+`action="interrupt"` stops the blocked cell, and the next cell's `await` is
+served normally.
 The one cell SIGINT cannot stop is one blocked in a syscall that ignores it, a
 network call stuck on a dead resolver being the usual case; only
 `restart=true` clears that, and a later call reports the cell as still running
