@@ -318,6 +318,13 @@ def test_the_kernel_description_changes_when_toolbox_shares_the_surface():
     assert "toolbox action=load" not in alone
 
 
+def test_the_kernel_description_names_the_interpreter_cells_run_in():
+    text = build_default_registry().resolve("kernel").description
+
+    assert "sys.executable" in text
+    assert "uv pip install --python" in text
+
+
 def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
     import yaml
 
@@ -356,6 +363,15 @@ def test_state_survives_between_calls_and_the_namespace_line_lists_it(ctx):
     assert "NAMESPACE triple" in first
     assert "42" in second
     assert "NAMESPACE triple" in second
+
+
+@needs_kernel
+def test_cells_run_in_the_interpreter_running_js(ctx):
+    import sys
+
+    result = kmod.kernel(code="import sys\nprint(sys.executable)", context=ctx)
+
+    assert sys.executable in result
 
 
 @needs_kernel

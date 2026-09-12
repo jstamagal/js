@@ -441,6 +441,14 @@ runtime abandons the worker running the tool call, so the next call does not
 queue behind a cell nobody is watching. The interrupt-on-cancel hook is
 `kernel.interrupt_inflight(context)`, called from the runtime's cancel path.
 
+Cells run in the interpreter running js, never in a venv of their own: the
+`python3` kernelspec's `python` argv is replaced with `sys.executable`, so a
+`just install`-ed `js` gives cells the uv tool environment and `just run` gives
+them this checkout's project venv. A module installed into some other project's
+venv is not importable in a cell. To add a package to the kernel's environment,
+read `sys.executable` in a cell and install with
+`uv pip install --python <that path> <package>`.
+
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.
 

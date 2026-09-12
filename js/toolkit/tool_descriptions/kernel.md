@@ -71,8 +71,12 @@ Practical notes:
   scripts: you keep the intermediate state.
 - Prefer defining a named function over pasting the same block twice. A named
   function shows up in `NAMESPACE` and stays callable.
-- `!pip install` and other IPython magics work, but installing into the running
-  environment is rarely what you want.
+- Cells run in the interpreter that runs js: the uv tool environment of a
+  `just install`-ed `js`, the project venv under `just run`. Modules installed
+  in some other project's venv are not importable here, so check
+  `sys.executable` in a cell and install into that one:
+  `uv pip install --python <that path> <package>`. `!pip install` and other
+  IPython magics reach the same environment.
 
 {{#if shell}}
 Use `shell` instead for builds, tests, git, package managers, and anything that
