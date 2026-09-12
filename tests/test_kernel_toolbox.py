@@ -719,6 +719,22 @@ def test_a_tool_whose_module_level_calls_a_sibling_loads_whatever_its_name(ctx):
 
 
 @needs_kernel
+def test_save_accepts_a_definition_that_calls_an_already_saved_tool(ctx):
+    """Load execs every tool file into one namespace, so a sibling resolves."""
+    kmod.kernel(code="def leaf(n):\n    return n * 2\n", context=ctx)
+    tbmod.toolbox(action="save", name="leaf", note="doubles", context=ctx)
+    kmod.kernel(code="def composite(n):\n    return leaf(n) + 1\n", context=ctx)
+
+    report = tbmod.toolbox(action="save", name="composite", note="uses leaf", context=ctx)
+
+    assert not report.startswith("ERROR")
+    assert "composite" in report
+    kmod.kernel(restart=True, context=ctx)
+    tbmod.toolbox(action="load", context=ctx)
+    assert "9" in kmod.kernel(code="print(composite(4))", context=ctx)
+
+
+@needs_kernel
 def test_save_refuses_a_definition_whose_free_name_lives_in_the_session(ctx):
     kmod.kernel(code=(
         "PREFIX = '>> '\n"

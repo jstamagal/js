@@ -410,11 +410,12 @@ def unbound_names(source: str) -> list[str]:
     """Names a file body reads that nothing in the body defines.
 
     The save-time lint. A name the definition reads but the file does not carry —
-    a session constant, a sibling function, a client built in an earlier cell —
-    is a NameError the next time a session loads the tool, so `save` refuses
-    instead of writing the file and warning about it afterwards. Builtins are
-    not free names; imports, definitions, arguments and assignments in the body
-    bind theirs.
+    a session constant, a client built in an earlier cell — is a NameError the
+    next time a session loads the tool, so `save` refuses instead of writing the
+    file and warning about it afterwards. Builtins are not free names; imports,
+    definitions, arguments and assignments in the body bind theirs. An
+    already-saved tool is not a free name to the caller of this function: every
+    tool file execs into one namespace at load, so callers filter those out.
     """
     try:
         tree = ast.parse(source)
@@ -565,7 +566,11 @@ def toolbox(
         if not body.strip():
             return (f"ERROR: no source found for {name!r}. Define it in the kernel first, "
                     "or pass the definition in `source`.")
-        missing = unbound_names(body)
+        # A saved sibling is carried: load execs every tool file into one
+        # namespace and retries a file whose module level needs one not yet
+        # loaded, so a call to another tool resolves there.
+        siblings = set(discover(cwd)) - {name}
+        missing = [free for free in unbound_names(body) if free not in siblings]
         if missing:
             message = (
                 f"ERROR: {name!r} uses " + ", ".join(missing)
