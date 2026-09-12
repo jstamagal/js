@@ -58,14 +58,48 @@ _NATIVE_INTENTS = {
     "terminal_session": "terminal shell interactive process kill stop terminate",
 }
 
+# Words that carry no search intent on their own. Without this a query like
+# "install a package" matches almost every entry on the single letter "a".
+_STOP_WORDS = frozenset({
+    "a", "about", "an", "and", "any", "are", "as", "at", "be", "been", "but",
+    "by", "can", "could", "did", "do", "does", "for", "from", "had", "has",
+    "have", "how", "i", "if", "in", "into", "is", "it", "its", "me", "my",
+    "no", "not", "of", "on", "or", "our", "should", "so", "some", "such",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "to", "up", "was", "we", "were", "what", "when", "where",
+    "which", "who", "why", "will", "with", "would", "you", "your",
+})
+
 
 def search_tokens(text: str) -> set[str]:
-    """Split punctuation and underscores, never matching kill inside skill."""
-    return set(re.findall(r"[^\W_]+", str(text).casefold()))
+    """Split punctuation and underscores, never matching kill inside skill.
+
+    Simple plurals fold to their singular so a query word reaches the plural
+    form a description uses.
+    """
+    tokens = set(re.findall(r"[^\W_]+", str(text).casefold()))
+    for token in tuple(tokens):
+        if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+            tokens.add(token[:-1])
+            if token.endswith("es"):
+                tokens.add(token[:-2])
+    return tokens
+
+
+def query_terms(query: str) -> set[str]:
+    """Query tokens that carry intent; stop words and single letters carry none."""
+    return {
+        token for token in search_tokens(query)
+        if len(token) > 1 and token not in _STOP_WORDS
+    }
 
 
 def ranked_entries(entries: Iterable[CatalogEntry], query: str) -> list[CatalogEntry]:
-    terms = search_tokens(query)
+    terms = query_terms(query)
+    # A query of nothing but stop words asks for nothing; return no matches
+    # rather than the whole catalog.
+    if str(query).strip() and not terms:
+        return []
     ranked = []
     for item in entries:
         names = search_tokens(item.name)

@@ -111,6 +111,21 @@ _LAZY_SUITES = {
 }
 
 
+def _catalog_summary(description: str, present: set[str], tool: str) -> str:
+    """Index the opening paragraph, not the first hard-wrapped line.
+
+    Descriptions wrap at 80 columns, so the first line alone often stops before
+    the sentence that names what the tool can do. Collapsing the whole first
+    paragraph keeps the capability in the catalog entry.
+    """
+    rendered = render_tool_name_sections(description, present, tool=tool)
+    for paragraph in rendered.split("\n\n"):
+        collapsed = " ".join(paragraph.split())
+        if collapsed:
+            return collapsed[:240]
+    return ""
+
+
 class TurnToolSurface:
     """A selected registry split into deterministic eager and loaded subsets."""
 
@@ -278,11 +293,12 @@ class TurnToolSurface:
         return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
+        present = set(self.allowed.by_name)
         native = (
             CatalogEntry(
                 item_id,
                 tool.name,
-                tool.description.split("\n", 1)[0][:240],
+                _catalog_summary(tool.description, present, tool.name),
                 "native",
                 self._sources[tool.name],
             )

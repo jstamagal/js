@@ -1,7 +1,7 @@
-Open a page or local HTML in real Chromium and measure what is on screen.
-Use it when pixels and interaction matter: screenshots, canvas, WebGL (rendered
-through SwiftShader, no GPU needed), controls that only appear after JavaScript,
-or whether an input visibly changes the result. Local files and directories are
+Render and screenshot a page or local HTML in real Chromium: pixels, canvas,
+WebGL (through SwiftShader, no GPU needed), and whether an interaction changes
+the result. Use it when how the page looks or responds matters, including
+controls that only appear after JavaScript. Local files and directories are
 served from a temporary localhost server.
 
 `click` is a `>`-separated chain of case-insensitive regexes matched against

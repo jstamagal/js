@@ -33,6 +33,22 @@ def test_intent_search_ranks_native_tools(tmp_path, query, expected):
     assert results[0]['id'] == f'native:{expected}'
 
 
+def test_screenshot_query_reaches_browser_probe_through_its_description(tmp_path):
+    surface = build_default_registry().lazy_surface(tmp_path)
+    names = {
+        item['name'] for item in json.loads(surface.discover(query='screenshot'))['results']
+    }
+    assert {'browser_probe', 'terminal_snapshot'} <= names
+
+
+@pytest.mark.parametrize('query', ['take a screenshot', 'install a package', 'the a of'])
+def test_stop_words_narrow_instead_of_flooding_the_catalog(tmp_path, query):
+    surface = build_default_registry().lazy_surface(tmp_path)
+    catalog_total = json.loads(surface.discover())['total']
+    page = json.loads(surface.discover(query=query))
+    assert page['total'] <= catalog_total // 4
+
+
 def test_word_boundaries_and_partial_match_ranking(tmp_path, monkeypatch):
     surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
     entries = (CatalogEntry('skill:skills', 'skills', 'Skill instructions', 'skill', 'global'), CatalogEntry('native:kill', 'kill', 'Stop process', 'native', 'shell'))
