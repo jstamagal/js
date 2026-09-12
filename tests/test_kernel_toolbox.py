@@ -661,7 +661,7 @@ def test_load_reports_a_broken_tool_by_name_and_still_loads_the_healthy_ones(ctx
 
 
 @needs_kernel
-def test_save_warns_about_session_names_it_could_not_put_in_the_file(ctx):
+def test_save_refuses_a_definition_whose_free_name_lives_in_the_session(ctx):
     kmod.kernel(code=(
         "PREFIX = '>> '\n"
         "def shout(text):\n"
@@ -670,9 +670,59 @@ def test_save_warns_about_session_names_it_could_not_put_in_the_file(ctx):
 
     report = tbmod.toolbox(action="save", name="shout", note="loud", context=ctx)
 
-    assert "saved shout r1 [global]" in report
-    assert "WARNING this definition also uses PREFIX" in report
-    assert "will NameError when a later session loads it" in report
+    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    assert report.startswith("ERROR: 'shout' uses PREFIX")
+    assert not (directory / "shout.py").exists()
+    assert not (directory / ".history").exists()
+
+
+@needs_kernel
+def test_a_refused_save_leaves_the_previous_revision_and_history_alone(ctx):
+    cwd = Path(ctx.cwd)
+    kmod.kernel(code=(
+        "def shout(text):\n"
+        "    return text\n"
+        "PREFIX = '>> '\n"
+    ), context=ctx)
+    assert tbmod.toolbox(action="save", name="shout", note="plain", context=ctx).startswith(
+        "saved shout r1")
+    kmod.kernel(code="def shout(text):\n    return PREFIX + text\n", context=ctx)
+
+    report = tbmod.toolbox(action="save", name="shout", note="loud", context=ctx)
+
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    record = tbmod.discover(cwd)["shout"]
+    assert report.startswith("ERROR: 'shout' uses PREFIX")
+    assert record.revision == 1
+    assert [entry["note"] for entry in record.history] == ["plain"]
+    assert not (directory / ".history").exists()
+
+
+def test_save_refuses_an_explicit_source_that_reads_an_undefined_name(ctx, monkeypatch):
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+
+    report = tbmod.toolbox(action="save", name="over", source=(
+        "def over(n):\n"
+        "    return n > THRESHOLD\n"
+    ), context=ctx)
+
+    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    assert report.startswith("ERROR: 'over' uses THRESHOLD")
+    assert not (directory / "over.py").exists()
+
+
+def test_an_explicit_source_with_its_own_imports_saves_cleanly(ctx, monkeypatch):
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+
+    report = tbmod.toolbox(action="save", name="mean", source=(
+        "import statistics\n"
+        "\n"
+        "def mean(values):\n"
+        "    return statistics.fmean(values)\n"
+    ), context=ctx)
+
+    assert report.startswith("saved mean r1 [global]")
+    assert "import statistics" in (tbmod.toolbox_dirs(Path(ctx.cwd))[0] / "mean.py").read_text()
 
 
 @needs_kernel

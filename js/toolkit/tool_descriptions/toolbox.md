@@ -39,6 +39,14 @@ stays restorable forever. A first save is `r1`; a save over an existing tool is
 Save when a function is worth having again — a parser, a fetcher, a report
 formatter, anything you would be annoyed to rewrite.
 
+Before writing, `save` hoists the definition's module imports into the file so it
+stands alone, and refuses the save if the definition still reads a name the file
+would not carry — a session constant, a sibling function, a client built in an
+earlier cell. The ERROR names every one of them; save them as their own tools,
+inline them, or pass a complete definition in `source`. Nothing is written and no
+revision is bumped by a refused save. The same check runs on an explicit
+`source`.
+
 `history` prints every revision of one tool: date, model, note, and which
 revisions can be restored.
 

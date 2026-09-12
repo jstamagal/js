@@ -28,6 +28,7 @@ and the kernel is unaffected.
 from __future__ import annotations
 
 import ast
+import builtins
 import json
 import re
 import time
@@ -47,6 +48,8 @@ _REVISION_SUFFIX = re.compile(r"\.r(\d+)\.py$")
 
 ACTIONS = ("list", "save", "load", "history", "restore")
 
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
 # Recovers a definition's source from the KERNEL process, where it lives, AND
 # works out what it needs from the surrounding namespace to still run tomorrow.
 #
@@ -55,8 +58,9 @@ ACTIONS = ("list", "save", "load", "history", "restore")
 # imported in a different cell, the saved file had no import, and the tool was
 # broken the moment the session that wrote it ended. So the probe resolves every
 # free name against the live namespace: modules become import lines prepended to
-# the saved body, and anything it cannot resolve comes back as a warning naming
-# the name.
+# the saved body. Whatever stays unbound in that body is what `save` refuses on
+# (see `unbound_names`), because a name the file does not carry is a NameError
+# waiting for the next session that loads it.
 #
 # `inspect.getsource` covers cells IPython registered with linecache and files a
 # previous `load` exec'd; the `In` scan is the fallback for anything it misses.
@@ -116,17 +120,14 @@ def __js_src(target_name):
         return out
 
     source = _body()
-    imports, unresolved = [], []
+    imports = []
     for name in _free(source):
         value = globals().get(name)
         module = getattr(value, '__name__', None) if inspect.ismodule(value) else None
         if module:
             imports.append('import ' + module
                            + ('' if module == name else ' as ' + name))
-        else:
-            unresolved.append(name)
-    return json.dumps({'source': source, 'imports': imports,
-                       'unresolved': unresolved})
+    return json.dumps({'source': source, 'imports': imports})
 print('__JS_SRC__' + __js_src(%(name)r))
 del __js_src
 """
@@ -347,11 +348,10 @@ def restore(cwd: Path, name: str, revision: int, *, model: str = "") -> str:
 
 @dataclass
 class Extracted:
-    """A definition lifted out of the kernel, plus what it needs to run alone."""
+    """A definition lifted out of the kernel, plus the imports it needs to run alone."""
 
     source: str = ""
     imports: list[str] = field(default_factory=list)
-    unresolved: list[str] = field(default_factory=list)
 
     def body(self) -> str:
         """The self-contained file body: hoisted imports, then the definition."""
@@ -359,6 +359,48 @@ class Extracted:
             return ""
         prefix = "\n".join(self.imports) + "\n\n" if self.imports else ""
         return prefix + self.source.strip()
+
+
+def unbound_names(source: str) -> list[str]:
+    """Names a file body reads that nothing in the body defines.
+
+    The save-time lint. A name the definition reads but the file does not carry —
+    a session constant, a sibling function, a client built in an earlier cell —
+    is a NameError the next time a session loads the tool, so `save` refuses
+    instead of writing the file and warning about it afterwards. Builtins are
+    not free names; imports, definitions, arguments and assignments in the body
+    bind theirs.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    bound: set[str] = set()
+    used: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                used.append(node.id)
+            else:
+                bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.alias):
+            bound.add((node.asname or node.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+    seen: set[str] = set()
+    missing: list[str] = []
+    for name in used:
+        if name in bound or name in seen or name in _BUILTIN_NAMES:
+            continue
+        seen.add(name)
+        missing.append(name)
+    return missing
 
 
 def source_from_kernel(session: Any, name: str) -> Extracted:
@@ -376,7 +418,6 @@ def source_from_kernel(session: Any, name: str) -> Extracted:
     return Extracted(
         source=str(value.get("source") or ""),
         imports=[str(item) for item in value.get("imports", [])],
-        unresolved=[str(item) for item in value.get("unresolved", [])],
     )
 
 
@@ -471,17 +512,19 @@ def toolbox(
             body = extracted.body()
             if extracted.imports:
                 warnings.append("hoisted into the file: " + "; ".join(extracted.imports))
-            if extracted.unresolved:
-                warnings.append(
-                    "WARNING this definition also uses "
-                    + ", ".join(extracted.unresolved)
-                    + " from the session namespace, which is NOT in the saved file. "
-                    "Save those too, or inline them, or the tool will NameError when "
-                    "a later session loads it."
-                )
         if not body.strip():
             return (f"ERROR: no source found for {name!r}. Define it in the kernel first, "
                     "or pass the definition in `source`.")
+        missing = unbound_names(body)
+        if missing:
+            message = (
+                f"ERROR: {name!r} uses " + ", ".join(missing)
+                + ", which the file would not carry: a later session that loads it would "
+                "NameError. Save them as their own tools, inline them into this "
+                "definition, or pass the whole definition in `source`."
+            )
+            _kernel.render_event(context, level, message, style="bold red")
+            return _kernel.cap_for_model(message, context)
         report = "\n".join([write_revision(cwd, name, body, model=model,
                                            note=text_or_default(note), scope=scope),
                             *warnings])

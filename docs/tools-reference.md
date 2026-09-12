@@ -487,9 +487,12 @@ Each tool is one file with a machine-readable provenance header:
 
 `save` reads the definition out of the live kernel, resolves the free names it
 references against the kernel namespace, and prepends the `import` lines it needs
-so the saved file stands alone. Names it cannot resolve to a module (a sibling
-function, a module-level constant) come back as a `WARNING` naming them — a tool
-saved without them would `NameError` on the next session's `load`.
+so the saved file stands alone. A definition that still reads a name the file
+would not carry — a session constant, a sibling function, a client built in an
+earlier cell — is refused: the ERROR names every one of them and says to save
+them as their own tools, inline them, or pass a complete definition in `source`.
+Nothing is written and no revision is bumped by a refused save. The same check
+runs on an explicit `source`.
 
 `save` never overwrites: revision N is archived to `.history/<name>.rN.py` and
 N+1 is written. `restore` rolls back by writing the old body as a *new* revision,
