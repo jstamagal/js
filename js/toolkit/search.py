@@ -496,7 +496,7 @@ def browse(
         return "ERROR: url is required"
     binary = resolve_binary("obscura")
     if binary is None:
-        return "ERROR: obscura is not installed (expected in js/tools or on PATH)"
+        return "ERROR: obscura is not installed (expected in tools/bin or on PATH)"
     dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
     if dump not in _BROWSE_DUMPS:
         return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"

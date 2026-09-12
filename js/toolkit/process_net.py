@@ -27,6 +27,7 @@ from ..tool_binaries import (
     ARIA2_EXECUTABLE,
     DownloadError,
     download_with_aria2,
+    TOOLS_DIR,
     resolve_binary,
     warn_urllib_fallback,
 )
@@ -71,6 +72,13 @@ def shell(
         configured_allow = _ENV_ALLOW
     allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
     safe_env = {key: os.environ[key] for key in allowed if key in os.environ}
+    # The managed binaries are downloaded for a command to call by name, so the
+    # directory holding them leads PATH. Without this fd, bat and fzf are
+    # installed and unreachable.
+    if "PATH" in allowed:
+        managed_bin = str(TOOLS_DIR)
+        inherited = safe_env.get("PATH", "")
+        safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
     shell_path = _default_shell()
     shell_arg = "/C" if sys.platform == "win32" else "-c"
     cap = int(context.max_bash_output_bytes)

@@ -883,15 +883,15 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
 
 def test_warn_missing_binaries_once_per_binary(monkeypatch, capsys):
     monkeypatch.setattr(cli.shutil, "which", lambda name: None if name in {"rg", "fd"} else f"/bin/{name}")
-    monkeypatch.setattr(cli, "resolve_binary", lambda name: None if name == "rg" else f"/bin/{name}")
+    monkeypatch.setattr(cli, "resolve_binary", lambda name: None if name in {"rg", "fd"} else f"/bin/{name}")
     cli._warned_binaries.clear()
 
     cli._warn_missing_binaries()
     cli._warn_missing_binaries()
 
     err = capsys.readouterr().err
-    assert err.count("warning: rg not found in js/tools or PATH") == 1
-    assert err.count("warning: fd not found on PATH") == 1
+    assert err.count("warning: rg not found") == 1
+    assert err.count("warning: fd not found") == 1
     assert "bat not found" not in err
     assert "fzf not found" not in err
     assert "just install" in err

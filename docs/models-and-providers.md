@@ -389,9 +389,9 @@ export SHELL=/usr/bin/zsh
 
 Current behavior:
 
-- `fs_search` invokes the pinned `js/tools/rg` installed by `just install`,
+- `fs_search` invokes the pinned `tools/bin/rg` installed by `just install`,
   falling back to PATH only when the managed binary is absent.
-- `browse` likewise prefers the verified manual `js/tools/obscura` copy.
+- `browse` likewise prefers the verified manual `tools/bin/obscura` copy.
 - Byte transfers from `fetch` and the pinned tool installer resolve the system
   `aria2c` through the same managed-path-then-PATH resolver. Ordinary API calls
   and rendered browsing do not spawn it.

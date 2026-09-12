@@ -65,6 +65,6 @@ When not to use:
   looks.
 {{/if}}
 
-Uses the managed `js/tools/obscura` binary installed by `just install`. Before
+Uses the managed `tools/bin/obscura` binary installed by `just install`. Before
 installation it falls back to `obscura` on PATH and reports a plain ERROR when
 neither exists.

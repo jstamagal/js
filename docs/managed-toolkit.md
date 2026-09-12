@@ -1,6 +1,6 @@
 # Managed toolkit provisioning
 
-Toolkit executables belong to the checkout's `js/tools` directory. Runtime
+Toolkit executables belong to the checkout's `tools/bin` directory. Runtime
 resolution prefers these files to PATH; PATH availability must not substitute
 for provisioning. Archives and extracted executables are independently SHA-256
 pinned. Initial downloads can use Python's urllib without an installed aria2.
@@ -54,7 +54,7 @@ the verified subset. An incomplete toolkit is never reported as complete.
 
 ## Integrity, repair, and publication
 
-Archives are retained in `js/tools/.archives` under their SHA-256 plus asset
+Archives are retained in `tools/bin/.archives` under their SHA-256 plus asset
 name, verified before reuse. This avoids downloading large releases again to
 repair a worker. Executable and companion hashes and executable permissions
 are checked on every install. Missing/corrupt companions trigger repair even

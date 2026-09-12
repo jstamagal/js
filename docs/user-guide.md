@@ -329,7 +329,7 @@ The `shell` tool uses the configured operating-system shell:
 
 If the environment starts with `SHELL=/usr/bin/zsh`, `shell` is zsh-first. The
 Python harness does not itself require `fzf` or `bat`. `fs_search` invokes the
-pinned `js/tools/rg` installed by `just install`, falling back to PATH only
+pinned `tools/bin/rg` installed by `just install`, falling back to PATH only
 before that download has been run, and reports a plain ERROR when neither is
 present. Agents can still call `rg`, `fzf`, or `bat` through `shell` when those
 programs are installed and useful.

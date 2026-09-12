@@ -2403,7 +2403,7 @@ def _warn_missing_binaries() -> None:
         binary = resolve_binary(name)
         if binary is None:
             _warned_binaries.add(name)
-            expected_location = "in js/tools or PATH"
+            expected_location = "in tools/bin or PATH"
             print(
                 f"{C.ORANGE}warning: {name} not found {expected_location}; {why} — "
                 f"run `just install` to provision it{C.RESET}",

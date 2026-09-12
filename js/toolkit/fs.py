@@ -786,10 +786,10 @@ def _iter_files(root: Path) -> Iterable[Path]:
                 yield candidate
 
 
-_RG_MISSING = "ERROR: rg (ripgrep) not found in js/tools or PATH; run `just install` to provision it."
+_RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it."
 _RG_TIMEOUT_S = 120
 _AST_GREP_MISSING = (
-    "ERROR: ast-grep not found in js/tools or PATH; run `just install` to provision it."
+    "ERROR: ast-grep not found in tools/bin or PATH; run `just install` to provision it."
 )
 _AST_GREP_TIMEOUT_S = 120
 _AST_GREP_LANGUAGES = (

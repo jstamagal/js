@@ -18,7 +18,7 @@ node_modules/
 .claude/
 banks/
 /handoff/
-/js/tools/
+/tools/bin/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

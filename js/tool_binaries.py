@@ -1,7 +1,9 @@
 """Pinned, integrity-checked binaries owned by this js checkout.
 
-Runtime callers prefer ``js/tools/<name>`` and consult PATH only when the
-installer has not populated that file. Keeping that fallback here makes the
+They live in ``tools/bin`` beside the source, the one directory .gitignore has
+to cover, and ``shell`` puts it on PATH so a command can reach fd, bat and fzf
+by name. Runtime callers prefer ``tools/bin/<name>`` and consult PATH only when
+the installer has not populated that file. Keeping that fallback here makes the
 degraded behavior explicit while ensuring an installed tool is never resolved
 through PATH (notably, ``sg`` on this box is not ast-grep).
 """
@@ -29,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-TOOLS_DIR = Path(__file__).resolve().parent / "tools"
+TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
 class InstallError(RuntimeError):
     """A tool could not be installed without compromising reproducibility."""
 
@@ -47,7 +49,7 @@ class DownloadTool:
     # Sidecar files the executable will not run without, as
     # (archive member, installed name, sha256). obscura spawns obscura-worker
     # from its own directory, so installing the one binary alone produces a
-    # js/tools/obscura that resolve_binary() happily returns and that then
+    # tools/bin/obscura that resolve_binary() happily returns and that then
     # fails at render time.
     companions: tuple[tuple[str, str, str], ...] = ()
 

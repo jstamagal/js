@@ -15,7 +15,7 @@ requires_ast_grep = pytest.mark.skipif(
 
 
 def test_ast_search_resolves_the_managed_binary_and_reports_a_missing_one(tmp_path, monkeypatch):
-    """No absolute path may be baked in: js/tools first, PATH as the fallback."""
+    """No absolute path may be baked in: tools/bin first, PATH as the fallback."""
     (tmp_path / "a.py").write_text("f(1)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(fs, "_ast_grep_binary", lambda: None)

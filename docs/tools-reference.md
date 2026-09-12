@@ -130,7 +130,7 @@ more matches exist than `head_limit`, the result ends with a continuation note.
 ### `ast_search`
 
 Structural search and optional rewrite over parsed source code, backed by
-ast-grep 0.45.1 — the managed `js/tools/ast-grep` installed by `just install`,
+ast-grep 0.45.1 — the managed `tools/bin/ast-grep` installed by `just install`,
 falling back to `ast-grep` on PATH before that.
 
 Parameters:
@@ -263,7 +263,7 @@ Parameters:
 
 Private and localhost URLs are allowed automatically. This tool cannot render
 WebGL or take screenshots. `just install` downloads the pinned `obscura`
-release asset into `js/tools` — the stealth build, which carries TLS
+release asset into `tools/bin` — the stealth build, which carries TLS
 impersonation alongside the browser fingerprint — together with the
 `obscura-worker` binary it spawns. Before that install, the tool falls back to
 PATH.

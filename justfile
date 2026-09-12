@@ -49,6 +49,7 @@ commit:
 sync:
     uv sync --extra test {{ browser-extra }}
     just install-browser
+    just install-tool-binaries
 
 # drop into a shell with the project env active (uv owns the venv).
 shell:
@@ -57,7 +58,7 @@ shell:
 # install `js` onto PATH as launchers shebanged to a managed venv,
 # editable so they track the working tree (no reinstall after a code edit). uv
 # puts the launchers in its tool bin dir — usually ~/.local/bin. Also downloads
-# js's pinned CLI binaries into js/tools and provisions optional interactive
+# js's pinned CLI binaries into tools/bin and provisions optional interactive
 # helpers (fd/bat/fzf). `uv tool install` resolves from pyproject on its own,
 # so the recipe feeds it uv.lock as a constraints file: the tool venv gets the
 # same versions as `just run`'s env and reuses the wheels `just sync` already
@@ -89,6 +90,24 @@ install:
     ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
     just install-tool-binaries
     just install-browser
+    # put the managed binaries on the operator's PATH too. js itself resolves
+    # them by absolute path, but fd/bat/fzf are downloaded for a human and for
+    # other agents to call by name, and hunting for them is the whole problem.
+    # One marked block per rc file, appended once.
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        [ -f "$rc" ] || continue
+        if grep -q '# js tools PATH block begin' "$rc"; then
+            echo "ok: $rc already has the js tools PATH block"
+            continue
+        fi
+        {
+            echo ''
+            echo '# js tools PATH block begin'
+            echo "export PATH=\"$(pwd -P)/tools/bin:\$PATH\""
+            echo '# js tools PATH block end'
+        } >> "$rc"
+        echo "added the js tools PATH block to $rc"
+    done
     # verify the install took: whatever `js` PATH resolves must load code from
     # THIS working tree, or an old/foreign install is still answering.
     repo="$(pwd -P)"
@@ -112,9 +131,9 @@ install:
             ;;
     esac
 
-# Download js's pinned, checksummed subprocess binaries into js/tools. The
+# Download js's pinned, checksummed subprocess binaries into tools/bin. The
 # managed aria2c performs transfers after urllib bootstraps it.
-# download js's pinned, checksummed CLI binaries into js/tools.
+# download js's pinned, checksummed CLI binaries into tools/bin.
 install-tool-binaries:
     uv run {{ browser-extra }} python -m js.tool_binaries
 

@@ -40,7 +40,9 @@ def test_remove_login_refuses_to_overwrite_a_corrupt_file(tmp_logins_dir):
 
 def test_save_login_writes_atomically_with_no_leftover_temp_file(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="a", provider_api_key="k"))
-    names = {p.name for p in tmp_logins_dir.iterdir()}
+    # Files only: the suite's XDG isolation puts its own directories in this
+    # same tmp dir, and a half-written login would be a file beside the store.
+    names = {entry.name for entry in tmp_logins_dir.iterdir() if entry.is_file()}
     assert names == {"logins.toml"}
 
 
