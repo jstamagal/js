@@ -389,8 +389,10 @@ and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
 Both need `jupyter_client` and `ipykernel`, which are base dependencies —
-`just sync` installs them. Without them the tools return one ERROR naming the
-missing package instead of a traceback, and the rest of js is unaffected.
+`just install` puts them in the `js` on PATH, and `just sync` in this checkout's
+project venv. Without them the tools return one ERROR naming the missing package
+and the recipe that repairs the env js is running in, instead of a traceback,
+and the rest of js is unaffected.
 
 ### `kernel`
 

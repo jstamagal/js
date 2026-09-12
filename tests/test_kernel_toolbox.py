@@ -185,7 +185,8 @@ def test_a_missing_jupyter_package_becomes_one_error_naming_it(ctx, monkeypatch)
     result = kmod.kernel(code="1 + 1", context=ctx)
 
     assert result.startswith("ERROR: the kernel tool needs the jupyter_client package")
-    assert "pyproject.toml" in result and "just sync" in result
+    assert "pyproject.toml" in result
+    assert "just install" in result and "just sync" in result
     assert "Traceback" not in result
 
 
