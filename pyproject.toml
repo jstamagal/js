@@ -8,14 +8,10 @@ version = "0.1.0"
 description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
-    "ai[openai,anthropic]==0.4.2",
-    # `just install` constrains the tool venv to uv.lock, but keep the provider
-    # boundary pinned here too so a bare `uv tool install` or relock can't
-    # cross it: openai 3 switched to httpx2/httpcore2 and exposed a broken
-    # async-generator shutdown path.
-    "openai==2.44.0",
-    "anthropic==0.113.0",
-    "httpx==0.28.1",
+    "ai[openai,anthropic]>=0.5.2",
+    "openai>=3.13.0",
+    "anthropic>=1.5.0",
+    "httpx>=0.28.1",
     # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
     # not an extra: one box, one user, and a mode that half-installs is a mode
     # that fails at the worst moment. the tools still degrade to one clear ERROR
