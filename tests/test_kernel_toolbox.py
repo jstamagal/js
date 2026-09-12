@@ -173,6 +173,22 @@ def test_toolbox_rejects_a_body_that_does_not_parse_before_touching_disk(ctx):
     assert tbmod.discover(cwd)["adder"].revision == 1
 
 
+def test_the_shipped_example_is_seeded_once_and_an_edited_copy_is_left_alone(ctx):
+    cwd = Path(ctx.cwd)
+
+    first = tbmod.toolbox(action="list", context=ctx)
+    path = tbmod.toolbox_dirs(cwd)[0] / "word_frequencies.py"
+
+    assert "word_frequencies r1 [global] js" in first
+    assert path.is_file()
+
+    edited = "def word_frequencies(text, limit=1):\n    return [('mine', limit)]\n"
+    path.write_text(edited, encoding="utf-8")
+    tbmod.toolbox(action="list", context=ctx)
+
+    assert path.read_text(encoding="utf-8") == edited
+
+
 # ---------------------------------------------------------------------------
 # degradation, capping, verbosity — no kernel needed
 # ---------------------------------------------------------------------------
@@ -781,6 +797,16 @@ def test_the_toolbox_load_probe_reports_json_the_kernel_actually_produced(ctx):
     assert loaded == ["alpha"]
     assert problems == []
     assert json.loads(json.dumps(loaded)) == ["alpha"]
+
+
+@needs_kernel
+def test_the_shipped_example_loads_and_calls_cleanly_in_a_fresh_kernel(ctx):
+    report = tbmod.toolbox(action="load", context=ctx)
+
+    result = kmod.kernel(code="print(word_frequencies('a b a c a', limit=2))", context=ctx)
+
+    assert "word_frequencies r1 [global] js" in report
+    assert "[('a', 3), ('b', 1)]" in result
 
 
 def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shadows_it(ctx):

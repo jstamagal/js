@@ -173,6 +173,34 @@ def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
     return _paths.config_dir() / "toolbox", Path(cwd) / ".js" / "toolbox"
 
 
+_EXAMPLES = Path(__file__).with_name("toolbox_examples")
+
+
+def seed_examples() -> list[str]:
+    """Copy the shipped example tools into the global toolbox, once each.
+
+    A fresh box lists nothing, which reads as a broken tool rather than an empty
+    one. The copy lands in the same global directory `save` writes to; after that
+    the file belongs to the owner. It is never overwritten — editing it, or
+    deleting it, is not undone by the next run or by a reinstall.
+    """
+    if not _EXAMPLES.is_dir():
+        return []
+    global_dir = _paths.config_dir() / "toolbox"
+    seeded: list[str] = []
+    for path in sorted(_EXAMPLES.glob("*.py")):
+        target = global_dir / path.name
+        if target.exists():
+            continue
+        try:
+            global_dir.mkdir(parents=True, exist_ok=True)
+            target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            continue
+        seeded.append(path.stem)
+    return seeded
+
+
 @dataclass
 class ToolRecord:
     name: str
@@ -491,6 +519,11 @@ def toolbox(
 
     if verb not in ACTIONS:
         return f"ERROR: action must be one of {', '.join(ACTIONS)}"
+
+    # Both actions that show the box seed it first, so a fresh install lists the
+    # shipped example instead of nothing.
+    if verb in ("list", "load"):
+        seed_examples()
 
     if verb == "list":
         listing = describe(cwd)

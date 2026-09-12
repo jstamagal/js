@@ -498,6 +498,12 @@ runs on an explicit `source`.
 N+1 is written. `restore` rolls back by writing the old body as a *new* revision,
 so history is append-only and nothing is ever lost.
 
+One example tool ships with js, `word_frequencies` under
+`js/toolkit/toolbox_examples/`. The first `list` or `load` copies it into the
+global toolbox (`<config dir>/toolbox/word_frequencies.py`), so a fresh box has
+something to read; from then on it is the owner's file, and neither a later run
+nor a reinstall overwrites it.
+
 `load` execs every healthy tool file into the kernel, each inside its own
 try/except. One broken tool file costs that tool and reports it by name; the rest
 of the box loads. Files share one namespace, so a tool may call a sibling; a file

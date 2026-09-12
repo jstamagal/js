@@ -27,6 +27,11 @@ Parameters:
 chain of models that have worked on it. A file that will not parse is listed as
 `BROKEN` with the reason rather than being hidden.
 
+A fresh box is not empty: `js` ships one example tool, `word_frequencies`, and
+the first `list` or `load` copies it into the global toolbox. It is an ordinary
+tool from then on — edit it, refine it, or delete it. Nothing overwrites a copy
+that already exists, including a reinstall.
+
 `load` execs every healthy tool file into the kernel namespace, then reports
 what arrived. Each file is exec'd separately, so one broken tool costs you that
 tool and nothing else. Call this once at the start of a session, before you
