@@ -661,6 +661,25 @@ def test_load_reports_a_broken_tool_by_name_and_still_loads_the_healthy_ones(ctx
 
 
 @needs_kernel
+def test_a_tool_whose_module_level_calls_a_sibling_loads_whatever_its_name(ctx):
+    """Alphabetical order decides nothing: the sibling may sort after the caller."""
+    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    directory.mkdir(parents=True)
+    (directory / "leaf.py").write_text("def leaf(n):\n    return n + 1\n", encoding="utf-8")
+    (directory / "amodulelevel.py").write_text("VALUE = leaf(3)\n", encoding="utf-8")
+    (directory / "zsolo.py").write_text("SOLO = never_defined(1)\n", encoding="utf-8")
+
+    report = tbmod.toolbox(action="load", context=ctx)
+
+    assert "TOOLBOX loaded " in report
+    assert "amodulelevel r1 [global]" in report
+    assert "leaf r1 [global]" in report
+    assert "TOOLBOX BROKEN amodulelevel" not in report
+    assert "TOOLBOX BROKEN zsolo: NameError" in report
+    assert "4" in kmod.kernel(code="VALUE", context=ctx)
+
+
+@needs_kernel
 def test_save_refuses_a_definition_whose_free_name_lives_in_the_session(ctx):
     kmod.kernel(code=(
         "PREFIX = '>> '\n"

@@ -134,17 +134,34 @@ del __js_src
 
 # One round trip, per-file isolation preserved: the loop lives in the kernel so
 # a tool whose module-level code raises costs exactly that tool.
+# Every file execs into the same globals, so a tool may call a sibling. A file
+# whose module level needs one that has not loaded yet fails with NameError on
+# the first pass and is retried once the rest are in — the tool's own name never
+# decides whether it loads.
 _LOAD_PROBE = """
 def __js_load(payload):
     import json
     loaded, problems = [], []
-    for item_name, item_path, item_source in json.loads(payload):
-        try:
-            exec(compile(item_source, item_path, 'exec'), globals())
-        except BaseException as exc:
-            problems.append(item_name + ': ' + type(exc).__name__ + ': ' + str(exc))
-            continue
-        loaded.append(item_name)
+    remaining = list(json.loads(payload))
+    while remaining:
+        failed = []
+        for item_name, item_path, item_source in remaining:
+            try:
+                exec(compile(item_source, item_path, 'exec'), globals())
+            except NameError as exc:
+                failed.append((item_name, item_path, item_source, str(exc)))
+                continue
+            except BaseException as exc:
+                problems.append(item_name + ': ' + type(exc).__name__ + ': ' + str(exc))
+                continue
+            loaded.append(item_name)
+        if len(failed) == len(remaining):
+            # A whole round with nothing loaded: no sibling is coming, so these
+            # NameErrors are the tool's own.
+            for item_name, item_path, item_source, message in failed:
+                problems.append(item_name + ': NameError: ' + message)
+            break
+        remaining = [(name, path, source) for name, path, source, _ in failed]
     return json.dumps({'loaded': loaded, 'problems': problems})
 print('__JS_LOAD__' + __js_load(%(payload)r))
 del __js_load

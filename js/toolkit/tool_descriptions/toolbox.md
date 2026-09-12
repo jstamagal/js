@@ -32,6 +32,10 @@ what arrived. Each file is exec'd separately, so one broken tool costs you that
 tool and nothing else. Call this once at the start of a session, before you
 start writing code, so you build on what already exists.
 
+Every file lands in one shared namespace, so a tool may call a sibling. A file
+whose module-level code needs a sibling that has not loaded yet is retried after
+the rest are in, so what a tool is named never decides whether it loads.
+
 `save` reads the named definition out of the live kernel and writes it as the
 next revision. It never overwrites: the previous revision is archived first and
 stays restorable forever. A first save is `r1`; a save over an existing tool is

@@ -500,7 +500,9 @@ so history is append-only and nothing is ever lost.
 
 `load` execs every healthy tool file into the kernel, each inside its own
 try/except. One broken tool file costs that tool and reports it by name; the rest
-of the box loads.
+of the box loads. Files share one namespace, so a tool may call a sibling; a file
+whose module level needs a sibling that has not loaded yet is retried once the
+rest are in, so load order does not depend on the names sorting favourably.
 
 ### Rendering and verbosity
 
