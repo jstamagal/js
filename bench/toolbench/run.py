@@ -236,6 +236,29 @@ def find_toolstats(value) -> dict | None:
     return None
 
 
+def record_log_text(record: dict, dest: Path) -> str:
+    """The agent's captured stdout for one task.
+
+    RepoRacer references it through a top-level `logPath` instead of inlining it
+    in the result record. The saved `logs/` copy under `dest` keeps the text
+    readable after the work directory is cleared; the original path still wins
+    while it exists.
+    """
+    raw = record.get("logPath")
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    path = Path(raw)
+    candidates = [path, dest / "logs" / path.name]
+    if not path.is_absolute():
+        candidates.append(dest / path)
+    for candidate in candidates:
+        try:
+            return candidate.read_text("utf-8", errors="replace")
+        except OSError:
+            continue
+    return ""
+
+
 def collect(run_dir: Path, repo_name: str, out_dir: Path) -> list[dict]:
     dest = out_dir / "reporacer" / repo_name
     dest.mkdir(parents=True, exist_ok=True)
@@ -246,6 +269,9 @@ def collect(run_dir: Path, repo_name: str, out_dir: Path) -> list[dict]:
                 shutil.copy2(src, dest / name)
         for html in run_dir.glob("*.html"):
             shutil.copy2(html, dest / html.name)
+        logs = run_dir / "logs"
+        if logs.is_dir():
+            shutil.copytree(logs, dest / "logs", dirs_exist_ok=True)
     rows = []
     results = dest / "results.jsonl"
     if not results.exists():
@@ -268,7 +294,7 @@ def collect(run_dir: Path, repo_name: str, out_dir: Path) -> list[dict]:
                 "tests_passed": tests.get("passed"),
                 "hidden_passed": None if hidden.get("skipped") else hidden.get("passed"),
                 "duration_s": round((record.get("durationMs") or 0) / 1000, 1),
-                "toolstats": find_toolstats(record),
+                "toolstats": find_toolstats(record) or find_toolstats(record_log_text(record, dest)),
             }
         )
     return rows

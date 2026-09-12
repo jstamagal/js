@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,58 @@ def test_toolstats_line_is_found_inside_a_result_record():
     record = {"agentName": "js-full", "agent": {"output": "warning: bat not found\nTOOLSTATS " + json.dumps(stats) + "\n"}}
     assert run.find_toolstats(record) == stats
     assert run.find_toolstats({"output": "no stats here"}) is None
+
+
+def test_collect_joins_toolstats_from_the_reporacer_log_and_keeps_the_log(tmp_path):
+    source = tmp_path / "run"
+    saved = tmp_path / "saved"
+    (source / "logs").mkdir(parents=True)
+    stats = {"tool_calls": 7, "tool_errors": 1, "calls_by_tool": {"read": 7}}
+    log = source / "logs" / "task-001-agent.log"
+    log.write_text("TOOLSTATS " + json.dumps(stats) + "\n", encoding="utf-8")
+    record = {
+        "taskId": "task-001",
+        "agentName": "agent",
+        "status": "completed",
+        "scores": {"solved": True, "final": 90},
+        "logPath": str(log),
+    }
+    (source / "results.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    rows = run.collect(source, "example", saved)
+
+    assert rows[0]["toolstats"]["tool_calls"] == 7
+    assert (saved / "reporacer" / "example" / "logs" / log.name).is_file()
+    assert "| task-001 | agent | completed | yes | - | 0 | 7 | read 7 |" in run.summarize(rows)
+
+
+def test_report_regeneration_reads_toolstats_after_the_workspace_is_removed(tmp_path):
+    source = tmp_path / "run"
+    saved = tmp_path / "saved"
+    (source / "logs").mkdir(parents=True)
+    stats = {"tool_calls": 7, "calls_by_tool": {"read": 7}}
+    log = source / "logs" / "task-001-agent.log"
+    log.write_text("TOOLSTATS " + json.dumps(stats) + "\n", encoding="utf-8")
+    record = {"taskId": "task-001", "agentName": "agent", "status": "completed", "logPath": str(log)}
+    (source / "results.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    run.collect(source, "example", saved)
+    shutil.rmtree(source)
+
+    rows = run.collect(saved / "reporacer" / "example", "example", saved)
+
+    assert rows[0]["toolstats"]["tool_calls"] == 7
+
+
+def test_collect_keeps_inline_toolstats_when_the_record_carries_them(tmp_path):
+    source = tmp_path / "run"
+    source.mkdir()
+    stats = {"tool_calls": 3}
+    record = {"taskId": "task-001", "agentName": "agent", "output": "TOOLSTATS " + json.dumps(stats)}
+    (source / "results.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    rows = run.collect(source, "example", tmp_path / "saved")
+
+    assert rows[0]["toolstats"] == stats
 
 
 def test_summary_table_aggregates_per_agent():
