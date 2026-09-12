@@ -137,7 +137,14 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
                 return copied
             embed = f"![[{copied.name}]]"
         rc, out, err = run(["tesseract", str(p), "stdout"], context)
-        ocr = f"\n--- OCR (tesseract) ---\n{out.strip()}" if rc == 0 and out.strip() else ""
+        if rc == 0 and out.strip():
+            ocr = f"\n--- OCR (tesseract) ---\n{out.strip()}"
+        elif rc == 127:
+            ocr = "\n--- OCR unavailable: tesseract is not installed ---"
+        elif rc != 0:
+            ocr = f"\n--- OCR unavailable: tesseract exited {rc}: {err.strip()[:200]} ---"
+        else:
+            ocr = "\n--- OCR (tesseract) found no text in this image ---"
         return f"MEDIA image. embed: {embed}{ocr}"
     if ext in AV_EXT:
         embed = "(pass vault= to copy into assets/)"

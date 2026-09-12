@@ -485,7 +485,11 @@ Installed wiki agents use three deterministic native operations:
 ### `wiki_convert`
 
 Converts text, structured documents, PDFs, office files, images, and media into
-model-readable text or a vault asset embed.
+model-readable text or a vault asset embed. Images are OCR'd with `tesseract`
+when it is installed; a missing or failed `tesseract` is reported as OCR
+unavailable. Images and media are copied into `<vault>/assets/` when `vault` is
+given, or into the nearest ancestor directory with a `PURPOSE.md`; with neither,
+no copy is made.
 
 ### `wiki_write`
 

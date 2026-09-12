@@ -6,6 +6,7 @@ from pathlib import Path
 from js.toolkit import ToolContext
 from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
+from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
@@ -297,6 +298,45 @@ def test_wiki_convert_reads_text_and_structured_files_and_copies_media(tmp_path,
     assert image_actual == "MEDIA image. embed: ![[photo.png]]\n--- OCR (tesseract) ---\nocr words"
     assert (vault / "assets" / "photo.png").read_bytes() == b"fake-png-bytes"
     assert run_calls == [["tesseract", str(image), "stdout"]]
+
+
+def test_wiki_convert_copies_into_a_vault_discovered_from_purpose_md(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    image = vault / "inbox" / "shot.png"
+    image.parent.mkdir()
+    image.write_bytes(b"fake-png-bytes")
+    monkeypatch.setattr(wiki_convert_module, "run", lambda cmd, context: (0, "", ""))
+
+    result = wiki_convert(str(image), context=_ctx(tmp_path))
+
+    assert result.startswith("MEDIA image. embed: ![[shot.png]]")
+    assert (vault / "assets" / "shot.png").read_bytes() == b"fake-png-bytes"
+
+
+def test_wiki_convert_reports_ocr_unavailable_instead_of_a_bare_embed(tmp_path, monkeypatch):
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"fake-png-bytes")
+    monkeypatch.setattr(
+        wiki_convert_module, "run", lambda cmd, context: (127, "", "command not found: tesseract")
+    )
+
+    result = wiki_convert(str(image), context=_ctx(tmp_path))
+
+    assert result.startswith("MEDIA image.")
+    assert "OCR unavailable" in result
+    assert "tesseract" in result
+    assert not (tmp_path / "assets").exists()
+
+
+def test_wiki_convert_description_names_formats_and_discloses_copy_and_ocr(tmp_path):
+    description = load_description("wiki_convert")
+
+    first_line = description.split("\n", 1)[0]
+    assert "PDF" in first_line
+    assert "image" in first_line
+    assert "PURPOSE.md" in description
+    assert "tesseract" in description
 
 
 def test_wiki_convert_reads_a_long_jsonl_file_in_full(tmp_path):
