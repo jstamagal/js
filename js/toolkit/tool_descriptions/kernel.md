@@ -82,6 +82,10 @@ Practical notes:
   `loop.run_until_complete(...)` raise `RuntimeError: This event loop is already
   running` there, and `await` is the fix. Patch nothing: loop-patching libraries
   are not needed, and `import nest_asyncio` fails in a cell.
+- Close the async clients you open. Construct the client inside the function,
+  wrap the work in `try`/`finally`, and `await client.aclose()` in the `finally`.
+  A client left open keeps printing `Unclosed client session` onto kernel stderr,
+  and that reaches you in a later result.
 - Cells run in the interpreter that runs js: the uv tool environment of a
   `just install`-ed `js`, the project venv under `just run`. Modules installed
   in some other project's venv are not importable here, so check

@@ -50,3 +50,8 @@ What belongs in the toolbox: self-contained functions and classes with clear
 inputs and outputs. What does not: throwaway one-liners, anything holding a
 credential, and anything whose behaviour depends on state left in one particular
 session's namespace.
+
+A saved tool that uses an async client owns closing it. Construct the client
+inside the function, wrap the body in `try`/`finally`, and `await
+client.aclose()` in the `finally`; a client left open keeps printing `Unclosed
+client session` onto kernel stderr, which lands in a later result.

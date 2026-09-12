@@ -423,6 +423,50 @@ def test_a_cell_blocked_on_the_kernels_own_loop_returns_a_handle_and_recovers(ct
 
 
 @needs_kernel
+def test_a_saved_async_tool_that_closes_its_client_leaves_no_unclosed_warning(ctx):
+    """The cleanup pattern the kernel and toolbox descriptions ask for."""
+    source = (
+        "import sys\n"
+        "\n"
+        "class _Client:\n"
+        "    def __init__(self):\n"
+        "        self.closed = False\n"
+        "\n"
+        "    async def ping(self):\n"
+        "        return 'pong'\n"
+        "\n"
+        "    async def aclose(self):\n"
+        "        self.closed = True\n"
+        "\n"
+        "    def __del__(self):\n"
+        "        if not self.closed:\n"
+        "            print('Unclosed client session', file=sys.stderr)\n"
+        "\n"
+        "async def ask():\n"
+        "    client = _Client()\n"
+        "    try:\n"
+        "        return await client.ping()\n"
+        "    finally:\n"
+        "        await client.aclose()\n"
+    )
+    tbmod.toolbox(action="save", name="ask", note="closes its client",
+                  source=source, context=ctx)
+    tbmod.toolbox(action="load", context=ctx)
+
+    closed = kmod.kernel(code="print(await ask())", context=ctx)
+    leaked = kmod.kernel(code=(
+        "async def leaky():\n"
+        "    client = _Client()\n"
+        "    await client.ping()\n"
+        "    del client\n"
+        "print(await leaky())\n"
+    ), context=ctx)
+
+    assert "pong" in closed and "Unclosed" not in closed
+    assert "Unclosed client session" in leaked
+
+
+@needs_kernel
 def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
     kmod.kernel(code="def gone():\n    pass\ndef stays():\n    pass\n", context=ctx)
 
