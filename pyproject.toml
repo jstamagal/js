@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "js"
-version = "0.1.0"
+version = "0.2.0"
 description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
@@ -63,7 +63,11 @@ markers = [
 # venv PATH and js agents can call it through the shell tool directly.
 [dependency-groups]
 dev = [
-    "ruff>=0.15",
+    # 0.16 turned on opinion rules by default (BLE001 blind-except, TRY004,
+    # S110 try-except-pass, PLW1510 subprocess check) plus I001 import sorting:
+    # 282 hits on unchanged code, none of them defects. This repo's gate is
+    # defaults + UP. Raise the bound deliberately, with the cleanup.
+    "ruff>=0.15,<0.16",
 ]
 
 [tool.ruff]
