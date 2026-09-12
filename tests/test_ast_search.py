@@ -157,6 +157,20 @@ def test_ast_search_surfaces_a_parse_warning_instead_of_a_clean_no_match(tmp_pat
 
 
 @requires_ast_grep
+def test_ast_search_c_call_patterns_need_an_expression_statement_or_cpp(tmp_path):
+    """tree-sitter-c reads a bare `foo($A)` fragment as a type, not a call, so a
+    call-shaped pattern matches only written as an expression statement or
+    parsed with the C++ grammar — the two forms the description names."""
+    target = tmp_path / "main.c"
+    target.write_text("int main(void) { foo(1); return 0; }\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    assert ast_search("foo($A)", path=str(target), lang="C", context=context) == "(no matches)"
+    assert "foo(1)" in ast_search("foo($A);", path=str(target), lang="C", context=context)
+    assert "foo(1)" in ast_search("foo($A)", path=str(target), lang="Cpp", context=context)
+
+
+@requires_ast_grep
 def test_ast_search_marks_results_truncated_at_max_results(tmp_path):
     target = tmp_path / "code.py"
     target.write_text("".join(f"foo({index})\n" for index in range(5)), encoding="utf-8")

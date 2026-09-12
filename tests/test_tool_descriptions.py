@@ -87,6 +87,13 @@ def test_ast_search_description_says_the_walk_crosses_mount_points():
     assert "--one-file-system" in description
 
 
+def test_ast_search_description_discloses_the_c_bare_call_pattern_limit():
+    description = " ".join(descriptions.load_description("ast_search").split())
+
+    assert "call($A);" in description
+    assert "Cpp" in description
+
+
 
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()
