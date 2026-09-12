@@ -396,6 +396,33 @@ def test_a_cell_awaits_at_top_level_without_a_loop_patch_and_has_no_nest_asyncio
 
 
 @needs_kernel
+def test_a_cell_blocked_on_the_kernels_own_loop_returns_a_handle_and_recovers(ctx):
+    """The #101 wedge shape: a sync wrapper waiting on this kernel's own loop."""
+    ctx.kernel_wait_seconds = 1
+    kmod.kernel(code=(
+        "import asyncio\n"
+        "def blocked():\n"
+        "    loop = asyncio.get_event_loop()\n"
+        "    return asyncio.run_coroutine_threadsafe(asyncio.sleep(0.5), loop).result()\n"
+    ), context=ctx)
+
+    wedged = kmod.kernel(code="blocked()", context=ctx)
+
+    assert wedged.splitlines()[-1].endswith(" RUNNING")
+    refused = kmod.kernel(code="print('next')", context=ctx)
+    assert "the previous cell is still running (blocked())" in refused
+
+    stopped = kmod.kernel(action="interrupt", context=ctx)
+    assert "KeyboardInterrupt" in stopped
+    assert stopped.splitlines()[-1].startswith("NAMESPACE ")
+
+    after = kmod.kernel(
+        code="import asyncio\nawait asyncio.sleep(0.1)\nprint('loop answers')", context=ctx)
+
+    assert "loop answers" in after
+
+
+@needs_kernel
 def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
     kmod.kernel(code="def gone():\n    pass\ndef stays():\n    pass\n", context=ctx)
 

@@ -57,6 +57,12 @@ Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
 that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that
 submitted the cell — stops the cell exactly like Ctrl-C in a notebook: the
 namespace and everything in it survive, and the result carries the traceback.
+A cell that waits on the kernel's own loop — `run_coroutine_threadsafe(...)
+.result()` is the usual shape, and a nested `loop.run_until_complete(...)` under
+a loop patch does the same — blocks until it is interrupted, but it cannot wedge
+the tool: the submitting call returns a handle, the next `code` is refused with
+`the previous cell is still running`, `action="interrupt"` stops it, and the next
+cell's `await` is served.
 The one cell SIGINT cannot stop is one blocked in a syscall that ignores it, a
 network call stuck on a dead resolver being the usual case; only
 `restart=true` clears that, and a later call reports the cell as still running

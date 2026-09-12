@@ -449,6 +449,16 @@ venv is not importable in a cell. To add a package to the kernel's environment,
 read `sys.executable` in a cell and install with
 `uv pip install --python <that path> <package>`.
 
+Cells run inside a live asyncio loop: `await` works at cell top level,
+`asyncio.run(...)` and `loop.run_until_complete(...)` raise `RuntimeError: This
+event loop is already running` in a cell, and `import nest_asyncio` fails there.
+A cell that waits on the kernel's own loop — a sync wrapper calling
+`run_coroutine_threadsafe(...).result()` is the shape reproduced from the
+2026-08-11 session — blocks until it is interrupted, and the tool returns a
+handle for it instead of stalling the turn; the next `code` is refused as still
+running, and `action="interrupt"` clears it. `restart` is only for a cell stuck
+in a syscall SIGINT cannot reach.
+
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.
 
