@@ -1343,8 +1343,13 @@ def ast_search(
         return f"ERROR: not a regular file or directory: {root}"
 
     limit = int_or_default(max_results, 100, minimum=1)
-    cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit))
-    if not apply and cache_key in context.search_cache:
+    # Mirror fs_search: a directory's own stat does not move when a nested file
+    # changes, so a directory-root result cannot be vouched for by the root's
+    # stamp; only a regular-file root is memoized, keyed on its stamp.
+    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    stamp = _stat_stamp(root) if memoized else None
+    cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit, stamp))
+    if memoized and not apply and cache_key in context.search_cache:
         return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
 
     binary = _ast_grep_binary()
@@ -1372,7 +1377,8 @@ def ast_search(
             out += "\n[additional matches omitted; increase max_results to see them]"
         if warning:
             out = f"{warning}\n{out}"
-        context.search_cache[cache_key] = out
+        if memoized:
+            context.search_cache[cache_key] = out
         return out
 
     prepared = _prepare_ast_rewrite(visible, context)
@@ -1385,7 +1391,8 @@ def ast_search(
         out = _cap_ast_output(out, context)
         if warning:
             out = f"{warning}\n{out}"
-        context.search_cache[cache_key] = out
+        if memoized:
+            context.search_cache[cache_key] = out
         return out
     if overflow:
         return (
