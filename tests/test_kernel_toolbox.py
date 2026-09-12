@@ -325,6 +325,13 @@ def test_the_kernel_description_names_the_interpreter_cells_run_in():
     assert "uv pip install --python" in text
 
 
+def test_the_kernel_description_points_at_await_instead_of_nest_asyncio():
+    text = build_default_registry().resolve("kernel").description
+
+    assert "await" in text
+    assert "nest_asyncio" in text
+
+
 def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
     import yaml
 
@@ -372,6 +379,20 @@ def test_cells_run_in_the_interpreter_running_js(ctx):
     result = kmod.kernel(code="import sys\nprint(sys.executable)", context=ctx)
 
     assert sys.executable in result
+
+
+@needs_kernel
+def test_a_cell_awaits_at_top_level_without_a_loop_patch_and_has_no_nest_asyncio(ctx):
+    awaited = kmod.kernel(code=(
+        "import asyncio\n"
+        "async def ping():\n"
+        "    return 'pong'\n"
+        "print(await ping())\n"
+    ), context=ctx)
+    missing = kmod.kernel(code="import nest_asyncio", context=ctx)
+
+    assert "pong" in awaited and "NAMESPACE ping" in awaited
+    assert "ModuleNotFoundError" in missing and "nest_asyncio" in missing
 
 
 @needs_kernel

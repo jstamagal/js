@@ -71,6 +71,11 @@ Practical notes:
   scripts: you keep the intermediate state.
 - Prefer defining a named function over pasting the same block twice. A named
   function shows up in `NAMESPACE` and stays callable.
+- Cells run inside a live asyncio event loop. `await` works at cell top level,
+  so `async def` helpers are awaited directly; `asyncio.run(...)` and
+  `loop.run_until_complete(...)` raise `RuntimeError: This event loop is already
+  running` there, and `await` is the fix. Patch nothing: loop-patching libraries
+  are not needed, and `import nest_asyncio` fails in a cell.
 - Cells run in the interpreter that runs js: the uv tool environment of a
   `just install`-ed `js`, the project venv under `just run`. Modules installed
   in some other project's venv are not importable here, so check
