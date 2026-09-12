@@ -14,6 +14,7 @@ TOOLSTATS line each js agent prints, and writes a summary.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shutil
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tomllib
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -29,6 +31,30 @@ from urllib.parse import urlsplit, urlunsplit
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 SANDBOX = HERE / "sandbox.sh"
+
+
+@contextmanager
+def workspace_lock(work_dir: Path):
+    """Own a work directory's RepoRacer state for the life of one run.
+
+    The clones, each repo's `.reporacer/config.json`, and RepoRacer's last-run
+    pointer all live under the work directory. A second run that shares it would
+    rewrite the agent list before the first RepoRacer consumes it, so a second
+    claim is rejected before anything is touched.
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(work_dir / ".toolbench.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(
+                f"toolbench: {work_dir} is already in use by another run; "
+                "pass a distinct --work directory"
+            ) from None
+        yield
+    finally:
+        os.close(fd)
 
 
 def load_suite(path: Path) -> dict:
@@ -348,11 +374,12 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("toolbench: reporacer not on PATH (npm install -g reporacer)")
 
     if args.mine:
-        for repo in repos:
-            repo_dir = ensure_repo(repo, work_dir, int(repo.get("lookback", suite["miner"]["lookback"])))
-            write_config(repo_dir, suite, repo, agents, tasks, work_dir / "telemetry")
-            print(f"\n==== {repo['name']}  ({repo['category']})")
-            print(mine(repo_dir, tasks), end="")
+        with workspace_lock(work_dir):
+            for repo in repos:
+                repo_dir = ensure_repo(repo, work_dir, int(repo.get("lookback", suite["miner"]["lookback"])))
+                write_config(repo_dir, suite, repo, agents, tasks, work_dir / "telemetry")
+                print(f"\n==== {repo['name']}  ({repo['category']})")
+                print(mine(repo_dir, tasks), end="")
         return 0
 
     if any(agent.get("kind") == "js" for agent in agents):
@@ -394,15 +421,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"toolbench: results -> {out_dir}", flush=True)
 
     rows: list[dict] = []
-    for repo in repos:
-        repo_dir = ensure_repo(repo, work_dir, int(repo.get("lookback", suite["miner"]["lookback"])))
-        write_config(repo_dir, suite, repo, agents, tasks, telemetry_dir / repo["name"])
-        run_dir = run_repo(repo_dir, agents, tasks, env)
-        if run_dir is None:
-            print(f"toolbench: {repo['name']}: no run recorded", file=sys.stderr)
-            continue
-        rows.extend(collect(run_dir, repo["name"], out_dir))
-        write_summary(rows, out_dir)
+    with workspace_lock(work_dir):
+        for repo in repos:
+            repo_dir = ensure_repo(repo, work_dir, int(repo.get("lookback", suite["miner"]["lookback"])))
+            write_config(repo_dir, suite, repo, agents, tasks, telemetry_dir / repo["name"])
+            run_dir = run_repo(repo_dir, agents, tasks, env)
+            if run_dir is None:
+                print(f"toolbench: {repo['name']}: no run recorded", file=sys.stderr)
+                continue
+            rows.extend(collect(run_dir, repo["name"], out_dir))
+            write_summary(rows, out_dir)
     return 0 if rows else 1
 
 

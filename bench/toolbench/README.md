@@ -29,3 +29,7 @@ just toolbench --agents claude,js-full
 Model server: `suite.toml` `[model]` or `TOOLBENCH_BASE_URL` / `TOOLBENCH_MODEL`.
 Results land in `results/<stamp>/` with `summary.md`, `summary.json`, RepoRacer's
 `results.jsonl` and HTML report per repo, and every js session under `telemetry/`.
+
+One run owns its work directory at a time: the clones and each repo's
+`.reporacer/config.json` are shared mutable state, so a second run using the
+same `--work` is rejected before it can rewrite them.

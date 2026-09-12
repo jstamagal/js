@@ -50,6 +50,33 @@ def test_install_and_test_commands_are_wrapped_for_the_sandbox():
     assert "'\\''pytest<9'\\''" in wrapped  # inner single quotes survive the outer quoting
 
 
+def test_a_second_run_cannot_rewrite_the_shared_reporacer_config(tmp_path):
+    work = tmp_path / "work"
+    suite = run.load_suite(RUNNER.with_name("suite.toml"))
+    repo = suite["repos"][0]
+    repo_dir = work / "repos" / repo["name"]
+    (repo_dir / ".reporacer").mkdir(parents=True)
+    config = repo_dir / ".reporacer" / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    first_arm, second_arm = suite["agents"][:2]
+
+    with run.workspace_lock(work):
+        run.write_config(repo_dir, suite, repo, [first_arm], 1, work / "telemetry-first")
+        selected = json.loads(config.read_text(encoding="utf-8"))["agents"]
+
+        with pytest.raises(SystemExit):
+            with run.workspace_lock(work):
+                run.write_config(repo_dir, suite, repo, [second_arm], 1, work / "telemetry-second")
+
+        assert json.loads(config.read_text(encoding="utf-8"))["agents"] == selected
+
+
+def test_distinct_work_directories_do_not_contend(tmp_path):
+    with run.workspace_lock(tmp_path / "first"):
+        with run.workspace_lock(tmp_path / "second"):
+            pass
+
+
 def test_base_url_hostnames_become_ips_for_the_container():
     assert run.resolve_base_url("http://10.1.2.3:8080/v1") == "http://10.1.2.3:8080/v1"
     assert run.resolve_base_url("http://localhost:42069/v1") == "http://127.0.0.1:42069/v1"
