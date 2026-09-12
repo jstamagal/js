@@ -92,20 +92,20 @@ DOWNLOAD_TOOLS = (
     DownloadTool(
         name="obscura",
         executable="obscura",
-        version="0.2.0",
+        version="0.2.2",
         asset="obscura-x86_64-linux-stealth.tar.gz",
         url=(
-            "https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.0/"
+            "https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.2/"
             "obscura-x86_64-linux-stealth.tar.gz"
         ),
-        asset_sha256="4b0fe0ff32a2e17e33b1e3d67bfb06e8f4d875bdffa86aa766277232422dfde7",
+        asset_sha256="faf46c28948c10c6d44d6f46faad577adba43d63bb19b83cdb92a5e22bdd5da1",
         archive_member="obscura",
-        executable_sha256="bde140f54b90bf064335a017780ae1d3bd33f69ccdbc7f954a63b5f43db7c723",
+        executable_sha256="0e30b1ee35e3f3f291fed3cc55f7284964c8c741dcc24de1b171fcefa3444cdf",
         companions=(
             (
                 "obscura-worker",
                 "obscura-worker",
-                "4aa754d1d463a3fb8d3a192ec83f193c77ed31e6842cbac5478daaa2568c8d5f",
+                "34edfd3c79c45f04e86a8bae6994956b06d611cb5951d9b497ef91f449541321",
             ),
         ),
     ),

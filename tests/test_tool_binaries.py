@@ -140,10 +140,14 @@ def test_obscura_is_pinned_to_the_stealth_release_asset() -> None:
     spec = next(tool for tool in tool_binaries.DOWNLOAD_TOOLS if tool.name == "obscura")
 
     assert spec.asset == "obscura-x86_64-linux-stealth.tar.gz"
-    assert spec.url.startswith("https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.0/")
-    assert spec.executable_sha256 == (
-        "bde140f54b90bf064335a017780ae1d3bd33f69ccdbc7f954a63b5f43db7c723"
+    assert spec.url == (
+        "https://github.com/h4ckf0r0day/obscura/releases/download/"
+        f"v{spec.version}/{spec.asset}"
     )
+    # Which version is pinned is a bump away; that both checksums are present
+    # is what keeps the download verified.
+    assert len(spec.asset_sha256) == 64
+    assert len(spec.executable_sha256) == 64
 
 
 def test_obscura_installs_the_worker_it_cannot_run_without(tmp_path: Path) -> None:

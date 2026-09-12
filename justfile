@@ -290,6 +290,16 @@ upgrade:
 deps-outdated:
     uv lock --upgrade --dry-run
 
+# report pinned managed binaries that trail their project's latest release.
+# exits non-zero when any is stale, so it reads like deps-fresh does.
+tools-outdated:
+    uv run python scripts/refresh_tool_releases.py --check
+
+# re-pin every managed binary to its latest release: downloads each platform's
+# asset, hashes it and the executable inside, and rewrites the pins. Needs gh.
+tools-upgrade:
+    uv run python scripts/refresh_tool_releases.py
+
 # remove all generated/local build state (all of it is gitignored).
 clean:
     -rm -rf build dist .coverage coverage.xml htmlcov .pytest_cache .ruff_cache
