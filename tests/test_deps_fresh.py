@@ -1,7 +1,7 @@
 """Pin the justfile freshness gate against a throwaway repo.
 
-The gate counts commits since uv.lock last changed, so the test builds its own
-history with a known number of commits rather than reading this checkout's.
+The gate measures days since uv.lock last changed, so the test backdates its
+own commit rather than reading this checkout's history.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -41,15 +42,28 @@ def _commit(repo: Path, message: str) -> None:
     _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message)
 
 
-def _repo_with_commits_since_lock(tmp_path: Path, commits: int) -> Path:
+def _repo_with_lock_committed_days_ago(tmp_path: Path, days: int) -> Path:
+    """A repo whose uv.lock commit is dated `days` ago, with newer work on top.
+
+    The gate reads uv.lock's own commit date, so the later commit proves a busy
+    day cannot make a freshly relocked tree look stale.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
-    _commit(repo, "lock")
-    for index in range(commits):
-        (repo / "work.txt").write_text(f"{index}\n", encoding="utf-8")
-        _commit(repo, f"change {index}")
+    _git(repo, "add", "-A")
+    # GIT_COMMITTER_DATE wants a real timestamp, not an approxidate phrase.
+    stamp = f"{int(time.time()) - days * 86400} +0000"
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "lock"],
+        cwd=repo,
+        env={**os.environ, **GIT_IDENTITY,
+             "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp},
+        capture_output=True, text=True, check=True,
+    )
+    (repo / "work.txt").write_text("x\n", encoding="utf-8")
+    _commit(repo, "work today")
     return repo
 
 
@@ -70,27 +84,27 @@ def _run_deps_fresh(repo: Path, *flags: str) -> subprocess.CompletedProcess[str]
     )
 
 
-def test_four_commits_since_lock_pass(tmp_path: Path):
-    repo = _repo_with_commits_since_lock(tmp_path, 4)
+def test_a_lock_changed_today_is_fresh(tmp_path: Path):
+    repo = _repo_with_lock_committed_days_ago(tmp_path, 0)
 
     result = _run_deps_fresh(repo)
 
     assert result.returncode == 0
 
 
-def test_five_commits_since_lock_fail(tmp_path: Path):
-    repo = _repo_with_commits_since_lock(tmp_path, 5)
+def test_a_lock_untouched_past_the_limit_fails(tmp_path: Path):
+    repo = _repo_with_lock_committed_days_ago(tmp_path, 30)
 
     result = _run_deps_fresh(repo)
 
     assert result.returncode == 1
-    assert "5" in result.stderr
-    assert "stale" in result.stderr
+    assert "30 days" in result.stderr
+    assert "just upgrade" in result.stderr
 
 
-def test_raised_limit_allows_five_commits(tmp_path: Path):
-    repo = _repo_with_commits_since_lock(tmp_path, 5)
+def test_a_raised_limit_accepts_an_older_lock(tmp_path: Path):
+    repo = _repo_with_lock_committed_days_ago(tmp_path, 30)
 
-    result = _run_deps_fresh(repo, "--set", "deps-stale-limit", "10")
+    result = _run_deps_fresh(repo, "--set", "deps-stale-days", "60")
 
     assert result.returncode == 0

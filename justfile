@@ -217,8 +217,10 @@ test-wiki:
 # dynamic codebase (ToolContext dynamic attrs, **kwargs splats, implicit
 # optionals) with ~115 unactionable errors — not a useful gate here.
 
-# commits since uv.lock last changed; at this many the freshness gate fails.
-deps-stale-limit := "5"
+# days since uv.lock last changed; at this many the freshness gate fails.
+# Days, not commits: a busy afternoon puts 20 commits on top of a lock that
+# was relocked that morning, and a commit count calls that stale.
+deps-stale-days := "14"
 
 # ruff check: errors + pyflakes (defaults) + pyupgrade.
 lint:
@@ -238,28 +240,23 @@ fix:
 format:
     uv run {{ browser-extra }} ruff format .
 
-# fail once uv.lock trails HEAD by deps-stale-limit commits.
+# fail once uv.lock has gone deps-stale-days without changing.
 deps-fresh:
     #!/usr/bin/env bash
     set -euo pipefail
-    limit="{{ deps-stale-limit }}"
+    limit="{{ deps-stale-days }}"
     # an empty hash means uv.lock has never been committed: stale by definition.
-    base="$(git log -1 --format=%H -- uv.lock 2>/dev/null || true)"
-    if [ -z "$base" ]; then
-        n="$(git rev-list --count HEAD 2>/dev/null || printf '%s' 0)"
-        stale=1
-    else
-        n="$(git rev-list --count "$base..HEAD")"
-        stale=""
-        if [ "$n" -ge "$limit" ]; then
-            stale=1
-        fi
-    fi
-    if [ -n "$stale" ]; then
-        echo "uv.lock is $n commits stale (limit $limit): run \`just upgrade\`, then run the suites and bump the version in pyproject.toml." >&2
+    changed="$(git log -1 --format=%ct -- uv.lock 2>/dev/null || true)"
+    if [ -z "$changed" ]; then
+        echo "uv.lock is not committed: run \`just upgrade\`, then run the suites and bump the version in pyproject.toml." >&2
         exit 1
     fi
-    echo "deps fresh ($n commits since uv.lock changed)."
+    days=$(( ( $(date +%s) - changed ) / 86400 ))
+    if [ "$days" -ge "$limit" ]; then
+        echo "uv.lock has not changed in $days days (limit $limit): run \`just upgrade\` and \`just tools-upgrade\`, then run the suites and bump the version in pyproject.toml." >&2
+        exit 1
+    fi
+    echo "deps fresh (uv.lock changed $days days ago)."
 
 # quality gate = lint + dependency freshness. stops at the first failure.
 check: lint deps-fresh
