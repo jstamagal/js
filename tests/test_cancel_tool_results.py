@@ -131,3 +131,62 @@ def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_pa
     assert next(m["content"] for m in healed if m.get("tool_call_id") == "f2") == (
         "ERROR: tool result was not recorded (session interrupted)"
     )
+
+
+def test_cancel_interrupts_a_kernel_cell_left_in_flight(tmp_path, monkeypatch):
+    """A cancelled turn SIGINTs the cell before the worker running it is drained.
+
+    The worker thread cannot be cancelled, so without this the cell would keep
+    executing in the kernel and the next `kernel` call would queue behind it.
+    """
+    from js.toolkit import kernel as kernel_tool
+
+    class StubSession:
+        def __init__(self) -> None:
+            self.interrupts = 0
+            handle = kernel_tool.CellHandle(id="1", msg_id="m1", code="slow()", started=0.0)
+            self.handles = {handle.id: handle}
+            self.current = handle.id
+
+        def alive(self) -> bool:
+            return True
+
+        def interrupt(self) -> None:
+            self.interrupts += 1
+
+    session = StubSession()
+    context = ToolContext(cwd=tmp_path)
+    context.kernel_session = session
+    messages = [{"role": "user", "content": "run"}]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow(n, context=None):
+        entered.set()
+        assert release.wait(3)
+        return f"result {n}"
+
+    registry = ToolRegistry((Tool("probe", "test", slow, {"n": {"type": "integer"}}),), {})
+    monkeypatch.setattr(supervisor, "get_current", lambda: object())
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kw: _result(
+        ("c1", "probe", '{"n":1}')))
+
+    async def run():
+        job = asyncio.create_task(runtime.run_turn_async(
+            _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+            tool_registry=registry, tool_context=context, suppress_output=True))
+        while not entered.is_set():
+            if job.done():
+                await job
+                pytest.fail(repr(messages))
+            await asyncio.sleep(0.001)
+        job.cancel()
+        timer = threading.Timer(0.05, release.set)
+        timer.start()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(job, 2)
+        timer.join()
+
+    asyncio.run(run())
+
+    assert session.interrupts == 1

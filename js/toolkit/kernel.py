@@ -10,6 +10,13 @@ A cell that hangs is interrupted with SIGINT — exactly what Ctrl-C does in a
 notebook — never restarted. A runaway loop must not cost the agent the tools it
 spent the session building.
 
+A CALL NEVER INHERITS THE KERNEL'S STATE. The kernel is an external process
+talked to over a socket, like an MCP server: a cell is submitted with a bounded
+wait and a cell still running when that wait elapses comes back as a handle to
+poll. A turn cancelled mid-cell interrupts the cell before the worker running
+the tool is abandoned, so the next call never queues behind a cell nobody is
+watching anymore.
+
 THE AGENT CAN STILL SEE WHAT IT BUILT. After compaction the transcript that
 defined `parse_log` may be gone while the kernel still holds the function. So
 every result carries a NAMESPACE line listing the functions and classes the
@@ -82,6 +89,23 @@ del __js_probe
 
 VERBOSITY_LEVELS = ("quiet", "normal", "verbose")
 DEFAULT_RENDER_MAX_LINES = 24
+# How long a submitted cell is waited for before the call returns a handle.
+# Overridden by the `kernel.wait_seconds` knob.
+DEFAULT_WAIT_SECONDS = 5
+# One read of the iopub queue, in seconds. Short enough that a poll that finds
+# nothing feels immediate, long enough not to spin the CPU.
+POLL_SLICE = 0.25
+# After SIGINT, how long to keep reading for the KeyboardInterrupt. A CPU-bound
+# C extension only checks signals between chunks, so the first polls after the
+# signal routinely return nothing.
+INTERRUPT_GRACE = 10.0
+
+KERNEL_ACTIONS = ("run", "poll", "interrupt", "wait")
+
+# Handles for finished cells are kept only so the agent can still poll output it
+# has not read. A session that submits hundreds of cells should not accumulate
+# hundreds of message lists, so the table holds the most recent few.
+KEEP_FINISHED_HANDLES = 5
 
 # Kernels are subprocesses. Nothing in the tool protocol runs when js exits, so
 # without this every session that touched the kernel would leave a live Python
@@ -257,6 +281,36 @@ def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
 # --------------------------------------------------------------------------
 
 
+@dataclass
+class CellHandle:
+    """One submitted cell and the iopub messages the kernel produced for it.
+
+    A handle outlives the call that made it. Output keeps arriving into
+    `messages` while the agent is off doing something else, and a poll delivers
+    whatever arrived since the last one.
+    """
+
+    id: str
+    msg_id: str
+    code: str
+    started: float
+    messages: list[dict] = field(default_factory=list)
+    delivered: int = 0
+    finished: bool = False
+    died: bool = False
+    timed_out: bool = False
+    elapsed: float = 0.0
+
+    def first_line(self) -> str:
+        for line in self.code.strip().splitlines():
+            if line.strip():
+                return line.strip()[:80]
+        return "(no code)"
+
+    def age(self) -> float:
+        return self.elapsed if self.finished else time.monotonic() - self.started
+
+
 @dataclass(eq=False)   # identity hash: sessions live in the _LIVE_SESSIONS set
 class KernelSession:
     """One long-lived IPython kernel plus the artifacts dir for its rich output."""
@@ -267,6 +321,10 @@ class KernelSession:
     client: Any = None
     executions: int = 0
     artifact_seq: int = 0
+    sequence: int = 0
+    handles: dict[str, CellHandle] = field(default_factory=dict)
+    current: str = ""      # the handle the kernel is executing, "" when idle
+    last: str = ""         # the most recent handle, for poll/interrupt/wait
     namespace: dict[str, str] = field(default_factory=dict)
     visible_names: set[str] = field(default_factory=set)
     log_handle: Any = None
@@ -324,9 +382,58 @@ class KernelSession:
         self.client.wait_for_ready(timeout=60)
         self.namespace = {}
         self.visible_names = set()
+        self.handles = {}
+        self.current = ""
+        self.last = ""
         # IPython's own `In[n]` counter restarts too. Letting ours run on would
         # print "kernel cell 9" beside a traceback that says "Cell In[1]".
         self.executions = 0
+
+    def submit(self, code: str, *, store_history: bool = True, label: str = "") -> CellHandle:
+        """Send one cell and return its handle. Does not wait for the cell."""
+        msg_id = self.client.execute(code, store_history=store_history, allow_stdin=False)
+        self.sequence += 1
+        handle = CellHandle(id=label or f"p{self.sequence}", msg_id=msg_id, code=code,
+                            started=time.monotonic())
+        self.handles[handle.id] = handle
+        self.current = handle.id
+        self.last = handle.id
+        return handle
+
+    def record(self, msg: dict) -> None:
+        """File one iopub message under the cell that produced it."""
+        msg_id = (msg.get("parent_header") or {}).get("msg_id")
+        for handle in self.handles.values():
+            if handle.msg_id != msg_id:
+                continue
+            if handle.finished:
+                return
+            handle.messages.append(msg)
+            if (msg["header"]["msg_type"] == "status"
+                    and msg["content"].get("execution_state") == "idle"):
+                handle.finished = True
+                handle.elapsed = time.monotonic() - handle.started
+                if self.current == handle.id:
+                    self.current = ""
+            return
+
+    def interrupt(self) -> None:
+        """SIGINT the executing cell. Signals the process, so any thread may call it."""
+        if self.manager is not None:
+            self.manager.interrupt_kernel()
+
+    def forget(self, handle: CellHandle) -> None:
+        """Drop a handle whose whole result was already delivered."""
+        self.handles.pop(handle.id, None)
+        if self.current == handle.id:
+            self.current = ""
+
+    def prune(self) -> None:
+        """Keep the handle table proportional to the live session, not its history."""
+        finished = sorted((h for h in self.handles.values() if h.finished),
+                          key=lambda h: h.started)
+        for handle in finished[:-KEEP_FINISHED_HANDLES]:
+            self.forget(handle)
 
 
 def missing_dependencies() -> str:
@@ -367,71 +474,97 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
 # --------------------------------------------------------------------------
 
 
-def _drain_shell(session: KernelSession, msg_id: str, deadline: float) -> None:
-    """Wait for the shell reply so the next execute cannot read this cell's messages."""
+def _drain_shell(session: KernelSession, deadline: float) -> None:
+    """Read the shell replies nothing else is waiting for.
+
+    Executing a cell leaves a shell reply queued behind the iopub messages. Left
+    there, it is the next call's problem; draining it keeps the sockets empty.
+    """
     while time.monotonic() < deadline:
         try:
-            reply = session.client.get_shell_msg(timeout=0.2)
+            session.client.get_shell_msg(timeout=min(POLL_SLICE, deadline - time.monotonic()))
         except queue.Empty:
-            continue
-        if reply.get("parent_header", {}).get("msg_id") == msg_id:
             return
 
 
-def _collect(session: KernelSession, msg_id: str, timeout: int) -> tuple[list[dict], bool, bool]:
-    """Gather every iopub message for one execution until the kernel goes idle.
+def collect_until(session: KernelSession, handle: CellHandle, deadline: float) -> None:
+    """Read iopub into `handle` until the cell finishes, the kernel dies, or the deadline.
 
-    Returns (messages, timed_out, died). On timeout the kernel is INTERRUPTED,
-    not restarted: the cell dies, the namespace and everything the agent built
-    lives. A kernel that vanished mid-cell breaks the loop instead of blocking
-    until the deadline.
+    One quiet slice is not the end of a cell: a CPU-bound C extension only
+    checks signals periodically, so a poll that comes back empty keeps polling
+    to the deadline instead of treating silence as an answer.
     """
-    out: list[dict] = []
-    deadline = time.monotonic() + timeout
-    timed_out = False
-    died = False
+    while not handle.finished:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            msg = session.client.get_iopub_msg(timeout=min(POLL_SLICE, max(0.01, remaining)))
+        except queue.Empty:
+            if not session.alive():
+                handle.died = True
+                return
+            continue
+        session.record(msg)
+
+
+def pump(session: KernelSession, deadline: float) -> None:
+    """File every iopub message that arrives before the deadline, for whoever it belongs to."""
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            timed_out = True
-            session.manager.interrupt_kernel()
-            grace = time.monotonic() + 10  # let the KeyboardInterrupt surface
-            while time.monotonic() < grace:
-                try:
-                    msg = session.client.get_iopub_msg(timeout=0.3)
-                except queue.Empty:
-                    # Keep polling to the grace deadline. A CPU-bound C
-                    # extension only checks signals periodically, so the first
-                    # poll after SIGINT routinely returns nothing; breaking here
-                    # collapsed the 10s window to 300ms and dropped the
-                    # KeyboardInterrupt traceback the caller is waiting for.
-                    if not session.alive():
-                        died = True
-                        break
-                    continue
-                if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                    continue
-                out.append(msg)
-                if (msg["header"]["msg_type"] == "status"
-                        and msg["content"].get("execution_state") == "idle"):
-                    break
-            break
+            return
         try:
-            msg = session.client.get_iopub_msg(timeout=min(0.5, max(0.05, remaining)))
+            msg = session.client.get_iopub_msg(timeout=min(POLL_SLICE, max(0.01, remaining)))
         except queue.Empty:
             if not session.alive():
-                died = True
-                break
+                return
             continue
-        if msg.get("parent_header", {}).get("msg_id") != msg_id:
-            continue
-        kind = msg["header"]["msg_type"]
-        if kind == "status" and msg["content"].get("execution_state") == "idle":
-            break
-        out.append(msg)
-    if not died:
-        _drain_shell(session, msg_id, time.monotonic() + 5)
-    return out, timed_out, died
+        session.record(msg)
+
+
+def interrupt_and_collect(session: KernelSession, handle: CellHandle,
+                          grace: float = INTERRUPT_GRACE) -> None:
+    """SIGINT the cell, then keep reading until it reports idle."""
+    session.interrupt()
+    collect_until(session, handle, time.monotonic() + grace)
+
+
+def busy_handle(session: KernelSession) -> CellHandle | None:
+    """The cell the kernel is still executing, if any."""
+    current = getattr(session, "current", "")
+    handle = getattr(session, "handles", {}).get(current) if current else None
+    return handle if handle is not None and not handle.finished else None
+
+
+def pick_handle(session: KernelSession, target: str) -> CellHandle | None:
+    """The handle a poll/interrupt/wait names, defaulting to the live one."""
+    handles = getattr(session, "handles", {})
+    if target:
+        return handles.get(target)
+    live = busy_handle(session)
+    if live is not None:
+        return live
+    last = getattr(session, "last", "")
+    return handles.get(last) if last else None
+
+
+def interrupt_inflight(context: Any) -> bool:
+    """SIGINT a cell whose turn was cancelled out from under the tool.
+
+    The runtime cannot cancel the worker thread running a tool, so a `kernel`
+    call abandoned by a cancelled turn would leave its cell executing behind the
+    next call. The runtime calls this before it drains that worker; the signal
+    makes the cell stop so the kernel is idle for what comes next.
+    """
+    session = getattr(context, "kernel_session", None)
+    if session is None or not session.alive():
+        return False
+    handle = busy_handle(session)
+    if handle is None:
+        return False
+    session.interrupt()
+    return True
 
 
 @dataclass
@@ -509,14 +642,65 @@ def _render_messages(session: KernelSession, messages: list[dict], marker: str) 
 
 def run_cell(session: KernelSession, code: str, timeout: int, *,
              store_history: bool = True, marker: str = "") -> CellOutput:
+    """Submit a cell and block for the whole answer: the internal probe path.
+
+    Model-facing calls go through `submit_cell`, which hands back a handle when
+    the wait elapses. This one is for the round trips the tool makes on its own
+    account — the namespace probe, the toolbox probes — where there is nothing
+    for the agent to poll and half an answer is no answer. On timeout the cell
+    is interrupted, never restarted.
+    """
     started = time.monotonic()
-    msg_id = session.client.execute(code, store_history=store_history, allow_stdin=False)
-    messages, timed_out, died = _collect(session, msg_id, timeout)
-    result = _render_messages(session, messages, marker)
-    result.timed_out = timed_out
-    result.died = died
+    handle = session.submit(code, store_history=store_history)
+    collect_until(session, handle, started + timeout)
+    if not handle.finished and not handle.died:
+        handle.timed_out = True
+        interrupt_and_collect(session, handle)
+    result = _render_messages(session, handle.messages, marker)
+    handle.delivered = len(handle.messages)
+    session.forget(handle)
+    if not handle.died:
+        _drain_shell(session, time.monotonic() + 1)
+    result.timed_out = handle.timed_out
+    result.died = handle.died
     result.elapsed = time.monotonic() - started
     return result
+
+
+def submit_cell(session: KernelSession, code: str, wait: float, *,
+                label: str = "") -> tuple[CellHandle, CellOutput]:
+    """Submit a model-facing cell and collect for `wait` seconds.
+
+    Returns the handle and the output produced so far. The cell keeps running
+    when the wait elapses; the handle is how the agent follows it.
+    """
+    handle = session.submit(code, label=label)
+    session.prune()
+    collect_until(session, handle, time.monotonic() + wait)
+    output = _render_messages(session, handle.messages, "")
+    handle.delivered = len(handle.messages)
+    if handle.finished:
+        _drain_shell(session, time.monotonic() + 1)
+    return handle, output
+
+
+def poll_cell(session: KernelSession, handle: CellHandle) -> CellOutput:
+    """Collect whatever arrived since the last read of `handle`."""
+    pump(session, time.monotonic() + POLL_SLICE)
+    output = _render_messages(session, handle.messages[handle.delivered:], "")
+    handle.delivered = len(handle.messages)
+    if handle.finished:
+        _drain_shell(session, time.monotonic() + 1)
+    return output
+
+
+def wait_cell(session: KernelSession, handle: CellHandle, timeout: int) -> CellOutput:
+    """Block up to `timeout` for a submitted cell, interrupting it if the wait expires."""
+    collect_until(session, handle, time.monotonic() + timeout)
+    if not handle.finished and not handle.died:
+        handle.timed_out = True
+        interrupt_and_collect(session, handle)
+    return poll_cell(session, handle)
 
 
 def refresh_namespace(session: KernelSession) -> tuple[list[str], list[str]]:
@@ -567,18 +751,99 @@ def cap_for_model(text: str, context: Any) -> str:
 # --------------------------------------------------------------------------
 
 
+def wait_seconds(context: Any) -> float:
+    """How long a submitted cell is waited for before the call returns a handle."""
+    return float(int_or_default(getattr(context, "kernel_wait_seconds", None),
+                                DEFAULT_WAIT_SECONDS, minimum=1))
+
+
+def _output_parts(output: CellOutput) -> list[str]:
+    text = output.text()
+    parts = [text.rstrip("\n") if text.strip() else "(no output)"]
+    parts.extend(f"IMAGE {image}" for image in output.images)
+    return parts
+
+
+def _finished_parts(session: KernelSession, output: CellOutput) -> list[str]:
+    """The tail of a result for a cell the kernel has finished with."""
+    added, removed = refresh_namespace(session)
+    parts = _output_parts(output)
+    if added:
+        parts.append("DEFINED " + ", ".join(session.namespace.get(name, name) for name in added))
+    if removed:
+        parts.append("GONE " + ", ".join(removed))
+    parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
+    return parts
+
+
+def _running_parts(handle: CellHandle, output: CellOutput) -> list[str]:
+    parts = _output_parts(output)
+    parts.append(f"HANDLE {handle.id} RUNNING")
+    return parts
+
+
+def _died(context: ToolContext, session: KernelSession, level: str, notes: list[str],
+          cell: str) -> str:
+    session.namespace = {}
+    session.visible_names = set()
+    session.handles = {}
+    session.current = ""
+    message = (
+        f"ERROR: the kernel died during execution (cell {cell}). "
+        "Everything defined in this session is gone; call again with restart=true "
+        "and rebuild."
+    )
+    render_event(context, level, message, style="bold red")
+    return "\n".join([*notes, message, "NAMESPACE (none)"])
+
+
+def _busy(context: ToolContext, session: KernelSession, level: str, notes: list[str],
+          live: CellHandle) -> str:
+    message = (f"ERROR: the previous cell is still running ({live.first_line()}); "
+               "interrupt it or wait")
+    hint = (f'handle {live.id}: action="poll" for new output, action="interrupt" to stop it, '
+            'action="wait" to block for it. A cell blocked in a syscall that ignores '
+            "SIGINT needs restart=true")
+    render_event(context, level, message, style="bold red")
+    return cap_for_model("\n".join([*notes, message, hint, f"HANDLE {live.id} RUNNING"]), context)
+
+
+def _report(context: ToolContext, session: KernelSession, level: str, notes: list[str],
+            handle: CellHandle, output: CellOutput, *, status: str = "",
+            timed_out_note: str = "") -> str:
+    """Render a cell that may or may not have finished into the model-facing string."""
+    if handle.died or not session.alive():
+        return _died(context, session, level, notes, handle.id)
+    parts: list[str] = list(notes)
+    if timed_out_note:
+        parts.append(timed_out_note)
+    if status:
+        parts.append(status)
+    if handle.finished:
+        parts.extend(_finished_parts(session, output))
+    else:
+        parts.extend(_running_parts(handle, output))
+    return cap_for_model("\n".join(parts), context)
+
+
 def kernel(
     code: str = "",
     timeout: int = 120,
     restart: bool = False,
     verbosity: str = "",
+    action: str = "",
+    handle: str = "",
     context: ToolContext | None = None,
 ) -> str:
     if context is None:
         return "ERROR: missing ToolContext"
     code = text_or_default(code)
     limit = int_or_default(timeout, 120, minimum=1)
+    mode = text_or_default(action, "run").strip().lower() or "run"
+    target = text_or_default(handle).strip()
     level = resolve_verbosity(context, verbosity)
+    if mode not in KERNEL_ACTIONS:
+        return f"ERROR: action must be one of {', '.join(KERNEL_ACTIONS)}"
 
     session, problem, started_now = get_session(context)
     if session is None:
@@ -598,8 +863,48 @@ def kernel(
             return message
         render_event(context, level, "kernel restarted — namespace cleared", style="yellow")
         notes.append("kernel restarted; the namespace is empty")
-        if not code.strip():
+        if mode == "run" and not code.strip():
             return "\n".join([*notes, "NAMESPACE (none)"])
+
+    if mode in ("poll", "interrupt", "wait"):
+        live = pick_handle(session, target)
+        if live is None:
+            message = (f"ERROR: no cell {('handle ' + target) if target else 'is running'}; "
+                       "nothing to poll, interrupt, or wait for")
+            render_event(context, level, message, style="bold red")
+            return cap_for_model("\n".join([*notes, message]), context)
+        if mode == "poll":
+            output = poll_cell(session, live)
+            status = (f"cell {live.id} finished ({live.age():.1f}s)." if live.finished
+                      else f"cell {live.id} is still running ({live.age():.1f}s).")
+            return _report(context, session, level, notes, live, output, status=status)
+        if mode == "interrupt":
+            already_finished = live.finished
+            if not already_finished:
+                interrupt_and_collect(session, live)
+            output = poll_cell(session, live)
+            if already_finished:
+                status = f"cell {live.id} had already finished ({live.age():.1f}s)."
+            elif live.finished:
+                status = f"interrupt sent to cell {live.id}; it stopped ({live.age():.1f}s)."
+            else:
+                status = (f"interrupt sent to cell {live.id}; it is still running "
+                          f"({live.age():.1f}s).")
+            return _report(context, session, level, notes, live, output, status=status)
+        output = wait_cell(session, live, limit)
+        status = (f"cell {live.id} finished ({live.age():.1f}s)." if live.finished
+                  else f"cell {live.id} is still running ({live.age():.1f}s).")
+        return _report(
+            context, session, level, notes, live, output, status=status,
+            timed_out_note=(
+                f"INTERRUPTED after {limit}s. The cell was stopped with a KeyboardInterrupt; "
+                "the namespace and everything defined in it are intact."
+                if live.timed_out else ""),
+        )
+
+    live = busy_handle(session)
+    if live is not None:
+        return _busy(context, session, level, notes, live)
 
     if not code.strip():
         added, removed = refresh_namespace(session)
@@ -613,51 +918,53 @@ def kernel(
         return "\n".join([*notes, f"NAMESPACE {live}"])
 
     session.executions += 1
+    window = min(wait_seconds(context), limit)
     try:
-        result = run_cell(session, code, limit)
+        live, output = submit_cell(session, code, window, label=str(session.executions))
     except Exception as exc:  # noqa: BLE001
         message = f"ERROR: kernel execution failed: {type(exc).__name__}: {exc}"
         render_event(context, level, message, style="bold red")
         return message
 
-    if result.died or not session.alive():
-        session.namespace = {}
-        session.visible_names = set()
-        message = (
-            f"ERROR: the kernel died during execution (cell {session.executions}). "
-            "Everything defined in this session is gone; call again with restart=true "
-            "and rebuild."
-        )
-        render_event(context, level, message, style="bold red")
-        return "\n".join([*notes, message, "NAMESPACE (none)"])
+    if live.died or not session.alive():
+        return _died(context, session, level, notes, live.id)
 
-    added, removed = refresh_namespace(session)
-
+    if live.finished:
+        added, removed = refresh_namespace(session)
+    else:
+        added, removed = [], []
     render_execution(
-        context, level=level, code=code, stdout=result.stdout, stderr=result.stderr,
-        display=result.display, error=result.error, elapsed=result.elapsed,
+        context, level=level, code=code, stdout=output.stdout, stderr=output.stderr,
+        display=output.display, error=output.error, elapsed=live.age(),
         cell=session.executions, added=[session.namespace.get(n, n) for n in added],
-        removed=removed, namespace=sorted(session.namespace), images=result.images,
-        interrupted=result.timed_out,
+        removed=removed, namespace=sorted(session.namespace), images=output.images,
+        interrupted=live.timed_out,
     )
 
-    parts: list[str] = list(notes)
-    if result.timed_out:
-        parts.append(
-            f"INTERRUPTED after {limit}s. The cell was stopped with a KeyboardInterrupt; "
-            "the namespace and everything defined in it are intact."
-        )
-    body = result.text()
-    parts.append(body.rstrip("\n") if body.strip() else "(no output)")
-    # Images are reported before the footer so every result really does end with
-    # the NAMESPACE line the description promises.
-    for image in result.images:
-        parts.append(f"IMAGE {image}")
-    if added:
-        parts.append("DEFINED " + ", ".join(session.namespace.get(name, name) for name in added))
-    if removed:
-        parts.append("GONE " + ", ".join(removed))
-    parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
+    if live.finished:
+        parts: list[str] = list(notes)
+        if live.timed_out:
+            parts.append(
+                f"INTERRUPTED after {limit}s. The cell was stopped with a KeyboardInterrupt; "
+                "the namespace and everything defined in it are intact."
+            )
+        parts.extend(_output_parts(output))
+        # Images are reported before the footer so every result really does end with
+        # the NAMESPACE line the description promises.
+        if added:
+            parts.append("DEFINED " + ", ".join(session.namespace.get(n, n) for n in added))
+        if removed:
+            parts.append("GONE " + ", ".join(removed))
+        parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
+        return cap_for_model("\n".join(parts), context)
+
+    parts = [
+        *notes,
+        f"cell {session.executions} is still running after {window:.1f}s (handle {live.id}). "
+        f'Poll it with action="poll", handle="{live.id}"; interrupt it with action="interrupt".',
+        *_output_parts(output),
+        f"HANDLE {live.id} RUNNING",
+    ]
     return cap_for_model("\n".join(parts), context)
 
 
@@ -669,6 +976,8 @@ def tools() -> tuple[Tool, ...]:
             kernel,
             {
                 "code": {"type": "string"},
+                "action": {"type": "string", "enum": list(KERNEL_ACTIONS), "default": "run"},
+                "handle": {"type": "string"},
                 "timeout": {"type": "integer", "default": 120},
                 "restart": {"type": "boolean", "default": False},
                 "verbosity": {"type": "string", "enum": list(VERBOSITY_LEVELS)},

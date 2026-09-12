@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -368,17 +369,93 @@ def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
 
 
 @needs_kernel
-def test_a_timeout_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
+def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
     kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
+    ctx.kernel_wait_seconds = 1
+    kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
 
     started = time.monotonic()
-    result = kmod.kernel(code="import time\ntime.sleep(60)", timeout=3, context=ctx)
+    result = kmod.kernel(action="wait", timeout=3, context=ctx)
     elapsed = time.monotonic() - started
 
     assert result.startswith("INTERRUPTED after 3s.")
     assert "KeyboardInterrupt" in result
     assert elapsed < 30
+    assert result.splitlines()[-1].startswith("NAMESPACE ")
     assert "'alive'" in kmod.kernel(code="survivor()", context=ctx)
+
+
+@needs_kernel
+def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx):
+    ctx.kernel_wait_seconds = 1
+
+    started = time.monotonic()
+    result = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    elapsed = time.monotonic() - started
+
+    handle = result.splitlines()[-1].removeprefix("HANDLE ").removesuffix(" RUNNING")
+    assert elapsed < 20
+    assert "still running" in result
+    assert f"cell 1 is still running after 1.0s (handle {handle})." in result
+    assert f"HANDLE {handle} RUNNING" in kmod.kernel(action="poll", context=ctx)
+
+    stopped = kmod.kernel(action="interrupt", context=ctx)
+
+    assert "KeyboardInterrupt" in stopped
+    assert stopped.splitlines()[-1].startswith("NAMESPACE ")
+    assert "1" in kmod.kernel(code="print(1)", context=ctx)
+
+
+@needs_kernel
+def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
+    ctx.kernel_wait_seconds = 1
+    first = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    assert "still running" in first
+
+    refused = kmod.kernel(code="print('second')", context=ctx)
+
+    assert "ERROR: the previous cell is still running (import time); interrupt it or wait" in refused
+    assert refused.splitlines()[-1].endswith("RUNNING")
+    kmod.kernel(action="interrupt", context=ctx)
+
+
+@needs_kernel
+def test_output_a_cell_produces_after_the_call_returned_arrives_on_the_next_poll(ctx):
+    ctx.kernel_wait_seconds = 1
+    kmod.kernel(code="import time\ntime.sleep(3)\nprint('late output')", context=ctx)
+    time.sleep(4)
+
+    polled = kmod.kernel(action="poll", context=ctx)
+
+    assert "late output" in polled
+    assert "finished" in polled
+    assert polled.splitlines()[-1].startswith("NAMESPACE ")
+
+
+@needs_kernel
+def test_a_cell_abandoned_by_a_cancelled_turn_leaves_the_kernel_idle(ctx):
+    """The runtime's cancel path: SIGINT the cell, then the next call runs."""
+    ctx.kernel_wait_seconds = 60
+    outcome: list[str] = []
+    worker = threading.Thread(
+        target=lambda: outcome.append(
+            kmod.kernel(code="import time\ntime.sleep(30)", context=ctx)))
+    worker.start()
+    for _ in range(400):
+        if kmod.busy_handle(ctx.kernel_session) is not None:
+            break
+        time.sleep(0.05)
+    assert kmod.busy_handle(ctx.kernel_session) is not None
+
+    assert kmod.interrupt_inflight(ctx) is True
+
+    worker.join(30)
+    assert not worker.is_alive()
+    started = time.monotonic()
+    result = kmod.kernel(code="print(1)", context=ctx)
+    assert time.monotonic() - started < 10
+    assert "1" in result
+    assert result.splitlines()[-1].startswith("NAMESPACE ")
 
 
 @needs_kernel
@@ -560,6 +637,9 @@ class _OfflineKernel:
     def __init__(self) -> None:
         self.cwd = Path("/tmp")
         self.executions = 0
+        self.handles: dict[str, kmod.CellHandle] = {}
+        self.current = ""
+        self.last = ""
         self.namespace: dict[str, str] = {}
         self.visible_names: set[str] = set()
 
@@ -581,8 +661,18 @@ def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=Tr
             return kmod.CellOutput(marker=json.dumps(probe))
         return output if output is not None else kmod.CellOutput()
 
+    def fake_submit_cell(sess, code, wait, *, label=""):
+        result = output if output is not None else kmod.CellOutput()
+        handle = kmod.CellHandle(id=label or "1", msg_id="offline", code=code,
+                                 started=time.monotonic())
+        handle.died = result.died
+        handle.finished = not result.died
+        handle.elapsed = result.elapsed
+        return handle, result
+
     monkeypatch.setattr(kmod, "get_session", lambda context: (session, "", False))
     monkeypatch.setattr(kmod, "run_cell", fake_run_cell)
+    monkeypatch.setattr(kmod, "submit_cell", fake_submit_cell)
     if not alive:
         session.alive = lambda: False  # type: ignore[method-assign]
     return session

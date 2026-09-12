@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import time
 from pathlib import Path
 
 from js.toolkit import kernel as kmod
@@ -48,25 +49,33 @@ def _session(client, alive=True):
     return session
 
 
+def _handle(session, msg_id="m1"):
+    handle = kmod.CellHandle(id="1", msg_id=msg_id, code="slow()", started=time.monotonic())
+    session.handles[handle.id] = handle
+    session.current = handle.id
+    return handle
+
+
 def test_the_grace_window_keeps_polling_for_the_keyboardinterrupt(monkeypatch):
     client = _SlowToInterruptClient(quiet_polls=4)
     session = _session(client)
+    handle = _handle(session)
 
-    messages, timed_out, died = kmod._collect(session, "m1", timeout=0)
+    kmod.interrupt_and_collect(session, handle)
 
-    assert timed_out is True
-    assert died is False
+    assert handle.died is False
+    assert handle.finished is True
     assert session.manager.interrupts == 1
-    assert [m["header"]["msg_type"] for m in messages] == ["error", "status"]
+    assert [m["header"]["msg_type"] for m in handle.messages] == ["error", "status"]
 
 
 def test_the_grace_window_stops_early_when_the_kernel_is_gone():
     client = _SlowToInterruptClient(quiet_polls=1000)
     session = _session(client, alive=False)
+    handle = _handle(session)
 
-    messages, timed_out, died = kmod._collect(session, "m1", timeout=0)
+    kmod.interrupt_and_collect(session, handle)
 
-    assert timed_out is True
-    assert died is True
-    assert messages == []
+    assert handle.died is True
+    assert handle.messages == []
     assert client.polls == 1

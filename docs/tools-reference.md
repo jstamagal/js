@@ -401,23 +401,43 @@ for the life of the session, so a function defined in call 3 is callable in call
 Parameters:
 
 - `code`: the Python to run. Empty `code` reports the namespace and runs nothing.
-- `timeout`: seconds, default 120.
+- `action`: `run` (default), `poll`, `interrupt`, or `wait`.
+- `handle`: the cell a `poll`/`interrupt`/`wait` acts on; defaults to the running
+  or most recently submitted cell.
+- `timeout`: the longest one call blocks, default 120.
 - `restart`: kill and restart, destroying every definition.
 - `verbosity`: `quiet`, `normal`, or `verbose` for this call's terminal render.
 
-Every result carries a `NAMESPACE` line naming the functions and classes this
-session defined, re-derived from the kernel on every call rather than remembered.
-That is what makes the tool survive compaction: the transcript that defined
-`parse_log` may be gone, the listing is not. New definitions also get a `DEFINED`
-line, deletions a `GONE` line.
+A cell is submitted with a bounded wait (`kernel.wait_seconds`, capped by
+`timeout`). A cell that finishes inside the wait returns whole; one still running
+returns a `HANDLE <id> RUNNING` line and whatever it has printed so far, and the
+agent polls or waits for the rest instead of blocking the turn. A new `code`
+submitted while a cell runs is refused — `ERROR: the previous cell is still
+running (<first line>); interrupt it or wait` — never queued behind it. Output
+that arrives between polls is buffered per handle and delivered on the next one.
+`restart` clears every handle.
 
-A cell that exceeds `timeout` is interrupted with SIGINT, exactly like Ctrl-C in
-a notebook — never restarted. The cell dies, the namespace lives. A kernel that
-actually dies is reported as such, naming the cell, instead of blocking until the
-deadline. Image output (matplotlib and friends) is written under `.js/kernel/`
-and reported as `IMAGE <path>`; the kernel process's own stderr goes to
-`.js/kernel/kernel.log`, never the terminal. The result string is capped by
-`limits.max_tool_result_bytes` with the standard truncation marker.
+Every result for a finished cell carries a `NAMESPACE` line naming the functions
+and classes this session defined, re-derived from the kernel on every call rather
+than remembered. That is what makes the tool survive compaction: the transcript
+that defined `parse_log` may be gone, the listing is not. New definitions also
+get a `DEFINED` line, deletions a `GONE` line.
+
+A `wait` that exceeds `timeout`, an `action="interrupt"`, and Ctrl-C on the turn
+that submitted the cell all SIGINT the cell, exactly like Ctrl-C in a notebook —
+never a restart. The cell dies, the namespace lives. A cell blocked in a syscall
+that ignores SIGINT (a DNS lookup on a dead resolver is the observed case) is
+cleared only by `restart=true`. A kernel that actually dies is reported as such,
+naming the cell, instead of blocking until the deadline. Image output (matplotlib
+and friends) is written under `.js/kernel/` and reported as `IMAGE <path>`; the
+kernel process's own stderr goes to `.js/kernel/kernel.log`, never the terminal.
+The result string is capped by `limits.max_tool_result_bytes` with the standard
+truncation marker.
+
+Ctrl-C on a turn that has a kernel cell in flight interrupts that cell before the
+runtime abandons the worker running the tool call, so the next call does not
+queue behind a cell nobody is watching. The interrupt-on-cancel hook is
+`kernel.interrupt_inflight(context)`, called from the runtime's cancel path.
 
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.

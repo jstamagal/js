@@ -163,6 +163,7 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
         # wants one verbosity, not one per agent.
         kernel_verbosity=getattr(parent, "kernel_verbosity", "normal"),
         kernel_render_max_lines=getattr(parent, "kernel_render_max_lines", 24),
+        kernel_wait_seconds=getattr(parent, "kernel_wait_seconds", 5),
         model=getattr(parent, "model", ""),
     )
     child.tool_registry = registry

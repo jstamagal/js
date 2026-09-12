@@ -9,19 +9,41 @@ instead of re-deriving the same work in every cell.
 Parameters:
 - `code`: the Python to run. Empty `code` runs nothing and just reports the
   current namespace.
-- `timeout` (default `120` seconds): wall-clock limit for this cell.
+- `action`: `run` (default) submits `code`; `poll` returns what a submitted cell
+  has produced since it was last read; `interrupt` SIGINTs the cell; `wait`
+  blocks for it.
+- `handle`: the id of the cell a `poll`, `interrupt`, or `wait` acts on.
+  Defaults to the cell that is running, or the one submitted last.
+- `timeout` (default `120` seconds): the longest one call blocks — both the wait
+  when a cell is submitted and the block an explicit `wait` performs.
 - `restart` (default `false`): kill and restart the kernel. This DESTROYS every
   definition and every value in the namespace. Only use it when the kernel is
   reported dead, or when you deliberately want a clean slate.
 - `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view
   of this one call. It changes nothing about what you receive.
 
-Every result ends with a `NAMESPACE` line listing the functions and classes the
-session defined (`NAMESPACE (none)` when it defined none), and a `DEFINED`
-line for anything this cell added — functions, imports, and values alike. That
-listing is re-derived from the kernel itself on every call, so it is accurate
-even when the conversation that defined a function is no longer in your context.
-Read it. It is the record of what you have already built.
+A cell does not have to finish before you get an answer. `kernel` submits it and
+waits a few seconds; a cell that finishes inside that window comes back whole,
+and a cell still running comes back as a handle:
+
+    cell 3 is still running after 5.0s (handle 3). Poll it with action="poll" ...
+    HANDLE 3 RUNNING
+
+Then `action="poll", handle="3"` returns what it produced since the last read
+and whether it is still running, `action="wait", handle="3", timeout=120` blocks
+for the rest, and `action="interrupt", handle="3"` stops it. Output produced
+while you are off doing something else is kept and delivered on the next poll.
+
+Every result for a finished cell ends with a `NAMESPACE` line listing the
+functions and classes the session defined (`NAMESPACE (none)` when it defined
+none), and a `DEFINED` line for anything this cell added — functions, imports,
+and values alike. That listing is re-derived from the kernel itself on every
+call, so it is accurate even when the conversation that defined a function is no
+longer in your context. Read it. It is the record of what you have already
+built. A cell that is still running ends with `HANDLE <id> RUNNING` instead, and
+a new `code` submitted while it runs is refused rather than queued behind it:
+
+    ERROR: the previous cell is still running (<first line>); interrupt it or wait
 
 Output behavior:
 - stdout, stderr, `repr` results, and tracebacks all come back. A cell that
@@ -31,10 +53,14 @@ Output behavior:
 - The whole result is capped by `limits.max_tool_result_bytes` with a visible
   truncation marker. Do not shrink output by hand; let the cap do it.
 
-Timeouts do not destroy your work. A cell that exceeds `timeout` is interrupted
-with a `KeyboardInterrupt`, exactly like Ctrl-C in a notebook. The cell stops;
-the namespace and everything in it survive. You get an `INTERRUPTED` line and
-can carry straight on.
+Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
+that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that
+submitted the cell — stops the cell exactly like Ctrl-C in a notebook: the
+namespace and everything in it survive, and the result carries the traceback.
+The one cell SIGINT cannot stop is one blocked in a syscall that ignores it, a
+network call stuck on a dead resolver being the usual case; only
+`restart=true` clears that, and a later call reports the cell as still running
+instead of queueing behind it and waiting out its timeout.
 
 If the kernel process actually dies (a segfault, an `os._exit`, the OOM killer)
 the result says so plainly and names the cell. That is the one case where

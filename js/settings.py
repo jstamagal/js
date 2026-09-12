@@ -55,6 +55,9 @@ DEFAULT_TASK_MAX_DEPTH = 2
 DEFAULT_SUBAGENT_MAX_WORKERS = 8
 DEFAULT_KERNEL_VERBOSITY = "normal"
 DEFAULT_KERNEL_RENDER_MAX_LINES = 24
+# Seconds a `kernel` call waits for a submitted cell before handing back a
+# handle. Small on purpose: a call that returns beats a call that blocks.
+DEFAULT_KERNEL_WAIT_SECONDS = 5
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
 DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
@@ -217,6 +220,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Line cap per section of that terminal render, so a 4000-line cell "
                 "cannot scroll the screen away. The hidden count is always shown, and "
                 "the model still gets the untrimmed output."),
+    SettingSpec("kernel.wait_seconds", "int", DEFAULT_KERNEL_WAIT_SECONDS,
+                "Seconds a `kernel` call waits for a submitted cell before returning "
+                "a handle to poll. The cell keeps running; nothing is interrupted by "
+                "this wait."),
     # --- runtime ---
     SettingSpec("runtime.debug", "bool", False,
                 "Append per-event records to state/<agent>/debug.log.",
@@ -676,8 +683,9 @@ _SECTION_INTRO: dict[str, list[str]] = {
     ],
     "limits": ["# Per-call / per-turn caps."],
     "kernel": [
-        "# How the persistent-kernel tools render to YOUR terminal.",
-        "# The model always receives the full result; these only change what you see.",
+        "# How the persistent-kernel tools behave and render.",
+        "# wait_seconds bounds how long a call blocks; verbosity and render_max_lines",
+        "# only change what you see. The model always receives the full result.",
     ],
     "runtime": ["# Live-runtime toggles."],
     "compact": ["# Cache-first context compaction knobs."],

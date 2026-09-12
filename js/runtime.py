@@ -1057,6 +1057,19 @@ async def _dispatch_async_tool(
     return pc, args, result
 
 
+def _interrupt_inflight(tool_context: ToolContext) -> None:
+    """Tell a live external process that the cell its tool call started is abandoned.
+
+    A worker thread running a sync tool cannot be cancelled, so a cancelled turn
+    leaves the call running to its own deadline. The kernel tool owns a process
+    that outlives the call, and a cell left executing there would sit behind the
+    next call; interrupting it makes the drain short and the kernel idle.
+    """
+    from .toolkit import kernel as kernel_tool
+
+    kernel_tool.interrupt_inflight(tool_context)
+
+
 async def _dispatch_batch(
     tool_calls: list[_PendingToolCall],
     telemetry: Telemetry,
@@ -1105,6 +1118,7 @@ async def _dispatch_batch(
                 await asyncio.shield(future)
             except asyncio.CancelledError:
                 progress.stopped.set()
+                _interrupt_inflight(tool_context)
                 while not future.done():
                     try:
                         await asyncio.shield(future)
@@ -1267,6 +1281,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.model = model
     active_context.kernel_verbosity = getattr(cfg, "kernel_verbosity", active_context.kernel_verbosity)
     active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
+    active_context.kernel_wait_seconds = getattr(cfg, "kernel_wait_seconds", active_context.kernel_wait_seconds)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
     active_context.last_incomplete_reason = None
