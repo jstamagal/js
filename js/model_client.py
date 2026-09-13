@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any
-from collections.abc import Callable, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import ai
 
-from . import codex_auth, codex_provider, providers, reasoning, routing, tool_args
+from . import codex_auth, codex_provider, providers, reasoning, routing, stream_transport, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -504,20 +504,28 @@ def build_tool_result_messages(
     ]
 
 
-def _open_stream(
+@asynccontextmanager
+async def _open_stream(
     *,
     model: ai.Model,
     messages: list[ai.messages.Message],
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
-) -> AbstractAsyncContextManager[ai.models.Stream]:
+) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
 
     ai 0.4 removed the public ``executor=`` argument from :func:`ai.stream`.
     Keeping the test seam here lets offline tests supply a public
     :class:`ai.models.Stream` without reaching into SDK internals.
     """
-    return ai.stream(model=model, messages=messages, tools=tools, params=params)
+    from ai.providers.anthropic.provider import AnthropicCompatibleProvider
+    from ai.providers.openai.provider import OpenAICompatibleProvider
+
+    async with AsyncExitStack() as cleanup:
+        if isinstance(model.provider, (OpenAICompatibleProvider, AnthropicCompatibleProvider)):
+            await cleanup.enter_async_context(stream_transport.own_responses(model.provider.sdk_client._client))
+        async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
+            yield stream
 
 
 def _usage_from_stream(stream: ai.models.Stream) -> ai.types.usage.Usage | None:

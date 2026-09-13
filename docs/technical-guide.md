@@ -120,6 +120,12 @@ by prepending the system prompt to the current messages.
 6. Repeats until the model returns a stop or the tool-iteration cap is hit.
 7. Appends tool result messages.
 8. Stops on tool retry limit or max iterations.
+The model-client stream scope owns HTTP response byte iterators for the OpenAI
+and Anthropic SDKs. `stream_transport.py` closes each iterator before its pool
+entry on normal completion or cancellation. This covers SSE termination before
+HTTP EOF with httpx2 2.12 (upstream pydantic/httpx2#1195). Custom transports are
+left as supplied. Recheck this adapter when upstream stream ownership changes.
+
 Provider request retry:
 
 - SDK `ProviderAPIError.is_retryable` permits two transport retries with backoff.

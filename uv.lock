@@ -552,12 +552,13 @@ wheels = [
 
 [[package]]
 name = "js"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "ai", extra = ["anthropic", "openai"] },
     { name = "anthropic" },
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "ipykernel" },
     { name = "jsonschema" },
     { name = "jupyter-client" },
@@ -592,6 +593,7 @@ requires-dist = [
     { name = "ai", extras = ["openai", "anthropic"], specifier = ">=0.5.2" },
     { name = "anthropic", specifier = ">=1.5.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx2", specifier = ">=2.12.0" },
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "jsonschema", specifier = "==4.25.1" },
     { name = "jupyter-client", specifier = ">=8.0" },
