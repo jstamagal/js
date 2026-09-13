@@ -31,7 +31,7 @@ def _overflow():
 
 
 @pytest.mark.parametrize("persistent", [False, True])
-def test_summary_peels_through_real_boundary(monkeypatch, tmp_path, persistent):
+def test_summary_partitions_through_real_boundary(monkeypatch, tmp_path, persistent):
     payloads = []
     error = _overflow()
 
@@ -40,7 +40,7 @@ def test_summary_peels_through_real_boundary(monkeypatch, tmp_path, persistent):
         payloads.append(json.loads(text.split("Session messages JSON:\n", 1)[1]))
         if persistent or len(payloads) == 1:
             raise error
-        return _result(text="recovered")
+        return _result(text=";".join(m["content"] for m in payloads[-1]))
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = [{"role": "user", "content": f"entry {i}"} for i in range(32)]
@@ -51,8 +51,9 @@ def test_summary_peels_through_real_boundary(monkeypatch, tmp_path, persistent):
         assert caught.value is error
         assert [len(p) for p in payloads] == [32, 16, 8, 4]
     else:
-        assert asyncio.run(call) == "recovered"
-        assert payloads == [messages, messages[16:]]
+        summary = asyncio.run(call)
+        assert all(m["content"] in summary for m in messages)
+        assert payloads == [messages, messages[:16], messages[16:]]
 
 
 @pytest.mark.parametrize("kind", ["overflow", "429", "503", "fatal"])
@@ -84,11 +85,7 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         tool_registry=build_default_registry().select([]),
         tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
     )
-    if persistent and kind == "overflow":
-        asyncio.run(call)
-        assert len(attempts) == 3
-        assert messages[-1] == {"role": "user", "content": "continue"}
-    elif persistent or kind == "fatal":
+    if persistent or kind == "fatal":
         with pytest.raises(ai.ProviderAPIError) as caught:
             asyncio.run(call)
         assert caught.value is error

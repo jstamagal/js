@@ -162,7 +162,7 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
         },
     )
     messages = [
-        {"role": "user", "content": "old"},
+        {"role": "user", "content": "old " * 20000},
         {"role": "assistant", "content": "done"},
     ]
     async def summarize_stub(*a, **kw):
@@ -187,7 +187,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     monkeypatch.setattr(compaction.model_client, "stream_model_async", stream_stub)
     cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": "bad-max"})
     messages = [
-        {"role": "user", "content": "old"},
+        {"role": "user", "content": "old " * 20000},
         {"role": "assistant", "content": "done"},
     ]
 
@@ -259,7 +259,8 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
 
     for raw in (" SAME ", "same", 123):
         cfg = _compact_test_cfg(tmp_path, {"model": raw})
-        messages = [{"role": "user", "content": "old"}]
+        messages = [{"role": "user", "content": "old " * 20000},
+                    {"role": "assistant", "content": "latest answer"}]
         compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert seen_models == ["offline-test-model", "offline-test-model", "offline-test-model"]

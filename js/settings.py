@@ -71,6 +71,7 @@ DEFAULT_COMPACT_BUFFER_TOKENS = 4096
 DEFAULT_COMPACT_SUMMARY_RESERVE_TOKENS = 20_000
 DEFAULT_COMPACT_TAIL_TOKENS = 16384
 DEFAULT_COMPACT_MIN_SAVINGS_TOKENS = 400
+DEFAULT_COMPACT_CLEAR_KEEP_RECENT = 20
 DEFAULT_COMPACT_CHARS_PER_TOKEN = 4.0
 DEFAULT_COMPACT_MODEL = "same"
 DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 8192
@@ -294,6 +295,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Recent tail budget retained after compaction."),
     SettingSpec("compact.min_savings_tokens", "int", DEFAULT_COMPACT_MIN_SAVINGS_TOKENS,
                 "Skip compaction unless estimated savings exceeds this."),
+    SettingSpec("compact.clear_keep_recent", "int", DEFAULT_COMPACT_CLEAR_KEEP_RECENT,
+                "Tool results left intact when an over-budget request clears old "
+                "tool-result bodies before falling back to a summary."),
     SettingSpec("compact.chars_per_token", "float", DEFAULT_COMPACT_CHARS_PER_TOKEN,
                 "Fallback/self-calibrating character-to-token estimate."),
     SettingSpec("compact.model", "str", DEFAULT_COMPACT_MODEL,

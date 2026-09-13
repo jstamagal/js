@@ -268,7 +268,7 @@ class TokenState:
         tools: Any = None,
     ) -> None:
         normalized = usage_from_provider(usage)
-        if normalized.total_tokens <= 0:
+        if normalized.prompt_tokens <= 0:
             self._anchor = None
             return
         self._anchor = _UsageAnchor(
@@ -304,7 +304,11 @@ class TokenState:
         agree. Clamped so a bad anchor cannot produce an absurd tail.
         """
         anchor = self._anchor
-        if anchor is None or anchor.usage.prompt_tokens <= 0:
+        if anchor is None or anchor.usage.total_tokens <= 0 or anchor.message_count > len(messages):
+            return self.chars_per_token
+        if anchor.prefix_fingerprint is not None and (
+            _messages_fingerprint(messages[:anchor.message_count]) != anchor.prefix_fingerprint
+        ):
             return self.chars_per_token
         estimated = estimate_request_tokens(
             system=system,
@@ -314,9 +318,9 @@ class TokenState:
         ).total_tokens
         if estimated <= 0:
             return self.chars_per_token
-        # estimator overshot -> factor > 1 -> more chars per token -> smaller
-        # estimates next time, and the reverse when it undershot.
-        factor = estimated / anchor.usage.prompt_tokens
+        # The anchored prefix includes the reply, so compare it with input + output.
+        # An overshoot increases chars/token and shrinks subsequent estimates.
+        factor = estimated / anchor.usage.total_tokens
         corrected = self.chars_per_token * factor
         return max(1.0, min(20.0, corrected))
 

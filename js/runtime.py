@@ -1458,24 +1458,27 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         specs: list[dict],
         force: bool = False,
     ) -> bool:
+        """Bring the next request under budget. Escalates in three steps, each
+        costlier than the last and each stopping as soon as the budget is met:
+        clear old tool-result bodies, summarize the history before the current
+        user message, then summarize the current turn itself keeping only its
+        tail. Returns True when the history changed."""
         nonlocal ai_convo
-        if not force and not bool(compaction.get(active_compact_cfg, "auto", True)):
+        if not force and not compaction.get_bool(active_compact_cfg, "auto", True):
             return False
         context_window = _budget_context_window()
         if context_window <= 0 and not force:
             return False
-        preserve_from = _active_preserve_from()
         ai_tools_for_budget = model_client.tool_specs_to_ai_tools(specs) if specs else None
+        reserved = context_window - compaction.effective_context_window(active_compact_cfg, context_window)
+        buffer_tokens = min(_budget_buffer_tokens(), max(0, reserved))
         status = token_state.budget_status(
             system=system,
             messages=messages,
             tools=ai_tools_for_budget,
             context_window=context_window if context_window > 0 else None,
-            output_reserve_tokens=max(
-                0, context_window - compaction.effective_context_window(active_compact_cfg, context_window)
-                - _budget_buffer_tokens(),
-            ),
-            buffer_tokens=_budget_buffer_tokens(),
+            output_reserve_tokens=max(0, reserved - buffer_tokens),
+            buffer_tokens=buffer_tokens,
         )
         active_context.context_tokens = status.current_context_tokens
         active_context.tokens_until_compaction = status.tokens_until_compaction
@@ -1490,43 +1493,93 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         )
         if not (force or status.should_compact):
             return False
-        if preserve_from is None or preserve_from <= 0:
-            telemetry.event("context_compaction_skipped", phase=phase, reason="no_compactable_prefix")
-            return False
-        try:
-            result = await compaction.compact_now(
-                active_compact_cfg,
-                system,
-                messages,
-                focus=f"{phase} context budget",
-                forced=True,
-                preserve_from=preserve_from,
-                trigger={"phase": phase, "context_tokens": status.current_context_tokens,
-                         "context_window": context_window,
-                         "effective_input_limit": status.effective_input_limit,
-                         "forced_recovery": force},
-                flight_data={"budget": asdict(status), "tools": specs,
-                             "usage_anchor": vars(token_state).get("_anchor"),
-                             "ai_messages": ai_convo},
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[COMPACT FAILURE] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            telemetry.event(
-                "context_compaction_failed",
-                phase=phase,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            return False
-        if not result.startswith("compacted:"):
-            telemetry.event("context_compaction_skipped", phase=phase, reason=result)
-            return False
-        token_state.reset()
-        ai_convo = model_client.history_to_ai_messages(system, messages)
-        _trace_req["sent"] = 0
-        _trace_req["schemas"] = True
-        active_context.compacted_during_turn = True
-        telemetry.event("context_compacted", phase=phase, result=result)
-        return True
+        trigger = {"phase": phase, "context_tokens": status.current_context_tokens,
+                   "context_window": context_window,
+                   "effective_input_limit": status.effective_input_limit,
+                   "forced_recovery": force}
+        flight_data = {"budget": asdict(status), "tools": specs,
+                       "usage_anchor": vars(token_state).get("_anchor"),
+                       "ai_messages": ai_convo}
+        chars_per_token = token_state.calibrated_chars_per_token(
+            system=system, messages=messages, tools=ai_tools_for_budget,
+        )
+        reclaimed = 0
+        changed = False
+
+        def _over_budget(reclaimed_chars: int) -> bool:
+            # The provider-anchored count minus what was removed, in the
+            # currency the anchor was calibrated in.
+            if status.effective_input_limit is None:
+                return False
+            remaining = status.current_context_tokens - int(reclaimed_chars / chars_per_token)
+            return remaining > status.effective_input_limit
+
+        def _history_changed() -> None:
+            nonlocal changed, ai_convo
+            changed = True
+            token_state.reset()
+            ai_convo = model_client.history_to_ai_messages(system, messages)
+            _trace_req["sent"] = 0
+            _trace_req["schemas"] = True
+            active_context.compacted_during_turn = True
+
+        # 1. Old tool-result bodies are the bulk of a long turn and cost no
+        #    model call to drop.
+        cleared, reclaimed = compaction.clear_for_budget(
+            messages, cfg=active_compact_cfg, system=system, trigger=trigger,
+            flight_data=flight_data, over_budget=_over_budget,
+        )
+        if cleared:
+            _history_changed()
+            telemetry.event("context_results_cleared", phase=phase, cleared=cleared)
+            if not (force or _over_budget(reclaimed)):
+                return True
+
+        async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
+            nonlocal reclaimed
+            before_chars = compaction.history_chars(messages)
+            try:
+                result = await compaction.compact_now(
+                    active_compact_cfg, system, messages, focus=focus, forced=True,
+                    preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
+                    tail_tokens=tail_tokens, context=active_context,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMPACT FAILURE] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                telemetry.event("context_compaction_failed", phase=phase,
+                                error=f"{type(exc).__name__}: {exc}")
+                return False
+            if not result.startswith("compacted:"):
+                telemetry.event("context_compaction_skipped", phase=phase, reason=result)
+                return False
+            reclaimed += before_chars - compaction.history_chars(messages)
+            _history_changed()
+            telemetry.event("context_compacted", phase=phase, result=result)
+            return True
+
+        # 2. Summarize everything before the current user message, which stays
+        #    verbatim along with the turn's work so far.
+        preserve_from = _active_preserve_from()
+        if (preserve_from is not None and preserve_from > 0
+                and compaction.prefix_worth_summarizing(messages, preserve_from)
+                and await _summarize(preserve_from, f"{phase} context budget")
+                and (force or not _over_budget(reclaimed))):
+            return True
+        # 3. The current turn alone is over budget: summarize it too, keeping
+        #    its most recent tail so the model can carry on from the summary.
+        #    A provider rejection (force) says the request did not fit no matter
+        #    what the budget believed, so keep half as much tail each round.
+        tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens", 16384)
+        if force:
+            history_tokens = int(compaction.history_chars(messages) / chars_per_token)
+            tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_recovered
+        keep_from = compaction.tail_start(messages, tail_tokens, chars_per_token)
+        if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
+            await _summarize(None, f"{phase} context budget: current turn over budget",
+                             tail_tokens=tail_tokens)
+        elif not changed:
+            telemetry.event("context_compaction_skipped", phase=phase, reason="tail_fills_budget")
+        return changed
 
     try:
         if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
@@ -1546,7 +1599,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             provider_metadata: dict[str, Any] | None = None
             incomplete_reason: str | None = None
             budget_checked = False
-            for attempt in range(3):
+            transport_retries = 0
+            for attempt in range(3 + compaction.MAX_OVERFLOW_ROUNDS):
                 t0 = time.time()
                 try:
                     if mcp_host is not None:
@@ -1660,7 +1714,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     _close_text()
                     if (
                         compaction.is_context_overflow_error(e)
-                        and not durable_side_effects_started
                         and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS
                     ):
                         overflow_recovered += 1
@@ -1698,11 +1751,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     if e.is_retryable:
                         telemetry.event("retriable_error", model=model,
                                         error=f"{type(e).__name__}: {e}", attempt=attempt)
-                        if attempt == 2:
+                        if transport_retries == 2:
                             _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                             _end_turn("error")
                             raise
-                        await asyncio.sleep(_backoff(attempt))
+                        await asyncio.sleep(_backoff(transport_retries))
+                        transport_retries += 1
                     else:
                         telemetry.event("fatal_error", model=model,
                                         error=f"{type(e).__name__}: {e}")

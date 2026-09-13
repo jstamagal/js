@@ -200,7 +200,9 @@ def load_messages(memory_file: Path) -> list[dict]:
                         messages[:] = _heal_orphaned_tool_calls(messages)
                         keep_from = int(data.get("keep_from", len(messages)))
                         keep_from = max(0, min(keep_from, len(messages)))
-                        messages[:] = [_compaction_summary_message(data["summary"]), *messages[keep_from:]]
+                        rehydrated = data.get("rehydrated")
+                        messages[:] = [_compaction_summary_message(data["summary"]),
+                                       *([rehydrated] if rehydrated else []), *messages[keep_from:]]
                 continue
             if rec.kind != "message" or rec.message is None:
                 continue
@@ -225,6 +227,21 @@ def _append(memory_file: Path, rec: Record) -> None:
 
 def append_message(memory_file: Path, message: dict) -> None:
     _append(memory_file, Record(kind="message", ts=time.time(), message=message))
+
+
+def persist_messages(memory_file: Path, messages: list[dict]) -> None:
+    """Append the live suffix, retaining replaced records in the journal."""
+    persisted = load_messages(memory_file)
+    comparable = _strip_orphan_reasoning(messages)
+    common = 0
+    for old, new in zip(persisted, comparable):
+        if old != new:
+            break
+        common += 1
+    if common < len(persisted):
+        append_mark(memory_file, f"rollback_to:{common}")
+    for message in messages[common:]:
+        append_message(memory_file, message)
 
 
 def append_mark(memory_file: Path, marker: str) -> None:
@@ -268,8 +285,11 @@ def load_system_prompt(memory_file: Path) -> str | None:
     return None
 
 
-def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False, trigger: dict | None = None) -> None:
+def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
+                           trigger: dict | None = None, rehydrated: dict | None = None) -> None:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}
+    if rehydrated is not None:
+        payload["rehydrated"] = rehydrated
     if trigger is not None:
         payload["trigger"] = trigger
     append_mark(memory_file, "compaction:" + json.dumps(payload, separators=(",", ":")))

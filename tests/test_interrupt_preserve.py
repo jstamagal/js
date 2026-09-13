@@ -60,11 +60,12 @@ def test_interrupt_keeps_partial_work_across_reload(monkeypatch, tmp_path):
     assert "interrupted" in reloaded[2]["content"].lower()
 
 
-def test_turn_persistence_does_not_reappend_mutated_history(tmp_path):
+def test_turn_persistence_journals_mutated_history_without_overwriting(tmp_path):
     session_file = tmp_path / "session.jsonl"
     append_message(session_file, {"role": "assistant", "content": "before normalization"})
     user_message = {"role": "user", "content": "new work"}
     append_message(session_file, user_message)
+    archived = session_file.read_bytes()
     messages = [
         {"role": "assistant", "content": "after normalization"},
         user_message,
@@ -74,15 +75,10 @@ def test_turn_persistence_does_not_reappend_mutated_history(tmp_path):
     cli._persist_turn_messages(
         type("Cfg", (), {"session_file": session_file})(),
         messages,
-        user_message,
-        user_recorded=True,
     )
 
-    assert load_messages(session_file) == [
-        {"role": "assistant", "content": "before normalization"},
-        {"role": "user", "content": "new work"},
-        {"role": "assistant", "content": "partial work"},
-    ]
+    assert load_messages(session_file) == messages
+    assert session_file.read_bytes().startswith(archived)
 
 
 def test_interrupt_with_no_work_drops_the_bare_prompt(monkeypatch, tmp_path):

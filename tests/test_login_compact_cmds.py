@@ -85,7 +85,8 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
 def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     state = {
-        "messages": [{"role": "user", "content": "old context"}],
+        "messages": [{"role": "user", "content": "old context " * 7000},
+                     {"role": "assistant", "content": "latest answer"}],
         "system": "sys",
         "settings": settings.seed_defaults(),
     }

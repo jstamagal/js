@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import asyncio
 import io
 import json
@@ -22,7 +24,7 @@ def read_flight(cfg):
 def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path, capsys, failure):
     cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights"), "tail_tokens": 1})
     cfg.settings["provider"] = {"api_key": "private-key"}
-    original = [{"role": "user", "content": "old content"}, {"role": "user", "content": "new content"}]
+    original = [{"role": "user", "content": "old content " * 100}, {"role": "user", "content": "new content"}]
     messages = list(original)
 
     async def summarize(*a, **kw):
@@ -71,7 +73,7 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     state = _auto_state()
     state["settings"] = {"compact": {"context_window": 128000}}
     captured = []
-    monkeypatch.setattr(compaction, "maybe_auto_compact", lambda active, *args: captured.append(active) or compaction.AutoCompactOutcome())
+    monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args: captured.append(active) or compaction.AutoCompactOutcome()))
     cli._maybe_auto_compact(cfg, state)
     assert captured[0].settings["compact"]["context_window"] == 128000
     state["settings"]["compact"]["context_window"] = 1000000

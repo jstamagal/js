@@ -336,7 +336,6 @@ async def _run_one_task_async(
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
     messages = M.load_messages(cfg.session_file)
-    before_len = len(messages)
     messages.append({"role": "user", "content": prompt})
     try:
         await run_turn_async(
@@ -351,13 +350,11 @@ async def _run_one_task_async(
             sampling=sampling,
         )
     except Exception as exc:  # noqa: BLE001
-        messages[:] = messages[:before_len]
         return f"{idx}. ERROR {type(exc).__name__}: {exc}"
     finally:
         close_terminal_sessions(child_context)
+        M.persist_messages(cfg.session_file, messages)
 
-    for new_message in messages[before_len:]:
-        M.append_message(cfg.session_file, new_message)
     final = ""
     for msg in reversed(messages):
         if msg.get("role") == "assistant" and msg.get("content"):

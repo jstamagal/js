@@ -208,21 +208,27 @@ def _replace_runtime_user_message(
             return
 
 
-def _persist_turn_messages(
-    cfg: Config,
-    messages: list[dict],
-    user_message: dict,
-    *,
-    user_recorded: bool,
-) -> None:
-    try:
-        start = next(idx for idx, message in enumerate(messages) if message is user_message)
-    except StopIteration as exc:
-        raise RuntimeError("current turn's user message is missing from history") from exc
-    if user_recorded:
-        start += 1
-    for message in messages[start:]:
-        _append_turn(cfg, message)
+def _persist_turn_messages(cfg: Config, messages: list[dict]) -> None:
+    M.persist_messages(cfg.session_file, messages)
+
+
+def _turn_user_index(messages: list[dict], user_message: dict) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index] is user_message or messages[index] == user_message:
+            return index
+    return None
+
+
+def _turn_has_progress(messages: list[dict], user_message: dict) -> bool:
+    index = _turn_user_index(messages, user_message)
+    return bool(messages) if index is None else index < len(messages) - 1
+
+
+def _discard_unstarted_turn(cfg: Config, messages: list[dict], user_message: dict) -> None:
+    index = _turn_user_index(messages, user_message)
+    if index is not None:
+        del messages[index:]
+    _persist_turn_messages(cfg, messages)
 
 
 def _session_hint_arg(cfg: Config) -> str:
@@ -1106,13 +1112,13 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
     return True
 
 
-def _maybe_auto_compact(cfg: Config, state: dict) -> None:
+async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here."""
     if not compaction.get_bool(cfg, "auto", True):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
-    outcome = compaction.maybe_auto_compact(
+    outcome = await compaction.maybe_auto_compact_async(
         active_cfg,
         state.setdefault("auto_compact", compaction.AutoCompactState()),
         runtime.T.DEFAULT_CONTEXT,
@@ -1128,11 +1134,8 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
         print(f"{C.GREY}({outcome.result}){C.RESET}")
 
 
-def _post_auto_compact_needs_executor() -> bool:
-    prompt_tokens = int(getattr(runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 0) or 0)
-    incomplete_reason = getattr(runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", None)
-    return prompt_tokens > 0 or compaction.is_max_output_incomplete(incomplete_reason)
-
+def _maybe_auto_compact(cfg: Config, state: dict) -> None:
+    asyncio.run(_maybe_auto_compact_async(cfg, state))
 
 
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
@@ -1916,9 +1919,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
             )
             if save:
-                _persist_turn_messages(
-                    cfg, messages, user_bundle.history_message, user_recorded=True,
-                )
+                _persist_turn_messages(cfg, messages)
         finally:
             if trace_sink is not None:
                 trace_sink.close()
@@ -2445,8 +2446,7 @@ async def _close_session_mcp_host(state: dict) -> None:
 
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
-    deltas, persists new messages, then auto-compacts (in the executor because
-    compaction still calls asyncio.run under the hood). Owns cancellation
+    deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
     caller — persists partial work and heals orphaned tool_calls, mirroring the
     legacy blocking KeyboardInterrupt path, then re-raises so the job ends
@@ -2494,16 +2494,8 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             user_bundle.history_message,
             before_len,
         )
-        _persist_turn_messages(
-            cfg,
-            state["messages"],
-            user_bundle.history_message,
-            user_recorded=True,
-        )
-        if _post_auto_compact_needs_executor():
-            await loop.run_in_executor(None, functools.partial(_maybe_auto_compact, turn_cfg, state))
-        else:
-            _maybe_auto_compact(turn_cfg, state)
+        _persist_turn_messages(cfg, state["messages"])
+        await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
         cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         if _event_results_changed_sampling(cancel_event.results):
@@ -2516,7 +2508,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         if _changed_lock_subagent_model_key(cancel_changed_keys):
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        if len(state["messages"]) > before_len + 1:
+        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
             _replace_runtime_user_message(
                 state["messages"],
@@ -2524,24 +2516,22 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
                 user_bundle.history_message,
                 before_len,
             )
-            _persist_turn_messages(
-                cfg,
-                state["messages"],
-                user_bundle.history_message,
-                user_recorded=True,
-            )
+            _persist_turn_messages(cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
             print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-            state["messages"][:] = state["messages"][:before_len]
-            M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except Exception as e:  # noqa: BLE001
         print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
-        state["messages"][:] = state["messages"][:before_len]
-        M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+            _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
+                                          user_bundle.history_message, before_len)
+            _persist_turn_messages(cfg, state["messages"])
+        else:
+            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
         M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
 
 
@@ -3448,12 +3438,7 @@ def main(argv: list[str] | None = None) -> int:
                 user_bundle.history_message,
                 before_len,
             )
-            _persist_turn_messages(
-                cfg,
-                state["messages"],
-                user_bundle.history_message,
-                user_recorded=True,
-            )
+            _persist_turn_messages(cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
@@ -3467,7 +3452,7 @@ def main(argv: list[str] | None = None) -> int:
             if _changed_lock_subagent_model_key(cancel_changed_keys):
                 _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if len(state["messages"]) > before_len + 1:
+            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
                 # Turn did real work (assistant/tool messages beyond the user
                 # prompt) before ^C landed. Keep it: persist the partial turn,
                 # then heal any orphaned tool_calls in memory so the next turn is
@@ -3480,25 +3465,23 @@ def main(argv: list[str] | None = None) -> int:
                     user_bundle.history_message,
                     before_len,
                 )
-                _persist_turn_messages(
-                    cfg,
-                    state["messages"],
-                    user_bundle.history_message,
-                    user_recorded=True,
-                )
+                _persist_turn_messages(cfg, state["messages"])
                 M.append_mark(cfg.session_file, "turn_interrupted")
                 state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
             else:
                 # Stopped before the model produced anything worth keeping — drop
                 # the bare user prompt (rollback removes it on reload too).
                 print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-                state["messages"][:] = state["messages"][:before_len]
-                M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
-            state["messages"][:] = state["messages"][:before_len]
-            M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
+            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+                _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
+                                              user_bundle.history_message, before_len)
+                _persist_turn_messages(cfg, state["messages"])
+            else:
+                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
     mcp_loop.run(_close_session_mcp_host(state))
     model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())

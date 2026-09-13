@@ -120,12 +120,13 @@ by prepending the system prompt to the current messages.
 6. Repeats until the model returns a stop or the tool-iteration cap is hit.
 7. Appends tool result messages.
 8. Stops on tool retry limit or max iterations.
-Provider transport retry:
+Provider request retry:
 
-- Retries `APIConnectionError`, `RateLimitError`, `ServiceUnavailableError`,
-  `Timeout`, and 5xx `APIError`.
-- Treats auth, not found, bad request, and context overflow as fatal.
-- Uses exponential backoff with jitter.
+- SDK `ProviderAPIError.is_retryable` permits two transport retries with backoff.
+- Context overflow has three separate recovery rounds, each followed by a new
+  request. Recovery clears old tool results, then summarizes if needed. This
+  also works after tool execution: only the rejected model request is retried.
+- Unrecovered provider errors propagate to the caller.
 
 ## Tool Dispatch
 
@@ -233,8 +234,9 @@ raising. Provider and harness failures raise to the CLI.
 
 The CLI prompt mode catches runtime exceptions and returns exit code `1`.
 
-The REPL catches runtime exceptions, rolls back the appended user message with a
-`rollback_to:N` mark, and keeps the REPL alive.
+The REPL catches runtime exceptions and keeps the REPL alive. Completed tool
+work and partial replies are persisted; an unstarted prompt is discarded using
+its current position, including after compaction has shifted the history.
 
 ## Backward Compatibility Policy
 
@@ -272,7 +274,9 @@ Existing jsrc values override that default.
 
 Both automatic compaction paths cap reply headroom with
 `compact.summary_reserve_tokens` and reserve `compact.buffer_tokens`.
-Output truncation alone does not trigger summarization. In-turn compaction
+Output truncation alone does not trigger summarization. Between-turn compaction
+is awaited on the async CLI loop, so cancellation stops its provider request.
+In-turn compaction
 prints its reason and budget before summarizing; automatic compaction marks
 retain phase, context-token count, window and effective input limit.
 
@@ -300,3 +304,28 @@ answer stdout is redirected. Flight data includes the provider rejection,
 retry round, retained-result count, changed message indexes and tool-call IDs,
 character savings, and complete before/after context. No eligible results is
 recorded as SKIPPED; any following summarization has its own attempt ID.
+
+### Compaction commit and replay
+
+In-turn budget recovery clears old tool results first (`compact.clear_keep_recent`
+starts the retained-result count), then summarizes older history. If the active
+turn itself is too large, its older work can be summarized while retaining a
+paired assistant/tool tail. Empty prefixes and summary-only prefixes are skipped.
+Both trigger paths use current provider-anchored input plus generated output;
+output-only usage falls back to estimation. Small windows share the same capped
+reserve and buffer calculation.
+
+Summary overflow partitions the source and summarizes both halves, with bounded
+split depth. A failing partition, blank response, or incomplete response leaves
+the source history intact. The proposed replacement must shrink the history;
+optional file reattachment is omitted if it consumes those savings.
+
+Pending messages are journaled before a compaction mark. The mark carries any
+reattached files, and clearing mutations are journaled as replacements. CLI and
+child-agent persistence compare the current live history with replayed history,
+append changed suffixes, and retain original records in the archive. Cancellation
+uses current user position rather than a pre-compaction list offset.
+
+`tests/compaction_harness/` contains standalone adversarial runners: scripted
+provider-boundary failures and a loopback HTTP/SSE server exercising the actual
+SDK adapter. See [Compaction adversarial audit](compaction-adversarial-audit.md).

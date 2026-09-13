@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import re
 
 import ai
@@ -351,7 +352,7 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
     calls: list[list[ai.types.messages.Message]] = []
 
     def bigtool(context=None):
-        return "Z" * 5000
+        return "Z" * 2000
 
     registry = ToolRegistry(
         tools=(Tool(name="bigtool", description="return a big result", handler=bigtool, params={}),),
@@ -366,7 +367,10 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
         calls.append(list(kwargs["messages"]))
         if len(calls) == 1:
             order.append("first_stream")
-            return model_tool_call_result("bigtool", ["{}"], call_id="call_big")
+            return replace(
+                model_tool_call_result("bigtool", ["{}"], call_id="call_big"),
+                usage=ai.types.usage.Usage(input_tokens=500, output_tokens=10),
+            )
         order.append("second_stream")
         return model_text_result("DONE")
 
@@ -374,7 +378,7 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=800)
     messages = [
-        {"role": "user", "content": "old context"},
+        {"role": "user", "content": "old context " * 150},
         {"role": "assistant", "content": "old answer"},
         {"role": "user", "content": "current tool turn"},
     ]
