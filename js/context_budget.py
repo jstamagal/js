@@ -22,6 +22,8 @@ _TOKENISH_RE = re.compile(r"[A-Za-z0-9_]+|[^\w\s]", re.UNICODE)
 
 @dataclass(frozen=True)
 class TokenUsage:
+    """SDK-normalized counts; cache fields are breakdowns of input_tokens."""
+
     input_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
@@ -29,16 +31,11 @@ class TokenUsage:
 
     @property
     def prompt_tokens(self) -> int:
-        return max(0, self.input_tokens) + max(0, self.cache_read_tokens) + max(0, self.cache_write_tokens)
+        return max(0, self.input_tokens)
 
     @property
     def total_tokens(self) -> int:
-        return (
-            max(0, self.input_tokens)
-            + max(0, self.cache_read_tokens)
-            + max(0, self.cache_write_tokens)
-            + max(0, self.output_tokens)
-        )
+        return self.prompt_tokens + max(0, self.output_tokens)
 
 
 @dataclass(frozen=True)

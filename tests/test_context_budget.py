@@ -41,7 +41,7 @@ def test_token_state_prefers_provider_usage_and_estimates_only_delta():
     )
 
     assert used_provider is True
-    assert current == 130 + context_budget.estimate_message_tokens(delta)
+    assert current == 120 + context_budget.estimate_message_tokens(delta)
     assert estimate.total_tokens > context_budget.estimate_message_tokens(delta)
 
 
@@ -73,5 +73,18 @@ def test_calibration_uses_recorded_prompt_tokens():
         SimpleNamespace(input_tokens=50, cache_read_tokens=50, output_tokens=10),
         message_count=1, messages=messages,
     )
-    assert state.last_usage.prompt_tokens == 100
+    assert state.last_usage.prompt_tokens == 50
     assert state.calibrated_chars_per_token(messages=messages) > 4.0
+
+
+def test_cached_prompt_is_counted_once_against_128k_window():
+    from ai.types.usage import Usage
+
+    messages = [{"role": "user", "content": "active task"}]
+    state = context_budget.TokenState()
+    usage = Usage(input_tokens=64000, cache_read_tokens=63000, output_tokens=500)
+    state.record_provider_usage(usage, message_count=1, messages=messages)
+    budget = state.budget_status(messages=messages, context_window=128000, buffer_tokens=4096)
+    assert state.last_usage.total_tokens == usage.total_tokens == 64500
+    assert budget.current_context_tokens == 64500
+    assert budget.should_compact is False

@@ -255,3 +255,45 @@ def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_pa
     assert len(notices) == 2
     assert str(paths[0]) in visible
     assert messages[-1]["content"] == "ok"
+
+
+def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch, tmp_path):
+    from ai.types.usage import Usage
+
+    cfg = replace(_config(tmp_path), max_tool_iterations=20, max_output_tokens=None,
+                  settings={"compact": {"context_window_fallback": 128000}})
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
+    calls = []
+    summaries = []
+
+    async def response(**kwargs):
+        calls.append(kwargs)
+        index = len(calls)
+        result = (_result((f"c{index}", "tool_discovery", "{}"), text="continue")
+                  if index <= 11 else _result(text="finished"))
+        return replace(result, usage=Usage(input_tokens=64000, cache_read_tokens=63000, output_tokens=500))
+
+    async def dispatch(tool_calls, telemetry, cap_bytes, trace, error_tracker, registry, context, loop, progress):
+        for pc in tool_calls:
+            progress.record(pc, {}, "saved tool output")
+
+    async def summarize(*args, **kwargs):
+        summaries.append(args)
+        return "summary"
+
+    monkeypatch.setattr(model_client, "stream_model_async", response)
+    monkeypatch.setattr(runtime, "_dispatch_batch", dispatch)
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    messages = [{"role": "user", "content": "previous summary"},
+                {"role": "user", "content": "active task " + "material " * 10000}]
+    asyncio.run(runtime.run_turn_async(
+        cfg, "SYSTEM", messages, runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+    ))
+    assert len(calls) == 12
+    assert summaries == []
+    assert messages[1]["content"].startswith("active task")
+    assert sum(m["role"] == "tool" for m in messages) == 11
+    assert messages[-1]["content"] == "finished"
