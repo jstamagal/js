@@ -38,6 +38,7 @@ browser = [
 ]
 test = [
     "pytest>=9.0",
+    "pytest-xdist>=3.6",
 ]
 
 [project.scripts]

@@ -167,7 +167,7 @@ uninstall:
 # and e2e (live end-to-end paths).
 # offline suite — skips the live markers (ai_provider, vision, e2e).
 test:
-    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
+    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e" -p no:cacheprovider -n auto
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:
