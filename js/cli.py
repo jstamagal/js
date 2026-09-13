@@ -1842,6 +1842,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
         return 2
     messages.append(user_bundle.runtime_message)
+    if save:
+        _append_turn(cfg, user_bundle.history_message)
     if (sink := _transcript_sink(telemetry)) is not None:
         sink.write_user(prompt)
     call_stats: list[dict] = []
@@ -1893,14 +1895,27 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
                 finally:
                     telemetry.transcript_log = visible_transcript
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            with _transcript_stdio(telemetry):
+                print(f"{C.ORANGE}(turn interrupted){C.RESET}", file=sys.stderr)
+            return 130
         except Exception as e:  # noqa: BLE001
             with _transcript_stdio(telemetry):
                 print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
             return 1
     finally:
-        if trace_sink is not None:
-            trace_sink.close()
-        telemetry.trace_sink = None
+        try:
+            _replace_runtime_user_message(
+                messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
+            )
+            if save:
+                _persist_turn_messages(
+                    cfg, messages, user_bundle.history_message, user_recorded=True,
+                )
+        finally:
+            if trace_sink is not None:
+                trace_sink.close()
+            telemetry.trace_sink = None
 
     if stats_json or stats_csv:
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
@@ -1911,7 +1926,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if stats_csv:
             stats.write_csv(stats_csv, [row])
 
-    _replace_runtime_user_message(messages, user_bundle.runtime_message, user_bundle.history_message, before_len)
     for message in reversed(messages):
         if message.get("role") == "assistant" and message.get("content"):
             # In debug, run_turn already streamed the answer live to stdout — a
@@ -1925,12 +1939,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     with _mute_transcript_tee(_transcript_sink(telemetry)):
                         print(content)
                 if save:
-                    _persist_turn_messages(
-                        cfg,
-                        messages,
-                        user_bundle.history_message,
-                        user_recorded=False,
-                    )
                     _maybe_auto_compact(cfg, {
                         "system": system,
                         "messages": messages,

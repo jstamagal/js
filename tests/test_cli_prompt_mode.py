@@ -1685,3 +1685,72 @@ def test_json_is_scoped_to_list(capsys):
     assert "--json only works with --list" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli.main(["-s", "named", "--session-key", "key", "-p", "nope"])
+
+
+@pytest.mark.parametrize("debug", [False, True])
+@pytest.mark.parametrize("failure, status", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
+def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, debug, failure, status):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    session = tmp_path / ".local/share/js/sessions/defaultagent/interrupted.jsonl"
+    user = {"role": "user", "content": "inspect tests"}
+    exchange = [
+        {"role": "assistant", "content": "checking", "tool_calls": [
+            {"id": "read-1", "type": "function", "function": {
+                "name": "read", "arguments": '{"path":"justfile"}',
+            }},
+            {"id": "read-2", "type": "function", "function": {
+                "name": "read", "arguments": '{"path":"pyproject.toml"}',
+            }},
+        ]},
+        {"role": "tool", "tool_call_id": "read-1", "name": "read", "content": "test recipe"},
+    ]
+
+    def interrupted(cfg, system, messages, telemetry, **kwargs):
+        assert load_messages(session) == [user]
+        messages.extend(exchange)
+        raise failure()
+
+    monkeypatch.setattr(runtime, "run_turn", interrupted)
+    args = ["-s", "interrupted", "-p", "inspect tests"] + (["-d"] if debug else [])
+    assert cli.main(args) == status
+    kept = load_messages(session)
+    assert kept[:3] == [user, *exchange]
+    assert kept[3]["tool_call_id"] == "read-2"
+
+    def resumed(cfg, system, messages, telemetry, **kwargs):
+        assert messages == [*kept, {"role": "user", "content": "continue"}]
+        messages.append({"role": "assistant", "content": "finished"})
+
+    monkeypatch.setattr(runtime, "run_turn", resumed)
+    assert cli.main(["-s", "interrupted", "-p", "continue"]) == 0
+    assert load_messages(session) == [
+        *kept, {"role": "user", "content": "continue"},
+        {"role": "assistant", "content": "finished"},
+    ]
+
+
+def test_prompt_interrupt_keeps_streamed_partial(monkeypatch, tmp_path):
+    import asyncio
+
+    async def interrupted(**kwargs):
+        kwargs["on_text"]("partial answer")
+        raise asyncio.CancelledError()
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", interrupted)
+    assert cli.main(["-s", "partial", "-p", "explain"]) == 130
+    session = tmp_path / ".local/share/js/sessions/defaultagent/partial.jsonl"
+    assert load_messages(session) == [
+        {"role": "user", "content": "explain"},
+        {"role": "assistant", "content": "partial answer", "incomplete_reason": "cancelled"},
+    ]
+
+
+def test_prompt_interrupt_without_save(monkeypatch, tmp_path):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(runtime, "run_turn", interrupted)
+    assert cli.main(["--no-save", "-p", "explain"]) == 130
+    assert not list((tmp_path / ".local/share/js/sessions").rglob("*.jsonl"))
