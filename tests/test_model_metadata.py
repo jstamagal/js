@@ -21,6 +21,7 @@ def _write_metadata_db(path: Path, *, generated_at: str, source: str = "https://
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("CREATE TABLE model_release_dates (full_id TEXT PRIMARY KEY, release_date TEXT NOT NULL)")
     conn.executemany(
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
         [
@@ -92,7 +93,7 @@ def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypat
         _write_metadata_db(output, generated_at=new_time.isoformat(), source=source)
         return 140, 5142
 
-    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "generate_database", fake_generate_database)
+    monkeypatch.setattr(model_metadata, "_generate_database", fake_generate_database)
     model_metadata.lookup_limits.cache_clear()
     model_metadata._all_models.cache_clear()
 
@@ -133,7 +134,7 @@ def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch
     monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
     monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
-    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "generate_database", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not refresh")))
+    monkeypatch.setattr(model_metadata, "_generate_database", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not refresh")))
 
     status = model_metadata.ensure_fresh_catalog()
 
@@ -171,7 +172,7 @@ def test_ensure_fresh_catalog_warns_and_keeps_current_on_refresh_failure(monkeyp
     def fail_refresh(**_kwargs):
         raise RuntimeError("offline")
 
-    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "generate_database", fail_refresh)
+    monkeypatch.setattr(model_metadata, "_generate_database", fail_refresh)
 
     status = model_metadata.ensure_fresh_catalog()
 
@@ -180,3 +181,75 @@ def test_ensure_fresh_catalog_warns_and_keeps_current_on_refresh_failure(monkeyp
     err = capsys.readouterr().err
     assert "*** updating models.dev cache..." in err
     assert "*** warning: models.dev cache refresh failed: RuntimeError: offline" in err
+
+
+def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):
+    payload = {
+        "maker": {
+            "id": "maker", "name": "Maker", "npm": "@ai-sdk/openai-compatible",
+            "doc": "https://example.test", "env": [],
+            "models": {
+                "model-v2": {
+                    "id": "model-v2", "name": "Model V2", "family": "model",
+                    "release_date": "2026-05-01", "attachment": False,
+                    "reasoning": True, "tool_call": True, "open_weights": False,
+                    "limit": {"context": 1000000, "output": 32000},
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                },
+            },
+        },
+    }
+    path = tmp_path / "catalog.sqlite"
+    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", lambda source: payload)
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: path)
+    model_metadata._generate_database(output=path)
+    assert model_metadata._release_dates() == {"maker:model-v2": "2026-05-01"}
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT limit_context FROM models").fetchone() == (1000000,)
+
+
+def test_routed_latest_uses_family_release_date_and_preserves_variants(monkeypatch):
+    from js.model_metadata import _ModelRow
+
+    rows = (
+        _ModelRow("openai", "gpt-5.6-sol", 1050000, 128000, None, "gpt-sol", "2026-07-09"),
+        _ModelRow("upstage", "solar-pro4", 524288, 32000, None, "solar-pro", "2026-09-01"),
+        _ModelRow("anthropic", "claude-opus-5", 1000000, 128000, None, "claude-opus", "2026-07-24"),
+        _ModelRow("router", "claude-opus-5-fast", 1000000, 128000, None, "claude-opus", "2026-08-01"),
+        _ModelRow("xai", "grok-4-0709", 256000, 32000, None, "grok", "2025-07-09"),
+        _ModelRow("xai", "grok-4.6", 500000, 128000, None, "grok", "2026-08-12"),
+        _ModelRow("minimax", "minimax-m27", 198000, 32000, None, "minimax", "2026-03-18"),
+        _ModelRow("minimax", "minimax-m3", 1048576, 128000, None, "minimax", "2026-06-01"),
+        _ModelRow("alibaba", "qwen3.8-max", 1000000, 32000, None, "qwen", "2026-08-03"),
+        _ModelRow("alibaba", "qwen3.8-flash", 1000000, 32000, None, "qwen", "2026-08-26"),
+    )
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _: None)
+    model_metadata.lookup_limits.cache_clear()
+    expected = {
+        "cpa/sol-latest-high": "gpt-5.6-sol",
+        "claude-opus-latest-max": "claude-opus-5",
+        "grok-latest-off": "grok-4.6",
+        "minimax-latest": "minimax-m3",
+        "qwen-max-latest": "qwen3.8-max",
+        "qwen-flash-latest": "qwen3.8-flash",
+        "nim/gpt-5.6-sol": "gpt-5.6-sol",
+        "grok-4-0709": "grok-4-0709",
+    }
+    for request, target in expected.items():
+        result = model_metadata.lookup_limits(request, "cpa")
+        assert result is not None, request
+        assert result.model_id == target
+
+
+def test_routed_catalog_prefers_issuer_limits(monkeypatch):
+    rows = (
+        model_metadata._ModelRow("router", "gpt-5.6-sol", 128000, 32000, None, "gpt-sol", "2026-07-09"),
+        model_metadata._ModelRow("openai", "gpt-5.6-sol", 1050000, 128000, None, "gpt-sol", "2026-07-09"),
+    )
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _: None)
+    model_metadata.lookup_limits.cache_clear()
+    result = model_metadata.lookup_limits("omni/gpt-5.6-sol", "cpa")
+    assert result.provider_id == "openai"
+    assert result.context_window == 1050000

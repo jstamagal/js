@@ -63,7 +63,7 @@ DEFAULT_KERNEL_WAIT_SECONDS = 5
 DEFAULT_SHELL_WAIT_SECONDS = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
-DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
+DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = 1_000_000
 DEFAULT_COMPACT_NOTIFY_THRESHOLD = 0.50
 DEFAULT_COMPACT_TRIGGER_THRESHOLD = 0.80
 DEFAULT_COMPACT_FORCE_THRESHOLD = 0.90
@@ -129,8 +129,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
     SettingSpec("model.context_window", "int", None,
-                "Override the active model's context window. Unset = server-reported "
-                "limits, then models.dev metadata. Beats every other source; for a "
+                "Override the active model's context window. Unset = local runtime "
+                "allocation, then models.dev metadata. Beats every other source; for a "
                 "multi-model setup use compact.context_window_overrides instead.",
                 env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str", None,

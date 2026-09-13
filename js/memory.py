@@ -268,8 +268,10 @@ def load_system_prompt(memory_file: Path) -> str | None:
     return None
 
 
-def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False) -> None:
+def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False, trigger: dict | None = None) -> None:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}
+    if trigger is not None:
+        payload["trigger"] = trigger
     append_mark(memory_file, "compaction:" + json.dumps(payload, separators=(",", ":")))
 
 

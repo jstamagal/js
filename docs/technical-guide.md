@@ -253,3 +253,25 @@ outright; `multi_patch`'s batch form now lives in `patch` as its `edits`
 parameter.
 
 Tests should protect current behavior, not old names.
+
+
+## Context-window resolution
+
+Remote model context limits come from models.dev. Catalog refresh keeps release
+dates alongside limits in the local SQLite cache. Exact provider/model IDs are
+resolved first; routed prefixes and effort suffixes are normalized. Family
+`latest` aliases select the newest matching release date while preserving
+variant names. Manufacturer rows resolve equal-release reseller duplicates.
+A family lookup is an estimate of an alias target, not router configuration.
+
+Ollama, llama.cpp and vLLM can use their actual allocated context. Explicit
+model overrides remain available. `compact.context_window` applies a shared
+window to the run banner and both automatic compaction paths;
+`compact.context_window_fallback` defaults to 1,000,000 for unresolved models.
+Existing jsrc values override that default.
+
+Both automatic compaction paths cap reply headroom with
+`compact.summary_reserve_tokens` and reserve `compact.buffer_tokens`.
+Output truncation alone does not trigger summarization. In-turn compaction
+prints its reason and budget before summarizing; automatic compaction marks
+retain phase, context-token count, window and effective input limit.

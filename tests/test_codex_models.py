@@ -19,15 +19,14 @@ def _write_manifest(tmp_path, monkeypatch, models):
     return home
 
 
-def test_codex_manifest_supplies_the_subscription_window(tmp_path, monkeypatch):
-    # models.dev says gpt-5.6-sol is 1,050,000 (the public API row). The codex
-    # subscription serves 272,000 and says so in its own cache.
+def test_runtime_uses_catalog_window_for_remote_codex(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime.model_metadata, "context_window", lambda *args: 1050000)
     _write_manifest(tmp_path, monkeypatch, [
         {"slug": "gpt-5.6-sol", "context_window": 272000,
          "max_context_window": 272000, "effective_context_window_percent": 95},
     ])
     assert codex_models.context_window("gpt-5.6-sol") == 272000
-    assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 272000
+    assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 1050000
     # Another provider serving the same id is unaffected.
     assert runtime._resolve_context_window("gpt-5.6-sol", "openrouter", None) != 272000
 

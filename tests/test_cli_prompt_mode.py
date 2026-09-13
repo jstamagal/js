@@ -1239,33 +1239,20 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
     assert [call["forced"] for call in calls] == [False, True]
 
 
-def test_auto_compact_triggers_after_repeated_max_output_incomplete(monkeypatch, tmp_path, capsys):
-    calls: list[dict] = []
-
-    def compact_stub(cfg, system, messages, *, forced=False, **kwargs):
-        calls.append({"forced": forced, "system": system, "messages": messages})
-        return "compacted"
-
-    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
+def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **kw: calls.append(kw) or "compacted")
     monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 10, raising=False)
-    monkeypatch.setattr(
-        cli.runtime.T.DEFAULT_CONTEXT,
-        "last_incomplete_reason",
-        "max_output_tokens",
-        raising=False,
-    )
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", "max_output_tokens", raising=False)
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
-
-    cli._maybe_auto_compact(cfg, state)
+    for _ in range(3):
+        cli._maybe_auto_compact(cfg, state)
     assert calls == []
-    assert state["auto_compact"].incomplete_consecutive == 1
-
+    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
     cli._maybe_auto_compact(cfg, state)
-
-    assert [call["forced"] for call in calls] == [True]
-    assert state["auto_compact"].incomplete_consecutive == 0
-    assert "response incomplete from max output tokens twice" in capsys.readouterr().out
+    assert len(calls) == 1
+    assert calls[0]["forced"] is True
 
 
 def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigger(monkeypatch, tmp_path, capsys):

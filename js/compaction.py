@@ -301,6 +301,14 @@ def thresholds(cfg: Config) -> tuple[float, float, float]:
     return notify_at, trigger_at, force_at
 
 
+def configured_context_window(cfg: Config, resolve_window: Any) -> int:
+    """One configured window for the banner and both compaction triggers."""
+    window = get_int(cfg, "context_window", 0)
+    if window <= 0:
+        window = int(resolve_window() or 0)
+    return window if window > 0 else get_int(cfg, "context_window_fallback", 1_000_000)
+
+
 def effective_context_window(cfg: Config, context_window: int) -> int:
     """Window minus the room the next turn already owes: one full reply plus the
     compaction buffer. Both triggers measure against this so they agree on what
@@ -540,6 +548,7 @@ async def compact_now(
     focus: str = "",
     forced: bool = False,
     preserve_from: int | None = None,
+    trigger: dict | None = None,
 ) -> str:
     chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
     tail_tokens = get_int(cfg, "tail_tokens", 16384)
@@ -558,7 +567,7 @@ async def compact_now(
     guidance = _run_pre_hook(cfg)
     compact_model = get_model(cfg)
     summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
-    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced)
+    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced, trigger=trigger)
     rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
     messages[:] = [
         _compaction_summary_message(summary),
@@ -576,6 +585,7 @@ def compact_now_sync(
     focus: str = "",
     forced: bool = False,
     preserve_from: int | None = None,
+    trigger: dict | None = None,
     loop_runner: asyncio.Runner | None = None,
 ) -> str:
     """Sync wrapper over :func:`compact_now` for callers off the event loop.
@@ -583,7 +593,7 @@ def compact_now_sync(
     The ONLY sync path — there is no second implementation to drift.
     """
     coro = compact_now(
-        cfg, system, messages, focus=focus, forced=forced, preserve_from=preserve_from
+        cfg, system, messages, focus=focus, forced=forced, preserve_from=preserve_from, trigger=trigger
     )
     if loop_runner is not None:
         return loop_runner.run(coro)
@@ -600,7 +610,6 @@ class AutoCompactState:
     consecutive: int = 0
     paused: bool = False
     notified: bool = False
-    incomplete_consecutive: int = 0
 
 
 @dataclass
@@ -627,23 +636,16 @@ def maybe_auto_compact(
     Notices are returned, not printed — presentation belongs to the caller.
     """
     out = AutoCompactOutcome()
-    output_limited = is_max_output_incomplete(getattr(context, "last_incomplete_reason", None))
-    ac.incomplete_consecutive = ac.incomplete_consecutive + 1 if output_limited else 0
-    incomplete_forced = ac.incomplete_consecutive >= 2
     prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
     if prompt_tokens <= 0:
         prompt_tokens = estimated_prompt_tokens(cfg, system, messages)
-    if prompt_tokens <= 0 and not incomplete_forced:
+    if prompt_tokens <= 0:
         return out
-    context_window = get_int(cfg, "context_window", 0)
-    if context_window <= 0:
-        context_window = int(resolve_window() or 0)
-    if context_window <= 0:
-        context_window = get_int(cfg, "context_window_fallback", 0)
+    context_window = configured_context_window(cfg, resolve_window)
     effective_window = effective_context_window(cfg, context_window)
     fullness = (prompt_tokens / effective_window) if effective_window > 0 else 0.0
     notify_at, trigger_at, force_at = thresholds(cfg)
-    if fullness < trigger_at and not incomplete_forced:
+    if fullness < trigger_at:
         ac.consecutive = 0
         ac.paused = False
         if fullness < notify_at:
@@ -657,13 +659,13 @@ def maybe_auto_compact(
     if fullness >= notify_at and not ac.notified:
         out.notices.append(f"(context {fullness:.0%} full; auto-compaction armed)")
         ac.notified = True
-    if incomplete_forced:
-        out.notices.append("(response incomplete from max output tokens twice; auto-compacting)")
-    out.forced = fullness >= force_at or incomplete_forced
-    out.result = compact_now_sync(cfg, system, messages, forced=out.forced)
+    out.forced = fullness >= force_at
+    out.result = compact_now_sync(
+        cfg, system, messages, forced=out.forced,
+        trigger={"phase": "between-turn", "context_tokens": prompt_tokens,
+                 "context_window": context_window, "effective_input_limit": effective_window},
+    )
     out.compacted = True
-    if incomplete_forced:
-        ac.incomplete_consecutive = 0
     ac.consecutive += 1
     if ac.consecutive >= 2:
         ac.paused = True

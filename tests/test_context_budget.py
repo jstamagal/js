@@ -61,3 +61,17 @@ def test_tokens_until_compaction_uses_output_and_buffer_reserve():
     assert status.effective_input_limit == 50
     assert status.tokens_until_compaction == 50 - status.current_context_tokens
     assert status.should_compact is (status.current_context_tokens > 50)
+
+
+def test_calibration_uses_recorded_prompt_tokens():
+    from types import SimpleNamespace
+    from js.context_budget import TokenState
+
+    state = TokenState()
+    messages = [{"role": "user", "content": "words " * 100}]
+    state.record_provider_usage(
+        SimpleNamespace(input_tokens=50, cache_read_tokens=50, output_tokens=10),
+        message_count=1, messages=messages,
+    )
+    assert state.last_usage.prompt_tokens == 100
+    assert state.calibrated_chars_per_token(messages=messages) > 4.0

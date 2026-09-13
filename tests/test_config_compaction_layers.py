@@ -263,3 +263,13 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
         compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert seen_models == ["offline-test-model", "offline-test-model", "offline-test-model"]
+
+
+def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
+    cfg = _compact_test_cfg(tmp_path, {})
+    assert compaction.configured_context_window(cfg, lambda: None) == 1000000
+    assert compaction.configured_context_window(cfg, lambda: 500000) == 500000
+    cfg.settings["compact"]["context_window"] = 750000
+    assert compaction.configured_context_window(cfg, lambda: 500000) == 750000
+    cfg.settings["compact"]["context_window"] = 1000000
+    assert compaction.configured_context_window(cfg, lambda: None) == 1000000

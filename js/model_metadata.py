@@ -27,7 +27,7 @@ import modelsdotdev
 from modelsdotdev._internal import data as modelsdotdev_data
 from modelsdotdev._internal import sync as modelsdotdev_sync
 
-from . import codex_auth, paths, providers, settings as _settings
+from . import codex_auth, model_matching, paths, providers, settings as _settings
 
 _CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
@@ -57,6 +57,8 @@ class ModelLimits:
     context_window: int | None
     max_output_tokens: int | None
     max_input_tokens: int | None
+    release_date: str | None = None
+    match_method: str = "exact"
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,8 @@ class _ModelRow:
     context_window: int | None
     max_output_tokens: int | None
     max_input_tokens: int | None
+    family: str | None = None
+    release_date: str | None = None
 
 
 def _clear_caches() -> None:
@@ -92,6 +96,7 @@ def _clear_caches() -> None:
 @lru_cache(maxsize=1)
 def _all_models() -> tuple[_ModelRow, ...]:
     rows: list[_ModelRow] = []
+    dates = _release_dates()
     for model in modelsdotdev.iter_models():
         limits = getattr(model, "limits", None)
         rows.append(
@@ -101,9 +106,47 @@ def _all_models() -> tuple[_ModelRow, ...]:
                 context_window=None if limits is None else limits.context,
                 max_output_tokens=None if limits is None else limits.output,
                 max_input_tokens=None if limits is None else limits.input,
+                family=getattr(model, "family", None),
+                release_date=dates.get(f"{model.provider_id}:{model.id}"),
             )
         )
     return tuple(rows)
+
+
+def _release_dates() -> dict[str, str]:
+    path = _custom_db_path()
+    if not path.is_file():
+        return {}
+    with closing(sqlite3.connect(path)) as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
+        ).fetchone()
+        if not exists:
+            return {}
+        return dict(connection.execute("SELECT full_id, release_date FROM model_release_dates"))
+
+
+def _generate_database(*, output: Path) -> None:
+    """Keep release dates from the same upstream payload as the limits."""
+    payload = modelsdotdev_sync._load_providers(modelsdotdev_sync.API_URL)
+    staged = output.with_name(output.name + ".refresh")
+    try:
+        modelsdotdev_sync._write_database(payload, staged, modelsdotdev_sync.API_URL)
+        with closing(sqlite3.connect(staged)) as connection:
+            connection.execute(
+                "CREATE TABLE model_release_dates (full_id TEXT PRIMARY KEY, release_date TEXT NOT NULL)"
+            )
+            connection.executemany(
+                "INSERT INTO model_release_dates VALUES (?, ?)",
+                [(f"{provider}:{model}", data["release_date"])
+                 for provider, info in payload.items()
+                 for model, data in info["models"].items()
+                 if data.get("release_date")],
+            )
+            connection.commit()
+        os.replace(staged, output)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def _provider_candidates(provider_id: str | None) -> tuple[str, ...]:
@@ -405,7 +448,12 @@ def catalog_is_stale(status: CatalogStatus | None, *, now: datetime | None = Non
     if checked_at is None:
         return True
     current = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
-    return current - checked_at >= _CATALOG_MAX_AGE
+    if current - checked_at >= _CATALOG_MAX_AGE:
+        return True
+    with closing(sqlite3.connect(status.db_path)) as connection:
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
+        ).fetchone() is None
 
 
 def refresh_catalog(*, force: bool = False) -> CatalogStatus:
@@ -417,7 +465,7 @@ def refresh_catalog(*, force: bool = False) -> CatalogStatus:
 
     output = _custom_db_path()
     output.parent.mkdir(parents=True, exist_ok=True)
-    modelsdotdev_sync.generate_database(output=output)
+    _generate_database(output=output)
     _activate_database(output)
     refreshed_at = datetime.now(tz=UTC)
     status = _status_from_db(output, refreshed_at=refreshed_at)
@@ -473,20 +521,16 @@ def _is_wrapper_request(catalog_id: str, request: str) -> bool:
 
 @lru_cache(maxsize=512)
 def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits | None:
-    """Return dynamic limits for ``model_id`` using models.dev metadata.
+    """Resolve exact IDs, routed names and newest dated family aliases.
 
-    We first try exact provider+model matches using the active js provider mapped
-    to its underlying models.dev provider id. If that misses, we scan the
-    catalog: exact model-id matches first, then a wrapper-prefix match (see
-    ``_is_wrapper_request``) so custom wrappers like ``deepseek-v4-pro:cloud``
-    can still inherit the limits of the underlying ``deepseek-v4-pro`` row,
-    without a shorter catalog id bleeding into an unrelated longer sibling.
+    Explicit catalog providers retain their own limits. Routed names prefer
+    the model maker; latest aliases compare release dates within the family.
     """
 
     model_id, provider_id = _normalize_request(model_id, provider_id)
     candidates = _provider_candidates(provider_id)
 
-    for candidate in candidates:
+    for candidate in (() if "-latest" in model_id.lower() else candidates):
         model = modelsdotdev.get_model_by_id(f"{candidate}:{model_id}")
         if model is not None:
             limits = getattr(model, "limits", None)
@@ -497,6 +541,15 @@ def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits 
                 max_output_tokens=None if limits is None else limits.output,
                 max_input_tokens=None if limits is None else limits.input,
             )
+
+    matched, method = model_matching.match_routed(model_id, _all_models())
+    if matched is not None:
+        return ModelLimits(
+            provider_id=matched.provider_id, model_id=matched.model_id,
+            context_window=matched.context_window, max_output_tokens=matched.max_output_tokens,
+            max_input_tokens=matched.max_input_tokens, release_date=matched.release_date,
+            match_method=method,
+        )
 
     exact_matches = [row for row in _all_models() if row.model_id == model_id]
     if exact_matches:

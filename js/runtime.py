@@ -28,6 +28,7 @@ from . import colors as C
 from . import context_budget
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
+from . import providers
 from . import settings as _settings
 from . import tools as T
 from . import tool_args
@@ -225,31 +226,26 @@ def _resolve_context_window(
     provider_id: str | None,
     provider_base_url: str | None = None,
 ) -> int | None:
-    """Prefer local server-reported context windows, else models.dev metadata."""
+    """Use explicit overrides, local runtime allocation, then models.dev."""
     override = _context_window_override(model, provider_id)
     if override is not None:
         return override
-    if (provider_id or "").strip().lower() == "openai-codex":
-        from . import codex_models
-
-        codex_window = codex_models.context_window(model)
-        if codex_window is not None:
-            return codex_window
-    probed = model_metadata.probe_local_context_window(
-        model,
-        provider_id,
-        base_url=provider_base_url,
+    provider = providers.get_provider(provider_id)
+    local_runtime = provider is not None and (
+        provider.transport in {"ollama", "llama.cpp"} or provider.id == "vllm"
     )
-    if probed is not None:
-        return probed
-    cached = model_metadata.cached_server_limits(model, provider_id)
-    if cached is not None and cached.context_window is not None:
-        return cached.context_window
+    if local_runtime:
+        probed = model_metadata.probe_local_context_window(
+            model, provider_id, base_url=provider_base_url,
+        )
+        if probed is not None:
+            return probed
+        cached = model_metadata.cached_server_limits(model, provider_id)
+        if cached is not None and cached.context_window is not None:
+            return cached.context_window
     catalog = model_metadata.context_window(model, provider_id)
-    ceiling = model_metadata.cached_server_context_ceiling(model, provider_id)
-    if catalog is not None and ceiling is not None:
-        return min(catalog, ceiling)
-    return catalog
+    ceiling = model_metadata.cached_server_context_ceiling(model, provider_id) if local_runtime else None
+    return min(catalog, ceiling) if catalog is not None and ceiling is not None else catalog
 
 
 # --------------------------------------------------------------------------
@@ -1342,7 +1338,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         # ctx is the number that decides when compaction fires and how much room
         # is left to work in; max_out only bounds one reply. Showing the second
         # without the first invites reading 128000 as the window.
-        _ctx_for_banner = _resolve_context_window(model, provider_id, provider_base_url)
+        _ctx_for_banner = compaction.configured_context_window(
+            active_context.config,
+            lambda: _resolve_context_window(model, provider_id, provider_base_url),
+        )
         _bits = [f"model={model}",
                  f"provider={_provider_label}",
                  f"base={_base}",
@@ -1437,15 +1436,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
 
     def _budget_context_window() -> int:
-        inferred = _resolve_context_window(model, provider_id, provider_base_url)
-        window = compaction.get_int(active_compact_cfg, "context_window", inferred or 0)
-        if window > 0:
-            return window
-        # Nothing known about this model. context_window is an override that
-        # applies to every model at once, so pinning it to cover one unknown
-        # model throws away the real window of every model that IS known;
-        # context_window_fallback only lands here, where there is no metadata.
-        return compaction.get_int(active_compact_cfg, "context_window_fallback", 0)
+        return compaction.configured_context_window(
+            active_compact_cfg,
+            lambda: _resolve_context_window(model, provider_id, provider_base_url),
+        )
 
     def _budget_buffer_tokens() -> int:
         return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens", 4096)
@@ -1472,7 +1466,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             messages=messages,
             tools=ai_tools_for_budget,
             context_window=context_window if context_window > 0 else None,
-            output_reserve_tokens=max_out or 0,
+            output_reserve_tokens=max(
+                0, context_window - compaction.effective_context_window(active_compact_cfg, context_window)
+                - _budget_buffer_tokens(),
+            ),
             buffer_tokens=_budget_buffer_tokens(),
         )
         active_context.context_tokens = status.current_context_tokens
@@ -1491,6 +1488,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         if preserve_from is None or preserve_from <= 0:
             telemetry.event("context_compaction_skipped", phase=phase, reason="no_compactable_prefix")
             return False
+        print(
+            f"  {C.ORANGE}(compacting: {phase}; context={status.current_context_tokens} "
+            f"window={context_window} input_limit={status.effective_input_limit}){C.RESET}",
+            file=sys.stderr if suppress_output else sys.stdout, flush=True,
+        )
         try:
             result = await compaction.compact_now(
                 active_compact_cfg,
@@ -1499,6 +1501,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 focus=f"{phase} context budget",
                 forced=True,
                 preserve_from=preserve_from,
+                trigger={"phase": phase, "context_tokens": status.current_context_tokens,
+                         "context_window": context_window,
+                         "effective_input_limit": status.effective_input_limit,
+                         "forced_recovery": force},
             )
         except Exception as exc:  # noqa: BLE001
             telemetry.event(

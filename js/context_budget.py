@@ -28,6 +28,10 @@ class TokenUsage:
     output_tokens: int = 0
 
     @property
+    def prompt_tokens(self) -> int:
+        return max(0, self.input_tokens) + max(0, self.cache_read_tokens) + max(0, self.cache_write_tokens)
+
+    @property
     def total_tokens(self) -> int:
         return (
             max(0, self.input_tokens)

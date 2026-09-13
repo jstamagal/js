@@ -116,3 +116,87 @@ def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
                                         [{"role": "user", "content": "x"}] * 12, "", ""))
     assert caught.value is error
     assert len(attempts) == 1
+
+@pytest.mark.parametrize("window", [750000, 1000000])
+def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path, capsys, window):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, settings={"compact": {"context_window": window}})
+    events = []
+
+    class Capture:
+        trace_sink = None
+        transcript_log = None
+        def event(self, kind, **fields):
+            events.append((kind, fields))
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], Capture(),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    budgets = [fields for kind, fields in events if kind == "context_budget"]
+    assert budgets and all(fields["context_window"] == window for fields in budgets)
+    # This is the diagnostic value users rely on to verify /set took effect.
+    assert f"ctx={window}" in capsys.readouterr().out
+
+
+def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):
+    cfg = replace(_config(tmp_path), max_output_tokens=500,
+                  settings={"compact": {"context_window": 10000, "tail_tokens": 100,
+                                        "buffer_tokens": 100, "summary_reserve_tokens": 500}})
+    messages = [{"role": "user", "content": "old " * 15000},
+                {"role": "assistant", "content": "prior answer"},
+                {"role": "user", "content": "continue"}]
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    async def summarize(*args, **kwargs):
+        return "Earlier work summary"
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", messages, runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+    ))
+    records = [json.loads(line) for line in cfg.session_file.read_text().splitlines()]
+    markers = [json.loads(r["marker"].split(":", 1)[1]) for r in records
+               if r.get("marker", "").startswith("compaction:")]
+    assert len(markers) == 1
+    trigger = markers[0]["trigger"]
+    assert trigger["context_window"] == 10000
+    assert trigger["context_tokens"] > trigger["effective_input_limit"]
+    assert "compacting:" in capsys.readouterr().err
+
+
+def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path):
+    cfg = replace(_config(tmp_path), max_output_tokens=128000,
+                  settings={"compact": {"context_window": 128000}})
+    messages = [{"role": "user", "content": "old " * 1000},
+                {"role": "assistant", "content": "answer"},
+                {"role": "user", "content": "continue"}]
+    summaries = []
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    async def summarize(*args, **kwargs):
+        summaries.append(args)
+        return "summary"
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", messages, runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+    ))
+    assert summaries == []
+    assert messages[0]["content"] == "old " * 1000
+    assert messages[-1]["content"] == "ok"
