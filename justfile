@@ -28,8 +28,9 @@ default:
 #   just run -p "summarize this repo"
 #   just run --commit
 # run js — no args opens the REPL; any js flags/args pass through.
+[positional-arguments]
 run *args:
-    uv run {{ browser-extra }} js {{ args }}
+    uv run {{ browser-extra }} js "$@"
 
 # Commit workflow is deliberately plain: run `js --commit` from repo root.
 # Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
