@@ -59,8 +59,14 @@ python -m pytest -m "not ai_provider and not vision and not e2e"
 Verified in this environment:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
+python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider -n auto
 ```
+
+`just test` runs exactly that. `-n auto` spreads the suite over every core
+(pytest-xdist, in the `test` extra): 1681 tests in ~130s on a six-core box
+against ~590s serial. The slowest tests drive the real obscura binary and real
+Jupyter kernels, so most of that wall time is spent waiting on a subprocess.
+Drop `-n auto` when a failure needs readable interleaved output.
 
 ## Focused Suites
 
