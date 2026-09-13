@@ -275,3 +275,21 @@ Both automatic compaction paths cap reply headroom with
 Output truncation alone does not trigger summarization. In-turn compaction
 prints its reason and budget before summarizing; automatic compaction marks
 retain phase, context-token count, window and effective input limit.
+
+
+### Compaction flight records
+
+Every call to the central compaction function writes a unique attempt under
+`logs/<agent>/compactions/<session>-<attempt>.jsonl`. `compact.flight_log_dir`
+changes that directory. Records contain caller stack/PIDs, active model and
+settings (credential fields redacted), exact system/messages before and after,
+content hashes, retention decision, summary input/output and provider trace,
+plus success, skip, failure or cancellation. Runtime-triggered records also
+include the tool schemas, request budget and usage anchor. Files are created
+with mode 0600; records are flushed and fsynced before summarization starts.
+
+Terminal START and outcome notices include attempt ID and file path. Session
+compaction marks carry that same ID. Budget telemetry also goes to the existing
+request autolog as `FLIGHT` JSON records even when optional runtime debug is off.
+`/set compact.context_window N` immediately displays the effective next-request
+window, and between-turn compaction reads the same live settings.

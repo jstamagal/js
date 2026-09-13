@@ -263,6 +263,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- compact ---
     SettingSpec("compact.auto", "bool", DEFAULT_COMPACT_AUTO,
                 "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
+    SettingSpec("compact.flight_log_dir", "str", None,
+                "Full compaction flight snapshots; unset = logs/<agent>/compactions.", empty=EMPTY_NONE),
     SettingSpec("compact.context_window", "int", DEFAULT_COMPACT_CONTEXT_WINDOW,
                 "Context window tokens for fullness math; unset = models.dev metadata.",
                 empty=EMPTY_NONE),

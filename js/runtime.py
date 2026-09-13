@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 import random
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from . import events as event_mod
@@ -279,9 +279,14 @@ class Telemetry:
     transcript_log: object = None  # visible transcript sink; never raises
 
     def event(self, kind: str, **fields: Any) -> None:
+        rec = {"ts": time.time(), "kind": kind, **fields}
+        if self.trace_sink is not None:
+            try:
+                self.trace_sink.write("FLIGHT " + json.dumps(rec, default=str) + "\n")
+            except OSError as exc:
+                print(f"[FLIGHT LOG ERROR] {exc}", file=sys.stderr, flush=True)
         if not self.debug_log:
             return
-        rec = {"ts": time.time(), "kind": kind, **fields}
         try:
             with open(self.debug_log, "a") as f:
                 f.write(json.dumps(rec, default=str) + "\n")
@@ -1488,11 +1493,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         if preserve_from is None or preserve_from <= 0:
             telemetry.event("context_compaction_skipped", phase=phase, reason="no_compactable_prefix")
             return False
-        print(
-            f"  {C.ORANGE}(compacting: {phase}; context={status.current_context_tokens} "
-            f"window={context_window} input_limit={status.effective_input_limit}){C.RESET}",
-            file=sys.stderr if suppress_output else sys.stdout, flush=True,
-        )
         try:
             result = await compaction.compact_now(
                 active_compact_cfg,
@@ -1505,8 +1505,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                          "context_window": context_window,
                          "effective_input_limit": status.effective_input_limit,
                          "forced_recovery": force},
+                flight_data={"budget": asdict(status), "tools": specs,
+                             "usage_anchor": vars(token_state).get("_anchor"),
+                             "ai_messages": ai_convo},
             )
         except Exception as exc:  # noqa: BLE001
+            print(f"[COMPACT FAILURE] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             telemetry.event(
                 "context_compaction_failed",
                 phase=phase,

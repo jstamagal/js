@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import sys
+import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,7 @@ import ai
 
 from . import colors as C
 from . import context_budget
+from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
 from . import memory as M
 from . import model_client
 from . import model_metadata
@@ -483,15 +485,19 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 tools=None,
                 max_output_tokens=get_int(cfg, "summary_max_tokens", 4096, max_value=8192),
                 reasoning_effort=None,
-                on_text=lambda _t: None,
+                on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=route.headers,
                 provider_extra=routing.provider_extra_params(cfg),
+                trace_request=ACTIVE_FLIGHT.get() is not None,
+                trace_sink=ACTIVE_FLIGHT.get(),
             )
             break
         except ai.ProviderAPIError as exc:
             if not is_context_overflow_error(exc) or peel >= _SUMMARY_PEEL_RETRIES or len(head) <= 2:
                 raise
             dropped = len(head) // 2
+            if (flight := ACTIVE_FLIGHT.get()) is not None:
+                flight.record("summary_overflow", peel=peel, dropped=dropped, error=str(exc), messages=head)
             head = head[dropped:]
             print(
                 f"  {C.ORANGE}(summary too large; dropped the oldest {dropped} messages "
@@ -499,6 +505,12 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 flush=True,
             )
     assert result is not None
+    if (flight := ACTIVE_FLIGHT.get()) is not None:
+        flight.record("summary_response", text=result.text,
+                      usage=getattr(result, "usage", None),
+                      finish_reason=getattr(result, "finish_reason", None),
+                      incomplete_reason=getattr(result, "incomplete_reason", None),
+                      provider_metadata=getattr(result, "provider_metadata", None))
     text = result.text.strip()
     if not text:
         text = "\n".join(f"## {h}\n(Not captured.)" for h in _COMPACTION_HEADINGS)
@@ -549,32 +561,54 @@ async def compact_now(
     forced: bool = False,
     preserve_from: int | None = None,
     trigger: dict | None = None,
+    flight_data: dict | None = None,
 ) -> str:
-    chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
-    tail_tokens = get_int(cfg, "tail_tokens", 16384)
-    min_savings = get_int(cfg, "min_savings_tokens", 400)
-    original_len = len(messages)
-    keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
-    if preserve_from is not None:
-        try:
+    flight = CompactionFlight(
+        cfg, system, messages, trigger=trigger or {"phase": "manual"},
+        forced=forced, focus=focus, preserve_from=preserve_from, details=flight_data,
+    )
+    token = ACTIVE_FLIGHT.set(flight)
+    try:
+        chars_per_token = _calibrated_chars_per_token(cfg, system, messages)
+        tail_tokens = get_int(cfg, "tail_tokens", 16384)
+        min_savings = get_int(cfg, "min_savings_tokens", 400)
+        original_len = len(messages)
+        keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
+        if preserve_from is not None:
             keep_from = min(keep_from, max(0, int(preserve_from)))
-        except (TypeError, ValueError):
-            pass
-    original_est = _estimate_tokens(messages, chars_per_token)
-    tail_est = _estimate_tokens(messages[keep_from:], chars_per_token)
-    if not forced and original_est - tail_est < min_savings:
-        return f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
-    guidance = _run_pre_hook(cfg)
-    compact_model = get_model(cfg)
-    summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
-    M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from, forced=forced, trigger=trigger)
-    rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
-    messages[:] = [
-        _compaction_summary_message(summary),
-        *([rehydrated] if rehydrated else []),
-        *messages[keep_from:],
-    ]
-    return f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
+        original_est = _estimate_tokens(messages, chars_per_token)
+        tail_est = _estimate_tokens(messages[keep_from:], chars_per_token)
+        flight.record("decision", chars_per_token=chars_per_token, tail_tokens=tail_tokens,
+                      min_savings=min_savings, keep_from=keep_from,
+                      original_estimate=original_est, tail_estimate=tail_est)
+        if not forced and original_est - tail_est < min_savings:
+            result = f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
+            flight.finish("skipped", system, messages, result=result)
+            return result
+        flight.notice("start", f"model={cfg.model} trigger={trigger or 'manual'} messages={original_len}")
+        guidance = _run_pre_hook(cfg)
+        compact_model = get_model(cfg)
+        flight.record("summary_input", model=compact_model, guidance=guidance,
+                      messages=messages[:keep_from])
+        summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
+        recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
+                            "flight_path": str(flight.path)}
+        rehydrated = _post_compact_rehydration(T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
+        after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *messages[keep_from:]]
+        flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
+        M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from,
+                                 forced=forced, trigger=recorded_trigger)
+        messages[:] = after
+        result = f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
+        flight.finish("success", system, messages, result=result, keep_from=keep_from)
+        return result
+    except BaseException as exc:
+        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
+        flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
+        raise
+    finally:
+        ACTIVE_FLIGHT.reset(token)
+        flight.close()
 
 
 def compact_now_sync(
@@ -586,6 +620,7 @@ def compact_now_sync(
     forced: bool = False,
     preserve_from: int | None = None,
     trigger: dict | None = None,
+    flight_data: dict | None = None,
     loop_runner: asyncio.Runner | None = None,
 ) -> str:
     """Sync wrapper over :func:`compact_now` for callers off the event loop.
@@ -593,7 +628,7 @@ def compact_now_sync(
     The ONLY sync path — there is no second implementation to drift.
     """
     coro = compact_now(
-        cfg, system, messages, focus=focus, forced=forced, preserve_from=preserve_from, trigger=trigger
+        cfg, system, messages, focus=focus, forced=forced, preserve_from=preserve_from, trigger=trigger, flight_data=flight_data
     )
     if loop_runner is not None:
         return loop_runner.run(coro)
@@ -664,6 +699,12 @@ def maybe_auto_compact(
         cfg, system, messages, forced=out.forced,
         trigger={"phase": "between-turn", "context_tokens": prompt_tokens,
                  "context_window": context_window, "effective_input_limit": effective_window},
+        flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": getattr(context, "last_prompt_tokens", None),
+                     "last_cached_tokens": getattr(context, "last_cached_tokens", None),
+                     "last_incomplete_reason": getattr(context, "last_incomplete_reason", None),
+                     "usage_anchor": vars(getattr(context, "context_budget_state", object())).get("_anchor")
+                         if hasattr(getattr(context, "context_budget_state", None), "__dict__") else None,
+                     "tools": context.tool_registry.openai_specs() if getattr(context, "tool_registry", None) else []},
     )
     out.compacted = True
     ac.consecutive += 1

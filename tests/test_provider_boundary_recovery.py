@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 from dataclasses import replace
 
 import ai
@@ -172,7 +173,10 @@ def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path,
     trigger = markers[0]["trigger"]
     assert trigger["context_window"] == 10000
     assert trigger["context_tokens"] > trigger["effective_input_limit"]
-    assert "compacting:" in capsys.readouterr().err
+    assert trigger["attempt_id"][:12] in capsys.readouterr().err
+    flight = [json.loads(line) for line in Path(trigger["flight_path"]).read_text().splitlines()]
+    assert flight[0]["details"]["budget"]["context_window"] == 10000
+    assert any(record["event"] == "success" for record in flight)
 
 
 def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path):

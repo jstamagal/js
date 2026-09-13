@@ -1111,7 +1111,7 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
     printing lives here."""
     if not compaction.get_bool(cfg, "auto", True):
         return
-    active_cfg = _cfg_for_active_model(cfg, state)
+    active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
     outcome = compaction.maybe_auto_compact(
         active_cfg,
         state.setdefault("auto_compact", compaction.AutoCompactState()),
@@ -1578,6 +1578,13 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
             print(out)
         if result.error:
             print(f"{C.ORANGE}{result.error}{C.RESET}")
+        elif any(key.startswith(("compact.context_window", "model.context_window")) for key in result.changed_keys):
+            active = _cfg_for_live_state(cfg, state)
+            runtime.install_context_window_overrides(active)
+            window = compaction.configured_context_window(
+                active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
+            )
+            print(f"ctx={window} model={active.model} (effective for next request)")
         return True
     if line.startswith("/model "):
         model_value = line[len("/model "):].strip()
