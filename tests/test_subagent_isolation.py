@@ -23,6 +23,7 @@ from tool_loading import after_loading
 
 @pytest.fixture(autouse=True)
 def offline_model_metadata(monkeypatch):
+    monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
