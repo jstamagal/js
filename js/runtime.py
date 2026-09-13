@@ -1671,14 +1671,17 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             attempt=attempt,
                             round=overflow_recovered,
                         )
-                        # Escalation policy lives in compaction: clear first
-                        # (no model call, cannot fail), summarize when empty.
+                        # Overflow recovery records old tool-result clearing before retrying.
                         action, cleared, reclaimed = compaction.recover_overflow(
-                            messages, overflow_recovered
+                            messages, overflow_recovered, cfg=active_compact_cfg,
+                            system=system, error=e,
+                            flight_data={"context_window": _budget_context_window(),
+                                         "max_output_tokens": max_out,
+                                         "usage_anchor": vars(token_state).get("_anchor"),
+                                         "tools": active_registry.openai_specs(),
+                                         "ai_messages": ai_convo},
                         )
                         if action == "cleared":
-                            print(f"  {C.ORANGE}(context overflow; cleared {cleared} old tool "
-                                  f"results, ~{reclaimed // 1000}k chars){C.RESET}", flush=True)
                             token_state.reset()
                             ai_convo = model_client.history_to_ai_messages(system, messages)
                             _trace_req["sent"] = 0

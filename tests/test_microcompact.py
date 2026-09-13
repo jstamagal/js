@@ -143,3 +143,40 @@ def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
 
 def test_overflow_classification_ignores_non_provider_exceptions():
     assert compaction.is_context_overflow_error(RuntimeError("context length exceeded")) is False
+
+
+def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_path, capsys):
+    import json
+    import pytest
+    from test_config_compaction_layers import _compact_test_cfg
+
+    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    msgs = _history(22)
+    original = list(msgs)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("clear failed")
+
+    monkeypatch.setattr(compaction, "microcompact", fail)
+    with pytest.raises(RuntimeError, match="clear failed"):
+        compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+                                    error=ai.ProviderAPIError("context length exceeded"), flight_data={})
+    records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
+    assert records[1]["messages"] == original
+    assert records[-2]["messages"] == original
+    assert records[-1]["event"] == "failure"
+    assert records[0]["id"][:12] in capsys.readouterr().err
+
+
+def test_recovery_records_no_eligible_results(tmp_path, capsys):
+    import json
+    from test_config_compaction_layers import _compact_test_cfg
+
+    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    msgs = _history(2)
+    assert compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={}) == ("summarize", 0, 0)
+    records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
+    assert records[-1]["event"] == "skipped"
+    assert records[1]["messages"] == records[-2]["messages"]
+    assert records[0]["id"][:12] in capsys.readouterr().err

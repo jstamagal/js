@@ -204,3 +204,54 @@ def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path)
     assert summaries == []
     assert messages[0]["content"] == "old " * 1000
     assert messages[-1]["content"] == "ok"
+
+
+def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_path, capsys):
+    import contextlib
+    import io
+
+    cfg = _config(tmp_path)
+    cfg.settings["compact"] = {"flight_log_dir": str(tmp_path / "flights")}
+    messages = []
+    for index in range(22):
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": f"c{index}", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": f"c{index}", "name": "read", "content": "x" * 1000},
+        ])
+    messages.append({"role": "user", "content": "continue"})
+    calls = []
+
+    async def sdk(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _overflow()
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    with contextlib.redirect_stdout(io.StringIO()):
+        asyncio.run(runtime.run_turn_async(
+            cfg, "SYSTEM", messages, runtime.Telemetry(None),
+            tool_registry=build_default_registry().select([]),
+            tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+        ))
+    paths = list((tmp_path / "flights").glob("*.jsonl"))
+    assert len(paths) == 1
+    records = [json.loads(line) for line in paths[0].read_text().splitlines()]
+    start = records[0]
+    assert start["operation"] == "tool-result-clearing"
+    assert start["trigger"]["round"] == 1
+    assert "97720" in start["trigger"]["error"]
+    before = next(r for r in records if r["event"] == "before")
+    after = next(r for r in records if r["event"] == "after")
+    changes = next(r for r in records if r["event"] == "cleared_results")
+    assert changes["cleared"] == 2
+    assert [r["tool_call_id"] for r in changes["results"]] == ["c0", "c1"]
+    assert before["messages"][1]["content"] == "x" * 1000
+    assert after["messages"][1]["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE
+    assert records[-1]["event"] == "success"
+    visible = capsys.readouterr().err
+    notices = [line for line in visible.splitlines() if start["id"][:12] in line]
+    assert len(notices) == 2
+    assert str(paths[0]) in visible
+    assert messages[-1]["content"] == "ok"

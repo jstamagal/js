@@ -293,3 +293,10 @@ compaction marks carry that same ID. Budget telemetry also goes to the existing
 request autolog as `FLIGHT` JSON records even when optional runtime debug is off.
 `/set compact.context_window N` immediately displays the effective next-request
 window, and between-turn compaction reads the same live settings.
+
+Overflow recovery also records `operation=tool-result-clearing` attempts before
+replacing old tool-result bodies. START/outcome notices go to stderr even when
+answer stdout is redirected. Flight data includes the provider rejection,
+retry round, retained-result count, changed message indexes and tool-call IDs,
+character savings, and complete before/after context. No eligible results is
+recorded as SKIPPED; any following summarization has its own attempt ID.

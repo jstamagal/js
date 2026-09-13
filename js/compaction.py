@@ -208,18 +208,47 @@ def microcompact(
     return cleared, reclaimed
 
 
-def recover_overflow(messages: list[dict], round_: int) -> tuple[str, int, int]:
-    """One escalation step after the provider rejects a request for size.
-
-    Returns ("cleared", n, reclaimed) when old tool bodies were blanked — the
-    caller resets its budget bookkeeping and retries. Returns ("summarize", 0,
-    0) when nothing was left to clear and the only way out is a paid
-    compaction. Each round spares fewer recent results than the last.
-    """
-    cleared, reclaimed = microcompact(messages, keep_recent=max(0, 20 // round_))
-    if cleared:
-        return "cleared", cleared, reclaimed
-    return "summarize", 0, 0
+def recover_overflow(
+    messages: list[dict], round_: int, *, cfg: Config, system: str,
+    error: BaseException, flight_data: dict,
+) -> tuple[str, int, int]:
+    """Record and announce tool-result clearing after a provider overflow."""
+    keep_recent = max(0, 20 // round_)
+    try:
+        flight = CompactionFlight(
+            cfg, system, messages,
+            trigger={"phase": "overflow_recovery", "round": round_,
+                     "error": f"{type(error).__name__}: {error}",
+                     "provider_error": {key: getattr(error, key, None)
+                                        for key in ("code", "error_type", "status_code", "body")}},
+            forced=True, focus="clear old tool-result bodies", preserve_from=None,
+            details=flight_data, operation="tool-result-clearing",
+        )
+    except OSError as exc:
+        print(f"[COMPACT FAILURE] tool-result-clearing flight setup: {exc}", file=sys.stderr, flush=True)
+        raise
+    try:
+        before = list(messages)
+        flight.notice("start", f"provider overflow; round={round_}; keeping newest {keep_recent} tool results")
+        cleared, reclaimed = microcompact(messages, keep_recent=keep_recent)
+        changed = [
+            {"message_index": index, "tool_call_id": old.get("tool_call_id"),
+             "tool_name": old.get("name"), "original_chars": len(old["content"]),
+             "replacement_chars": len(new["content"])}
+            for index, (old, new) in enumerate(zip(before, messages, strict=True)) if old != new
+        ]
+        flight.record("cleared_results", results=changed, cleared=cleared,
+                      reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=400)
+        result = (f"cleared {cleared} old tool results; reclaimed {reclaimed} chars"
+                  if cleared else "no eligible tool results; summary recovery may follow")
+        flight.finish("success" if cleared else "skipped", system, messages, result=result)
+        return ("cleared", cleared, reclaimed) if cleared else ("summarize", 0, 0)
+    except BaseException as exc:
+        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
+        flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
+        raise
+    finally:
+        flight.close()
 
 
 # --------------------------------------------------------------------------

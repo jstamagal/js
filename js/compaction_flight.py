@@ -37,7 +37,8 @@ def _redact(value):
 
 
 class CompactionFlight:
-    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details):
+    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details, operation="summary"):
+        self.operation = operation
         self.id = uuid4().hex
         self.started = time.monotonic()
         self.cfg = cfg
@@ -48,7 +49,7 @@ class CompactionFlight:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / f"{cfg.session_file.stem}-{self.id}.jsonl"
         self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
-        self.record("start", model=cfg.model, provider=cfg.provider_id,
+        self.record("start", operation=operation, model=cfg.model, provider=cfg.provider_id,
                     base_url=cfg.provider_base_url, session=str(cfg.session_file),
                     pid=os.getpid(), parent_pid=os.getppid(),
                     trigger=trigger, forced=forced, focus=focus, preserve_from=preserve_from,
@@ -74,7 +75,7 @@ class CompactionFlight:
                     with (directory / f"{self.cfg.session_file.stem}.log").open("a", encoding="utf-8") as log:
                         log.write("FLIGHT " + json.dumps({"ts": time.time(), "kind": "compaction_" + event,
                                   "attempt_id": self.id, "flight_path": str(self.path),
-                                  "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
+                                  "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
                 except OSError as exc:
                     print(f"[FLIGHT AUTOLOG ERROR] {exc} flight={self.path}", file=sys.stderr, flush=True)
 
@@ -84,7 +85,7 @@ class CompactionFlight:
                     utf8_bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest())
 
     def notice(self, event, detail=""):
-        print(f"[COMPACT {event.upper()} {self.id[:12]}] {detail} flight={self.path}", file=sys.stderr, flush=True)
+        print(f"[COMPACT {event.upper()} {self.id[:12]}] operation={self.operation} {detail} flight={self.path}", file=sys.stderr, flush=True)
 
     def write(self, text):
         if text:
