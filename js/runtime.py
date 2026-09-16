@@ -1919,4 +1919,4 @@ def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None
     """
     if loop_runner is not None:
         return loop_runner.run(run_turn_async(*args, **kwargs))
-    return asyncio.run(run_turn_async(*args, **kwargs))
+    return model_client.run_owning_loop(run_turn_async(*args, **kwargs))

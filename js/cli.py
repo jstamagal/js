@@ -36,6 +36,7 @@ from . import endpoint_uri
 from . import events
 from . import logins
 from . import memory as M
+from . import model_client
 from . import model_metadata
 from . import persona as P
 from . import picker
@@ -3320,7 +3321,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.nonblocking:
         try:
-            return asyncio.run(_repl_main(cfg, state, telemetry, session, prompt_spec))
+            return model_client.run_owning_loop(
+                _repl_main(cfg, state, telemetry, session, prompt_spec)
+            )
         finally:
             transcript_stack.close()
 
@@ -3480,6 +3483,7 @@ def main(argv: list[str] | None = None) -> int:
             M.append_mark(cfg.session_file, f"rollback_to:{before_len}")
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
     mcp_loop.run(_close_session_mcp_host(state))
+    model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
     mcp_loop.close()
     transcript_stack.close()
     _print_resume_hint(cfg, state)

@@ -95,7 +95,7 @@ def test_sync_boundary_swallows_only_the_close_protocol_noise(caplog):
         return "finish=stop"
 
     with caplog.at_level(logging.ERROR, logger="asyncio"):
-        assert model_client._run_owning_loop(turn()) == "finish=stop"
+        assert model_client.run_owning_loop(turn()) == "finish=stop"
 
     assert [record.getMessage() for record in caplog.records] == []
 
@@ -118,7 +118,7 @@ def test_sync_boundary_still_reports_a_real_teardown_failure(caplog):
         return "finish=stop"
 
     with caplog.at_level(logging.ERROR, logger="asyncio"):
-        assert model_client._run_owning_loop(turn()) == "finish=stop"
+        assert model_client.run_owning_loop(turn()) == "finish=stop"
 
     reported = "\n".join(record.getMessage() for record in caplog.records)
     assert "closing of asynchronous generator" in reported

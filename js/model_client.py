@@ -13,6 +13,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -743,6 +744,35 @@ def _emit_request_trace(
         pass
 
 
+# The two vendors that document `prompt_cache_key`: OpenAI, and DeepSeek, whose
+# automatic disk cache takes the key harmlessly. Hosts, because that is the only
+# thing that stays true when a provider id is pointed at somebody else's server.
+_CACHE_KEY_HOSTS = frozenset({"api.openai.com", "api.deepseek.com"})
+# The provider ids that reach one of those hosts by default, i.e. when nothing
+# overrode the base URL. OpenAI's own entries carry no `default_base_url` — the
+# SDK fills in api.openai.com — so there is no URL to match against for them.
+_CACHE_KEY_VENDORS = frozenset({"openai", "openai-completions", "openai-responses", "deepseek"})
+
+
+def accepts_prompt_cache_key(
+    *, provider_name: str, sdk_provider_name: str, base_url: str | None
+) -> bool:
+    """Does the endpoint this request is actually going to take `prompt_cache_key`?
+
+    A provider id names a vendor only until someone points it elsewhere; the base
+    URL is what says where the request lands. So a redirected `openai` provider
+    answers no, and a `sdk="openai"` provider serving its own vendor's host
+    (ollama, vLLM, mimo, xAI) was never OpenAI to begin with.
+    """
+    if base_url:
+        try:
+            host = (urlsplit(base_url).hostname or "").lower()
+        except ValueError:
+            return False
+        return host in _CACHE_KEY_HOSTS
+    return provider_name in _CACHE_KEY_VENDORS or sdk_provider_name in _CACHE_KEY_VENDORS
+
+
 async def stream_model_async(
     *,
     model_id: str,
@@ -874,18 +904,21 @@ async def stream_model_async(
     #   DeepSeek caches on disk automatically from token zero, with no request-side
     #     control at all, so it takes the same key harmlessly.
     # `prompt_cache_key` is an OpenAI extension, not part of the OpenAI-compatible
-    # shape everyone implements. This used to be a denylist holding one entry —
-    # Anthropic — which meant every other endpoint that validates its inputs got
-    # the key and answered 400 (observed: NVIDIA,
-    # `Unsupported parameter(s): prompt_cache_key`). Allowlist the wires known to
-    # take it instead. Losing the hint on an unlisted gateway costs cache hit
-    # rate; sending it costs the entire request.
+    # shape everyone implements, so what decides it is which ENDPOINT is being
+    # called, not which SDK shape talks to it. `sdk="openai"` is the wire for
+    # ollama, vLLM, llama.cpp, mimo, xAI and every `JS_BASE_URL` redirect, none of
+    # which are OpenAI; asking the wire sent the key to all of them, and an
+    # endpoint that validates its inputs rejects the whole request rather than
+    # dropping a key it does not know (observed:
+    # `JS_PROVIDER=openai JS_BASE_URL=https://integrate.api.nvidia.com/v1`, 400
+    # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
+    # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
+    # entire request.
     is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
-    _CACHE_KEY_WIRES = {"openai", "deepseek"}
-    accepts_cache_key = (
-        sdk_provider_name in _CACHE_KEY_WIRES
-        or provider_name in _CACHE_KEY_WIRES
-        or is_codex
+    accepts_cache_key = is_codex or accepts_prompt_cache_key(
+        provider_name=provider_name,
+        sdk_provider_name=sdk_provider_name,
+        base_url=provider_base_url,
     )
     if is_anthropic_wire:
         cache_params = ai_params.CacheParams()
@@ -970,6 +1003,16 @@ _ASYNCGEN_PROTOCOL_ERRORS = (
 )
 
 
+def install_asyncgen_shutdown_filter(loop: asyncio.AbstractEventLoop) -> None:
+    """Arm the filter below on a loop js owns, immediately before shutting it down.
+
+    Every sync entry point that runs a turn ends by closing its own loop, and
+    every one of them hits the same upstream teardown, so each of them installs
+    this. Arming it late keeps a running loop's own error reporting untouched.
+    """
+    loop.set_exception_handler(_asyncgen_shutdown_filter(loop.get_exception_handler()))
+
+
 def _asyncgen_shutdown_filter(previous: Callable[..., None] | None) -> Callable[..., None]:
     """An asyncio exception handler that drops exactly the close-protocol noise.
 
@@ -995,7 +1038,7 @@ def _asyncgen_shutdown_filter(previous: Callable[..., None] | None) -> Callable[
     return handler
 
 
-def _run_owning_loop(coro: Any) -> Any:
+def run_owning_loop(coro: Any) -> Any:
     """``asyncio.run(coro)``, minus one upstream traceback on the way out.
 
     A completed turn used to print a `RuntimeError` traceback after its own
@@ -1016,8 +1059,7 @@ def _run_owning_loop(coro: Any) -> Any:
     try:
         return runner.run(coro)
     finally:
-        loop = runner.get_loop()
-        loop.set_exception_handler(_asyncgen_shutdown_filter(loop.get_exception_handler()))
+        install_asyncgen_shutdown_filter(runner.get_loop())
         runner.close()
 
 
@@ -1027,4 +1069,4 @@ def stream_model(**kwargs: Any) -> ModelStreamResult:
     ``stream_model_async`` directly on its shared loop. Kept so un-migrated
     callers (and the current sync run_turn) keep working during the transition.
     """
-    return _run_owning_loop(stream_model_async(**kwargs))
+    return run_owning_loop(stream_model_async(**kwargs))

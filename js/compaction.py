@@ -587,7 +587,7 @@ def compact_now_sync(
     )
     if loop_runner is not None:
         return loop_runner.run(coro)
-    return asyncio.run(coro)
+    return model_client.run_owning_loop(coro)
 
 
 # --------------------------------------------------------------------------
