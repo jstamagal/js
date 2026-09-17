@@ -356,6 +356,7 @@ The memory layer is append-only JSONL plus control marks:
 - `/wipe`: rotates the whole file to `.bak`, `.bak.1`, etc.
 
 Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
-a compaction mark without rewriting the JSONL file. Automatic cache-aware
-compaction is controlled by `set compact.auto` and the `set compact.*` knobs in
-platform `jsrc` or project `.js/jsrc`.
+a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes
+that one compaction with the named summarizer instead of `compact.model`.
+Automatic cache-aware compaction is controlled by `set compact.auto` and the
+`set compact.*` knobs in platform `jsrc` or project `.js/jsrc`.

@@ -266,6 +266,24 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
     assert seen_models == ["offline-test-model", "offline-test-model", "offline-test-model"]
 
 
+def test_compact_now_model_argument_overrides_the_configured_summary_model(monkeypatch, tmp_path):
+    seen_models: list[str] = []
+
+    async def summarize_stub(cfg, model, messages, focus, guidance):
+        seen_models.append(model)
+        return f"Summary from {model}"
+
+    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+
+    cfg = _compact_test_cfg(tmp_path, {"model": "configured-summarizer"})
+    messages = [{"role": "user", "content": "old " * 20000},
+                {"role": "assistant", "content": "latest answer"}]
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, model="flag-summarizer")
+
+    assert seen_models == ["flag-summarizer"]
+    assert result.endswith("using flag-summarizer")
+
+
 def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
     cfg = _compact_test_cfg(tmp_path, {})
     assert compaction.configured_context_window(cfg, lambda: None) == 1000000

@@ -1300,7 +1300,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
   {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
   {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
-  {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
+  {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark (-m model picks the summarizer)
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
   {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
@@ -1521,6 +1521,20 @@ def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
     _append_turn(cfg, last_user)
 
 
+def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
+    """Pull a leading ``-m <model>`` (or ``--model``) off a /compact argument.
+
+    Returns ``(model, focus, ok)``; ``ok`` is False when the flag carries no
+    value. The flag is leading-only because focus is free text.
+    """
+    tokens = arg.split(maxsplit=2)
+    if tokens and tokens[0] in ("-m", "--model"):
+        if len(tokens) < 2:
+            return None, "", False
+        return tokens[1], tokens[2].strip() if len(tokens) > 2 else "", True
+    return None, arg.strip(), True
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in {"exit", "quit", ":q"}:
@@ -1669,13 +1683,16 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
                 print(out)
         return True
     if line == "/compact" or line.startswith("/compact "):
-        focus = line[len("/compact"):].strip()
+        model, focus, ok = _split_compact_model(line[len("/compact"):])
+        if not ok:
+            print(f"{C.ORANGE}usage: /compact [-m model] [focus]{C.RESET}")
+            return True
         forced = focus == "up to here"
         if forced:
             focus = ""
         try:
             compact_cfg = _cfg_for_live_state(cfg, state)
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], focus=focus, forced=forced)
+            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
         else:

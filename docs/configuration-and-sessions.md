@@ -424,5 +424,6 @@ the same offline. On load, the mark rebuilds in-memory context as:
 assistant `tool_calls` message is not separated from its tool results.
 
 The summary model is `compact.model`; literal `same` uses the active session
-model. Optional focus text and `compact.pre_hook` stdout are supplied as
-guidance. Hook failures warn but do not block compaction.
+model. `/compact -m <model>` overrides it for that one manual compaction.
+Optional focus text and `compact.pre_hook` stdout are supplied as guidance.
+Hook failures warn but do not block compaction.

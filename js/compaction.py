@@ -662,6 +662,7 @@ async def compact_now(
     *,
     focus: str = "",
     forced: bool = False,
+    model: str | None = None,
     preserve_from: int | None = None,
     trigger: dict | None = None,
     flight_data: dict | None = None,
@@ -695,9 +696,9 @@ async def compact_now(
             result = f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
             flight.finish("skipped", system, messages, result=result)
             return result
-        flight.notice("start", f"model={cfg.model} trigger={trigger or 'manual'} messages={original_len}")
+        compact_model = model or get_model(cfg)
+        flight.notice("start", f"model={compact_model} trigger={trigger or 'manual'} messages={original_len}")
         guidance = _run_pre_hook(cfg)
-        compact_model = get_model(cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
@@ -741,6 +742,7 @@ def compact_now_sync(
     *,
     focus: str = "",
     forced: bool = False,
+    model: str | None = None,
     preserve_from: int | None = None,
     trigger: dict | None = None,
     flight_data: dict | None = None,
@@ -752,8 +754,9 @@ def compact_now_sync(
     The ONLY sync path — there is no second implementation to drift.
     """
     coro = compact_now(
-        cfg, system, messages, focus=focus, forced=forced, preserve_from=preserve_from,
-        trigger=trigger, flight_data=flight_data, context=context,
+        cfg, system, messages, focus=focus, forced=forced, model=model,
+        preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
+        context=context,
     )
     if loop_runner is not None:
         return loop_runner.run(coro)

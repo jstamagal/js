@@ -116,8 +116,9 @@ One-shot forms remain available: `js --login <id>`, `js --logout <id>`, and
 
 ## Compaction
 
-`/compact [focus]`, `/compact up to here`, and `js --compact <session>` append
-compaction marks to JSONL instead of rewriting history.
+`/compact [focus]`, `/compact -m <model> [focus]`, `/compact up to here`, and
+`js --compact <session>` append compaction marks to JSONL instead of rewriting
+history.
 
 ## Provider Compatibility
 

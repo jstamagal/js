@@ -58,11 +58,49 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_cfg_for_active_model", lambda cfg, state: cfg)
     monkeypatch.setattr(
         cli.compaction, "compact_now_sync",
-        lambda cfg, system, messages, *, focus="", forced=False: seen_focus.append(focus) or "ok",
+        lambda cfg, system, messages, *, model=None, focus="", forced=False: seen_focus.append(focus) or "ok",
     )
     # plain /compact still runs a compaction with a clean focus (not "-auto on")
     assert cli._handle_command("/compact please", state, cfg) is True
     assert seen_focus == ["please"]
+
+
+def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    seen: list[tuple[str | None, str, bool]] = []
+
+    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False):
+        seen.append((model, focus, forced))
+        return "ok"
+
+    monkeypatch.setattr(cli, "_cfg_for_live_state", lambda cfg, state: cfg)
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
+
+    assert cli._handle_command("/compact -m fast-summarizer keep the API decisions", state, cfg) is True
+    assert cli._handle_command("/compact --model fast-summarizer", state, cfg) is True
+    assert cli._handle_command("/compact -m fast-summarizer up to here", state, cfg) is True
+    # no flag = no override; compact.model (or the active model) decides
+    assert cli._handle_command("/compact now", state, cfg) is True
+
+    assert seen == [
+        ("fast-summarizer", "keep the API decisions", False),
+        ("fast-summarizer", "", False),
+        ("fast-summarizer", "", True),
+        (None, "now", False),
+    ]
+
+
+def test_compact_command_model_flag_without_value_prints_usage(tmp_path, monkeypatch, capsys):
+    cfg = make_cfg(tmp_path)
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    compacted: list[int] = []
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: compacted.append(1) or "ok")
+
+    assert cli._handle_command("/compact -m", state, cfg) is True
+
+    assert "usage:" in capsys.readouterr().out
+    assert compacted == []
 
 
 def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
@@ -70,7 +108,7 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     seen_models: list[str | None] = []
 
-    def compact_stub(compact_cfg, system, messages, *, focus="", forced=False):
+    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False):
         seen_models.append(settings.get_dotted(compact_cfg.settings, ("compact", "model")))
         return "ok"
 
