@@ -14,6 +14,8 @@ import pytest
 from js.toolkit import ToolContext
 from js.toolkit.search import _absolutize, browse
 
+pytestmark = pytest.mark.live
+
 
 requires_obscura = pytest.mark.skipif(
     shutil.which("obscura") is None, reason="obscura binary not installed"

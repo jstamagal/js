@@ -174,7 +174,7 @@ uninstall:
 # and e2e (live end-to-end paths).
 # offline suite — skips the live markers (ai_provider, vision, e2e).
 test:
-    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e" -p no:cacheprovider -n auto
+    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n auto
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:
@@ -188,7 +188,7 @@ test-mark marker:
 # OpenAI-compatible endpoint. e.g. AI_GATEWAY_API_KEY=... just test-live
 # live ai_provider suite — needs provider creds or a local endpoint.
 test-live:
-    uv run {{ browser-extra }} --extra test pytest -q -m ai_provider tests/test_real_integrations.py
+    uv run {{ browser-extra }} --extra test pytest -q -m "ai_provider or live" tests/test_real_integrations.py tests/test_browse_obscura.py tests/test_browse_http_status.py tests/test_browse_delayed.py
 
 # live vision suite — needs ollama + a pulled vision model. default gemma4:e4b,
 # override with JS_VISION_TEST_MODEL=<tag>. e.g. just test-vision

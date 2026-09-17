@@ -12,6 +12,8 @@ import pytest
 from js.toolkit import ToolContext
 from js.toolkit import search
 
+pytestmark = pytest.mark.live
+
 
 class _DelayedHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler API

@@ -54,6 +54,7 @@ markers = [
     "e2e: exercises a complete user-visible runtime path",
     "ai_provider: requires configured ai-python provider credentials or local OpenAI-compatible endpoint",
     "vision: requires a reachable local vision model (ollama gemma4:e4b) and Pillow",
+    "live: drives a real browser or network endpoint; excluded from `just test`",
 ]
 
 [tool.setuptools.package-data]
