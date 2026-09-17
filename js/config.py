@@ -175,6 +175,7 @@ class Config:
     kernel_verbosity: str = _settings.DEFAULT_KERNEL_VERBOSITY
     kernel_render_max_lines: int = _settings.DEFAULT_KERNEL_RENDER_MAX_LINES
     kernel_wait_seconds: int = _settings.DEFAULT_KERNEL_WAIT_SECONDS
+    shell_wait_seconds: int = _settings.DEFAULT_SHELL_WAIT_SECONDS
     allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
@@ -492,6 +493,7 @@ def from_env(
     subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
     kernel_render_max_lines = _numeric_setting(js_root_settings, ("kernel", "render_max_lines"), _settings.DEFAULT_KERNEL_RENDER_MAX_LINES)
     kernel_wait_seconds = _numeric_setting(js_root_settings, ("kernel", "wait_seconds"), _settings.DEFAULT_KERNEL_WAIT_SECONDS)
+    shell_wait_seconds = _numeric_setting(js_root_settings, ("shell", "wait_seconds"), _settings.DEFAULT_SHELL_WAIT_SECONDS)
     kernel_verbosity = str(_settings.get_dotted(js_root_settings, ("kernel", "verbosity"), _settings.DEFAULT_KERNEL_VERBOSITY) or _settings.DEFAULT_KERNEL_VERBOSITY).strip().lower()
     if kernel_verbosity not in ("quiet", "normal", "verbose"):
         kernel_verbosity = _settings.DEFAULT_KERNEL_VERBOSITY
@@ -573,6 +575,7 @@ def from_env(
         kernel_verbosity=kernel_verbosity,
         kernel_render_max_lines=kernel_render_max_lines,
         kernel_wait_seconds=kernel_wait_seconds,
+        shell_wait_seconds=shell_wait_seconds,
         allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,

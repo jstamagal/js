@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import html
 import json
 import mimetypes
@@ -9,6 +10,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -18,9 +20,9 @@ from typing import Any
 
 from .. import settings as _settings
 from ..capped_process import (
+    CappedProcess,
     CappedProcessResult,
-    CappedProcessTimeout,
-    _run_capped,
+    start_capped,
     truncation_marker,
 )
 from ..tool_binaries import (
@@ -54,18 +56,145 @@ def _default_shell() -> str:
     return os.environ.get("SHELL", "/bin/sh")
 
 
+# Commands the shell tool started that had not exited when their call returned.
+# Keyed by handle id; one table per process, shared across turns so a poll in a
+# later turn finds the job a previous turn started.
+_JOBS: dict[str, _ShellJob] = {}
+_JOB_SEQ = 0
+_JOBS_LOCK = threading.Lock()
+KEEP_FINISHED_JOBS = 5
+
+
+class _ShellJob:
+    def __init__(self, job_id: str, command: str, process: CappedProcess,
+                 shell_path: str, keep_ansi: bool, cap: int) -> None:
+        self.id = job_id
+        self.command = command
+        self.process = process
+        self.shell_path = shell_path
+        self.keep_ansi = keep_ansi
+        self.cap = cap
+        self.delivered = (0, 0)     # bytes of (stdout, stderr) already handed to the model
+
+    def running(self) -> bool:
+        return self.process.running()
+
+
+def _register_job(job: _ShellJob) -> None:
+    with _JOBS_LOCK:
+        _JOBS[job.id] = job
+        finished = [j for j in _JOBS.values() if not j.running()]
+        for stale in finished[:-KEEP_FINISHED_JOBS] if len(finished) > KEEP_FINISHED_JOBS else []:
+            _JOBS.pop(stale.id, None)
+
+
+def _next_job_id() -> str:
+    global _JOB_SEQ
+    with _JOBS_LOCK:
+        _JOB_SEQ += 1
+        return str(_JOB_SEQ)
+
+
+def _find_job(handle: str | None) -> _ShellJob | None:
+    with _JOBS_LOCK:
+        if handle:
+            return _JOBS.get(str(handle))
+        running = [j for j in _JOBS.values() if j.running()]
+        if running:
+            return running[-1]
+        return next(reversed(_JOBS.values()), None) if _JOBS else None
+
+
+@atexit.register
+def _kill_live_jobs() -> None:
+    for job in list(_JOBS.values()):
+        if job.running():
+            job.process.kill()
+
+
+def _clean(raw: bytes, keep_ansi: bool) -> str:
+    text = raw.decode("utf-8", errors="replace")
+    return text if keep_ansi else _ANSI_RE.sub("", text)
+
+
+def _job_new_output(job: _ShellJob) -> tuple[str, str]:
+    """Output produced since the last time this job was reported."""
+    out, err = job.process.snapshot()
+    seen_out, seen_err = job.delivered
+    job.delivered = (len(out), len(err))
+    return _clean(out[seen_out:], job.keep_ansi), _clean(err[seen_err:], job.keep_ansi)
+
+
+def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,
+                     allowed: set[str], safe_env: dict[str, str], *, since_last: bool) -> str:
+    if since_last:
+        stdout, stderr = _job_new_output(job)
+    else:
+        stdout = _clean(result.stdout, job.keep_ansi)
+        stderr = _clean(result.stderr, job.keep_ansi)
+        job.delivered = (len(result.stdout), len(result.stderr))
+    marker = truncation_marker(job.cap)
+    if result.stdout_truncated:
+        stdout = f"{stdout}\n{marker}" if stdout else marker
+    if result.stderr_truncated:
+        stderr = f"{stderr}\n{marker}" if stderr else marker
+    parts = [f"shell={job.shell_path}", f"exit={result.returncode}"]
+    if description:
+        parts.append(f"description={description}")
+    if result.returncode:
+        allowed_names = ",".join(sorted(allowed)) or "<none>"
+        present_names = ",".join(sorted(safe_env)) or "<none>"
+        parts.append(
+            "environment=filtered "
+            f"allowed={allowed_names} present={present_names}; "
+            "names not allowed by limits.shell_env_allow or the env parameter are unset"
+        )
+    if stdout:
+        parts.append(f"--- stdout ---\n{stdout}")
+    if stderr:
+        parts.append(f"--- stderr ---\n{stderr}")
+    if not stdout and not stderr:
+        parts.append("(no output)")
+    return "\n".join(parts)
+
+
+def _render_running(job: _ShellJob, waited: float) -> str:
+    stdout, stderr = _job_new_output(job)
+    parts = [
+        f"command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). "
+        f"It keeps running. Poll it with action=\"poll\", handle=\"{job.id}\" for new output, "
+        f"action=\"wait\", handle=\"{job.id}\", timeout=N to block for it, "
+        f"or action=\"kill\", handle=\"{job.id}\" to stop it.",
+    ]
+    if stdout:
+        parts.append(f"--- stdout so far ---\n{stdout}")
+    if stderr:
+        parts.append(f"--- stderr so far ---\n{stderr}")
+    parts.append(f"HANDLE {job.id} RUNNING")
+    return "\n".join(parts)
+
+
 def shell(
-    command: str,
+    command: str = "",
     cwd: str | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
     keep_ansi: bool = False,
     env: list[str] | None = None,
     description: str | None = None,
+    action: str = "run",
+    handle: str | None = None,
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
+    action = (text_or_default(action, "run") or "run").strip().lower()
+    if action in ("poll", "wait", "kill"):
+        return _shell_job_action(action, handle, timeout, description)
+    if action != "run":
+        return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill"
     command = text_or_default(command)
-    timeout = int_or_default(timeout, 300, minimum=1)
+    if not command.strip():
+        return "ERROR: command is required for action=\"run\""
+    wait_s = int_or_default(timeout, int(getattr(context, "shell_wait_seconds", _settings.DEFAULT_SHELL_WAIT_SECONDS)), minimum=1)
     workdir = context.resolve_path(cwd) if cwd else context.cwd
     configured_allow = getattr(context, "shell_env_allow", _ENV_ALLOW)
     if not isinstance(configured_allow, (list, tuple, set, frozenset)):
@@ -89,77 +218,44 @@ def shell(
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
     try:
-        result = _run_capped(
+        process = start_capped(
             [shell_path, shell_arg, command],
-            timeout=timeout,
             cwd=str(workdir),
             env=safe_env,
             cap=cap,
         )
-        if isinstance(result, CappedProcessResult):
-            returncode, raw_stdout, raw_stderr = result.returncode, result.stdout, result.stderr
-        else:
-            returncode, raw_stdout, raw_stderr = result
-    except CappedProcessTimeout as expired:
-        # _run_capped attaches whatever the process had already written. Throwing
-        # it away told the model nothing about a build that printed 200 lines and
-        # then hung -- the last lines before the hang are the whole diagnosis.
-        parts = [
-            f"ERROR: command timed out after {timeout}s",
-            f"shell={shell_path}",
-            f"exit={expired.returncode}",
-        ]
-        streams = (
-            ("stdout", expired.output, expired.stdout_truncated),
-            ("stderr", expired.stderr, expired.stderr_truncated),
-        )
-        for label, raw, truncated in streams:
-            if not raw and not truncated:
-                continue
-            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-            if not keep_ansi:
-                text = _ANSI_RE.sub("", text)
-            text = text.strip()
-            if truncated:
-                marker = truncation_marker(cap)
-                text = f"{text}\n{marker}" if text else marker
-            if text:
-                parts.append(f"--- {label} before the timeout ---\n{text}")
-        if len(parts) == 3:
-            parts.append("(the command produced no output before it was killed)")
-        return "\n".join(parts)
     except OSError as exc:
         return f"ERROR: {exc}"
+    job = _ShellJob(_next_job_id(), command, process, shell_path, keep_ansi, cap)
+    job.allowed, job.safe_env = allowed, safe_env
+    _register_job(job)
+    result = process.wait(wait_s)
+    if result is None:
+        # The command outlived the window. It is NOT killed: a long build or
+        # test run finishing on its own beats one killed at an arbitrary
+        # deadline, and the model gets a handle to come back to it instead of
+        # the operator sitting through the wait.
+        return _render_running(job, process.elapsed())
+    return _render_finished(job, result, description, allowed, safe_env, since_last=False)
 
-    stdout = raw_stdout.decode("utf-8", errors="replace")
-    stderr = raw_stderr.decode("utf-8", errors="replace")
-    if not keep_ansi:
-        stdout = _ANSI_RE.sub("", stdout)
-        stderr = _ANSI_RE.sub("", stderr)
-    if isinstance(result, CappedProcessResult):
-        marker = truncation_marker(cap)
-        if result.stdout_truncated:
-            stdout = f"{stdout}\n{marker}" if stdout else marker
-        if result.stderr_truncated:
-            stderr = f"{stderr}\n{marker}" if stderr else marker
-    parts = [f"shell={shell_path}", f"exit={returncode}"]
-    if description:
-        parts.append(f"description={description}")
-    if returncode:
-        allowed_names = ",".join(sorted(allowed)) or "<none>"
-        present_names = ",".join(sorted(safe_env)) or "<none>"
-        parts.append(
-            "environment=filtered "
-            f"allowed={allowed_names} present={present_names}; "
-            "names not allowed by limits.shell_env_allow or the env parameter are unset"
-        )
-    if stdout:
-        parts.append(f"--- stdout ---\n{stdout}")
-    if stderr:
-        parts.append(f"--- stderr ---\n{stderr}")
-    if not stdout and not stderr:
-        parts.append("(no output)")
-    return "\n".join(parts)
+
+def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None) -> str:
+    job = _find_job(handle)
+    if job is None:
+        return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
+    if action == "kill":
+        was_running = job.running()
+        result = job.process.kill()
+        if not was_running:
+            return f"handle {job.id} had already exited\n" + _render_finished(
+                job, result, description, job.allowed, job.safe_env, since_last=True)
+        return f"killed handle {job.id} after {job.process.elapsed():.0f}s\n" + _render_finished(
+            job, result, description, job.allowed, job.safe_env, since_last=True)
+    wait_s = 0 if action == "poll" else int_or_default(timeout, _settings.DEFAULT_SHELL_WAIT_SECONDS, minimum=1)
+    result = job.process.wait(wait_s)
+    if result is None:
+        return _render_running(job, job.process.elapsed())
+    return _render_finished(job, result, description, job.allowed, job.safe_env, since_last=True)
 
 
 def _html_to_text(raw: str, base_url: str) -> str:
@@ -748,7 +844,12 @@ def tools() -> tuple[Tool, ...]:
             {
                 "command": {"type": "string"},
                 "cwd": {"type": "string"},
-                "timeout": {"type": "integer", "default": 300},
+                "timeout": {
+                    "type": "integer",
+                    "description": "Seconds this call blocks before returning a handle. The command is never killed by this.",
+                },
+                "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run"},
+                "handle": {"type": "string", "description": "Job id from a HANDLE line, for poll/wait/kill."},
                 "keep_ansi": {"type": "boolean", "default": False},
                 "env": {
                     "type": "array",
@@ -757,7 +858,7 @@ def tools() -> tuple[Tool, ...]:
                 },
                 "description": {"type": "string"},
             },
-            required=("command",),
+            required=(),
         ),
         Tool(
             "fetch",

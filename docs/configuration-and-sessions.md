@@ -50,7 +50,8 @@ as `<set>`.
 | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
 | `provider.extra` | `<none>` | Free-form extra params passed through to the provider SDK. |
-| `limits.max_tool_iterations` | `50` | Max tool calls per turn before the loop gives up. |
+| `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
+| `shell.wait_seconds` | `30` | Seconds a `shell` call waits for its command before returning a handle to poll. The command keeps running. |
 | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
 | `limits.fetch_timeout_s` | `15` | Whole-request deadline for unsaved fetch() calls, in seconds. |
@@ -152,7 +153,7 @@ coercion as `set`.
 | `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
 | `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
 | `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
-| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | `50` | Max tool calls per turn before the loop gives up. |
+| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
 | `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
 | `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |

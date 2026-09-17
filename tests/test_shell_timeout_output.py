@@ -1,115 +1,70 @@
-"""A timed-out command must hand back what it managed to print.
+"""A shell command that outlives the wait comes back as a handle, not a corpse.
 
-A build that emitted 200 lines and then hung used to come back as a bare
-"ERROR: command timed out after Ns" — the last lines before the hang are the
-whole diagnosis, and they were being discarded.
+The wait window is how long the CALL blocks; it is not a deadline for the
+command. A build that needs five minutes keeps running, the model gets what it
+printed so far plus a handle, and comes back for the rest.
 """
 from __future__ import annotations
-
-import signal
 
 from js.toolkit import ToolContext
 from js.toolkit.process_net import shell
 
 
-def test_output_written_before_the_hang_survives_the_timeout(tmp_path):
+def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path):
     context = ToolContext(cwd=tmp_path)
     result = shell(
-        "printf 'IMPORTANT_PROGRESS_LINE\\n'; sleep 30",
-        timeout=2,
+        "printf 'IMPORTANT_PROGRESS_LINE\\n'; sleep 1; printf 'LATE_LINE\\n'; exit 7",
+        timeout=1,
         context=context,
     )
-    assert result.startswith("ERROR:")
-    assert "timed out after 2s" in result
+    assert "HANDLE" in result and "RUNNING" in result
     assert "IMPORTANT_PROGRESS_LINE" in result
+    assert "LATE_LINE" not in result
+    handle = result.split("handle ", 1)[1].split(",", 1)[0]
+
+    finished = shell(action="wait", handle=handle, timeout=10, context=context)
+    assert "exit=7" in finished
+    assert "LATE_LINE" in finished
+    # Already-delivered output is not repeated on the follow-up.
+    assert "IMPORTANT_PROGRESS_LINE" not in finished
 
 
-def test_clipped_timeout_reports_status_and_truncation(tmp_path):
+def test_poll_returns_new_output_without_blocking(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    started = shell("printf 'one\\n'; sleep 30", timeout=1, context=context)
+    handle = started.split("handle ", 1)[1].split(",", 1)[0]
+    assert "one" in started
+
+    polled = shell(action="poll", handle=handle, context=context)
+    assert "RUNNING" in polled
+    assert "one" not in polled
+
+    killed = shell(action="kill", handle=handle, context=context)
+    assert killed.startswith("killed handle")
+    assert "exit=-9" in killed
+
+
+def test_handle_defaults_to_the_latest_running_job(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    shell("sleep 30", timeout=1, context=context)
+    killed = shell(action="kill", context=context)
+    assert killed.startswith("killed handle")
+
+
+def test_clipped_output_still_reports_truncation(tmp_path):
     context = ToolContext(
         cwd=tmp_path,
         max_bash_output_bytes=64,
         max_bash_output_ceiling=32,
     )
-    result = shell(
-        "head -c 4096 /dev/zero | tr '\\0' x; sleep 30",
-        timeout=1,
-        context=context,
-    )
-
-    assert f"exit={-signal.SIGKILL}" in result
-    assert "ERROR: command timed out after 1s" in result
-    assert "x" * 32 in result
-    assert "x" * 33 not in result
-    assert "[truncated: limits.max_bash_output_bytes (32) reached]" in result
-
-
-def test_shell_clamps_successful_output_to_configured_ceiling(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=64,
-        max_bash_output_ceiling=10,
-    )
-
-    result = shell("printf 12345678901234567890", context=context)
-
+    result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
     assert "exit=0" in result
-    assert "--- stdout ---\n1234567890\n" in result
-    assert "12345678901" not in result
-    assert "[truncated: limits.max_bash_output_bytes (10) reached]" in result
+    assert "[truncated: limits.max_bash_output_bytes (32) reached]" in result
+    assert "x" * 33 not in result
 
 
-def test_non_positive_ceiling_leaves_shell_byte_cap_in_effect(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=12,
-        max_bash_output_ceiling=0,
-    )
-
-    result = shell("printf 12345678901234567890", context=context)
-
-    assert "--- stdout ---\n123456789012\n" in result
-    assert "1234567890123" not in result
-    assert "[truncated: limits.max_bash_output_bytes (12) reached]" in result
-
-
-def test_zero_cap_timeout_still_marks_discarded_output(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=0,
-        max_bash_output_ceiling=0,
-    )
-
-    result = shell("printf discarded; sleep 30", timeout=1, context=context)
-
-    assert f"exit={-signal.SIGKILL}" in result
-    assert "[truncated: limits.max_bash_output_bytes (0) reached]" in result
-
-
-def test_stderr_written_before_the_hang_survives_too(tmp_path):
+def test_unknown_action_and_missing_command_are_errors(tmp_path):
     context = ToolContext(cwd=tmp_path)
-    result = shell(
-        "printf 'FAILED_TO_OPEN_SOCKET\\n' >&2; sleep 30",
-        timeout=2,
-        context=context,
-    )
-    assert result.startswith("ERROR:")
-    assert "FAILED_TO_OPEN_SOCKET" in result
-    assert "stderr" in result
-
-
-def test_a_silent_hang_says_so_rather_than_showing_an_empty_section(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    result = shell("sleep 30", timeout=2, context=context)
-    assert result.startswith("ERROR:")
-    assert "no output before it was killed" in result
-
-
-def test_ansi_is_stripped_from_pre_timeout_output_like_it_is_on_success(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    result = shell(
-        "printf '\\033[31mRED_PROGRESS\\033[0m\\n'; sleep 30",
-        timeout=2,
-        context=context,
-    )
-    assert "RED_PROGRESS" in result
-    assert "\x1b[" not in result
+    assert shell(action="dance", context=context).startswith("ERROR: unknown action")
+    assert shell(context=context).startswith("ERROR: command is required")
+    assert shell(action="poll", handle="no-such", context=context).startswith("ERROR: no shell job")

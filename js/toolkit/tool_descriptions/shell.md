@@ -2,6 +2,20 @@ Run one command with `$SHELL -c` and return exit code, stdout, and stderr.
 Output is capped and marked where it was cut, so do not pipe through `head` or
 `tail` just to shrink it.
 
+A command does not have to finish before you get an answer. The call waits
+`timeout` seconds (default from `shell.wait_seconds`); a command that finishes
+inside that window comes back whole, and one still running comes back as a
+handle with whatever it has printed so far:
+
+    command still running after 30s (handle 3, pid 4242). ...
+    HANDLE 3 RUNNING
+
+The command is never killed by the wait. Then `action="poll", handle="3"`
+returns new output and whether it is still running, `action="wait",
+handle="3", timeout=N` blocks up to N more seconds, and `action="kill",
+handle="3"` stops it. `handle` defaults to the most recent running job. Do a
+poll before assuming a long build or test run has failed.
+
 - Set `cwd` instead of `cd`.
 {{#if fs_search}}
 - Search with `fs_search`, not `grep`, `rg`, or `find`.

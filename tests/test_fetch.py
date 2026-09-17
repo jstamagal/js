@@ -284,13 +284,15 @@ def test_fetch_tool_schema_exposes_whole_hog_surface():
     }
 
 
-def test_shell_tool_schema_exposes_timeout_param():
-    """timeout has a handler default of 300s but must also be a declared schema
-    param, or a schema-enforcing provider can never raise it for long builds."""
+def test_shell_tool_schema_exposes_wait_and_job_actions():
+    """The wait window and the poll/wait/kill actions must be declared, or a
+    schema-enforcing provider can never reach a long-running job."""
     tool = next(tool for tool in process_net.tools() if tool.name == "shell")
 
     assert tool.params["timeout"]["type"] == "integer"
-    assert tool.params["timeout"]["default"] == 300
+    assert set(tool.params["action"]["enum"]) == {"run", "poll", "wait", "kill"}
+    assert tool.params["handle"]["type"] == "string"
+    assert "command" not in tool.required
 
 
 def test_shell_uses_configured_environment_allowlist_and_explains_failure(
@@ -298,12 +300,20 @@ def test_shell_uses_configured_environment_allowlist_and_explains_failure(
 ):
     seen = {}
 
-    def run_stub(cmd, **kwargs):
+    class FakeProcess:
+        pid = 1
+        def running(self): return False
+        def elapsed(self): return 0.0
+        def snapshot(self): return b"", b"token lookup failed"
+        def wait(self, timeout):
+            return process_net.CappedProcessResult(returncode=7, stdout=b"", stderr=b"token lookup failed")
+
+    def start_stub(argv, **kwargs):
         seen["env"] = kwargs["env"]
-        return 7, b"", b"token lookup failed"
+        return FakeProcess()
 
     monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
-    monkeypatch.setattr(process_net, "_run_capped", run_stub)
+    monkeypatch.setattr(process_net, "start_capped", start_stub)
     monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
     context = ToolContext(cwd=tmp_path)
     context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")

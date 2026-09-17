@@ -159,10 +159,19 @@ Parameters:
 
 - `command`
 - `cwd`
-- `timeout` (default `300` seconds)
+- `timeout` — seconds the call blocks before returning a handle (default
+  `shell.wait_seconds`, 30). The command is never killed by this.
+- `action` — `run` (default), `poll`, `wait`, `kill`
+- `handle` — job id for `poll`/`wait`/`kill`; defaults to the latest running job
 - `keep_ansi`
 - `env`
 - `description`
+
+A command that outlives the wait comes back as `HANDLE n RUNNING` with the
+output so far and keeps running. `poll` returns new output without blocking,
+`wait` blocks up to `timeout` more seconds, `kill` stops the whole process
+tree. Finished jobs are kept for five more calls so a late `poll` still finds
+its output. Live jobs are killed when js exits.
 
 Unix uses `$SHELL -c`, fallback `/bin/sh -c`. Windows uses `COMSPEC /C`.
 

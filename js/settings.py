@@ -58,6 +58,9 @@ DEFAULT_KERNEL_RENDER_MAX_LINES = 24
 # Seconds a `kernel` call waits for a submitted cell before handing back a
 # handle. Small on purpose: a call that returns beats a call that blocks.
 DEFAULT_KERNEL_WAIT_SECONDS = 5
+# Same shape for shell: a command still running after this many seconds comes
+# back as a handle and keeps running. The operator never sits through a build.
+DEFAULT_SHELL_WAIT_SECONDS = 30
 DEFAULT_COMPACT_AUTO = True
 DEFAULT_COMPACT_CONTEXT_WINDOW = None
 DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = None
@@ -220,6 +223,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Line cap per section of that terminal render, so a 4000-line cell "
                 "cannot scroll the screen away. The hidden count is always shown, and "
                 "the model still gets the untrimmed output."),
+    SettingSpec("shell.wait_seconds", "int", DEFAULT_SHELL_WAIT_SECONDS,
+                "Seconds a `shell` call waits for its command before returning a "
+                "handle to poll. The command keeps running; nothing is killed by "
+                "this wait."),
     SettingSpec("kernel.wait_seconds", "int", DEFAULT_KERNEL_WAIT_SECONDS,
                 "Seconds a `kernel` call waits for a submitted cell before returning "
                 "a handle to poll. The cell keeps running; nothing is interrupted by "

@@ -888,25 +888,28 @@ def test_fs_read_pdf_over_the_read_cap_still_reads(tmp_path):
 
 
 def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch):
-    calls: list[dict] = []
+    """A bool command is empty and refused; an invalid wait falls back to the
+    configured window."""
+    waits: list[float | None] = []
 
-    def run_stub(cmd, **kwargs):
-        calls.append({"cmd": cmd, "timeout": kwargs["timeout"]})
-        return 0, b"", b""
+    class FakeProcess:
+        pid = 1
+        def running(self): return False
+        def elapsed(self): return 0.0
+        def snapshot(self): return b"", b""
+        def wait(self, timeout):
+            waits.append(timeout)
+            return process_net.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(process_net, "_run_capped", run_stub)
+    monkeypatch.setattr(process_net, "start_capped", lambda argv, **kw: FakeProcess())
     monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
-    context = ToolContext(cwd=tmp_path)
+    context = ToolContext(cwd=tmp_path, shell_wait_seconds=42)
 
-    process_net.shell(True, timeout=True, context=context)
+    assert process_net.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
     process_net.shell("echo ok", timeout=-1, context=context)
     process_net.shell("echo ok", timeout="bad", context=context)
 
-    assert calls == [
-        {"cmd": ["/bin/sh", "-c", ""], "timeout": 300},
-        {"cmd": ["/bin/sh", "-c", "echo ok"], "timeout": 300},
-        {"cmd": ["/bin/sh", "-c", "echo ok"], "timeout": 300},
-    ]
+    assert waits == [42, 42]
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 def test_shell_uses_env_shell_with_dash_c_and_reports_shell(tmp_path, monkeypatch):

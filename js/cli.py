@@ -440,6 +440,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("subagent_max_workers", ("limits", "subagent_max_workers")),
     ("kernel_render_max_lines", ("kernel", "render_max_lines")),
     ("kernel_wait_seconds", ("kernel", "wait_seconds")),
+    ("shell_wait_seconds", ("shell", "wait_seconds")),
 )
 
 

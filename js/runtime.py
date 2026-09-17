@@ -475,7 +475,7 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 _TOOL_DISPLAY: dict[str, list[tuple[str, int]]] = {
     # (arg_name, max_len) — max_len 0 means hide it. Keyed by CANONICAL tool names only;
     # _dispatch resolves aliases to the canonical name before formatting.
-    "shell":          [("command", 120), ("cwd", 40), ("description", 60)],
+    "shell":          [("command", 120), ("cwd", 40), ("action", 10), ("handle", 10), ("description", 60)],
     "read":           [("file_path", 80), ("path", 80), ("range", 0)],
     "write":          [("file_path", 80), ("path", 80), ("content", 0), ("overwrite", 0)],
     "patch":          [("file_path", 80), ("path", 80), ("old_string", 30), ("new_string", 0), ("edits", 0)],
@@ -1282,6 +1282,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.kernel_verbosity = getattr(cfg, "kernel_verbosity", active_context.kernel_verbosity)
     active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
     active_context.kernel_wait_seconds = getattr(cfg, "kernel_wait_seconds", active_context.kernel_wait_seconds)
+    active_context.shell_wait_seconds = getattr(cfg, "shell_wait_seconds", active_context.shell_wait_seconds)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
     active_context.last_incomplete_reason = None

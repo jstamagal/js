@@ -82,22 +82,97 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
-def _run_capped(
+class CappedProcess:
+    """A started ``argv`` whose streams are being captured in the background.
+
+    ``wait(timeout)`` blocks up to ``timeout`` seconds and returns the result
+    once the process exits, or ``None`` while it is still running — the caller
+    decides whether to keep waiting, look at ``snapshot()``, or ``kill()``.
+    """
+
+    def __init__(self, proc: subprocess.Popen, captures: dict[str, _StreamCapture],
+                 threads: list[threading.Thread], stop_readers: threading.Event) -> None:
+        self.proc = proc
+        self.started = time.monotonic()
+        self._captures = captures
+        self._threads = threads
+        self._stop_readers = stop_readers
+        self._result: CappedProcessResult | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def pid(self) -> int:
+        return self.proc.pid
+
+    def running(self) -> bool:
+        return self._result is None and self.proc.poll() is None
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def snapshot(self) -> tuple[bytes, bytes]:
+        """Everything captured so far, whether or not the process has exited."""
+        return self._captures["stdout"].snapshot()[0], self._captures["stderr"].snapshot()[0]
+
+    def _finish_readers(self) -> None:
+        deadline = time.monotonic() + 2
+        for thread in self._threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in self._threads):
+            self._stop_readers.set()
+            for stream in (self.proc.stdout, self.proc.stderr):
+                with contextlib.suppress(Exception):
+                    os.close(stream.fileno())
+            for thread in self._threads:
+                thread.join(timeout=0.5)
+        for stream in (self.proc.stdout, self.proc.stderr):
+            with contextlib.suppress(Exception):
+                stream.close()
+
+    def _collect(self, rc: int) -> CappedProcessResult:
+        with self._lock:
+            if self._result is None:
+                self._finish_readers()
+                stdout, stdout_truncated = self._captures["stdout"].snapshot()
+                stderr, stderr_truncated = self._captures["stderr"].snapshot()
+                self._result = CappedProcessResult(
+                    returncode=rc, stdout=stdout, stderr=stderr,
+                    stdout_truncated=stdout_truncated, stderr_truncated=stderr_truncated,
+                )
+            return self._result
+
+    def wait(self, timeout: float | None) -> CappedProcessResult | None:
+        if self._result is not None:
+            return self._result
+        try:
+            rc = self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        return self._collect(rc)
+
+    def kill(self) -> CappedProcessResult:
+        """Kill the whole tree and return what was captured before it died."""
+        if self._result is not None:
+            return self._result
+        _kill_tree(self.proc)
+        return self._collect(self.proc.returncode)
+
+
+def start_capped(
     argv: list[str],
     *,
-    timeout: int,
     cwd: str | None,
     env: dict[str, str] | None = None,
     cap: int,
-) -> CappedProcessResult:
-    """Run ``argv`` capturing at most ``cap`` bytes per stream.
+) -> CappedProcess:
+    """Start ``argv`` with both streams captured to at most ``cap`` bytes each.
 
-    Raises ``subprocess.TimeoutExpired`` like ``subprocess.run``; on timeout the
-    whole process tree is killed. After a normal exit, readers get a short
-    grace to drain the pipe buffers; a reader still blocked past that (a
-    backgrounded grandchild deliberately keeps the pipe open) is stopped and
-    the parent's read end is closed. Intentionally-spawned daemons are not
-    killed, and whatever was captured so far is returned.
+    Readers run in daemon threads from the first byte, so a snapshot taken
+    while the process is still running returns what it has printed so far.
+    After exit, readers get a short grace to drain the pipe buffers; a reader
+    still blocked past that (a backgrounded grandchild deliberately keeps the
+    pipe open) is stopped and the parent's read end is closed.
+    Intentionally-spawned daemons are not killed.
     """
     popen_kwargs: dict = {}
     if sys.platform != "win32":
@@ -151,49 +226,36 @@ def _run_capped(
         ),
     ]
 
-    def finish_readers() -> None:
-        deadline = time.monotonic() + 2
-        for thread in threads:
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
-        if any(thread.is_alive() for thread in threads):
-            stop_readers.set()
-            for stream in (proc.stdout, proc.stderr):
-                with contextlib.suppress(Exception):
-                    os.close(stream.fileno())
-            for thread in threads:
-                thread.join(timeout=0.5)
-        for stream in (proc.stdout, proc.stderr):
-            with contextlib.suppress(Exception):
-                stream.close()
-
     for thread in threads:
         thread.start()
-    try:
-        rc = proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
-        finish_readers()
-        stdout, stdout_truncated = captures["stdout"].snapshot()
-        stderr, stderr_truncated = captures["stderr"].snapshot()
+    return CappedProcess(proc, captures, threads, stop_readers)
+
+
+def _run_capped(
+    argv: list[str],
+    *,
+    timeout: int,
+    cwd: str | None,
+    env: dict[str, str] | None = None,
+    cap: int,
+) -> CappedProcessResult:
+    """Run ``argv`` to completion. Raises ``CappedProcessTimeout`` like
+    ``subprocess.run``, with the whole process tree killed and whatever was
+    captured attached."""
+    job = start_capped(argv, cwd=cwd, env=env, cap=cap)
+    result = job.wait(timeout)
+    if result is None:
+        killed = job.kill()
         raise CappedProcessTimeout(
             argv,
             timeout,
-            returncode=proc.returncode,
-            output=stdout,
-            stderr=stderr,
-            stdout_truncated=stdout_truncated,
-            stderr_truncated=stderr_truncated,
+            returncode=killed.returncode,
+            output=killed.stdout,
+            stderr=killed.stderr,
+            stdout_truncated=killed.stdout_truncated,
+            stderr_truncated=killed.stderr_truncated,
         ) from None
-    finish_readers()
-    stdout, stdout_truncated = captures["stdout"].snapshot()
-    stderr, stderr_truncated = captures["stderr"].snapshot()
-    return CappedProcessResult(
-        returncode=rc,
-        stdout=stdout,
-        stderr=stderr,
-        stdout_truncated=stdout_truncated,
-        stderr_truncated=stderr_truncated,
-    )
+    return result
 
 
 def truncation_marker(cap: int, knob: str = "limits.max_bash_output_bytes") -> str:
