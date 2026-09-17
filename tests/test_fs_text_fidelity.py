@@ -207,3 +207,19 @@ assert target.read_bytes() == b"th\xc3\xa9\r\n", repr(target.read_bytes())
         timeout=30,
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_patch_miss_names_the_closest_line(tmp_path):
+    from js.toolkit import ToolContext, fs
+    target = tmp_path / "cli.cpp"
+    target.write_text('int a;\n" charts examples/revenue.csv -t pie3d -T \'Revenue mix\'\\n"\nint b;\n')
+    context = ToolContext(cwd=tmp_path)
+    fs.read(str(target), context=context)
+    result = fs.patch(
+        str(target),
+        old_string='" charts example/revenue.csv -t pie3d -T \'Revenue mix\'\\n"',
+        new_string="x",
+        context=context,
+    )
+    assert result.startswith("ERROR: Could not find match")
+    assert "Closest line is 2:" in result

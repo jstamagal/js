@@ -363,7 +363,9 @@ def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_pa
     target.write_text("old\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    assert fs.write("guarded.txt", "new\n", context=context) == "ERROR: Cannot overwrite existing file: overwrite flag not set."
+    refused = fs.write("guarded.txt", "new\n", context=context)
+    assert refused.startswith("ERROR: guarded.txt already exists")
+    assert "patch" in refused and "overwrite=true" in refused
     assert fs.write("guarded.txt", "new\n", overwrite=True, context=context) == (
         "ERROR: You must read the file with the read tool before attempting to overwrite it."
     )

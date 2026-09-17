@@ -374,7 +374,10 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         return "ERROR: file_path is required"
     target = context.resolve_path(raw_path)
     if target.exists() and not overwrite:
-        return "ERROR: Cannot overwrite existing file: overwrite flag not set."
+        return (
+            f"ERROR: {raw_path} already exists. To change part of it use patch; "
+            "to replace it whole, read it in full first and pass overwrite=true."
+        )
     if target.exists() and overwrite:
         try:
             current_hash = _hash_bytes(target.read_bytes())
@@ -521,6 +524,25 @@ def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
     return old, new, bool(raw.get("replace_all", False))
 
 
+def _nearest_hint(text: str, old: str) -> str:
+    """The closest line in the file to the first line of a missed old_string.
+
+    A miss is almost always a near-miss: one changed character, different
+    whitespace, a line that moved. Showing the model the closest real line and
+    its number turns a blind retry into a fix."""
+    first = next((line for line in old.splitlines() if line.strip()), "").strip()
+    if not first:
+        return " Read the file again."
+    lines = text.splitlines()
+    best = difflib.get_close_matches(first, [line.strip() for line in lines], n=1, cutoff=0.6)
+    if not best:
+        return " Nothing similar is in the file; read it again."
+    for number, line in enumerate(lines, 1):
+        if line.strip() == best[0]:
+            return f" Closest line is {number}: {line!r}. Anchor old_string on the file as it is now."
+    return " Read the file again."
+
+
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
     start_line = _normalize_line_endings(text[:start], "\n").count("\n") + 1
     end_line = _normalize_line_endings(text[:end], "\n").count("\n") + 1
@@ -614,7 +636,7 @@ def _apply_edit(
         )
     occurrences = _count_overlapping(text, old_norm)
     if occurrences == 0:
-        return f"ERROR: {label}Could not find match for search text: {old!r}. File may have changed externally, consider reading the file again."
+        return f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
     if occurrences > 1 and not replace_all:
         return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
     positions: list[tuple[int, int]] = []
