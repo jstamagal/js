@@ -302,3 +302,8 @@ def test_looks_text_accepts_utf8_split_at_read_boundary():
     assert attach._looks_text(full[:-1]) is True   # last byte of € dropped
     assert attach._looks_text(full[:-2]) is True   # two bytes of € dropped
     assert attach._looks_text(b"ab\xffcd") is False  # invalid byte mid-content
+
+
+def test_split_repl_attachments_bare_at_signs_are_prose():
+    line = "WTF IS THAT @ ERROR, and @@ too"
+    assert attach.split_repl_attachments(line) == (line, [])

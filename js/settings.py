@@ -30,7 +30,7 @@ from typing import Any
 
 # Built-in defaults — the value used when no config file or env var supplies one.
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
-DEFAULT_MAX_TOOL_ITERATIONS = 50
+DEFAULT_MAX_TOOL_ITERATIONS = 500
 DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE = 50
 DEFAULT_MAX_BASH_OUTPUT_BYTES = 256 * 1024
 DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000

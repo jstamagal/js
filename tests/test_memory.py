@@ -66,3 +66,29 @@ def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):
 
     assert out[0]["content"] == "<compaction-summary>\nS\n</compaction-summary>"
     assert [m.get("content") for m in out[1:]] == ["keep-user", "keep-assistant"]
+
+
+def test_heal_drops_duplicate_and_orphaned_tool_results():
+    from ai.providers import history_utils
+
+    from js import model_client
+
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
+            {"id": "c2", "type": "function", "function": {"name": "shell", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "name": "shell", "content": "one"},
+        {"role": "tool", "tool_call_id": "c2", "name": "shell", "content": "ERROR: tool result was not recorded (session interrupted)"},
+        {"role": "tool", "tool_call_id": "c2", "name": "shell", "content": "two (landed late)"},
+        {"role": "tool", "tool_call_id": "never-called", "name": "shell", "content": "stray"},
+        {"role": "user", "content": "again"},
+        {"role": "tool", "tool_call_id": "c1", "name": "shell", "content": "stray after user"},
+    ]
+
+    healed = M.balance_orphaned_tool_calls(messages)
+
+    assert [m.get("tool_call_id") for m in healed if m["role"] == "tool"] == ["c1", "c2"]
+    assert healed[-1] == {"role": "user", "content": "again"}
+    assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []

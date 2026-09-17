@@ -90,7 +90,7 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     attachments: list[str] = []
     spans: list[tuple[int, int]] = []
     for text, start, end in tokens:
-        if text.startswith("@") and len(text) > 1:
+        if text.startswith("@") and text.strip("@"):
             attachments.append(text[1:])
             spans.append((start, end))
 

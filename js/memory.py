@@ -72,23 +72,32 @@ def _open_locked(path: Path, mode: str):
 
 
 def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
-    """Backfill tool results lost to crashes or early-exit bugs so every assistant
-    ``tool_calls`` message is followed by one tool message per ``tool_call_id`` —
-    a hard requirement of OpenAI-shape providers (DeepSeek rejects the whole
-    request otherwise). Synthetic results are explicit about the loss."""
+    """Make every assistant ``tool_calls`` message be followed by exactly one tool
+    message per ``tool_call_id`` — a hard requirement of OpenAI-shape providers
+    (DeepSeek rejects the whole request otherwise). Results lost to crashes or
+    early-exit bugs are backfilled with a synthetic error. A second result for an
+    id already answered, or a result with no call in front of it, is dropped: a
+    cancelled turn can land the real result after the synthetic one, and the SDK
+    refuses to send either shape."""
     healed: list[dict] = []
     i = 0
     while i < len(messages):
         msg = messages[i]
+        if msg.get("role") == "tool":
+            i += 1
+            continue
         healed.append(msg)
         i += 1
         calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
         if not calls:
             continue
+        expected = {call.get("id") for call in calls}
         answered: set[str] = set()
         while i < len(messages) and messages[i].get("role") == "tool":
-            answered.add(messages[i].get("tool_call_id"))
-            healed.append(messages[i])
+            cid = messages[i].get("tool_call_id")
+            if cid in expected and cid not in answered:
+                answered.add(cid)
+                healed.append(messages[i])
             i += 1
         for call in calls:
             cid = call.get("id")
@@ -103,9 +112,9 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
 
 
 def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
-    """Public entry to the orphan-tool-call backfill, for the live REPL to repair
-    an interrupted turn's tail in memory before the next turn (the on-load path in
-    `load_messages` already heals the persisted copy)."""
+    """Public entry to the tool-result heal, for the live REPL to repair the
+    in-memory history before each turn (the on-load path in `load_messages`
+    already heals the persisted copy)."""
     return _heal_orphaned_tool_calls(messages)
 
 

@@ -2558,6 +2558,7 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
                 # re-resolving the live model: degrade to one friendly line, keep the REPL.
                 print(f"{C.ORANGE}error: {e}{C.RESET}")
                 continue
+            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
             before_len = len(state["messages"])
             state["messages"].append(user_bundle.runtime_message)
             _append_turn(cfg, user_bundle.history_message)
@@ -3380,6 +3381,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{C.ORANGE}error: {e}{C.RESET}")
             continue
 
+        state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)
         _append_turn(cfg, user_bundle.history_message)
