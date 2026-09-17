@@ -349,6 +349,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "model",
     "provider",
     "limits",
+    "shell",
     "kernel",
     "runtime",
     "compact",
@@ -695,6 +696,10 @@ _SECTION_INTRO: dict[str, list[str]] = {
         "# Leave unset to let ai-python route model ids natively.",
     ],
     "limits": ["# Per-call / per-turn caps."],
+    "shell": [
+        "# wait_seconds bounds how long a `shell` call blocks before handing back a",
+        "# handle. The command keeps running; poll/wait/kill it by handle.",
+    ],
     "kernel": [
         "# How the persistent-kernel tools behave and render.",
         "# wait_seconds bounds how long a call blocks; verbosity and render_max_lines",
