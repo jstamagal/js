@@ -41,7 +41,7 @@ def _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub):
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
     monkeypatch.setattr(cli, "patch_stdout", lambda *a, **k: contextlib.nullcontext())
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)
-    return cli.main(["--nonblocking"])
+    return cli.main([])
 
 
 def test_nonblocking_repl_runs_a_turn_and_persists(monkeypatch, tmp_path):

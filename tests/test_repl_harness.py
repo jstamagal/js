@@ -156,7 +156,7 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     captured = capsys.readouterr()
     assert actual == 0
@@ -195,7 +195,7 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
@@ -224,7 +224,7 @@ def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     records = _debug_records(debug_log)
     assert actual == 0
@@ -259,7 +259,7 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     records = _debug_records(debug_log)
     assert actual == 0
@@ -292,7 +292,7 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     records = _debug_records(debug_log)
     assert actual == 0
@@ -331,7 +331,7 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert temperatures == [0.2]
@@ -358,7 +358,7 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert trace_overrides == [True]
@@ -385,7 +385,7 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert temperatures == [0.9]
@@ -412,7 +412,7 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert temperatures == [0.2]
@@ -440,7 +440,7 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert models == ["hook-model"]
@@ -474,7 +474,7 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
@@ -506,7 +506,7 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [[{"match": ["offline-test-model"], "aliases": {"read": "r"}}]]
@@ -533,7 +533,7 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert max_tool_result_bytes == [123]
@@ -560,7 +560,7 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert prefer_inherit == [True]
@@ -590,7 +590,7 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [(True, False)]
@@ -627,7 +627,7 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert max_output_tokens == [5000, None]
@@ -654,7 +654,7 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
@@ -683,7 +683,7 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [("xhigh", "xhigh")]
@@ -710,7 +710,7 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [("none", "none")]
@@ -745,7 +745,7 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     # the rejected `default` never mutated the setting -- still disabled from `off`
@@ -778,7 +778,7 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert seen == [("xhigh", "xhigh")]
@@ -805,7 +805,7 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert traces == [True]
@@ -853,7 +853,7 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert len(params_seen) == 1
@@ -890,7 +890,7 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     assert temperatures == [0.2]

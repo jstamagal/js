@@ -41,7 +41,7 @@ def _repl(monkeypatch, tmp_path, argv, lines=(), interrupts=0):
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", lambda *a, **k: None)
     try:
-        return cli.main(argv)
+        return cli.main(["--blocking", *argv])
     except (RuntimeError, StopIteration):
         return 0
 

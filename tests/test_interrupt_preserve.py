@@ -33,7 +33,7 @@ def _drive_repl(monkeypatch, tmp_path, run_turn_stub):
     # StopIteration from the stubbed prompt() bubbles as RuntimeError out of the
     # generator; catch the clean exit paths and ignore the loop-terminator.
     try:
-        return cli.main([])
+        return cli.main(["--blocking"])
     except (RuntimeError, StopIteration):
         return 0
 

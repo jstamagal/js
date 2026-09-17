@@ -206,7 +206,7 @@ def test_repl_at_file_attaches_text_file(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     assert actual == 0
     capsys.readouterr()

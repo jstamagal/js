@@ -115,7 +115,7 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    assert cli.main([]) == 0
+    assert cli.main(["--blocking"]) == 0
 
     log = (log_dir / "repl.log").read_text(encoding="utf-8")
     assert log.index("<KING> hello") < log.index("<APE> REPL_OK")

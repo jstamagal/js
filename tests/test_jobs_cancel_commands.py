@@ -50,7 +50,7 @@ def test_jobs_lists_running(monkeypatch, capsys):
 def test_jobs_without_supervisor(monkeypatch, capsys):
     _set_sup(monkeypatch, None)
     assert cli._handle_command("/jobs", {}, None) is True
-    assert "nonblocking" in capsys.readouterr().out
+    assert "blocking" in capsys.readouterr().out
 
 
 def test_cancel_bare_targets_active_turn_only(monkeypatch, capsys):

@@ -1297,9 +1297,9 @@ HELP_TEXT = f"""\
   {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
   {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
-  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents (--nonblocking)
-  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn (--nonblocking)
-  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn (--nonblocking)
+  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
+  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
+  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
@@ -1624,7 +1624,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/jobs":
         sup = supervisor.get_current()
         if sup is None:
-            print(f"{C.GREY}(jobs need --nonblocking){C.RESET}")
+            print(f"{C.GREY}(jobs are unavailable under --blocking){C.RESET}")
             return True
         jobs = sup.jobs()
         if not jobs:
@@ -1637,7 +1637,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/cancel" or line.startswith("/cancel "):
         sup = supervisor.get_current()
         if sup is None:
-            print(f"{C.GREY}(cancel needs --nonblocking){C.RESET}")
+            print(f"{C.GREY}(cancel is unavailable under --blocking){C.RESET}")
             return True
         arg = line[len("/cancel"):].strip()
         if arg:
@@ -2870,8 +2870,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
-    parser.add_argument("--nonblocking", action="store_true", help="experimental: run the REPL on one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn. Legacy blocking REPL is the default.")
-    parser.add_argument("--tui", action="store_true", help="run the interactive REPL as a Textual cockpit; implies --nonblocking and renders assistant Markdown in-pane")
+    parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
+    parser.add_argument("--tui", action="store_true", help="run the interactive REPL as a Textual cockpit; renders assistant Markdown in-pane")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
@@ -3326,7 +3326,7 @@ def main(argv: list[str] | None = None) -> int:
     _enter_transcript_stdio(transcript_stack, telemetry)
     print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
 
-    if args.nonblocking:
+    if not args.blocking:
         try:
             return model_client.run_owning_loop(
                 _repl_main(cfg, state, telemetry, session, prompt_spec)

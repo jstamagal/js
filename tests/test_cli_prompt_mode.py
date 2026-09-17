@@ -131,7 +131,7 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path, capsys):
 )
 def test_cli_help_exposes_options_and_exits_successfully(option, documented_options, capsys):
     with pytest.raises(SystemExit) as exc:
-        cli.main([option])
+        cli.main(["--blocking", option])
 
     captured = capsys.readouterr()
     assert exc.value.code == 0
@@ -161,7 +161,7 @@ def test_interactive_compact_uses_active_model_for_same(monkeypatch, tmp_path, c
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
 
-    actual = cli.main(["--model", "flag-model"])
+    actual = cli.main(["--blocking", "--model", "flag-model"])
 
     assert actual == 0
     assert seen == ["flag-model"]
@@ -182,7 +182,7 @@ def test_interactive_cli_model_flag_overrides_banner_model(monkeypatch, tmp_path
 
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
 
-    actual = cli.main(["-n", "--model", "flag-model"])
+    actual = cli.main(["--blocking", "-n", "--model", "flag-model"])
 
     captured = capsys.readouterr()
 
@@ -208,7 +208,7 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
 
-    assert cli.main([]) == 0
+    assert cli.main(["--blocking"]) == 0
     assert seen["enable_suspend"] is True
 
 
@@ -279,7 +279,7 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    actual = cli.main(["--model", "openai-codex/gpt-5.5"])
+    actual = cli.main(["--blocking", "--model", "openai-codex/gpt-5.5"])
 
     assert actual == 0
     assert seen["cfg_model"] == "gpt-5.5"
@@ -450,7 +450,7 @@ def test_js_prompt_mode_reads_pipe_without_prompt_flag(monkeypatch, tmp_path, ca
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
-    actual = cli.main([])
+    actual = cli.main(["--blocking"])
 
     output = capsys.readouterr().out
     assert actual == 0
@@ -727,7 +727,7 @@ def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path,
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     monkeypatch.setattr(cli.sys, "stdin", StdinStub("Reply with PIPE_NO_SAVE_OK"))
-    actual_pipe = cli.main(["--no-save"])
+    actual_pipe = cli.main(["--blocking", "--no-save"])
     captured_pipe = capsys.readouterr()
 
     monkeypatch.setattr(cli.sys, "stdin", StdinStub("Reply with PIPE_NO_SAVE_OK"))
@@ -841,7 +841,7 @@ def test_cli_refresh_model_catalog_flag_exits_after_forced_refresh(monkeypatch, 
 
     monkeypatch.setattr(cli, "_force_refresh_model_catalog", refresh_stub)
 
-    actual = cli.main(["--refresh-model-catalog"])
+    actual = cli.main(["--blocking", "--refresh-model-catalog"])
 
     assert actual == 0
     assert seen == ["forced"]
@@ -942,7 +942,7 @@ def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatc
 def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path, capsys):
     """The bench loop validates --reasoning up front too (same ruling B path)."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    actual = cli.main(["--bench", "someagent", "-r", "auto"])
+    actual = cli.main(["--blocking", "--bench", "someagent", "-r", "auto"])
     err = capsys.readouterr().err
     assert actual == 2
     assert "--reasoning auto" in err
@@ -962,7 +962,7 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
 
-    actual = cli.main(["--compact", "compact-session", "--model", "compact-model"])
+    actual = cli.main(["--blocking", "--compact", "compact-session", "--model", "compact-model"])
 
     assert actual == 0
     assert "compacted" in capsys.readouterr().out
@@ -1024,8 +1024,8 @@ def test_commit_mode_accepts_target_dir_and_pipe_context(monkeypatch, tmp_path):
 def test_commit_mode_rejects_agent_override_and_missing_target(monkeypatch, tmp_path, capsys):
     missing = tmp_path / "missing"
 
-    with_agent = cli.main(["--commit", "--agent", "autocoder"])
-    missing_target = cli.main(["--commit", str(missing)])
+    with_agent = cli.main(["--blocking", "--commit", "--agent", "autocoder"])
+    missing_target = cli.main(["--blocking", "--commit", str(missing)])
 
     captured = capsys.readouterr()
     assert with_agent == 2
@@ -1630,13 +1630,13 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9)
     monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--blocking", "--list"]) == 0
     table = capsys.readouterr().out
     assert "AGENT" in table and "IN-FLIGHT" in table
     assert "legacy" in table and "caller/nested" in table
     assert "job-key/9" in table and str(tmp_path) in table
 
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--blocking", "--list", "--json"]) == 0
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert {(item["agent"], item["name"]) for item in records} == {
         ("old", "legacy"),
@@ -1667,18 +1667,18 @@ def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypat
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert ready.exists()
-        assert cli.main(["--list", "--json"]) == 0
+        assert cli.main(["--blocking", "--list", "--json"]) == 0
         assert json.loads(capsys.readouterr().out)["in_flight"] is True
     finally:
         process.terminate()
         process.wait(timeout=5)
 
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--blocking", "--list", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["in_flight"] is False
 
 
 def test_json_is_scoped_to_list(capsys):
-    assert cli.main(["--json"]) == 2
+    assert cli.main(["--blocking", "--json"]) == 2
     assert "--json only works with --list" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli.main(["-s", "named", "--session-key", "key", "-p", "nope"])
