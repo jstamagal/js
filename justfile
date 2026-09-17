@@ -98,13 +98,19 @@ install:
     for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
         [ -f "$rc" ] || continue
         if grep -q '# js tools PATH block begin' "$rc"; then
-            echo "ok: $rc already has the js tools PATH block"
+            if ! grep -q 'COLORTERM=truecolor' "$rc"; then
+                sed -i '/# js tools PATH block end/i export COLORTERM=truecolor' "$rc"
+                echo "added COLORTERM=truecolor to the js block in $rc"
+            else
+                echo "ok: $rc already has the js tools PATH block"
+            fi
             continue
         fi
         {
             echo ''
             echo '# js tools PATH block begin'
             echo "export PATH=\"$(pwd -P)/tools/bin:\$PATH\""
+            echo 'export COLORTERM=truecolor'
             echo '# js tools PATH block end'
         } >> "$rc"
         echo "added the js tools PATH block to $rc"
