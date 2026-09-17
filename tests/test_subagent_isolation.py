@@ -226,6 +226,32 @@ def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch
     assert seen[0]["max_output_tokens"] == (123 if parent_cap is None else parent_cap)
 
 
+def test_worker_system_prompt_ends_with_the_agent_own_prompt(monkeypatch, tmp_path):
+    """The agent's prompt is the last word on its own delivery shape.
+
+    An agent that declares "reply with one line: the path" is telling the truth
+    about itself. Harness text appended after that prompt wins on recency and
+    contradicts it, so the worker's system prompt must end where the agent's
+    prompt ends.
+    """
+    delivery = "DELIVERY: reply with one line, the path only."
+    prompts = prompt_dir(tmp_path, "worker", "tools: []\n", f"WORKER\n{delivery}\n")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    context = ToolContext(cwd=tmp_path)
+    context.config = cfg
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs)
+        return _fake_stream_result("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert "ok" in task(["work"], agent_id="worker", context=context)
+
+    system = seen[0]["messages"][0].parts[0].text
+    assert system.rstrip().endswith(delivery)
+
+
 @pytest.mark.parametrize("async_dispatch", [False, True])
 @pytest.mark.parametrize("session_id", [None, "existing"])
 def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_path, async_dispatch, session_id):

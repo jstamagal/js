@@ -132,17 +132,6 @@ def _task_text(item: Any) -> str:
     return str(item).strip()
 
 
-
-def _task_system(agent: str, session_id: str | None) -> str:
-    session = f" session_id={session_id}" if session_id else ""
-    return (
-        f"You are a fresh non-interactive worker agent. agent_id={agent}{session}.\n"
-        "Complete exactly the assigned task using the available tools. "
-        "Keep your final answer compressed: outcome, changed files if any, commands run, blockers. "
-        "Do not ask follow-up questions unless the task is impossible without operator input."
-    )
-
-
 def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContext:
     child = ToolContext(
         cwd=parent.cwd,
@@ -325,7 +314,7 @@ async def _run_one_task_async(
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
 
     registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
-    system = prompt_spec.system + "\n" + _task_system(agent, task_session_id)
+    system = prompt_spec.system
     sampling = (
         cfg.sampling_setscript
         .merge(Sampling.from_mapping(prompt_spec.sampling))
