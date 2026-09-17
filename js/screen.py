@@ -7,6 +7,8 @@ appended to the scrollback buffer; the input buffer is untouched.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import sys
 from collections.abc import Callable, Coroutine
 
@@ -22,6 +24,13 @@ from prompt_toolkit.styles import Style
 
 STATUS_STYLE = "bold #ffffff bg:#1b3a6b"
 SCROLLBACK_LINES = 5000
+
+# Skin-tone modifiers and variation selectors: the Linux console cannot draw
+# them, and prompt_toolkit's width for the sequence disagrees with fbcon's, so
+# every column after one is off and the wrapper re-breaks the line on each
+# repaint. Dropped on TERM=linux; the base glyph stays.
+_CONSOLE_UNDRAWABLE = re.compile("[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F]")
+_ON_CONSOLE = os.environ.get("TERM") == "linux"
 
 
 class _AnsiLexer(Lexer):
@@ -45,6 +54,8 @@ class Scrollback:
         self._pending = ""
 
     def append(self, text: str) -> None:
+        if _ON_CONSOLE:
+            text = _CONSOLE_UNDRAWABLE.sub("", text)
         self._pending += text
         if "\n" not in self._pending and len(self._pending) < 200:
             return
