@@ -113,7 +113,6 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("fs_read") is None
     assert registry.resolve("cat") is None
     assert registry.resolve("grep") is None
-    assert registry.resolve("forge__read_file") is None
 
 
 def test_core_tool_schemas_match_canonical_surface_names():

@@ -322,7 +322,7 @@ def fs_read(
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
         return f"{target} is empty (hash {content_hash})"
 
-    # Resolve the window the way forge's resolve_range does: a reversed range is
+    # Resolve the window: a reversed range is
     # swapped, an oversized one is clamped to max_read_lines, and an omitted
     # end_line means "one page starting at start_line" — NOT "one page starting at
     # line 1", which used to make the tool's own
@@ -1074,7 +1074,7 @@ def fs_search(
         argv += [glob_flag, str(glob)]
     if file_type:
         # Prefer rg's own type table so `type=rust` matches *.rs (and `py` also
-        # matches .pyi/.pyw), matching forge's `--type` behaviour. A bare extension
+        # matches .pyi/.pyw), as ripgrep's `--type` does. A bare extension
         # rg has no type for ("gdshader") still works via an extension glob —
         # previously EVERY value became `*.<value>`, so `type=rust` silently matched
         # nothing at all.

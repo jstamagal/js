@@ -1,7 +1,7 @@
 # js
 
 `js` is a personal terminal LLM harness written in Python. It runs interactive
-chat, one-shot prompts, pipe workflows, Forge-style local tools, parallel
+chat, one-shot prompts, pipe workflows, local tools, parallel
 subagents, wiki agents, and commit-agent
 workflows through the Vercel AI Python SDK (`ai-python`).
 This repo is for a power user, not a product team. The design bias is low
@@ -36,7 +36,7 @@ Start here:
 - [docs/README.md](docs/README.md): documentation map.
 - [docs/user-guide.md](docs/user-guide.md): commands, workflows, and daily use.
 - [docs/technical-guide.md](docs/technical-guide.md): architecture and runtime internals.
-- [docs/tool-system.md](docs/tool-system.md): registry, schemas, dispatch, descriptions, and Forge parity notes.
+- [docs/tool-system.md](docs/tool-system.md): registry, schemas, dispatch, and descriptions.
 - [docs/tools-reference.md](docs/tools-reference.md): all public tools.
 - [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `tools:` frontmatter, isolation, and limits.
 - [docs/inline-directives.md](docs/inline-directives.md): `{{VAR}}` / `!{sub}` / `` ```!lang `` expansion and the inline-code flag.

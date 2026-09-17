@@ -876,10 +876,10 @@ def _dispatch_tool_calls(
     tool_context: ToolContext,
     progress: _DispatchProgress | None = None,
 ) -> list[tuple[_PendingToolCall, dict, str]]:
-    """Dispatch one assistant batch with Forge-style task parallelism.
+    """Dispatch one assistant batch.
 
-    Forge runs all `task` calls from the same assistant turn concurrently, runs
-    non-task tools sequentially, then restores the original result order before
+    All `task` calls from the same assistant turn run concurrently, non-task
+    tools run sequentially, then restores the original result order before
     appending tool messages.
     """
     records: list[tuple[dict, str] | None] = [None] * len(tool_calls)

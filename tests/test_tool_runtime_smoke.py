@@ -518,7 +518,6 @@ def test_tool_resolution_is_canonical_case_insensitive_and_not_compat_alias_base
     assert registry.resolve("grep") is None
     assert registry.resolve("rg") is None
     assert registry.resolve("cat") is None
-    assert registry.resolve("forge__read_file") is None
     assert registry.resolve("delete") is None
 
 

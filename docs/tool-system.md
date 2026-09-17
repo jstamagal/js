@@ -1,7 +1,7 @@
 # Tool System
 
 The tool system is the main contract between the model and the local machine.
-It is intentionally close to Forge-style behavior: canonical tool names, rich
+Canonical tool names, rich
 unambiguous model-facing descriptions, exact edit tools, read-before-write
 guards, task parallelism, and provider-specific name handling at the boundary.
 
@@ -83,9 +83,8 @@ what each costs.
 The filename must match the registered tool name for core/wiki tools.
 Generated agent tools build descriptions at runtime.
 
-These descriptions are not comments. They are model-facing contract text. The
-Forge-style part is that the descriptions are explicit about ambiguity and
-failure modes: when to read first, what line anchors mean, how to patch, when to
+These descriptions are not comments. They are model-facing contract text,
+explicit about ambiguity and failure modes: when to read first, what line anchors mean, how to patch, when to
 use `cwd`, how tasks run, and what not to infer.
 
 Tests check description files for registered tools and protect the canonical
@@ -120,7 +119,6 @@ fs_list
 semantic_search
 cat
 grep
-forge__read_file
 ```
 
 ## Provider-Facing Names

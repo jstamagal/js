@@ -397,5 +397,5 @@ Current behavior:
   and rendered browsing do not spawn it.
 - `shell` can run `rg`, `fzf`, `bat`, or anything else on PATH when installed.
 
-If a future port wants closer Forge shell ergonomics, preserve `$SHELL` first
-and add optional shell-level affordances without changing canonical tool names.
+Any shell-level affordance added later preserves `$SHELL` first and does not
+change canonical tool names.

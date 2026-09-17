@@ -13,8 +13,7 @@ Root `README.md` is only a launch pad.
    ` ```!lang ` fences in system prompts, the subsystems, and the
    `--im-a-pussy` opt-out (code directives run by default).
 4. [Technical Guide](technical-guide.md): module map and runtime architecture.
-5. [Tool System](tool-system.md): registry, schemas, descriptions, dispatch, and
-   Forge-style behavior.
+5. [Tool System](tool-system.md): registry, schemas, descriptions, and dispatch.
 6. [Tools Reference](tools-reference.md): every built-in tool and what it does.
 7. [Subagents](subagents.md): `task`, direct agent tools, parallelism, isolation,
    and what is not implemented.
