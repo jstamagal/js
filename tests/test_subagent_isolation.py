@@ -510,8 +510,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
 
     assert tool.required == ("tasks",)
     assert set(tool.params) == {"tasks"}
-    assert "TASK_RESULTS agent=worker" in actual
-    assert "NAMED_AGENT_DONE" in actual
+    assert actual == "NAMED_AGENT_DONE"
     assert "WORKER SYSTEM" in str(seen["system"])
     assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
 
@@ -689,8 +688,7 @@ def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp
     # Single child: fair share == full budget (64 // 1), marker still fires.
     assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
     assert "X" * 65 not in actual
-    child_result = actual.split("1. ", 1)[1]
-    assert len(("1. " + child_result).encode("utf-8")) <= 64
+    assert len(actual.encode("utf-8")) <= 64
     assert "�" not in actual
 
 
@@ -717,3 +715,18 @@ def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
     assert "KEEP-ME-THREE" in actual
     assert "[truncated: limits.max_tool_result_bytes (133) reached]" in actual  # 400 // 3
     assert "X" * 200 not in actual
+
+
+def test_one_task_returns_the_worker_text_verbatim(monkeypatch, tmp_path):
+    """An agent whose contract is 'reply with exactly one line' has to survive
+    the round trip: no header, no ordinal, nothing appended."""
+    prompts = prompt_dir(tmp_path, "worker")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    monkeypatch.setattr(
+        runtime.model_client, "stream_model_async",
+        lambda **kwargs: _fake_stream_result("/tmp/out/summary.md"),
+    )
+
+    actual = task(["summarize it"], agent_id="worker", context=ToolContext(cwd=tmp_path))
+
+    assert actual == "/tmp/out/summary.md"

@@ -257,7 +257,7 @@ async def _run_one_task_async(
 
     prompt = _task_text(item)
     if not prompt:
-        return f"{idx}. ERROR task is empty"
+        return "ERROR task is empty"
 
     agent = agent_id
     task_session_id = global_session_id
@@ -269,7 +269,7 @@ async def _run_one_task_async(
             prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
         ))
     except (FileNotFoundError, ValueError) as exc:
-        return f"{idx}. ERROR could not load agent {agent!r}: {exc}"
+        return f"ERROR could not load agent {agent!r}: {exc}"
 
     cfg = P.apply_agent_max_tokens(_agent_cfg(parent_cfg, agent, task_session_id), prompt_spec)
 
@@ -339,7 +339,7 @@ async def _run_one_task_async(
             sampling=sampling,
         )
     except Exception as exc:  # noqa: BLE001
-        return f"{idx}. ERROR {type(exc).__name__}: {exc}"
+        return f"ERROR {type(exc).__name__}: {exc}"
     finally:
         close_terminal_sessions(child_context)
         M.persist_messages(cfg.session_file, messages)
@@ -360,7 +360,6 @@ async def _run_one_task_async(
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
     budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
-    final = f"{idx}. {final}"
     if budget > 0:
         cap = budget // max(1, total)
         final = cap_text(final, cap, f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]")
@@ -393,7 +392,7 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
             try:
                 results[idx - 1] = future.result()
             except Exception as exc:  # noqa: BLE001
-                results[idx - 1] = f"{idx}. ERROR {type(exc).__name__}: {exc}"
+                results[idx - 1] = f"ERROR {type(exc).__name__}: {exc}"
         return results
 
     async def _gather():
@@ -404,7 +403,7 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
 
     for (idx, _item), res in zip(indexed_items, asyncio.run(_gather())):
         results[idx - 1] = (
-            f"{idx}. ERROR {type(res).__name__}: {res}" if isinstance(res, Exception) else res
+            f"ERROR {type(res).__name__}: {res}" if isinstance(res, Exception) else res
         )
     return results
 
@@ -433,7 +432,7 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
         )
         for (idx, _job), res in zip(jobs, gathered):
             results[idx - 1] = (
-                f"{idx}. ERROR {type(res).__name__}: {res}"
+                f"ERROR {type(res).__name__}: {res}"
                 if isinstance(res, BaseException)
                 else res
             )
@@ -445,7 +444,7 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
     )
     for (idx, _item), res in zip(indexed_items, gathered):
         results[idx - 1] = (
-            f"{idx}. ERROR {type(res).__name__}: {res}"
+            f"ERROR {type(res).__name__}: {res}"
             if isinstance(res, BaseException)
             else res
         )
@@ -524,11 +523,17 @@ def _prepare_fan_out(
 
 
 def _assemble_task_results(results: list[str | None], agent_id: str, session_id: str | None) -> str:
-    filled = [result if result is not None else f"{idx}. ERROR worker did not return" for idx, result in enumerate(results, 1)]
+    """One task returns the worker's text verbatim, so an agent whose contract is
+    "reply with exactly X" round-trips. A fan-out is numbered in task order under
+    one header."""
+    filled = [result if result is not None else "ERROR worker did not return" for result in results]
+    if len(filled) == 1:
+        return filled[0]
+    numbered = [f"{idx}. {text}" for idx, text in enumerate(filled, 1)]
     header = f"TASK_RESULTS agent={agent_id}"
     if session_id:
         header += f" session_id={session_id}"
-    return "\n\n".join([header, *filled])
+    return "\n\n".join([header, *numbered])
 
 
 def task(

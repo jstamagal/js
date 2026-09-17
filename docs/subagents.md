@@ -133,8 +133,9 @@ What exists today:
 
 ## No Monitor/Stop Handles Yet
 
-A `task` call blocks until all child futures complete. The parent model receives
-one aggregated `TASK_RESULTS` string.
+A `task` call blocks until all child futures complete. One task returns the
+worker's text verbatim; a fan-out returns one `TASK_RESULTS` string with the
+results numbered in task order.
 
 Not implemented:
 

@@ -57,7 +57,8 @@ Parallelism:
   parallel at the runtime orchestration layer.
 - Non-task tools run sequentially.
 - Results are restored to the original task/tool-call order before being sent
-  back to the model.
+  back to the model. One task returns the worker's reply verbatim; a fan-out
+  returns them numbered under a `TASK_RESULTS` header.
 
 Prompting guidance:
 - Include the expected output shape.

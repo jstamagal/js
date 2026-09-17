@@ -53,12 +53,12 @@ def test_supervisor_ramp_reports_per_task_errors():
             async def work():
                 if idx == 2:
                     raise RuntimeError("boom")
-                return f"{idx}. ok"
+                return "ok"
             return work()
 
         results = _fan_out([(1, "a"), (2, "b")], factory)
-        assert results[0] == "1. ok"
-        assert results[1].startswith("2. ERROR RuntimeError: boom")
+        assert results[0] == "ok"
+        assert results[1].startswith("ERROR RuntimeError: boom")
     finally:
         supervisor.set_current(None)
         loop.call_soon_threadsafe(loop.stop)
