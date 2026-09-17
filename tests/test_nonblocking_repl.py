@@ -1,5 +1,5 @@
 """The --nonblocking REPL drives one real turn end-to-end on the async loop:
-prompt_async → queue → supervised _do_turn → run_turn_async → persist → clean
+Enter handler → queue → supervised _do_turn → run_turn_async → persist → clean
 EOF shutdown. Headless: a stub session feeds lines, run_turn_async is stubbed,
 and patch_stdout is neutralized (prompt_toolkit's terminal machinery is its own
 concern, not ours)."""
@@ -28,18 +28,28 @@ def _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self._lines = iter(lines)
+    class AppStub:
+        """Feeds each line to the Enter handler, then EOF — no terminal."""
 
-        async def prompt_async(self, *_args, **_kwargs):
-            try:
-                return next(self._lines)
-            except StopIteration:
-                raise EOFError  # ends the REPL loop cleanly
+        def __init__(self, on_line, on_eof):
+            self._on_line, self._on_eof = on_line, on_eof
 
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli, "patch_stdout", lambda *a, **k: contextlib.nullcontext())
+        async def run_async(self):
+            for line in lines:
+                await self._on_line(line.strip())
+            self._on_eof()
+
+        def exit(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    def build_app_stub(*, on_line, on_eof, **_kwargs):
+        return AppStub(on_line, on_eof), cli.screen.Scrollback()
+
+    monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
+    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)
     return cli.main([])
 

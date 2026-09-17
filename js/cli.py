@@ -24,7 +24,6 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
@@ -48,6 +47,7 @@ from . import paths as _paths
 from . import transcript as transcript_mod
 from . import tui
 from .promptexpand import expand_prompt
+from . import screen
 from . import setcmd
 from . import settings
 from . import routing
@@ -2619,11 +2619,12 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return dropped
 
 
-async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
+async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
-    event loop. `prompt_async` keeps the input line live while a turn streams
-    (output paints above it via patch_stdout); ^C cancels the active turn
-    instead of killing the process; new prompts queue behind a running turn."""
+    event loop. The screen has three regions (scrollback, status, input); turn
+    output lands in the scrollback and never touches the input line. ^C cancels
+    the active turn instead of killing the process; new prompts queue behind a
+    running turn."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
     sup = supervisor.Supervisor(loop)
@@ -2632,46 +2633,59 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec) -> int:
     consumer = loop.create_task(
         _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop)
     )
+
+    async def on_line(line: str) -> None:
+        if not line:
+            return
+        if line in ("/flush", "/cancel queued"):
+            # Drop pending input without touching the active turn. Handled
+            # here (not in _handle_command) because the queue is loop-owned
+            # and _handle_command runs on an executor thread.
+            flushed = _drain_queue(queue)
+            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+            return
+        if _is_turn_state_command(line) and sup.turn_active():
+            print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
+            return
+        handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
+        if handled:
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            if not state["running"]:
+                app.exit()
+            return
+        if (sink := _transcript_sink(telemetry)) is not None:
+            sink.write_user(line)
+        queue.put_nowait(line)
+        if sup.turn_active() or queue.qsize() > 1:
+            print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
+
+    def on_interrupt() -> None:
+        # ^C cancels the active turn AND drops anything queued behind it —
+        # otherwise the queue keeps draining prompts the operator meant to
+        # abort. The drain-on-quit path (EOF) stays intact.
+        if sup.turn_active():
+            n = sup.cancel_kind("turn")
+            print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
+        flushed = _drain_queue(queue)
+        if flushed:
+            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+
+    def on_eof() -> None:
+        state["running"] = False
+
+    app, scrollback = screen.build_app(
+        prompt=f"{C.YELLOW}LO> {C.RESET}",
+        history=session.history,
+        completer=session.completer,
+        on_line=on_line,
+        on_interrupt=on_interrupt,
+        on_eof=on_eof,
+    )
     try:
-        with patch_stdout(raw=True):
-            while state["running"]:
-                try:
-                    line = (await session.prompt_async(ANSI(f"{C.YELLOW}LO> {C.RESET}"))).strip()
-                except EOFError:
-                    print()
-                    break
-                except KeyboardInterrupt:
-                    # ^C cancels the active turn AND drops anything queued behind
-                    # it — otherwise the queue keeps draining prompts the operator
-                    # meant to abort. The drain-on-quit path (EOF) stays intact.
-                    if sup.turn_active():
-                        n = sup.cancel_kind("turn")
-                        print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
-                    flushed = _drain_queue(queue)
-                    if flushed:
-                        print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
-                    continue
-                if not line:
-                    continue
-                if line in ("/flush", "/cancel queued"):
-                    # Drop pending input without touching the active turn. Handled
-                    # here (not in _handle_command) because the queue is loop-owned
-                    # and _handle_command runs on an executor thread.
-                    flushed = _drain_queue(queue)
-                    print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
-                    continue
-                if _is_turn_state_command(line) and sup.turn_active():
-                    print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
-                    continue
-                handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
-                if handled:
-                    _sync_telemetry_from_live_settings(cfg, state, telemetry)
-                    continue
-                if (sink := _transcript_sink(telemetry)) is not None:
-                    sink.write_user(line)
-                queue.put_nowait(line)
-                if sup.turn_active() or queue.qsize() > 1:
-                    print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
+        with screen.capture_stdio(loop, scrollback, app):
+            if banner:
+                print(banner)
+            await app.run_async()
     finally:
         supervisor.set_current(None)
         # Graceful quit (EOF / exit): let queued and in-flight turns finish
@@ -3341,12 +3355,13 @@ def main(argv: list[str] | None = None) -> int:
 
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
-    print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
-
-    if not args.blocking:
+    banner = BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file)
+    if args.blocking:
+        print(banner)
+    else:
         try:
             return model_client.run_owning_loop(
-                _repl_main(cfg, state, telemetry, session, prompt_spec)
+                _repl_main(cfg, state, telemetry, session, prompt_spec, banner)
             )
         finally:
             transcript_stack.close()
