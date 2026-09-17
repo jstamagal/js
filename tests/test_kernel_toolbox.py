@@ -41,6 +41,7 @@ def ctx(tmp_path, monkeypatch):
     context = ToolContext(cwd=work)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"
+    context.kernel_wait_seconds = 1
     yield context
     session = getattr(context, "kernel_session", None)
     if session is not None:
@@ -523,10 +524,10 @@ def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intac
     kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
 
     started = time.monotonic()
-    result = kmod.kernel(action="wait", timeout=3, context=ctx)
+    result = kmod.kernel(action="wait", timeout=1, context=ctx)
     elapsed = time.monotonic() - started
 
-    assert result.startswith("INTERRUPTED after 3s.")
+    assert result.startswith("INTERRUPTED after 1s.")
     assert "KeyboardInterrupt" in result
     assert elapsed < 30
     assert result.splitlines()[-1].startswith("NAMESPACE ")
@@ -570,8 +571,8 @@ def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
 @needs_kernel
 def test_output_a_cell_produces_after_the_call_returned_arrives_on_the_next_poll(ctx):
     ctx.kernel_wait_seconds = 1
-    kmod.kernel(code="import time\ntime.sleep(3)\nprint('late output')", context=ctx)
-    time.sleep(4)
+    kmod.kernel(code="import time\ntime.sleep(1.5)\nprint('late output')", context=ctx)
+    time.sleep(2)
 
     polled = kmod.kernel(action="poll", context=ctx)
 
