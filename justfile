@@ -172,9 +172,10 @@ uninstall:
 # the verified offline command from docs/testing-and-development.md.
 # skips ai_provider (needs live creds), vision (needs a local vision model),
 # and e2e (live end-to-end paths).
-# offline suite — skips the live markers (ai_provider, vision, e2e).
-test:
-    uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n auto
+# offline suite — skips the live markers. Cached per tree state: an unchanged
+# tree replays the last run. `just test --force` reruns.
+test *args:
+    scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n auto
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:

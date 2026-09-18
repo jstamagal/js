@@ -22,7 +22,12 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    upper bound needs the incompatibility it guards against named beside it.
 2. **Env feels broken? → `just sync`.** It is the real fix.
 3. **Make the change.**
-4. **Run the tests that cover it.** Green before done.
+4. **Run the tests that cover it.** Green before done. `just test` is cached
+   per tree state: an unchanged tree replays the last run in milliseconds and
+   says who ran it — so running it again tells you nothing new. A red suite is
+   nobody's to walk past: "it was failing before me" is a fact the cache line
+   already printed, not an excuse. Fix it, or file the bead with the failing
+   test names, before moving on.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
    Commits are authored by whoever made them. The owner is
