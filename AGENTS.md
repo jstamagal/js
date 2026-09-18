@@ -80,10 +80,14 @@ nobody here rereads `docs/` to keep it current. When a page in `docs/`
 disagrees with the code, the code is right. If you are changing the area a
 stale page describes, correct or delete the stale text in the same change.
 
-Issues go in `jstamagal/js` on GitHub. `.scratch/` holds working notes, not the
-shared issue backlog. After filing a scratch report's confirmed issues with
-their reproduction evidence, delete the original report. Leave `toolsweep-*`
-artifacts alone unless explicitly asked to clean them up.
+This project uses **bd (beads)** for issue tracking. Run `bd prime` for the
+workflow, memories and current rules — that output is the truth, not this
+file. `bd ready` lists unblocked work, `bd show <id>` has the spec pointer
+and acceptance, `bd close <id>` when it is done, `bd sync` after a batch.
+Never `bd delete` a child id (`js-x.N`): it can take the parent epic with
+it. Design docs live in `~/inbox/agents/js/`; a bead points at the section.
+`.scratch/` is for a reproduction you are still building, not a backlog.
+Leave `toolsweep-*` artifacts alone unless explicitly asked to clean them up.
 
 ## Tests and comments
 
