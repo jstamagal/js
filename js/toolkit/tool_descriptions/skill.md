@@ -15,5 +15,6 @@ directory wins.
 Rules:
 - Only load skills that are relevant to the current task.
 - Do not call a skill that is already active.
-- Follow the loaded skill instructions before taking task actions.
+- The returned text is the skill's procedure, as written by whoever wrote the
+  skill.
 - If no local skill matches, the tool returns an error.
