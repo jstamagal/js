@@ -1,6 +1,6 @@
-Version-current library documentation via Context7. Use it before writing code
-against a library, framework, SDK, or API whenever exact syntax, config keys, or
-a migration path matters. It resolves `library` to Context7's best match and
+Version-current library documentation via Context7. Use it before the first
+code you write against any third-party library, framework, SDK, or API in a
+session — whichever the library, however well you think you know it. It resolves `library` to Context7's best match and
 returns documentation snippets with source URLs. Context7 matches keywords, so a
 hit is reported only when the requested name, case and separators ignored, is
 the hit's project name (an id path segment or its title) or one whole word of
