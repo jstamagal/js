@@ -1,5 +1,6 @@
-Version-current library documentation via Context7: exact syntax, config keys,
-migration paths for a library, framework, SDK, or API. It resolves `library` to Context7's best match and
+Version-current library documentation via Context7. Use it before writing code
+against a library, framework, SDK, or API whenever exact syntax, config keys, or
+a migration path matters. It resolves `library` to Context7's best match and
 returns documentation snippets with source URLs. Context7 matches keywords, so a
 hit is reported only when the requested name, case and separators ignored, is
 the hit's project name (an id path segment or its title) or one whole word of
