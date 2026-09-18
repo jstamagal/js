@@ -12,9 +12,8 @@ Parameters:
 - `action` (required): `list`, `load`, `save`, `history`, or `restore`.
 - `name`: the tool's name, for `save`, `history`, and `restore`. It must be a
   plain Python identifier and it must match the name of the definition.
-- `note`: for `save` — one line on WHAT CHANGED and why. This is the message the
-  next model reads before deciding whether to trust or rewrite your version.
-  A save without a note is close to useless.
+- `note`: for `save` — one line on what changed and why. It is the history
+  entry the next model reads before trusting or rewriting the revision.
 - `scope`: `global` (default, available in every project) or `project` (stored
   under `.js/toolbox/` and only visible here). A project tool shadows a global
   tool of the same name.
@@ -34,8 +33,8 @@ that already exists, including a reinstall.
 
 `load` execs every healthy tool file into the kernel namespace, then reports
 what arrived. Each file is exec'd separately, so one broken tool costs you that
-tool and nothing else. Call this once at the start of a session, before you
-start writing code, so you build on what already exists.
+tool and nothing else. Until it has run, the kernel namespace has none of the
+saved tools in it.
 
 Every file lands in one shared namespace, so a tool may call a sibling. A file
 whose module-level code needs a sibling that has not loaded yet is retried after
@@ -45,8 +44,8 @@ the rest are in, so what a tool is named never decides whether it loads.
 next revision. It never overwrites: the previous revision is archived first and
 stays restorable forever. A first save is `r1`; a save over an existing tool is
 `r2`, `r3`, and so on, with your model name and note appended to the history.
-Save when a function is worth having again — a parser, a fetcher, a report
-formatter, anything you would be annoyed to rewrite.
+What is worth saving: a parser, a fetcher, a report formatter — a function
+that would otherwise be rewritten next session.
 
 Before writing, `save` hoists the definition's module imports into the file so
 it stands alone, and refuses the save if the definition still reads a name the

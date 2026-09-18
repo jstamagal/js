@@ -2,9 +2,8 @@ Execute Python in a persistent IPython kernel. State survives between calls.
 
 One kernel runs for the whole session. Everything a cell defines — functions,
 classes, imports, open connections, loaded dataframes — is still there on the
-next call and every call after it. Define a helper now, call it twenty turns
-later. This is the point of the tool: build your own instruments as you go
-instead of re-deriving the same work in every cell.
+next call and every call after it. A helper defined now is callable twenty
+turns later.
 
 Parameters:
 - `code`: the Python to run. Empty `code` runs nothing and just reports the
@@ -39,8 +38,8 @@ functions and classes the session defined (`NAMESPACE (none)` when it defined
 none), and a `DEFINED` line for anything this cell added — functions, imports,
 and values alike. That listing is re-derived from the kernel itself on every
 call, so it is accurate even when the conversation that defined a function is no
-longer in your context. Read it. It is the record of what you have already
-built. A cell that is still running ends with `HANDLE <id> RUNNING` instead, and
+longer in your context; it is the record of what the session has built.
+A cell that is still running ends with `HANDLE <id> RUNNING` instead, and
 a new `code` submitted while it runs is refused rather than queued behind it:
 
     ERROR: the previous cell is still running (<first line>); interrupt it or wait
@@ -83,10 +82,9 @@ the result says so plainly and names the cell. That is the one case where
 everything is gone and `restart=true` plus a rebuild is the answer.
 
 Practical notes:
-- Long-running or exploratory work belongs here rather than in one-shot
-  scripts: you keep the intermediate state.
-- Prefer defining a named function over pasting the same block twice. A named
-  function shows up in `NAMESPACE` and stays callable.
+- Intermediate state survives here and not in a one-shot script.
+- A named function shows up in `NAMESPACE` and stays callable; a pasted block
+  does not.
 - Cells run inside a live asyncio event loop. `await` works at cell top level,
   so `async def` helpers are awaited directly; `asyncio.run(...)` and
   `loop.run_until_complete(...)` raise `RuntimeError: This event loop is already
@@ -113,11 +111,9 @@ time; this tool gets you a process that remembers.
 This tool does not persist anything past the session. `toolbox` is the layer
 that does: `toolbox action=load` pulls previously saved tools into this kernel's
 namespace, and `toolbox action=save name=<fn>` promotes a function you defined
-here to disk with provenance. If you write something worth having tomorrow,
-save it — otherwise it dies with the session.
-
-At the start of a session, call `toolbox action=load` once before writing new
-code, so you do not rebuild something a previous session already got right.
+here to disk with provenance. Anything not saved dies with the session.
+Until `toolbox action=load` has run, none of the saved tools are in this
+namespace.
 {{/if}}
 {{#unless toolbox}}
 Nothing here survives the session. When this session ends the kernel is torn
