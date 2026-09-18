@@ -22,12 +22,16 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    upper bound needs the incompatibility it guards against named beside it.
 2. **Env feels broken? → `just sync`.** It is the real fix.
 3. **Make the change.**
-4. **Run the tests that cover it.** Green before done. `just test` is cached
-   per tree state: an unchanged tree replays the last run in milliseconds and
-   says who ran it — so running it again tells you nothing new. A red suite is
-   nobody's to walk past: "it was failing before me" is a fact the cache line
-   already printed, not an excuse. Fix it, or file the bead with the failing
-   test names, before moving on.
+4. **Run the tests that cover it.** The job is not done until the suite is
+   green. Whose change broke it does not matter; "it was failing before me"
+   is not a state of the tree, it is a description of you walking past it.
+   Do not delete the test. Do not edit the test to pass. If you cannot make
+   it pass, the only other way out is a written confession: append to
+   `FAILURES.md` at the repo root your full model name, the date, the failing
+   test names, what you tried, and the sentence "I could not make this pass."
+   A confession is public and permanent; that is the point. `just test` is
+   cached per tree state — an unchanged tree replays the last run and says
+   who ran it, so rerunning tells you nothing new.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
    Commits are authored by whoever made them. The owner is
