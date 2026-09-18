@@ -251,7 +251,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.transcript_log", "bool", True,
                 "Append the visible terminal/TUI transcript to transcript/<agent>/<session>.log "
                 "under the js data dir. On by default; records what printed to the user with "
-                "IRC-style <KING>/<APE> tags for user/assistant turns.",
+                "IRC-style <USER>/<APE> tags for user/assistant turns.",
                 env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
     SettingSpec("runtime.transcript_log_dir", "str", None,
                 "Directory for the visible transcript log; unset = transcript/<agent> under the js data dir.",

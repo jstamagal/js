@@ -108,7 +108,7 @@ class TranscriptLogSink:
         self.end_speaker_stream(speaker)
 
     def write_user(self, text: str) -> None:
-        self.write_turn("KING", text)
+        self.write_turn("USER", text)
 
     def write_assistant(self, text: str) -> None:
         self.write_turn("APE", text)

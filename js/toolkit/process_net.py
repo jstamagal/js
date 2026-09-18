@@ -47,6 +47,14 @@ _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
 _HREF_RE = re.compile(
     r"(?is)(?:^|\s)href\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))"
 )
+# Structural boundaries, so adjacent blocks do not fuse into one word when the
+# remaining tags are swept away below. A block ends a line; a table cell ends a
+# space, so `<td>A</td><td>B</td>` reads as "A B" rather than "AB".
+_BLOCK_CLOSE_RE = re.compile(
+    r"(?i)</(?:div|h[1-6]|li|tr|ul|ol|dl|dt|dd|blockquote|pre|section|article|"
+    r"header|footer|aside|main|nav|figure|figcaption|form|table|title)\s*>|<hr\s*/?>"
+)
+_CELL_CLOSE_RE = re.compile(r"(?i)</t[dh]\s*>")
 
 
 
@@ -271,6 +279,8 @@ def _html_to_text(raw: str, base_url: str) -> str:
     text = _ANCHOR_RE.sub(_anchor_to_markdown, text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p>", "\n\n", text)
+    text = _CELL_CLOSE_RE.sub(" ", text)
+    text = _BLOCK_CLOSE_RE.sub("\n", text)
     text = _TAG_RE.sub("", text)
     text = html.unescape(text)
     text = _absolutize(text, base_url)

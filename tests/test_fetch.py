@@ -45,6 +45,28 @@ class FakeResponse:
         return False
 
 
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ("<h1>H</h1><p>P</p>", "H\nP"),
+        ("<p>A</p><p>B</p>", "A\n\nB"),
+        ("<ul><li>A</li><li>B</li></ul>", "A\nB"),
+        ("<table><tr><td>A</td><td>B</td></tr></table>", "A B"),
+        ("<tr><td>A</td><td>B</td></tr>", "A B"),
+        ("<div>A</div><div>B</div>", "A\nB"),
+        ("<h2>A</h2><h2>B</h2>", "A\nB"),
+        ("<blockquote>A</blockquote><p>B</p>", "A\nB"),
+        ("<dl><dt>A</dt><dd>B</dd></dl>", "A\nB"),
+        ("A<br>B", "A\nB"),
+    ],
+)
+def test_html_block_siblings_keep_their_boundary(html, expected):
+    """The sweep that removes the remaining tags runs with an empty replacement,
+    so a boundary the source expressed as a tag has to be turned into whitespace
+    before it. Without that, `<h1>H</h1><p>P</p>` reads as `HP`."""
+    assert process_net._html_to_text(html, "https://example.test/") == expected
+
+
 def test_file_url_html_defaults_to_readable_text_and_raw_can_keep_source(tmp_path):
     page = tmp_path / "page.html"
     page.write_text("<html><body><p>Hello<br>world</p></body></html>", encoding="utf-8")

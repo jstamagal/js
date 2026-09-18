@@ -210,7 +210,7 @@ class JsTuiApp(App[int]):
             self.deps.sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
             self._refresh_status()
             return
-        self._write_transcript(Text(f"KING 👑 {line}", style="bold #ebcb8b"), speaker="KING", log_text=line)
+        self._write_transcript(Text(f"> {line}", style="bold #ebcb8b"), speaker="USER", log_text=line)
         self.queue.put_nowait(line)
         if self.sup.turn_active() or self.queue.qsize() > 1:
             self._write_transcript(f"[dim](queued — {self.queue.qsize()} ahead)[/]")
@@ -409,7 +409,7 @@ class JsTuiApp(App[int]):
         if sink is None:
             return
         text = log_text if log_text is not None else transcript_mod.render_plain(obj)
-        if speaker == "KING":
+        if speaker == "USER":
             write_user = getattr(sink, "write_user", None)
             if callable(write_user):
                 write_user(text)

@@ -452,7 +452,7 @@ def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatc
 
     assert result == (
         f"ERROR: target is over the 512 MiB trash limit ({fs._TRASH_MAX_BYTES + 1} bytes); "
-        "confirm with KING and pass permanent=true to delete directly."
+        "confirm with the operator and pass permanent=true to delete directly."
     )
     assert target.exists()
     assert not context.snapshots.get(target)

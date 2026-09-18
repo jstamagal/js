@@ -404,7 +404,7 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
     try:
         size = _path_size_no_follow(target)
         if not permanent and size > _TRASH_MAX_BYTES:
-            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with KING and pass permanent=true to delete directly."
+            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with the operator and pass permanent=true to delete directly."
         _snapshot_remove_target(context, target)
         if not permanent:
             error = _trash_target(target, context)
@@ -1556,7 +1556,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("pattern",),
         ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after KING confirms permanent deletion."}}, required=("path",)),
+        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after the operator confirms permanent deletion."}}, required=("path",)),
         Tool(
             "patch",
             load_description("patch"),

@@ -89,7 +89,7 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
     assert rc == 0
     assert capsys.readouterr().out == "FINAL_OK\nContinue: js --session sess\n"
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
-    assert "<KING> hello" in log
+    assert "<USER> hello" in log
     assert "<APE> FINAL_OK" in log
 
 
@@ -118,7 +118,7 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
     assert cli.main(["--blocking"]) == 0
 
     log = (log_dir / "repl.log").read_text(encoding="utf-8")
-    assert log.index("<KING> hello") < log.index("<APE> REPL_OK")
+    assert log.index("<USER> hello") < log.index("<APE> REPL_OK")
     assert "\x1b[" not in log
 
 

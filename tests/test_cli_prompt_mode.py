@@ -1095,21 +1095,21 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     # Sessions live directly under the platform data sessions/<agent>/ dir.
-    kingape_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "kingape"
+    scoped_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "scoped"
     default_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
-    kingape_sessions_dir = kingape_dir
+    scoped_sessions_dir = scoped_dir
     default_sessions_dir = default_dir
-    kingape_sessions_dir.mkdir(parents=True)
+    scoped_sessions_dir.mkdir(parents=True)
     default_sessions_dir.mkdir(parents=True)
     session_name = "scoped-session.jsonl"
-    kingape_session = kingape_sessions_dir / session_name
+    scoped_session = scoped_sessions_dir / session_name
     default_session = default_sessions_dir / session_name
-    cli.M.append_message(kingape_session, {"role": "user", "content": "kingape old"})
+    cli.M.append_message(scoped_session, {"role": "user", "content": "scoped old"})
     cli.M.append_message(default_session, {"role": "user", "content": "default old"})
     loaded_prompt_dirs = []
 
     def completion_stub(**kwargs):
-        return _fake_stream_result("KINGAPE_SESSION_OK")
+        return _fake_stream_result("SCOPED_SESSION_OK")
 
     def load_prompt_spec_stub(prompts_dir):
         loaded_prompt_dirs.append(prompts_dir)
@@ -1118,19 +1118,19 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli.P, "load_prompt_spec", load_prompt_spec_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli.main(["-a", "kingape", "-s", "scoped-session", "-p", "Reply with KINGAPE_SESSION_OK"])
+    actual = cli.main(["-a", "scoped", "-s", "scoped-session", "-p", "Reply with SCOPED_SESSION_OK"])
 
     output = capsys.readouterr().out
     assert actual == 0
-    # The resume hint must echo -a kingape: the session lives under
-    # sessions/kingape, so an agent-less `js --session ...` would resolve against
+    # The resume hint must echo -a scoped: the session lives under
+    # sessions/scoped, so an agent-less `js --session ...` would resolve against
     # sessions/defaultagent and 404 the .jsonl.
-    assert output == "KINGAPE_SESSION_OK\nContinue: js --agent kingape --session scoped-session\n"
-    assert loaded_prompt_dirs[0].name == "kingape"
-    assert load_messages(kingape_session) == [
-        {"role": "user", "content": "kingape old"},
-        {"role": "user", "content": "Reply with KINGAPE_SESSION_OK"},
-        {"role": "assistant", "content": "KINGAPE_SESSION_OK"},
+    assert output == "SCOPED_SESSION_OK\nContinue: js --agent scoped --session scoped-session\n"
+    assert loaded_prompt_dirs[0].name == "scoped"
+    assert load_messages(scoped_session) == [
+        {"role": "user", "content": "scoped old"},
+        {"role": "user", "content": "Reply with SCOPED_SESSION_OK"},
+        {"role": "assistant", "content": "SCOPED_SESSION_OK"},
     ]
     assert load_messages(default_session) == [{"role": "user", "content": "default old"}]
 
