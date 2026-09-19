@@ -439,9 +439,18 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
     for root in roots:
         if not root.is_dir():
             continue
-        for agent_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        for agent_dir in sorted(root.iterdir()):
             agent_id = agent_dir.name
-            if not any(agent_dir.glob("*.md")):
+            try:
+                # A symlinked agent is trusted by name and checked when called:
+                # following it at startup wakes (or waits on) whatever host it
+                # points at, for an agent this run may never touch.
+                if not agent_dir.is_symlink() and (not agent_dir.is_dir() or not any(agent_dir.glob("*.md"))):
+                    continue
+            except OSError as exc:
+                # A symlinked agent on a sleeping NFS/automount host stats as
+                # ENODEV or ETIMEDOUT. One unreachable agent must not kill every run.
+                print(f"js: agent dir {agent_dir} unreadable ({exc.strerror}); skipped", file=sys.stderr)
                 continue
             if agent_id in reserved:
                 # A builtin tool owns this name, so the agent can never be selected.

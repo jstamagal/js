@@ -124,3 +124,111 @@ def test_directory_without_markdown_is_not_an_agent(tmp_path):
     (root / "notanagent" / "00-tools.yaml").write_text("tools: []\n", encoding="utf-8")
 
     assert registry_for_roots((root,)).resolve("notanagent") is None
+
+
+def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
+    """A symlinked agent on a sleeping automount host stats as ENODEV.
+
+    Seen live: ~/.config/js/agents/research -> ~/darkstar/... with darkstar's lid
+    closed killed every `js -p` run with OSError before the model was called.
+    """
+    import errno
+
+    root = tmp_path / "agents"
+    _agent_dir(root, "alive")
+    dead = _agent_dir(root, "asleep")
+
+    real_is_dir = Path.is_dir
+
+    def is_dir(self, *args, **kwargs):
+        if self == dead:
+            raise OSError(errno.ENODEV, "No such device", str(self))
+        return real_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    registry = cli._registry_for(_cfg((root,)))
+
+    assert registry.resolve("alive") is not None
+    assert registry.resolve("asleep") is None
+    assert "asleep" in capsys.readouterr().err
+
+
+def test_symlinked_agent_is_a_tool_without_following_the_link(tmp_path, monkeypatch, capsys):
+    """Startup must not follow an agent symlink: following it wakes the host behind it.
+
+    Seen live: sheape lists `research` (-> ~/darkstar/..., lid closed). Following
+    the link stalled every run 5s and dropped `research` from her tools.
+    """
+    root = tmp_path / "agents"
+    target = _agent_dir(tmp_path / "elsewhere", "research")
+    root.mkdir()
+    link = root / "research"
+    link.symlink_to(target)
+
+    real_is_dir, real_glob = Path.is_dir, Path.glob
+
+    def is_dir(self, *args, **kwargs):
+        assert self != link, f"followed {self}"
+        return real_is_dir(self, *args, **kwargs)
+
+    def glob(self, *args, **kwargs):
+        assert self != link, f"globbed {self}"
+        return real_glob(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    monkeypatch.setattr(Path, "glob", glob)
+
+    from js.toolkit.registry import _agent_tools
+
+    names = [tool.name for tool in _agent_tools(root, set())]
+
+    assert names == ["research"]
+    assert capsys.readouterr().err == ""
+
+
+def test_task_child_on_unreachable_agent_is_an_error_result_not_a_crash(tmp_path, monkeypatch):
+    """The task worker's own dir lookup: ENODEV must become ValueError, which the
+    worker returns as `ERROR could not load agent ...` to the calling agent."""
+    import errno
+
+    import pytest
+
+    from js.toolkit.meta import _select_agent_prompt_dir
+
+    root = tmp_path / "agents"
+    dead = _agent_dir(root, "research")
+    real_is_dir = Path.is_dir
+
+    def is_dir(self, *args, **kwargs):
+        if self == dead:
+            raise OSError(errno.ENODEV, "No such device", str(self))
+        return real_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    with pytest.raises(ValueError, match="research.*No such device"):
+        _select_agent_prompt_dir("research", (root,))
+
+
+def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
+    """Skipping is only for the startup scan. `js -a asleep` must stop, cleanly."""
+    import errno
+
+    import pytest
+
+    from js.config import _select_prompt_dir
+
+    root = tmp_path / "agents"
+    dead = _agent_dir(root, "asleep")
+    real_is_dir = Path.is_dir
+
+    def is_dir(self, *args, **kwargs):
+        if self == dead:
+            raise OSError(errno.ENODEV, "No such device", str(self))
+        return real_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    with pytest.raises(ValueError, match="asleep.*No such device"):
+        _select_prompt_dir("asleep", tmp_path / "repo", root, tmp_path / "project")

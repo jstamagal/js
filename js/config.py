@@ -331,8 +331,14 @@ def _reserve_default_session(agent_dir: Path, sessions_dir: Path) -> Path:
 def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path) -> Path:
     for root in (project_root, global_root, repo_root):
         candidate = root / agent_id
-        if candidate.is_dir() and any(candidate.glob("*.md")):
-            return candidate
+        try:
+            if candidate.is_dir() and any(candidate.glob("*.md")):
+                return candidate
+        except OSError as exc:
+            # Named agent exists but can't be read (symlink onto a sleeping
+            # NFS/automount host). Stop here; falling through would silently
+            # run a different agent of the same name.
+            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc.strerror}") from exc
     return repo_root / agent_id
 
 def _preset_config_paths(

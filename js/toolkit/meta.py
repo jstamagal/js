@@ -209,8 +209,11 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
     """Select the most-specific prompt dir from repo/global/project roots."""
     for root in reversed(prompt_roots):
         candidate = root / agent
-        if candidate.is_dir() and any(candidate.glob("*.md")):
-            return candidate
+        try:
+            if candidate.is_dir() and any(candidate.glob("*.md")):
+                return candidate
+        except OSError as exc:
+            raise ValueError(f"agent {agent!r} at {candidate} is unreadable: {exc.strerror}") from exc
     return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
