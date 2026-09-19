@@ -871,7 +871,8 @@ int main(void) {
   {
     static const char *TOOLS[] = {"python3", "node", "cc",     "git",
                                   "rustc",   "go",   "uv",     "just",
-                                  "rg",      "jq",   "docker", NULL};
+                                  "rg",      "jq",   "docker", "fd",
+                                  NULL};
     char fp[2048];
     fp[0] = 0;
     size_t fl = 0;
@@ -910,7 +911,8 @@ int main(void) {
           "tr -cd '[:alnum:]._+-' | cut -c1-22)\"; }; "
           "{ v python3 -V & v node -v & v cc -dumpversion & v git --version & "
           "v rustc -V & v go version & v uv -V & v just --version & "
-          "v rg --version & v jq --version & v docker -v & wait; } "
+          "v rg --version & v jq --version & v docker -v & v fd --version & "
+          "wait; } "
           "2>/dev/null | sort",
           "r");
       size_t o = 0;
