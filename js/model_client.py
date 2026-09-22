@@ -511,7 +511,7 @@ async def _open_stream(
     model: ai.Model,
     messages: list[ai.messages.Message],
     tools: Sequence[ai.types.tools.Tool] | None,
-    params: ai_params.InferenceRequestParams | None,
+    params: ai_params.InferenceRequestParams | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
 

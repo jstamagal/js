@@ -40,6 +40,31 @@ def _use_fake_stream(monkeypatch, events) -> _FakeStreamFactory:
     return factory
 
 
+@pytest.mark.parametrize("max_output_tokens", [None, 64])
+def test_stream_model_optional_params_reaches_sdk(monkeypatch, max_output_tokens):
+    factory = _FakeStreamFactory(_text_events("ok"))
+    # Exercise _stream_async -> _open_stream; replace only the SDK call.
+    monkeypatch.setattr(ai, "stream", factory)
+    emitted = []
+    result = model_client.stream_model(
+        model_id="test",
+        provider_id="openai",
+        provider_base_url="http://llamacpp.test/v1",
+        provider_api_key="fixture",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=None,
+        on_text=emitted.append,
+    )
+    assert result.text == "ok"
+    assert emitted == ["ok"]
+    if max_output_tokens is None:
+        assert factory.kwargs["params"] is None
+    else:
+        assert _pview(factory.kwargs["params"]) == {"max_tokens": max_output_tokens}
+
+
 def test_sync_stream_finalizes_generator_before_event_loop_shutdown(monkeypatch):
     finalized = False
 
