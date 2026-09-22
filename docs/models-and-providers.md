@@ -169,8 +169,12 @@ For direct OpenAI-compatible transports this is sent through `extra_body`, not a
 an invalid top-level SDK kwarg. MiniMax (token-plan and API variants) strips the
 OpenAI-shaped reasoning object because its adapter rejects it.
 
-The runtime round-trips provider reasoning content on assistant messages that
-carry tool calls because some reasoning providers require it on the next call.
+Session replay retains archived reasoning. OpenAI chat-completions transports
+(including llama.cpp) replay reasoning on every assistant message, including
+final answers, so the next turn preserves the generated prompt prefix. Models
+known to reject that field (GLM) still have it stripped at the provider boundary.
+Other transports retain the tool-call-only replay policy; some providers require
+reasoning on those messages.
 
 ## Sampling
 

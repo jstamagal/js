@@ -1856,7 +1856,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if model is not None
         else cfg
     )
-    messages = M.load_messages(cfg.session_file)
+    messages = M.load_messages(cfg.session_file, preserve_reasoning=True)
     before_len = len(messages)
     try:
         user_bundle = attach.build_user_message(
@@ -2297,7 +2297,7 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
     try:
         cfg = _cfg_from_env_compat(session, save_session=True, extras=extras, agent_id=agent)
         prompt_spec = P.load_configured_prompt_spec(cfg)
-        messages = M.load_messages(cfg.session_file)
+        messages = M.load_messages(cfg.session_file, preserve_reasoning=True)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
         result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
     except Exception as e:  # noqa: BLE001
@@ -3253,7 +3253,7 @@ def main(argv: list[str] | None = None) -> int:
         enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
     )
 
-    messages = M.load_messages(cfg.session_file)
+    messages = M.load_messages(cfg.session_file, preserve_reasoning=True)
     if messages:
         print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
     elif args.session is not None:

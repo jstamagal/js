@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Reasoning replay on OpenAI-compatible endpoints.** Live turns and resumed
+  sessions now retain tool-free assistant reasoning for prefix-stable replay on
+  llama.cpp and other chat-completions transports. Compaction rebuilds and child
+  sessions preserve it too; native-provider behavior and GLM rejection handling
+  remain unchanged. The session journal remains append-only.
+
 - **Streaming without inference overrides.** Optional stream `params` now defaults to `None`, fixing the missing keyword-only argument error when no inference parameters are configured.
 
 ### Added

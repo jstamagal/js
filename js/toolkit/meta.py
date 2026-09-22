@@ -327,7 +327,7 @@ async def _run_one_task_async(
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
-    messages = M.load_messages(cfg.session_file)
+    messages = M.load_messages(cfg.session_file, preserve_reasoning=True)
     messages.append({"role": "user", "content": prompt})
     try:
         await run_turn_async(

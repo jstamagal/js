@@ -119,13 +119,10 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
 
 
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
-    """Drop ``reasoning_content`` from assistant messages that have NO ``tool_calls``
-    when rebuilding the in-memory conversation. The on-disk JSONL keeps the field
-    (archive value, costs nothing on disk); only the live conversation that gets
-    sent back to the provider is trimmed. DeepSeek IGNORES AND BILLS the field on
-    tool-free assistant turns — roughly 500 wasted prompt tokens each — but still
-    REQUIRES it on the assistant turn that carried tool_calls. Mirrors the
-    write-side rule in ``js/runtime.py``.
+    """Project history to the tool-call-only reasoning view.
+
+    Persistence compares this view so callers using either the full or reduced
+    history can append without replacing archived reasoning records.
     """
     out: list[dict] = []
     for msg in messages:
@@ -153,8 +150,12 @@ def _parse_compaction_marker(marker: str) -> dict | None:
         return None
     return data
 
-def load_messages(memory_file: Path) -> list[dict]:
-    """Return the OpenAI-shape message list from disk, honoring control marks."""
+def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
+    """Return the OpenAI-shape message list from disk, honoring control marks.
+
+    Model replay uses ``preserve_reasoning=True`` to retain every assistant's
+    reasoning. The default projects to tool-call reasoning only.
+    """
     if not memory_file.exists():
         return []
     messages: list[dict] = []
@@ -215,7 +216,8 @@ def load_messages(memory_file: Path) -> list[dict]:
             "history may be incomplete",
             file=sys.stderr,
         )
-    return _strip_orphan_reasoning(_heal_orphaned_tool_calls(messages))
+    messages = _heal_orphaned_tool_calls(messages)
+    return messages if preserve_reasoning else _strip_orphan_reasoning(messages)
 
 
 def _append(memory_file: Path, rec: Record) -> None:

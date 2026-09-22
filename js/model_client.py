@@ -237,16 +237,10 @@ def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
 
 
 def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
-    """Drop reasoning parts from assistant messages.
+    """Drop reasoning parts for models whose chat-completions API rejects them.
 
-    The OpenAI chat-completions protocol re-serializes any ``ReasoningPart`` in
-    the history as a non-standard ``message.reasoning`` field. Some gateways
-    (opencode-go) reject it outright ("Extra inputs are not permitted, field:
-    messages[..].reasoning"), so a stored session can't be replayed there or
-    switched onto mid-conversation. Replayed chain-of-thought has no value on
-    this wire anyway — the model re-reasons — so strip it. Providers that do
-    want reasoning replayed (DeepSeek's own provider requires ``reasoning_content``;
-    Anthropic keeps thinking blocks) use their own protocols and never hit this.
+    The caller applies ``reasoning.rejects_reasoning_replay`` before using this
+    projection. Accepting models retain reasoning for prefix-stable replay.
     """
     out: list[ai.messages.Message] = []
     for msg in messages:
@@ -285,12 +279,14 @@ def _coerce_parts(content: Any) -> list[Any]:
 
 
 def history_to_ai_messages(
-    system: str, messages: list[dict]
+    system: str, messages: list[dict], *, provider_id: str | None = None
 ) -> list[ai.messages.Message]:
     """Convert the harness JSONL history into ``ai.messages.Message`` objects.
 
     The harness history uses OpenAI-shaped dicts. We translate them at the
     provider boundary so the runtime itself keeps the stable JSONL schema.
+    OpenAI chat-completions transports replay all reasoning to preserve the
+    generated prefix; other transports retain tool-call reasoning only.
 
     * ``role == "system"`` -> ``ai.system_message(system)``
     * ``role == "user"`` -> ``ai.user_message(content)``
@@ -298,6 +294,11 @@ def history_to_ai_messages(
       reasoning, and tool call parts.
     * ``role == "tool"`` -> ``ai.tool_message`` with a ``ToolResultPart``.
     """
+    provider = providers.get_provider(provider_id)
+    sdk_id = provider.effective_sdk_provider_id if provider is not None else provider_id
+    preserve_reasoning = sdk_id == "openai" and (
+        provider is None or provider.transport != "custom_responses"
+    )
     out: list[ai.messages.Message] = []
     if system:
         out.append(ai.system_message(system))
@@ -318,7 +319,7 @@ def history_to_ai_messages(
         if role == "assistant":
             parts: list[Any] = []
             reasoning = msg.get("reasoning_content")
-            if reasoning and msg.get("tool_calls"):
+            if reasoning and (preserve_reasoning or msg.get("tool_calls")):
                 parts.append(ai.thinking(str(reasoning)))
             content = msg.get("content")
             if content:

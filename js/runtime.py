@@ -1221,7 +1221,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
     if max_out is None:
         max_out = model_metadata.resolve_max_output(model, provider_id)
-    ai_convo = model_client.history_to_ai_messages(system, messages)
+    ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T._REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
@@ -1526,7 +1526,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             nonlocal changed, ai_convo
             changed = True
             token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages)
+            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
             _trace_req["sent"] = 0
             _trace_req["schemas"] = True
             active_context.compacted_during_turn = True
@@ -1744,7 +1744,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         )
                         if action == "cleared":
                             token_state.reset()
-                            ai_convo = model_client.history_to_ai_messages(system, messages)
+                            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
                             _trace_req["sent"] = 0
                             _trace_req["schemas"] = True
                             active_context.compacted_during_turn = True
