@@ -143,6 +143,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "models.dev input modalities, then curated name hints. Clear with "
                 "`set -model.vision`.",
                 env="JS_VISION", empty=EMPTY_NONE),
+    # --- ui ---
+    SettingSpec("ui.reasoning", "int", 2,
+                "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
+                "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
+                "async screen. Display only; session reasoning is always retained.",
+                env="JS_UI_REASONING"),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
@@ -425,6 +431,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             value = int(text)
         except ValueError:
             return None, "expected an integer"
+        if spec.key == "ui.reasoning" and value not in range(4):
+            return None, "expected an integer from 0 to 3"
         if spec.key in {"limits.max_tool_calls_per_message", "limits.subagent_max_workers"} and value < 1:
             return None, "expected an integer >= 1"
         return value, None

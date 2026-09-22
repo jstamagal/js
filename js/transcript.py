@@ -1,8 +1,9 @@
 """Visible-screen transcript logging.
 
 This is intentionally separate from the raw session JSONL and the debug request
-autolog. It records what the operator saw, with only IRC-style speaker tags
-added for user and assistant turns.
+autolog. It records visible answers and tool output with IRC-style speaker tags
+for user and assistant turns. Display-only reasoning bypasses this sink; its
+original text lives in the session JSONL.
 """
 
 from __future__ import annotations
@@ -190,6 +191,14 @@ class TranscriptTee:
         sink = self._sink_getter()
         if sink is not None:
             sink.write_plain(text)
+
+    def write_unlogged(self, text: str) -> None:
+        """Write display-only material without feeding any nested transcript tee."""
+        try:
+            write = getattr(self._primary, "write_unlogged", self._primary.write)
+            write(text)
+        except Exception:
+            pass
 
     def flush(self) -> None:
         try:

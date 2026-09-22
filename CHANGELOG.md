@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Reasoning on screen (`js-q7v.2`).** Thinking now streams separately from the
+  answer and stays visible by default. `/set ui.reasoning 0–3` controls display;
+  the standard async screen supports auto-collapse and Ctrl-R expansion without
+  disturbing input. One-shot/blocking modes use stderr. Reasoning stays out of
+  the human answer transcript but remains in append-only session history,
+  including partial thoughts received before cancellation.
+
 - **Review corrections for local inference.** Local/custom chat-completions
   endpoints receive the parser-recognized `reasoning_content` field. Vision
   respects merged CLI/live settings, including unset-to-detection behavior.

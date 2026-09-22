@@ -2684,12 +2684,15 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_interrupt=on_interrupt,
         on_eof=on_eof,
     )
+    previous_reasoning_factory = telemetry.reasoning_factory
+    telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
     try:
         with screen.capture_stdio(loop, scrollback, app):
             if banner:
                 print(banner)
             await app.run_async()
     finally:
+        telemetry.reasoning_factory = previous_reasoning_factory
         supervisor.set_current(None)
         # Graceful quit (EOF / exit): let queued and in-flight turns finish
         # before teardown so submitted work isn't silently dropped. To abandon a

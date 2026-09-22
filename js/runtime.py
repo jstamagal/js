@@ -4,6 +4,7 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 import asyncio
 import contextlib
 import inspect
@@ -36,6 +37,7 @@ from . import routing
 from . import compaction
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
+from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .toolkit.core import ToolContext, ToolResult, call_tool, call_tool_async
 from .toolkit.registry import ToolRegistry
 
@@ -282,6 +284,7 @@ class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
     trace_sink: object = None  # a .write()-able sink for the full request trace, or None
     transcript_log: object = None  # visible transcript sink; never raises
+    reasoning_factory: Callable[[int], ReasoningDisplay] | None = None
 
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
@@ -1376,6 +1379,34 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # the answer on screen and nothing in history.
     streamed_text = {"value": ""}
     _transcript_log = getattr(telemetry, "transcript_log", None)
+    streamed_reasoning: list[str] = []
+    reasoning_display: ReasoningDisplay | None = None
+    reasoning_level = _settings.get_dotted(
+        getattr(cfg, "settings", {}) or {}, ("ui", "reasoning"), 2,
+    )
+    if not isinstance(reasoning_level, int) or reasoning_level not in range(4):
+        reasoning_level = 2
+
+    def _emit_reasoning(chunk: str) -> None:
+        nonlocal reasoning_display
+        if not chunk:
+            return
+        streamed_reasoning.append(chunk)
+        if suppress_output or reasoning_level == 0:
+            return
+        if reasoning_display is None:
+            factory = telemetry.reasoning_factory
+            reasoning_display = (
+                factory(reasoning_level) if factory is not None
+                else StderrReasoning(reasoning_level, sys.stderr)
+            )
+        reasoning_display.append(chunk)
+
+    def _close_reasoning(tokens: int | None = None) -> None:
+        nonlocal reasoning_display
+        if reasoning_display is not None:
+            reasoning_display.finish(tokens)
+            reasoning_display = None
 
     def _muted_transcript_tee():
         mute = getattr(_transcript_log, "mute_tee", None)
@@ -1386,6 +1417,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     def _emit_text(t: str) -> None:
         if not t:
             return
+        if reasoning_display is not None:
+            reasoning_display.answer_started()
         streamed_text["value"] += t
         _emit_event("stream", text=t)
         if suppress_output:
@@ -1403,25 +1436,24 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             sys.stdout.flush()
 
     def _commit_streamed_partial() -> None:
-        """Record text displayed before a cancellation as a real assistant turn.
+        """Record received text and reasoning before cancellation.
 
-        Without this the caller sees no new message and treats the turn as having
-        produced nothing, discarding the user's prompt along with the answer."""
+        A partial assistant record marks progress even when its reasoning was
+        hidden, so the caller preserves the turn rather than discarding it.
+        """
         partial = streamed_text["value"]
+        partial_reasoning = "".join(streamed_reasoning)
         streamed_text["value"] = ""
-        if not partial:
+        streamed_reasoning.clear()
+        if not partial and not partial_reasoning:
             return
-        messages.append({
-            "role": "assistant",
-            "content": partial,
-            "incomplete_reason": "cancelled",
-        })
+        record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
+        if partial_reasoning:
+            record["reasoning_content"] = partial_reasoning
+        messages.append(record)
 
-    def _close_text() -> None:
-        if suppress_output:
-            text_started["value"] = False
-            return
-        if text_started["value"]:
+    def _close_text(reasoning_tokens: int | None = None) -> None:
+        if not suppress_output and text_started["value"]:
             if _transcript_log is not None:
                 end_stream = getattr(_transcript_log, "end_assistant_stream", None)
                 if callable(end_stream):
@@ -1429,7 +1461,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             with _muted_transcript_tee():
                 sys.stdout.write(C.RESET + "\n")
                 sys.stdout.flush()
-            text_started["value"] = False
+        text_started["value"] = False
+        _close_reasoning(reasoning_tokens)
 
     # Full request trace: dump system prompt + full tool schemas once (first
     # model call), then only the newly-sent messages each call. This goes ONLY to
@@ -1627,6 +1660,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         tool_count=len(specs),
                         tool_names=[spec["function"]["name"] for spec in specs],
                     )
+                    streamed_reasoning.clear()
                     _res = model_client.stream_model_async(
                         model_id=model,
                         provider_id=provider_id,
@@ -1637,6 +1671,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         max_output_tokens=max_out,
                         reasoning_effort=effort,
                         on_text=_emit_text,
+                        on_reasoning=_emit_reasoning,
                         provider_headers=getattr(cfg, "provider_headers", None),
                         provider_extra=routing.provider_extra_params(cfg),
                         sampling=sampling,
@@ -1653,7 +1688,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     # test stub patched onto stream_model_async that returns a result
                     # directly) so the seam accepts either shape.
                     result = await _res if inspect.isawaitable(_res) else _res
-                    _close_text()
+                    _close_text(getattr(result.usage, "reasoning_tokens", None))
                     text = result.text
                     pending_calls = [
                         _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
@@ -1862,6 +1897,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             messages.append(history_assistant_record)
             # Recorded in full now; a later ^C in this turn must not re-append it.
             streamed_text["value"] = ""
+            streamed_reasoning.clear()
             durable_side_effects_started = True
             token_state.record_provider_usage(
                 usage,
@@ -1991,6 +2027,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _end_turn("cancelled")
         raise
     finally:
+        _close_reasoning()
         if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()
 

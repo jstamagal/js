@@ -155,13 +155,10 @@ REPL:
 /set model.reasoning_effort xhigh   # deepseek-native models
 ```
 
-Normalization:
-
-- `min` -> `low`
-- `none`, `off`, `0` -> the literal string `"none"` (explicitly disables reasoning)
-- empty/unset -> `None` (provider default applies)
-- other values are forwarded as typed (`xhigh`, `max` for deepseek/glm-native endpoints,
-  then snapped to the nearest stop the endpoint actually serves)
+Accepted effort values are `off|minimal|low|medium|high|xhigh|max`.
+`off` is stored as `"none"`; `/set -model.reasoning_effort` restores the provider
+default. Other spellings are rejected. Supported values are snapped to the
+nearest effort that the selected endpoint actually serves.
 
 DeepSeek gets `max_reasoning_tokens=32000` when reasoning is enabled so it can
 use its full reasoning budget without capping total output earlier than necessary.
@@ -177,6 +174,30 @@ template; named vendor endpoints retain their SDK wire format. Models known to
 reject replayed reasoning (GLM) still have it stripped at the provider boundary.
 Other transports retain the tool-call-only replay policy; some providers require
 reasoning on those messages.
+
+### Reasoning display
+
+`ui.reasoning` controls presentation in the standard REPL and one-shot mode,
+independently of `model.reasoning_effort`:
+
+| Value | Display |
+|---|---|
+| `0` | Hidden |
+| `1` | Stream, then collapse when the answer starts (or a tool-only call completes) |
+| `2` | Stream and leave visible — **default** |
+| `3` | Stream and leave visible, with token counts (`~` marks estimates) |
+
+Use `/set ui.reasoning <0-3>` and `/save`; `JS_UI_REASONING` is the environment
+alias. Setting changes apply to subsequent turns. In the standard async screen,
+**Ctrl-R** collapses or expands retained reasoning blocks without changing the
+input line; a manual toggle overrides auto-collapse for those blocks.
+
+One-shot and blocking modes stream reasoning on **stderr**, separately from
+answer stdout. They leave it visible rather than trying to rewrite terminal
+scrollback. Reasoning is excluded from the human answer transcript, but its
+original text stays in the append-only session JSONL at every display level,
+including partial reasoning received before cancellation. Display controls do
+not change next-turn or resumed provider replay.
 
 ## Sampling
 

@@ -22,6 +22,9 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.styles import Style
 
+from .context_budget import estimate_text_tokens
+from .reasoning_display import grey
+
 STATUS_STYLE = "bold #ffffff bg:#1b3a6b"
 SCROLLBACK_LINES = 5000
 
@@ -52,6 +55,7 @@ class Scrollback:
     def __init__(self) -> None:
         self.buffer = Buffer(read_only=True, document=Document("", 0))
         self._pending = ""
+        self._reasoning: list[ReasoningBlock] = []
 
     def append(self, text: str) -> None:
         if _ON_CONSOLE:
@@ -67,17 +71,127 @@ class Scrollback:
         doc = self.buffer.document
         text = doc.text + self._pending
         self._pending = ""
+        self._set_text(text, doc.cursor_position, follow=doc.is_cursor_at_the_end)
+
+    def _set_text(self, text: str, cursor: int, *, follow: bool) -> None:
         lines = text.split("\n")
-        if len(lines) > SCROLLBACK_LINES:
-            text = "\n".join(lines[-SCROLLBACK_LINES:])
-        follow = doc.cursor_position >= len(doc.text)
+        trimmed = "\n".join(lines[-SCROLLBACK_LINES:])
+        removed = len(text) - len(trimmed)
+        if removed:
+            for block in self._reasoning:
+                block.start = max(0, block.start - removed)
+                block.end = max(0, block.end - removed)
+            self._reasoning[:] = [block for block in self._reasoning if block.end > 0]
         self.buffer.set_document(
-            Document(text, len(text) if follow else min(doc.cursor_position, len(text))),
+            Document(trimmed, len(trimmed) if follow else max(0, min(cursor - removed, len(trimmed)))),
             bypass_readonly=True,
         )
 
     def flush(self) -> None:
         self._commit()
+
+    def reasoning(self, level: int) -> ReasoningBlock:
+        self.flush()
+        block = ReasoningBlock(self, level, len(self.buffer.text))
+        self._reasoning.append(block)
+        return block
+
+    def _render_reasoning(self, block: ReasoningBlock, *, new_text: bool = False) -> None:
+        self.flush()
+        doc = self.buffer.document
+        if block not in self._reasoning:
+            if not new_text:
+                return
+            block.start = block.end = len(doc.text)
+            self._reasoning.append(block)
+        rendered = block.render()
+        if _ON_CONSOLE:
+            rendered = _CONSOLE_UNDRAWABLE.sub("", rendered)
+        end = block.end
+        change = len(rendered) - (end - block.start)
+        text = doc.text[:block.start] + rendered + doc.text[end:]
+        for following in self._reasoning:
+            if following is not block and following.start >= end:
+                following.start += change
+                following.end += change
+        block.end = block.start + len(rendered)
+        cursor = doc.cursor_position
+        if cursor >= end:
+            cursor += change
+        elif cursor >= block.start:
+            cursor = min(cursor, block.end)
+        self._set_text(text, cursor, follow=doc.is_cursor_at_the_end)
+
+    def toggle_reasoning(self) -> bool:
+        blocks = [block for block in self._reasoning if block.level and block.text]
+        collapse = not any(block.collapsed for block in blocks)
+        for block in blocks:
+            block.manual = True
+            block.collapsed = collapse
+            self._render_reasoning(block)
+        return bool(blocks)
+
+
+class ReasoningBlock:
+    """A replaceable scrollback region retaining the provider's original text."""
+
+    def __init__(self, owner: Scrollback, level: int, position: int) -> None:
+        self.owner = owner
+        self.level = level
+        self.start = self.end = position
+        self.text = ""
+        self.collapsed = False
+        self.manual = False
+        self.tokens: int | None = None
+
+    def render(self) -> str:
+        if self.level == 0:
+            return ""
+        heading = "── reasoning ──"
+        if self.collapsed or self.level == 3:
+            count = str(self.tokens) if self.tokens is not None else f"~{estimate_text_tokens(self.text)}"
+            heading += f" {count} tok"
+        if self.collapsed:
+            return grey(heading + "  Ctrl-R to expand\n")
+        return grey(heading + "\n" + self.text + ("" if self.text.endswith("\n") else "\n"))
+
+    def append(self, text: str) -> None:
+        self.text += text
+        self.owner._render_reasoning(self, new_text=True)
+
+    def answer_started(self) -> None:
+        if self.level == 1 and not self.manual and not self.collapsed:
+            self.collapsed = True
+            self.owner._render_reasoning(self)
+
+    def finish(self, tokens: int | None = None) -> None:
+        self.tokens = tokens
+        self.answer_started()
+        self.owner._render_reasoning(self)
+
+
+class ScreenReasoningDisplay:
+    """Schedule reasoning and ordinary stdout writes on the same loop queue."""
+
+    def __init__(self, loop, scrollback: Scrollback, app: Application, level: int) -> None:
+        self._loop, self._scrollback, self._app = loop, scrollback, app
+        self._level = level
+        self._block: ReasoningBlock | None = None
+
+    def _apply(self, method: str, *args) -> None:
+        if self._block is None:
+            self._block = self._scrollback.reasoning(self._level)
+        getattr(self._block, method)(*args)
+        self._app.invalidate()
+
+    def append(self, text: str) -> None:
+        self._loop.call_soon_threadsafe(self._apply, "append", text)
+
+    def answer_started(self) -> None:
+        self._loop.call_soon_threadsafe(self._apply, "answer_started")
+
+    def finish(self, tokens: int | None = None) -> None:
+        self._loop.call_soon_threadsafe(self._apply, "finish", tokens)
 
 
 class _ScreenStdout:
@@ -157,6 +271,11 @@ def build_app(
     @kb.add("c-z")
     def _ctrl_z(event) -> None:
         event.app.suspend_to_background()
+
+    @kb.add("c-r")
+    def _ctrl_r(event) -> None:
+        if scrollback.toggle_reasoning():
+            event.app.invalidate()
 
     @kb.add("c-l")
     def _ctrl_l(event) -> None:

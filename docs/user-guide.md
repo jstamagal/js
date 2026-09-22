@@ -108,6 +108,7 @@ REPL commands:
 /load <file>                  load a slashless ircII-style runtime script
 /on [event handler]           list or register event hooks
 /set model.reasoning_effort high
+/set ui.reasoning 2            show reasoning and leave it visible (default)
 /set compact.auto off
 /on turn_start set compact.auto off
 /turns
@@ -141,8 +142,15 @@ the JSONL so future loads ignore older messages in that file.
 `/wipe` rotates the active session file to `.jsonl.bak`, `.jsonl.bak.1`, and so
 on, then clears the in-process messages.
 
-Ctrl-C while a turn is running rolls back the appended user message in memory
-and writes a rollback mark. Runtime exceptions do the same.
+Reasoning streams visibly by default. `/set ui.reasoning 0` hides it, `1`
+auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
+token counts. In the standard async screen, **Ctrl-R** toggles retained reasoning
+without changing the input line. `/save` persists the setting. Hiding or folding
+reasoning never removes it from session history or provider replay.
+
+Ctrl-C cancels the active turn and drops queued prompts. Already received text
+and reasoning are retained as an interrupted assistant record. A turn with no
+recorded progress can be discarded; completed tool work is preserved.
 
 ## One-Shot Prompt Mode
 

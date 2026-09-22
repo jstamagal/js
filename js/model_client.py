@@ -48,7 +48,7 @@ class ModelStreamResult:
     assistant_message: ai.messages.Message
     # Wall-clock measured around `ai.stream` itself (isolated from run_turn's
     # bookkeeping). first_token_s is time-to-first-*text*-token: js collects
-    # reasoning at end (not via on_text), and a tool-only turn streams no text,
+    # reasoning separately from on_text, and a tool-only turn streams no text,
     # so it is None when the model emitted no visible text. elapsed_s is the full
     # stream duration. Both default to 0/None so older constructors stay valid.
     first_token_s: float | None = None
@@ -587,6 +587,7 @@ async def _stream_async(
     tools: list[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
     on_text: Callable[[str], None],
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> ModelStreamResult:
     kwargs: dict[str, Any] = {
         "model": model,
@@ -607,6 +608,8 @@ async def _stream_async(
                 if first_token_s is None:
                     first_token_s = time.perf_counter() - start
                 on_text(event.chunk)
+            elif isinstance(event, ai.events.ReasoningDelta) and on_reasoning is not None:
+                on_reasoning(event.chunk)
     elapsed_s = time.perf_counter() - start
 
     text = stream.text
@@ -825,6 +828,7 @@ async def stream_model_async(
     max_output_tokens: int | None,
     reasoning_effort: str | None,
     on_text: Callable[[str], None],
+    on_reasoning: Callable[[str], None] | None = None,
     provider_headers: dict[str, str] | None = None,
     provider_extra: dict[str, Any] | None = None,
     sampling: Sampling | None = None,
@@ -1014,6 +1018,7 @@ async def stream_model_async(
             tools=tools,
             params=params,
             on_text=on_text,
+            on_reasoning=on_reasoning,
         )
     except routing.ProviderNotLoggedInError:
         raise
