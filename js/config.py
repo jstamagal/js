@@ -106,20 +106,17 @@ def _vision_by_name(model: str) -> bool:
 def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     """Whether image bytes should be sent to ``model``.
 
-    Order: explicit JS_VISION override → the ``model.vision`` knob → models.dev
-    input modalities → curated name heuristic for ids the catalog has never heard
-    of (private builds, local GGUF paths). The catalog is keyed on the model, not
-    the provider: the same model behind a proxy, a router prefix, or a local
-    server has the same inputs."""
-    override = os.environ.get("JS_VISION")
-    if override is not None:
-        parsed = _env_bool(override)
-        if parsed is not None:
-            return parsed
-    if settings is not None:
+    Resolved ``settings`` already include environment, CLI and live overrides.
+    Without a settings store, JS_VISION supplies the override. Unset falls back
+    to models.dev input modalities, then curated name hints for unknown ids.
+    The catalog follows the model rather than its serving provider.
+    """
+    if settings is None:
+        explicit = _env_bool(os.environ.get("JS_VISION", ""))
+    else:
         explicit = _settings.get_dotted(settings, ("model", "vision"))
-        if isinstance(explicit, bool):
-            return explicit
+    if isinstance(explicit, bool):
+        return explicit
     from . import model_metadata
 
     try:

@@ -330,7 +330,10 @@ def probe_local_context_window(
     provider-like prefix in the model name: ``Alibaba/Qwen3.8-27B`` behind a
     local openai-compatible server is probed at that server, not at Alibaba."""
     parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
-    if parsed_provider is not None and parsed_model is not None:
+    if parsed_provider is not None and parsed_model is not None and (
+        provider_id is None
+        or providers.normalize_provider_id(provider_id) == parsed_provider
+    ):
         model_id = parsed_model
         if provider_id is None:
             provider_id = parsed_provider

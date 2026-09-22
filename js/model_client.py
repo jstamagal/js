@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
-from typing import Any
+from typing import Any, Literal
+from types import SimpleNamespace
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -27,6 +28,7 @@ import ai.types.tools
 import ai.types.usage
 import ai.models
 from ai.models.core import params as ai_params
+from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,30 @@ def incomplete_finish_reason(reason: str) -> str:
     return f"incomplete:{reason}"
 
 
+class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
+    """Adapt the SDK's reasoning field for local/custom chat-completions APIs.
+
+    llama.cpp parses ``reasoning_content`` before applying its chat template.
+    The client view is per stream; the provider still owns its real SDK client.
+    """
+
+    protocol_class_id: Literal["js_reasoning_content"] = "js_reasoning_content"
+
+    def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        async def create(**api_kwargs: Any):
+            outgoing = []
+            for message in api_kwargs["messages"]:
+                entry = dict(message)
+                if entry.get("role") == "assistant" and "reasoning" in entry:
+                    entry.setdefault("reasoning_content", entry.pop("reasoning"))
+                outgoing.append(entry)
+            api_kwargs["messages"] = outgoing
+            return await client.chat.completions.create(**api_kwargs)
+
+        view = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        return super().stream(view, model, messages, **kwargs)
+
+
 def resolve_model(
     model_id: str,
     *,
@@ -198,9 +224,18 @@ def resolve_model(
     protocol = None
     transport = provider_def.transport if provider_def is not None else None
     if sdk_provider_id == "openai" and transport != "custom_responses":
-        from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
-
-        protocol = OpenAIChatCompletionsProtocol()
+        default_base = provider_def.default_base_url if provider_def is not None else None
+        if transport == "openai":
+            default_base = "https://api.openai.com/v1"
+        custom_base = bool(provider_base_url) and (
+            provider_base_url.rstrip("/") != (default_base or "").rstrip("/")
+        )
+        local = provider_def is not None and provider_def.local
+        protocol = (
+            _ReasoningContentProtocol()
+            if local or transport == "custom_openai" or custom_base
+            else OpenAIChatCompletionsProtocol()
+        )
     provider = ai.get_provider(
         sdk_provider_id,
         base_url=provider_base_url,

@@ -406,7 +406,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         # no provider so the turn surfaces the friendly not-logged-in error at the
         # model boundary instead.
         route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
-    route_vision = vision_enabled_for_model(route.model, getattr(cfg, "settings", None))
+    route_vision = vision_enabled_for_model(route.model, state.get("settings", cfg.settings))
     if (
         route.model != cfg.model
         or route.provider_id != cfg.provider_id
@@ -469,7 +469,6 @@ _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 
 _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("trace", ("runtime", "trace")),
-    ("vision_enabled", ("model", "vision")),
     ("prefer_inherit", ("subagents", "prefer_inherit")),
     ("lock_subagent_model", ("subagents", "lock_model")),
 )
@@ -746,7 +745,10 @@ def _sync_trace_sink(
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
-    updates = {"settings": live_settings}
+    updates = {
+        "settings": live_settings,
+        "vision_enabled": vision_enabled_for_model(active.model, live_settings),
+    }
     for attr, path in _LIVE_LIMIT_FIELDS:
         updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
     for attr, path in _LIVE_OPTIONAL_INT_FIELDS:

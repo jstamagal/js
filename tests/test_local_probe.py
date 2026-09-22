@@ -160,6 +160,31 @@ def test_openai_custom_endpoint_is_probed(monkeypatch):
     assert calls == [("GET", "http://yoda.test:8080/v1/models", None)]
 
 
+@pytest.mark.parametrize("detail", [False, True])
+def test_explicit_endpoint_preserves_model_prefix_with_multiple_models(monkeypatch, detail):
+    model = "Alibaba/Qwen3.8-27B"
+    base = "http://local.test/v1"
+    calls = []
+
+    def request(method, url, *, json_body=None):
+        calls.append((method, url))
+        if url == f"{base}/models":
+            match = {"id": model}
+            if not detail:
+                match["context_window"] = 262144
+            return {"data": [{"id": "other", "context_window": 8192}, match]}
+        assert url == f"{base}/models/Alibaba%2FQwen3.8-27B"
+        return {"id": model, "context_window": 262144}
+
+    monkeypatch.setattr(model_metadata, "_request_json", request)
+    monkeypatch.setattr(model_metadata, "context_window", lambda *_args: 32768)
+    assert runtime._resolve_context_window(model, "openai", base) == 262144
+    expected = [("GET", f"{base}/models")]
+    if detail:
+        expected.append(("GET", f"{base}/models/Alibaba%2FQwen3.8-27B"))
+    assert calls == expected
+
+
 def test_non_probe_transport_is_never_probed(monkeypatch):
     calls = []
 

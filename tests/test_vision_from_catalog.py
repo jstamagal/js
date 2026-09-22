@@ -41,8 +41,12 @@ def test_knob_forces_vision_on_or_off():
 
 
 def test_env_override_beats_the_knob(monkeypatch):
+    from js import settings
+
     monkeypatch.setenv("JS_VISION", "0")
-    assert vision_enabled_for_model("claude-opus-5", {"model": {"vision": True}}) is False
+    # Detection consumes the merged view; environment overrides config there.
+    store = settings.apply_env_overrides({"model": {"vision": True}}, env=os.environ)
+    assert vision_enabled_for_model("claude-opus-5", store) is False
 
 
 def test_vision_knob_is_registered_and_settable():

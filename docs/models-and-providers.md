@@ -171,8 +171,10 @@ OpenAI-shaped reasoning object because its adapter rejects it.
 
 Session replay retains archived reasoning. OpenAI chat-completions transports
 (including llama.cpp) replay reasoning on every assistant message, including
-final answers, so the next turn preserves the generated prompt prefix. Models
-known to reject that field (GLM) still have it stripped at the provider boundary.
+final answers, to preserve the generated prompt prefix. Local/custom endpoints
+receive `reasoning_content`, which llama.cpp recognizes before applying its chat
+template; named vendor endpoints retain their SDK wire format. Models known to
+reject replayed reasoning (GLM) still have it stripped at the provider boundary.
 Other transports retain the tool-call-only replay policy; some providers require
 reasoning on those messages.
 
@@ -368,11 +370,11 @@ image bytes for image files.
 
 Order:
 
-1. `JS_VISION` explicit bool override
-2. the `model.vision` knob (`/set model.vision on|off`)
-3. models.dev input modalities for the model id, keyed on the model rather than
+1. the resolved `model.vision` knob: config < `JS_VISION` < `--extra`, followed
+   by live `/set model.vision on|off` changes. `/set -model.vision` restores detection.
+2. models.dev input modalities for the model id, keyed on the model rather than
    the provider
-4. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
+3. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
    image-generation names
 
 There is no public `ai-python` model-capability registry — when models.dev has

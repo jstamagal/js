@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Review corrections for local inference.** Local/custom chat-completions
+  endpoints receive the parser-recognized `reasoning_content` field. Vision
+  respects merged CLI/live settings, including unset-to-detection behavior.
+  Context probes retain model IDs whose apparent vendor prefix differs from
+  the explicitly selected provider, including multi-model endpoint listings.
+
 - **Reasoning replay on OpenAI-compatible endpoints.** Live turns and resumed
   sessions now retain tool-free assistant reasoning for prefix-stable replay on
   llama.cpp and other chat-completions transports. Compaction rebuilds and child
@@ -18,9 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`model.vision` knob.** Whether `read` sends image bytes is now a registered
   setting: `/set model.vision on|off` overrides per-model detection for the
-  session and persists through `/save`. `JS_VISION` remains the env alias and
-  wins over the knob; unset falls back to models.dev modalities and the curated
-  name hints.
+  session and persists through `/save`. `JS_VISION` remains the env alias;
+  CLI extras and live settings take precedence. Unset falls back to models.dev
+  modalities and the curated name hints.
 - **Pinned tool-binary installer.** `just install` now downloads checksummed
   ripgrep, ast-grep, and obscura release assets into ignored `js/tools`, and
   reports the system aria2c used for those release-asset transfers. obscura is
