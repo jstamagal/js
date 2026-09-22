@@ -6,8 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Streaming without inference overrides.** Optional stream `params` now defaults to `None`, fixing the missing keyword-only argument error when no inference parameters are configured.
+
 ### Added
 
+- **`model.vision` knob.** Whether `read` sends image bytes is now a registered
+  setting: `/set model.vision on|off` overrides per-model detection for the
+  session and persists through `/save`. `JS_VISION` remains the env alias and
+  wins over the knob; unset falls back to models.dev modalities and the curated
+  name hints.
 - **Pinned tool-binary installer.** `just install` now downloads checksummed
   ripgrep, ast-grep, and obscura release assets into ignored `js/tools`, and
   reports the system aria2c used for those release-asset transfers. obscura is

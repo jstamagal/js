@@ -231,8 +231,15 @@ def _resolve_context_window(
     if override is not None:
         return override
     provider = providers.get_provider(provider_id)
+    # An explicit non-default endpoint owns the truth about its own context
+    # window, whatever transport the provider definition uses.
+    custom_endpoint = bool(provider_base_url) and provider is not None and (
+        provider_base_url.rstrip("/") != (provider.default_base_url or "").rstrip("/")
+    )
     local_runtime = provider is not None and (
-        provider.transport in {"ollama", "llama.cpp"} or provider.id == "vllm"
+        provider.transport in {"ollama", "llama.cpp"}
+        or provider.id == "vllm"
+        or custom_endpoint
     )
     if local_runtime:
         probed = model_metadata.probe_local_context_window(
@@ -1225,6 +1232,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         cfg, model=model, provider_id=provider_id,
         provider_base_url=provider_base_url, provider_api_key=provider_api_key,
         reasoning_effort=effort, max_output_tokens=max_out,
+        vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)),
     )
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
@@ -1299,7 +1307,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     else:
         token_state.chars_per_token = chars_per_token
     active_context.context_budget_state = token_state
-    active_context.vision_enabled = vision_enabled_for_model(model)
+    active_context.vision_enabled = active_context.config.vision_enabled
 
     def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
         if event_hooks is None:
@@ -1934,6 +1942,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     )
                     reconciled.append((pc, args, new_result))
                 dispatch_records = reconciled
+                # A batch's tool results must stay contiguous: the SDK's history
+                # check ends the pending tool-call window at the first following
+                # user/assistant message, so an image's user FilePart inserted
+                # between two tool results orphans every later one. Collect the
+                # batch's tool messages first, then the media that follows it.
+                batch_tool_msgs: list[ai.messages.Message] = []
+                batch_media_msgs: list[ai.messages.Message] = []
                 for pc, _args, result_value in dispatch_records:
                     canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
                     _emit_event(
@@ -1942,9 +1957,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         name=canonical_pc.name,
                         result=result_value,
                     )
-                    tool_msgs = model_client.build_tool_result_messages(pc.id, pc.name, result_value)
-                    ai_convo.extend(tool_msgs)
+                    for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
+                        if built.role == "tool":
+                            batch_tool_msgs.append(built)
+                        else:
+                            batch_media_msgs.append(built)
                     messages.extend(_history_tool_result_message(canonical_pc, result_value))
+                ai_convo.extend(batch_tool_msgs)
+                ai_convo.extend(batch_media_msgs)
             if error_tracker.limit_reached():
                 name, last_error = next(
                     ((_canonical_tool_call_name(pc.name, active_registry), result_value)

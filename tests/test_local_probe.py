@@ -125,25 +125,56 @@ def test_probe_failure_returns_none_and_runtime_falls_back(monkeypatch, failure)
     ) == 12345
 
 
-def test_non_local_provider_is_not_probed(monkeypatch):
+def test_openai_default_endpoint_is_not_probed(monkeypatch):
     calls = []
 
     def fake_request_json(_method: str, _url: str, *, json_body=None):
         calls.append((_method, _url, json_body))
-        raise AssertionError("non-local providers must not be probed")
+        raise AssertionError("the default OpenAI endpoint must not be probed")
 
     monkeypatch.setattr(model_metadata, "_request_json", fake_request_json)
     monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: 777)
 
+    assert model_metadata.probe_local_context_window("gpt-4.1", "openai") is None
+    assert runtime._resolve_context_window("gpt-4.1", "openai") == 777
+    assert calls == []
+
+
+def test_openai_custom_endpoint_is_probed(monkeypatch):
+    calls = []
+
+    def fake_request_json(method: str, url: str, *, json_body=None):
+        calls.append((method, url, json_body))
+        return {"data": [{"id": "whatever", "meta": {"n_ctx": 262144}}]}
+
+    monkeypatch.setattr(model_metadata, "_request_json", fake_request_json)
+
+    # A provider-like prefix in the model name must not redirect the probe away
+    # from the route's provider: the server's own n_ctx beats catalog guesses.
+    assert (
+        runtime._resolve_context_window(
+            "Alibaba/Qwen3.8-27B", "openai", "http://yoda.test:8080/v1"
+        )
+        == 262144
+    )
+    assert calls == [("GET", "http://yoda.test:8080/v1/models", None)]
+
+
+def test_non_probe_transport_is_never_probed(monkeypatch):
+    calls = []
+
+    def fake_request_json(_method: str, _url: str, *, json_body=None):
+        calls.append((_method, _url, json_body))
+        raise AssertionError("providers without a probe must not be probed")
+
+    monkeypatch.setattr(model_metadata, "_request_json", fake_request_json)
+
     assert (
         model_metadata.probe_local_context_window(
-            "gpt-4.1",
-            "openai",
-            base_url="http://localhost:9999/v1",
+            "deepseek-chat", "deepseek", base_url="http://proxy.test/v1"
         )
         is None
     )
-    assert runtime._resolve_context_window("gpt-4.1", "openai", "http://localhost:9999/v1") == 777
     assert calls == []
 
 

@@ -103,18 +103,23 @@ def _vision_by_name(model: str) -> bool:
     return any(hint in name for hint in _VISION_NAME_HINTS)
 
 
-def vision_enabled_for_model(model: str) -> bool:
+def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     """Whether image bytes should be sent to ``model``.
 
-    Order: explicit JS_VISION override → models.dev input modalities → curated
-    name heuristic for ids the catalog has never heard of (private builds, local
-    GGUF paths). The catalog is keyed on the model, not the provider: the same
-    model behind a proxy, a router prefix, or a local server has the same inputs."""
+    Order: explicit JS_VISION override → the ``model.vision`` knob → models.dev
+    input modalities → curated name heuristic for ids the catalog has never heard
+    of (private builds, local GGUF paths). The catalog is keyed on the model, not
+    the provider: the same model behind a proxy, a router prefix, or a local
+    server has the same inputs."""
     override = os.environ.get("JS_VISION")
     if override is not None:
         parsed = _env_bool(override)
         if parsed is not None:
             return parsed
+    if settings is not None:
+        explicit = _settings.get_dotted(settings, ("model", "vision"))
+        if isinstance(explicit, bool):
+            return explicit
     from . import model_metadata
 
     try:
@@ -565,7 +570,7 @@ def from_env(
         session_file=session_file,
         history_file=sessions_dir / ".history",
         prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
-        vision_enabled=vision_enabled_for_model(model),
+        vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
         agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),

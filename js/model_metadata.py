@@ -32,8 +32,8 @@ from . import codex_auth, model_matching, paths, providers, settings as _setting
 _CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
 _LOCAL_PROBE_TIMEOUT_S = min(float(_settings.DEFAULT_FETCH_TIMEOUT_S), 3.0)
-_LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai"}
-_OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai"}
+_LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai", "openai"}
+_OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai", "openai"}
 _CONTEXT_WINDOW_KEYS = {
     "context_length",
     "context_window",
@@ -324,10 +324,22 @@ def probe_local_context_window(
     *,
     base_url: str | None = None,
 ) -> int | None:
-    """Best-effort context-window probe for local model servers."""
-    model_id, provider_id = _normalize_request(model_id, provider_id)
+    """Best-effort context-window probe for the server that will serve the model.
+
+    An explicit ``provider_id`` is the route's provider and wins over a
+    provider-like prefix in the model name: ``Alibaba/Qwen3.8-27B`` behind a
+    local openai-compatible server is probed at that server, not at Alibaba."""
+    parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
+    if parsed_provider is not None and parsed_model is not None:
+        model_id = parsed_model
+        if provider_id is None:
+            provider_id = parsed_provider
     provider = providers.get_provider(provider_id)
     if provider is None or provider.transport not in _LOCAL_PROBE_TRANSPORTS:
+        return None
+    # The openai transport is probeable only when the caller names the endpoint:
+    # api.openai.com is never asked for a context window it does not report.
+    if provider.transport == "openai" and not base_url:
         return None
     resolved_base_url = providers.provider_base_url(provider, base_url)
     if not resolved_base_url:

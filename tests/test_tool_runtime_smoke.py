@@ -1228,6 +1228,97 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
     assert context.vision_enabled is True
 
 
+def test_parallel_image_reads_keep_tool_results_contiguous(tmp_path, monkeypatch):
+    from js import config as js_config
+
+    monkeypatch.delenv("JS_VISION", raising=False)
+    monkeypatch.delenv("JS_IMAGE_RESULT_SHAPE", raising=False)
+    for name in ("one.png", "two.png"):
+        (tmp_path / name).write_bytes(_TINY_PNG)
+
+    context = ToolContext(cwd=tmp_path)
+    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+
+    call_messages: list[list[ai.messages.Message]] = []
+
+    def stream_model_stub(**kw):
+        call_messages.append(list(kw["messages"]))
+        if len(call_messages) == 1:
+            images = [("c1", "one.png"), ("c2", "two.png")]
+            return ModelStreamResult(
+                text="",
+                tool_calls=[
+                    ModelToolCall(id=cid, name="read", arguments=json.dumps({"file_path": name}))
+                    for cid, name in images
+                ],
+                reasoning="",
+                usage=None,
+                finish_reason="tool_calls",
+                assistant_message=ai.messages.Message(
+                    role="assistant",
+                    parts=[
+                        ai.types.messages.ToolCallPart(
+                            tool_call_id=cid,
+                            tool_name="read",
+                            tool_args=json.dumps({"file_path": name}),
+                        )
+                        for cid, name in images
+                    ],
+                ),
+            )
+        return ModelStreamResult(
+            text="two images.",
+            tool_calls=[],
+            reasoning="",
+            usage=None,
+            finish_reason="stop",
+            assistant_message=ai.messages.Message(
+                role="assistant",
+                parts=[ai.types.messages.TextPart(text="two images.")],
+            ),
+        )
+
+    monkeypatch.setattr(model_client, "stream_model_async", after_loading(stream_model_stub, "read"))
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    agent_dir = tmp_path / ".js" / "sessions" / "test"
+    cfg = js_config.Config(
+        agent_id="test",
+        agent_dir=agent_dir,
+        model="vision-test-gemma4",
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+        reasoning_effort=None,
+        max_output_tokens=64,
+        max_tool_iterations=5,
+        max_bash_output_bytes=65536,
+        max_tool_result_bytes=256 * 1024,
+        fetch_timeout_s=5,
+        debug_log=None,
+        trace=False,
+        history_file=tmp_path / ".history",
+        sessions_dir=agent_dir,
+        session_file=agent_dir / "session.jsonl",
+        prompts_dir=prompts_dir,
+    )
+
+    class _Tel:
+        def event(self, *args, **kwargs):
+            pass
+
+    messages: list[dict] = [{"role": "user", "content": "what is in these images?"}]
+    # after_loading runs the SDK's history check before the follow-up request:
+    # a user FilePart between two tool results orphans the later ones.
+    runtime.run_turn(cfg, "system", messages, _Tel())
+
+    assert len(call_messages) == 2
+    followup = call_messages[1]
+    assistant_idx = max(i for i, m in enumerate(followup) if m.role == "assistant")
+    assert [m.role for m in followup[assistant_idx + 1:]] == ["tool", "tool", "user", "user"]
+
+
 def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     """remove keys its snapshot under the no-follow path; undo must find it even when
     a parent component is a symlink (resolve_path would key under the resolved path)."""

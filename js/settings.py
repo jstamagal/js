@@ -138,6 +138,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
                 "any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
+    SettingSpec("model.vision", "bool", None,
+                "Send image bytes to the active model: on/off; unset = detect from "
+                "models.dev input modalities, then curated name hints. Clear with "
+                "`set -model.vision`.",
+                env="JS_VISION", empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",

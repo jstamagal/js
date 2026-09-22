@@ -359,17 +359,20 @@ the rest of the runtime stable.
 
 ## Vision
 
-`vision_enabled_for_model(model)` chooses whether `read` should send image bytes
-for image files.
+`vision_enabled_for_model(model, settings)` chooses whether `read` should send
+image bytes for image files.
 
 Order:
 
 1. `JS_VISION` explicit bool override
-2. curated model-name hints
-3. anti-hints for code/embed/rerank/audio/image-generation names
+2. the `model.vision` knob (`/set model.vision on|off`)
+3. models.dev input modalities for the model id, keyed on the model rather than
+   the provider
+4. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
+   image-generation names
 
-There is no public `ai-python` model-capability registry — the harness uses
-a heuristic name-based check.
+There is no public `ai-python` model-capability registry — when models.dev has
+never heard of the id, the harness falls back to the name-based check.
 
 `read` behavior:
 

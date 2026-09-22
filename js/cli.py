@@ -406,7 +406,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         # no provider so the turn surfaces the friendly not-logged-in error at the
         # model boundary instead.
         route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
-    route_vision = vision_enabled_for_model(route.model)
+    route_vision = vision_enabled_for_model(route.model, getattr(cfg, "settings", None))
     if (
         route.model != cfg.model
         or route.provider_id != cfg.provider_id
@@ -469,6 +469,7 @@ _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 
 _LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("trace", ("runtime", "trace")),
+    ("vision_enabled", ("model", "vision")),
     ("prefer_inherit", ("subagents", "prefer_inherit")),
     ("lock_subagent_model", ("subagents", "lock_model")),
 )
@@ -1736,7 +1737,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         provider_base_url=route.base_url,
         provider_api_key=route.api_key,
         provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model),
+        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
     )
 
 
@@ -1851,7 +1852,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
 
     attachment_cfg = (
-        replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model))
+        replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
         if model is not None
         else cfg
     )
@@ -2352,7 +2353,7 @@ def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
         provider_base_url=route.base_url,
         provider_api_key=route.api_key,
         provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model),
+        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
     )
 
 
