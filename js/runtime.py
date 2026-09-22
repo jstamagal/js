@@ -233,9 +233,7 @@ def _resolve_context_window(
     provider = providers.get_provider(provider_id)
     # An explicit non-default endpoint owns the truth about its own context
     # window, whatever transport the provider definition uses.
-    custom_endpoint = bool(provider_base_url) and provider is not None and (
-        provider_base_url.rstrip("/") != (provider.default_base_url or "").rstrip("/")
-    )
+    custom_endpoint = provider is not None and providers.is_custom_base_url(provider, provider_base_url)
     local_runtime = provider is not None and (
         provider.transport in {"ollama", "llama.cpp"}
         or provider.id == "vllm"

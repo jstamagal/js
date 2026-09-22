@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   respects merged CLI/live settings, including unset-to-detection behavior.
   Context probes retain model IDs whose apparent vendor prefix differs from
   the explicitly selected provider, including multi-model endpoint listings.
+  Default xAI endpoints retain their SDK reasoning format, while operator-hosted
+  endpoints use the adapter even at their default URLs. Explicit OpenAI default
+  URLs bypass local context probing.
 
 - **Reasoning replay on OpenAI-compatible endpoints.** Live turns and resumed
   sessions now retain tool-free assistant reasoning for prefix-stable replay on

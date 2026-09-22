@@ -340,9 +340,12 @@ def probe_local_context_window(
     provider = providers.get_provider(provider_id)
     if provider is None or provider.transport not in _LOCAL_PROBE_TRANSPORTS:
         return None
-    # The openai transport is probeable only when the caller names the endpoint:
-    # api.openai.com is never asked for a context window it does not report.
-    if provider.transport == "openai" and not base_url:
+    # OpenAI's default endpoint has no context metadata; explicit custom bases
+    # can report their own allocation through the same transport.
+    if provider.transport == "openai" and (
+        not base_url
+        or (provider.id == "openai" and not providers.is_custom_base_url(provider, base_url))
+    ):
         return None
     resolved_base_url = providers.provider_base_url(provider, base_url)
     if not resolved_base_url:

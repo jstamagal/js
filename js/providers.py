@@ -636,6 +636,16 @@ def provider_base_url(provider: ProviderDef, explicit: str | None, env: Mapping[
     return first_env(provider.base_url_env, env) or provider.default_base_url
 
 
+def is_custom_base_url(provider: ProviderDef | None, base_url: str | None) -> bool:
+    """Whether an explicit endpoint differs from the provider's default."""
+    if not base_url:
+        return False
+    default = provider.default_base_url if provider is not None else None
+    if provider is not None and provider.id == "openai" and default is None:
+        default = "https://api.openai.com/v1"
+    return base_url.rstrip("/") != (default or "").rstrip("/")
+
+
 def provider_api_key(provider: ProviderDef, explicit: str | None, env: Mapping[str, str] | None = None) -> str | None:
     if explicit:
         return explicit

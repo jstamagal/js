@@ -224,16 +224,13 @@ def resolve_model(
     protocol = None
     transport = provider_def.transport if provider_def is not None else None
     if sdk_provider_id == "openai" and transport != "custom_responses":
-        default_base = provider_def.default_base_url if provider_def is not None else None
-        if transport == "openai":
-            default_base = "https://api.openai.com/v1"
-        custom_base = bool(provider_base_url) and (
-            provider_base_url.rstrip("/") != (default_base or "").rstrip("/")
+        custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
+        operator_endpoint = provider_def is not None and (
+            provider_def.local or not provider_def.established
         )
-        local = provider_def is not None and provider_def.local
         protocol = (
             _ReasoningContentProtocol()
-            if local or transport == "custom_openai" or custom_base
+            if operator_endpoint or transport == "custom_openai" or custom_base
             else OpenAIChatCompletionsProtocol()
         )
     provider = ai.get_provider(

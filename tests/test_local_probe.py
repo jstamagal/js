@@ -125,7 +125,8 @@ def test_probe_failure_returns_none_and_runtime_falls_back(monkeypatch, failure)
     ) == 12345
 
 
-def test_openai_default_endpoint_is_not_probed(monkeypatch):
+@pytest.mark.parametrize("base", [None, "https://api.openai.com/v1", "https://api.openai.com/v1/"])
+def test_openai_default_endpoint_is_not_probed(monkeypatch, base):
     calls = []
 
     def fake_request_json(_method: str, _url: str, *, json_body=None):
@@ -135,8 +136,8 @@ def test_openai_default_endpoint_is_not_probed(monkeypatch):
     monkeypatch.setattr(model_metadata, "_request_json", fake_request_json)
     monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: 777)
 
-    assert model_metadata.probe_local_context_window("gpt-4.1", "openai") is None
-    assert runtime._resolve_context_window("gpt-4.1", "openai") == 777
+    assert model_metadata.probe_local_context_window("gpt-4.1", "openai", base_url=base) is None
+    assert runtime._resolve_context_window("gpt-4.1", "openai", base) == 777
     assert calls == []
 
 
