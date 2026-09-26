@@ -13,11 +13,11 @@
 
 set dotenv-load
 
-# Playwright publishes glibc Linux wheels but no musllinux wheels. Keep its
-# browser backend automatic everywhere it is installable without breaking the
-# rest of js on Alpine and other musl systems.
-browser-extra := `if ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
-browser-target := `if ldd --version 2>&1 | grep -qi musl; then printf '%s' '.'; else printf '%s' '.[browser]'; fi`
+# Playwright publishes wheels for mainstream glibc/macOS/Windows targets, but
+# not musl or Android. Keep its browser backend automatic everywhere it is
+# installable without breaking the rest of js on unsupported systems.
+browser-extra := `if [ "$(python -c 'import sys; print(sys.platform)')" = android ] || ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
+browser-target := `if [ "$(python -c 'import sys; print(sys.platform)')" = android ] || ldd --version 2>&1 | grep -qi musl; then printf '%s' '.'; else printf '%s' '.[browser]'; fi`
 
 # show all recipes (default when `just` is called with no argument)
 default:
@@ -69,6 +69,16 @@ shell:
 install:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Provider SDKs depend on Rust extensions with no Android ARMv7 wheels.
+    # A desktop-built wheelhouse avoids a half-gigabyte Termux Rust install.
+    if [ "$(python -c 'import sys; print(sys.platform)')" = android ] \
+        && ! command -v rustc >/dev/null \
+        && [ -z "${UV_FIND_LINKS:-}" ]; then
+        echo "!! Android ARMv7 needs prebuilt CPython 3.13 wheels for:" >&2
+        echo "!!   pydantic-core, jiter, rpds-py, PyYAML" >&2
+        echo "!! set UV_FIND_LINKS=/path/to/wheelhouse, then rerun: just install" >&2
+        exit 1
+    fi
     # refuse to install from a linked worktree: the editable install and the
     # wiki symlink would point at a tree that vanishes when the worktree is
     # cleaned up, leaving `js` and `wiki` broken everywhere.
@@ -142,6 +152,12 @@ install:
 # managed aria2c performs transfers after urllib bootstraps it.
 # download js's pinned, checksummed CLI binaries into tools/bin.
 install-tool-binaries:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(python -c 'import sys; print(sys.platform)')" = android ]; then
+        echo "Android: bundled CLI releases unavailable; using tools from PATH"
+        exit 0
+    fi
     uv run {{ browser-extra }} python -m js.tool_binaries
 
 # Provision managed binaries even when system copies exist; never use a package manager.
