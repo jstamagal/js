@@ -248,3 +248,6 @@ bench/toolbench/results/
 
 # graphify output (17MB of generated graph/cache artifacts)
 graphify-out/
+
+.scratch/*
+.scratch/
