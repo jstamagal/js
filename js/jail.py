@@ -303,7 +303,7 @@ class Jail:
         """``argv`` wrapped to run in the jail.
 
         ``env_path`` is the PATH the command runs with; its directories under a
-        hidden tree are bound back read-only. ``extra_ro``/``extra_rw`` bind
+        hidden tree or the host /tmp are bound back read-only. ``extra_ro``/``extra_rw`` bind
         more paths for this one command (the kernel's interpreter, its sockets)."""
         hidden = hidden_roots()
         home = paths.user_home()
@@ -323,8 +323,11 @@ class Jail:
         implicit = [Bind(p, False) for p in self._path_binds(env_path)]
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
+        # The host /tmp is replaced by the private one, so a path under it is
+        # as unreachable as one in a hidden tree.
+        replaced = [*hidden, Path("/tmp")]
         implicit = [b for b in implicit
-                    if any(_under(b.path, h) for h in hidden) and not covered(b.path)]
+                    if any(_under(b.path, h) for h in replaced) and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
         for bind in binds:
