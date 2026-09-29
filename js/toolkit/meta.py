@@ -43,6 +43,7 @@ _INHERITED_FIELDS = (
     "kernel_render_max_lines",
     "kernel_wait_seconds",
     "shell_wait_seconds",
+    "max_parallel_tools",
     "shell_program",
     "jail_bind",
     "model",

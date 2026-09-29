@@ -505,6 +505,7 @@ _LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("kernel_render_max_lines", ("kernel", "render_max_lines")),
     ("kernel_wait_seconds", ("kernel", "wait_seconds")),
     ("shell_wait_seconds", ("shell", "wait_seconds")),
+    ("max_parallel_tools", ("runtime", "max_parallel_tools")),
 )
 
 

@@ -9,8 +9,10 @@ for read-before-write checks, undo snapshots, and search deduplication.
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import inspect
+import itertools
 import json
 import os
 import secrets
@@ -36,6 +38,35 @@ _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
 # Upper bound on ToolContext.known_content; the oldest entries go first.
 _KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
+
+
+# The id of the tool call running in this thread or task. Read coverage is
+# recorded per call, so the runtime can narrow one call's coverage after it
+# clips that call's result.
+_CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_call_id", default=None)
+_anonymous_calls = itertools.count()
+
+
+@contextmanager
+def call_scope(call_id: str):
+    """Run the body as tool call ``call_id``."""
+    token = _CALL_ID.set(call_id)
+    try:
+        yield
+    finally:
+        _CALL_ID.reset(token)
+
+
+def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
+    """True when calling ``tool`` with ``args`` writes nothing."""
+    if tool.read_only:
+        return True
+    if tool.read_only_when is None:
+        return False
+    try:
+        return bool(tool.read_only_when(args))
+    except Exception:  # noqa: BLE001 - odd arguments make the call exclusive
+        return False
 
 
 def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -229,6 +260,10 @@ class Tool:
     # True when the tool writes nothing: no files, no processes, no remote
     # state. It defines the intrinsic `tag:read_only` of tools.yaml.
     read_only: bool = False
+    # For a tool that writes only under some arguments: True when a call with
+    # these arguments writes nothing. `tag:read_only` does not match such a
+    # tool; dispatch runs its read-only calls beside other read-only calls.
+    read_only_when: Callable[[dict[str, Any]], bool] | None = None
     # Catalog label shown by tool_discovery (fs, shell, search, agent, ...).
     source: str = "native"
 
@@ -305,6 +340,17 @@ class TurnStatus:
             setattr(self, name, spec.default)
 
 
+@dataclass
+class _ReadWindow:
+    """One path's read coverage since the runtime last settled reads: the
+    coverage before the first of those reads, and what each read call added."""
+
+    content_hash: str
+    base_ranges: list[tuple[int, int]]
+    base_whole: bool
+    reads: dict[str, tuple[list[tuple[int, int]], bool]] = field(default_factory=dict)
+
+
 def _knob(key: str) -> Any:
     """A ToolContext field whose default is knob ``key``'s js/jsrc value."""
     return field(default_factory=lambda: _settings.default_value(key))
@@ -341,6 +387,7 @@ class ToolContext:
     kernel_wait_seconds: int = _knob("kernel.wait_seconds")  # seconds a kernel call waits for a submitted cell
     shell_wait_seconds: int = _knob("shell.wait_seconds")  # seconds a shell call waits before returning a handle
     shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
+    max_parallel_tools: int = _knob("runtime.max_parallel_tools")  # read-only calls of one batch run at once
     jail_bind: tuple[str, ...] = field(default_factory=lambda: tuple(_settings.default_value("jail.bind")))
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
@@ -366,9 +413,11 @@ class ToolContext:
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
-    _coverage_before_read: dict[Path, tuple[list[tuple[int, int]], bool]] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    # Read-only calls run in parallel threads; this lock covers read_paths,
+    # file_hashes, read_ranges, read_line_totals, fully_read_paths,
+    # known_content and _read_windows.
+    _coverage_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
+    _read_windows: dict[Path, _ReadWindow] = field(default_factory=dict, init=False, repr=False)
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:
@@ -401,36 +450,43 @@ class ToolContext:
         read. Text readers pass their rendered window explicitly, including when
         an implicit max-lines page made a nominal whole-file read partial.
         """
-        # The runtime can clip this read's text after the handler returns, and
-        # the correction in record_delivered_read must not erase what earlier
-        # reads delivered, so stash the coverage that predates this read.
-        self._coverage_before_read[path] = (
-            list(self.read_ranges.get(path, [])),
-            path in self.fully_read_paths,
-        )
-        previous_hash = self.file_hashes.get(path)
-        if previous_hash is not None and previous_hash != content_hash:
-            self.read_ranges.pop(path, None)
-            self.read_line_totals.pop(path, None)
-            self.fully_read_paths.discard(path)
-        self.read_paths.add(path)
-        self.file_hashes[path] = content_hash
-        if total_lines is not None:
-            self.read_line_totals[path] = max(0, total_lines)
         if whole_file is None:
             whole_file = start_line is None and end_line is None
-        if whole_file:
-            self.fully_read_paths.add(path)
-            if total_lines:
-                self.read_ranges[path] = [(1, total_lines)]
-            return
-        if start_line is None or end_line is None or end_line < start_line:
-            return
-        ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
-        self.read_ranges[path] = _merge_line_ranges(ranges)
-        total = self.read_line_totals.get(path)
-        if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
-            self.fully_read_paths.add(path)
+        with self._coverage_lock:
+            previous_hash = self.file_hashes.get(path)
+            if previous_hash is not None and previous_hash != content_hash:
+                self.read_ranges.pop(path, None)
+                self.read_line_totals.pop(path, None)
+                self.fully_read_paths.discard(path)
+                self._read_windows.pop(path, None)
+            # The runtime can clip this read's text after the handler returns;
+            # record_delivered_read then narrows this call's share and keeps
+            # what earlier and concurrent reads delivered.
+            window = self._read_windows.get(path)
+            if window is None or window.content_hash != content_hash:
+                window = _ReadWindow(content_hash, list(self.read_ranges.get(path, [])),
+                                     path in self.fully_read_paths)
+                self._read_windows[path] = window
+            call_id = _CALL_ID.get() or f"anonymous-{next(_anonymous_calls)}"
+            self.read_paths.add(path)
+            self.file_hashes[path] = content_hash
+            if total_lines is not None:
+                self.read_line_totals[path] = max(0, total_lines)
+            if whole_file:
+                window.reads[call_id] = ([(1, total_lines)] if total_lines else [], True)
+                self.fully_read_paths.add(path)
+                if total_lines:
+                    self.read_ranges[path] = [(1, total_lines)]
+                return
+            if start_line is None or end_line is None or end_line < start_line:
+                window.reads[call_id] = ([], False)
+                return
+            window.reads[call_id] = ([(start_line, end_line)], False)
+            ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
+            self.read_ranges[path] = _merge_line_ranges(ranges)
+            total = self.read_line_totals.get(path)
+            if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
+                self.fully_read_paths.add(path)
 
     def _ranges_cover(
         self,
@@ -439,27 +495,29 @@ class ToolContext:
         end: int,
         seen_ranges: list[tuple[int, int]] | None = None,
     ) -> bool:
-        if seen_ranges is None and path in self.fully_read_paths:
-            return True
-        cursor = start
-        for seen_start, seen_end in seen_ranges if seen_ranges is not None else self.read_ranges.get(path, []):
-            if seen_end < cursor:
-                continue
-            if seen_start > cursor:
-                return False
-            cursor = max(cursor, seen_end + 1)
-            if cursor > end:
+        with self._coverage_lock:
+            if seen_ranges is None and path in self.fully_read_paths:
                 return True
-        return cursor > end
+            cursor = start
+            for seen_start, seen_end in seen_ranges if seen_ranges is not None else self.read_ranges.get(path, []):
+                if seen_end < cursor:
+                    continue
+                if seen_start > cursor:
+                    return False
+                cursor = max(cursor, seen_end + 1)
+                if cursor > end:
+                    return True
+            return cursor > end
 
     def remember_content(self, path: Path, content_hash: str, data: bytes) -> None:
         """Keep *data* as the content of *path* that *content_hash* names."""
-        self.known_content.pop(path, None)
-        self.known_content[path] = (content_hash, data)
-        total = sum(len(entry[1]) for entry in self.known_content.values())
-        while total > _KNOWN_CONTENT_MAX_BYTES and len(self.known_content) > 1:
-            oldest = next(iter(self.known_content))
-            total -= len(self.known_content.pop(oldest)[1])
+        with self._coverage_lock:
+            self.known_content.pop(path, None)
+            self.known_content[path] = (content_hash, data)
+            total = sum(len(entry[1]) for entry in self.known_content.values())
+            while total > _KNOWN_CONTENT_MAX_BYTES and len(self.known_content) > 1:
+                oldest = next(iter(self.known_content))
+                total -= len(self.known_content.pop(oldest)[1])
 
     def require_read(
         self,
@@ -470,15 +528,16 @@ class ToolContext:
         content_hash: str | None = None,
         seen_ranges: list[tuple[int, int]] | None = None,
     ) -> str | None:
-        if path not in self.read_paths:
-            return f"ERROR: You must read the file with the read tool before attempting to {action}."
-        known_hash = self.file_hashes.get(path)
-        if content_hash is not None and known_hash != content_hash:
-            return (
-                f"ERROR: {path} changed since it was read (hash {known_hash} when read, "
-                f"{content_hash} now); read it again before attempting to {action}."
-            )
-        unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
+        with self._coverage_lock:
+            if path not in self.read_paths:
+                return f"ERROR: You must read the file with the read tool before attempting to {action}."
+            known_hash = self.file_hashes.get(path)
+            if content_hash is not None and known_hash != content_hash:
+                return (
+                    f"ERROR: {path} changed since it was read (hash {known_hash} when read, "
+                    f"{content_hash} now); read it again before attempting to {action}."
+                )
+            unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
         if unseen:
             rendered = ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in unseen)
             return (
@@ -496,22 +555,28 @@ class ToolContext:
         *,
         whole_file: bool,
     ) -> None:
-        self.read_paths.add(path)
-        self.file_hashes[path] = content_hash
-        self.read_ranges[path] = _merge_line_ranges(ranges)
-        self.read_line_totals[path] = max(0, total_lines)
-        if whole_file:
-            self.fully_read_paths.add(path)
-        else:
-            self.fully_read_paths.discard(path)
+        with self._coverage_lock:
+            # Reads recorded before this replacement no longer describe the
+            # coverage, so a later clip of one of them changes nothing.
+            self._read_windows.pop(path, None)
+            self.read_paths.add(path)
+            self.file_hashes[path] = content_hash
+            self.read_ranges[path] = _merge_line_ranges(ranges)
+            self.read_line_totals[path] = max(0, total_lines)
+            if whole_file:
+                self.fully_read_paths.add(path)
+            else:
+                self.fully_read_paths.discard(path)
 
-    def record_delivered_read(self, path: Path, raw: str, delivered: str) -> None:
+    def record_delivered_read(self, path: Path, raw: str, delivered: str,
+                              call_id: str | None = None) -> None:
         """Reconcile coverage after the runtime clipped a read result.
 
         The read handler recorded coverage for the whole text it returned, but
         the runtime clips or spills that text before the model sees it. Keep only
         the numbered lines fully present in the shared prefix, so a later edit is
-        never authorized against lines the model never received."""
+        never authorized against lines the model never received. ``call_id``
+        names the read call; it defaults to the call running in this thread."""
         limit = 0
         upper = min(len(raw), len(delivered))
         while limit < upper and raw[limit] == delivered[limit]:
@@ -524,19 +589,32 @@ class ToolContext:
             if separator and head.isdigit():
                 number = int(head)
                 seen.append((number, number))
-        # Restrict only this read's contribution: keep the ranges and the
-        # whole-file flag that predate it, so a clip cannot revoke lines an
-        # earlier read delivered in full.
-        prior_ranges, prior_whole = self._coverage_before_read.get(path, ([], False))
-        merged = _merge_line_ranges([*prior_ranges, *seen])
-        if merged:
-            self.read_ranges[path] = merged
-        else:
-            self.read_ranges.pop(path, None)
-        if prior_whole:
-            self.fully_read_paths.add(path)
-        else:
-            self.fully_read_paths.discard(path)
+        call_id = call_id or _CALL_ID.get()
+        with self._coverage_lock:
+            window = self._read_windows.get(path)
+            if window is None or call_id not in window.reads:
+                return
+            # Restrict only this read's contribution: keep the coverage that
+            # predates the window and every other read's share, so a clip
+            # cannot revoke lines another read delivered in full.
+            window.reads[call_id] = (seen, False)
+            merged = _merge_line_ranges(
+                [*window.base_ranges, *(span for ranges, _whole in window.reads.values() for span in ranges)]
+            )
+            if merged:
+                self.read_ranges[path] = merged
+            else:
+                self.read_ranges.pop(path, None)
+            if window.base_whole or any(whole for _ranges, whole in window.reads.values()):
+                self.fully_read_paths.add(path)
+            else:
+                self.fully_read_paths.discard(path)
+
+    def settle_reads(self) -> None:
+        """Forget which call recorded which read. The runtime calls it once a
+        batch's results are final, after the last clip."""
+        with self._coverage_lock:
+            self._read_windows.clear()
 
     def configure_snapshot_store(
         self,

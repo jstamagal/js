@@ -122,6 +122,30 @@ def test_fs_search_refuses_the_home(jailed):
 
 
 @needs_bwrap
+def test_parallel_read_only_calls_stay_in_the_jail(jailed):
+    """One batch of read-only calls runs at once; each is still confined."""
+    calls = [
+        runtime._PendingToolCall("in", "read", ['{"file_path": "inside.txt"}']),
+        runtime._PendingToolCall("home", "read", ['{"file_path": "~/.zshrc"}']),
+        runtime._PendingToolCall("grep", "fs_search", ['{"pattern": "inside", "output_mode": "content"}']),
+        runtime._PendingToolCall("grep_home", "fs_search", [f'{{"pattern": "{SECRET}", "path": "~"}}']),
+    ]
+    jailed.max_parallel_tools = 8
+
+    records = runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+        build_default_registry(), jailed,
+    )
+
+    results = {pc.id: result for pc, _args, result in records}
+    assert "inside" in results["in"] and not results["in"].startswith("ERROR")
+    assert "inside" in results["grep"] and not results["grep"].startswith("ERROR")
+    for refused in ("home", "grep_home"):
+        assert results[refused].startswith("ERROR:")
+        assert SECRET not in results[refused]
+
+
+@needs_bwrap
 def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
     bin_dir = operator_home / ".local" / "bin"
     bin_dir.mkdir(parents=True)

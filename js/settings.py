@@ -256,6 +256,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool",
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
+    SettingSpec("runtime.max_parallel_tools", "int",
+                "Most read-only tool calls of one model response that run at once: "
+                "read, fs_search, the web searches, a GET fetch. A call that writes "
+                "runs alone, after the calls before it. 1 runs every call in turn."),
     SettingSpec("runtime.steer", "str",
                 "What a line typed while a turn runs does. now: it reaches the model "
                 "at the turn's next tool boundary, as a user message. A turn with no "
@@ -478,7 +482,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
-            "tools.terminal_cols", "tools.terminal_rows",
+            "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None

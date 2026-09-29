@@ -662,5 +662,7 @@ def tools() -> tuple[Tool, ...]:
                 },
             },
             required=("url",),
+            # Each call is its own obscura process; only a screenshot writes a file.
+            read_only_when=lambda args: not text_or_default(args.get("screenshot")).strip(),
         ),
     )

@@ -10,6 +10,7 @@ import contextlib
 import inspect
 import json
 import hashlib
+import itertools
 import os
 import sys
 import threading
@@ -42,7 +43,7 @@ from . import stream_transport
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
-from .toolkit.core import ToolContext, ToolResult, call_tool, call_tool_async
+from .toolkit.core import ToolContext, ToolResult, call_is_read_only, call_scope, call_tool, call_tool_async
 from .toolkit.registry import ToolRegistry
 
 
@@ -284,6 +285,10 @@ def _backoff(attempt: int) -> float:
 # Telemetry
 # --------------------------------------------------------------------------
 
+# Serializes trace and telemetry writes from the threads of one dispatch batch.
+_OUTPUT_LOCK = threading.RLock()
+
+
 @dataclass
 class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
@@ -296,18 +301,20 @@ class Telemetry:
 
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
-        if self.trace_sink is not None:
+        line = json.dumps(rec, default=str) + "\n"
+        with _OUTPUT_LOCK:
+            if self.trace_sink is not None:
+                try:
+                    self.trace_sink.write("FLIGHT " + line)
+                except OSError as exc:
+                    msgs.warn(msgs.FLIGHT_LOG_FAILED, error=exc)
+            if not self.debug_log:
+                return
             try:
-                self.trace_sink.write("FLIGHT " + json.dumps(rec, default=str) + "\n")
-            except OSError as exc:
-                msgs.warn(msgs.FLIGHT_LOG_FAILED, error=exc)
-        if not self.debug_log:
-            return
-        try:
-            with open(self.debug_log, "a") as f:
-                f.write(json.dumps(rec, default=str) + "\n")
-        except OSError:
-            pass  # telemetry must never break the loop
+                with open(self.debug_log, "a") as f:
+                    f.write(line)
+            except OSError:
+                pass  # telemetry must never break the loop
 
 
 @dataclass
@@ -506,12 +513,15 @@ def _show_trace(telemetry: Telemetry, text: str) -> None:
         return
     sink = getattr(telemetry, "transcript_log", None)
     mute = getattr(sink, "mute_tee", None)
-    with mute() if callable(mute) else contextlib.nullcontext():
-        sys.stdout.write(text)
-        sys.stdout.flush()
-    write_plain = getattr(sink, "write_plain", None)
-    if callable(write_plain):
-        write_plain(text)
+    # Parallel read-only calls trace from their own threads; one exchange
+    # reaches the screen and the transcript whole.
+    with _OUTPUT_LOCK:
+        with mute() if callable(mute) else contextlib.nullcontext():
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        write_plain = getattr(sink, "write_plain", None)
+        if callable(write_plain):
+            write_plain(text)
 
 
 def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
@@ -699,7 +709,11 @@ def spill_oversized_result(
         digest = hashlib.sha256(result.encode("utf-8", "replace")).hexdigest()[:16]
         path = target_dir / f"result-{digest}.txt"
         if not path.exists():
-            path.write_bytes(result.encode("utf-8"))
+            # Two parallel calls can spill the same text; neither may see the
+            # other's half-written file.
+            partial = target_dir / f".result-{digest}.{threading.get_ident()}.tmp"
+            partial.write_bytes(result.encode("utf-8"))
+            os.replace(partial, path)
     except OSError:
         return result  # cannot spill -> the byte cap downstream still applies
     total_bytes = byte_size(result)
@@ -731,13 +745,14 @@ def spill_oversized_result(
 
 
 def _reconcile_read_delivery(
-    tool_name: str, args: dict, raw: Any, delivered: Any, context: ToolContext
+    tool_name: str, args: dict, raw: Any, delivered: Any, context: ToolContext, call_id: str,
 ) -> None:
     """Match read coverage to what the model actually received.
 
     A clipping cap (inline spill, per-result cap, or the per-turn batch cap) runs
     after the read handler returned the full text and recorded coverage for all
-    of it. Without this, patch is authorized to edit lines the model never saw."""
+    of it. Without this, patch is authorized to edit lines the model never saw.
+    ``call_id`` names the read call whose coverage is narrowed."""
     if tool_name != "read" or not isinstance(raw, str) or not isinstance(delivered, str):
         return
     if delivered == raw:
@@ -749,7 +764,7 @@ def _reconcile_read_delivery(
     # delivered, so a clipped one keeps none of its own coverage.
     bounds = args.get("range") if isinstance(args.get("range"), dict) else args
     byte_read = bounds.get("start_byte") is not None or bounds.get("end_byte") is not None
-    context.record_delivered_read(context.resolve_path(raw_path), raw, "" if byte_read else delivered)
+    context.record_delivered_read(context.resolve_path(raw_path), raw, "" if byte_read else delivered, call_id)
 
 
 
@@ -802,11 +817,14 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               error_tracker: ToolErrorTracker | None = None,
               registry: ToolRegistry | None = None,
               tool_context: ToolContext | None = None,
-              trace_together: bool = False) -> tuple[dict, str]:
+              trace_together: bool = False,
+              call_id: str | None = None) -> tuple[dict, str]:
     """Parse + execute one tool call. Returns (parsed_args, result_string).
 
     `trace_together` prints the call header with the result instead of before
-    the call runs; concurrent calls use it so their exchanges do not interleave."""
+    the call runs; concurrent calls use it so their exchanges do not interleave.
+    `call_id` is the model's id for the call; read coverage is recorded under it."""
+    call_id = call_id or f"dispatch-{next(_ANONYMOUS_CALLS)}"
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
@@ -836,7 +854,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
     started = time.time()
     try:
-        result = call_tool(tool, args, context)
+        with call_scope(call_id):
+            result = call_tool(tool, args, context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name,
@@ -846,7 +865,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes)
-    _reconcile_read_delivery(tool.name, args, result, capped, context)
+    _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     if trace:
         _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together)
     return args, capped
@@ -854,6 +873,44 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
 def _is_task_call(pc: _PendingToolCall) -> bool:
     return pc.name.lower() == "task"
+
+
+def _is_read_only_call(pc: _PendingToolCall, registry: ToolRegistry) -> bool:
+    """True when ``pc`` names a tool that writes nothing with these arguments.
+    A call that cannot be resolved or parsed is not read-only."""
+    tool = registry.resolve(pc.name)
+    if tool is None or pc.validation_error is not None:
+        return False
+    try:
+        args = _repair_jsonish(pc.arguments())
+    except ValueError:
+        return False
+    return call_is_read_only(tool, args)
+
+
+def _read_write_groups(indices: list[int], read_only: Callable[[int], bool]) -> list[list[int]]:
+    """Split calls, in model order, into the groups a readers-writer lock admits.
+
+    Consecutive read-only calls share a group and run together. Every other
+    call is a group of its own: it starts after every call before it has
+    finished, and the calls after it wait for it. read, read, patch, read
+    gives [read, read], [patch], [read]."""
+    groups: list[list[int]] = []
+    readers: list[int] = []
+    for idx in indices:
+        if read_only(idx):
+            readers.append(idx)
+            continue
+        if readers:
+            groups.append(readers)
+            readers = []
+        groups.append([idx])
+    if readers:
+        groups.append(readers)
+    return groups
+
+
+_ANONYMOUS_CALLS = itertools.count()
 
 
 @dataclass
@@ -880,10 +937,13 @@ def _dispatch_tool_calls(
 ) -> list[tuple[_PendingToolCall, dict, str]]:
     """Dispatch one assistant batch.
 
-    All `task` calls from the same assistant turn run concurrently, non-task
-    tools run sequentially, then restores the original result order before
-    appending tool messages. `trace_together` is set when other calls run
-    beside this batch; concurrent `task` calls always trace together.
+    All `task` calls from the same assistant turn run concurrently first. The
+    other calls then run in model order under a readers-writer rule (see
+    _read_write_groups): read-only calls run together, up to
+    tool_context.max_parallel_tools at once, and a call that writes runs
+    alone. Results come back in the original order. `trace_together` is set
+    when other calls run beside this batch; calls that run concurrently always
+    trace together.
     """
     records: list[tuple[dict, str] | None] = [None] * len(tool_calls)
     for idx, pc in enumerate(tool_calls):
@@ -934,11 +994,15 @@ def _dispatch_tool_calls(
                 if progress is not None:
                     progress.record(tool_calls[idx], *records[idx])
 
-    for idx, pc in enumerate(tool_calls):
-        if progress is not None and progress.stopped.is_set():
-            break
-        if records[idx] is not None:
-            continue
+    def stopped() -> bool:
+        return progress is not None and progress.stopped.is_set()
+
+    def run_leaf(idx: int, together: bool) -> None:
+        # A queued call checks the stop flag as it starts: ^C lets the calls
+        # already running finish and starts no new one.
+        if stopped():
+            return
+        pc = tool_calls[idx]
         records[idx] = _dispatch(
             pc.name,
             pc.arguments(),
@@ -948,10 +1012,28 @@ def _dispatch_tool_calls(
             error_tracker,
             registry,
             tool_context,
-            trace_together,
+            together,
+            pc.id,
         )
         if progress is not None:
             progress.record(pc, *records[idx])
+
+    limit = max(1, int(getattr(tool_context, "max_parallel_tools", 1) or 1))
+    leaves = [idx for idx in range(len(tool_calls)) if records[idx] is None]
+    groups = _read_write_groups(
+        leaves, lambda idx: limit > 1 and _is_read_only_call(tool_calls[idx], registry),
+    )
+    for group in groups:
+        if stopped():
+            break
+        if len(group) == 1:
+            run_leaf(group[0], trace_together)
+            continue
+        with ThreadPoolExecutor(max_workers=min(limit, len(group)),
+                                thread_name_prefix="js-runtime-read") as executor:
+            futures = [executor.submit(run_leaf, idx, True) for idx in group]
+        for future in futures:
+            future.result()
 
     return [
         (pc, *record)
@@ -1036,7 +1118,8 @@ async def _dispatch_async_tool(
         _trace_call(telemetry, tool_context, tool.name, args)
     started = time.time()
     try:
-        result = await call_tool_async(tool, args, tool_context)
+        with call_scope(pc.id):
+            result = await call_tool_async(tool, args, tool_context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
         raise
@@ -1045,7 +1128,7 @@ async def _dispatch_async_tool(
         result = f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"
     raw_result = result
     result = _cap_result(result, cap_bytes)
-    _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context)
+    _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
@@ -1294,6 +1377,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
     active_context.kernel_wait_seconds = getattr(cfg, "kernel_wait_seconds", active_context.kernel_wait_seconds)
     active_context.shell_wait_seconds = getattr(cfg, "shell_wait_seconds", active_context.shell_wait_seconds)
+    active_context.max_parallel_tools = getattr(cfg, "max_parallel_tools", active_context.max_parallel_tools)
     active_context.task_max_depth = getattr(cfg, "task_max_depth", active_context.task_max_depth)
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", active_context.subagent_max_workers)
     live_settings = getattr(cfg, "settings", None)
@@ -2000,9 +2084,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         old_result,
                         new_result,
                         active_context,
+                        pc.id,
                     )
                     reconciled.append((pc, args, new_result))
                 dispatch_records = reconciled
+                active_context.settle_reads()
                 # A batch's tool results must stay contiguous: the SDK's history
                 # check ends the pending tool-call window at the first following
                 # user/assistant message, so an image's user FilePart inserted

@@ -1289,8 +1289,9 @@ def fs_search(
     memoized = not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, stamp))
-    if memoized and cache_key in context.search_cache:
-        return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
+    cached = context.search_cache.get(cache_key) if memoized else None
+    if cached is not None:
+        return cached + "\n[deduplicated repeated search]"
 
     rg = _rg_binary()
     if rg is None:
@@ -1615,8 +1616,9 @@ def ast_search(
     memoized = not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit, stamp))
-    if memoized and not apply and cache_key in context.search_cache:
-        return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
+    cached = context.search_cache.get(cache_key) if memoized and not apply else None
+    if cached is not None:
+        return cached + "\n[deduplicated repeated search]"
 
     binary = _ast_grep_binary()
     if binary is None:
@@ -1806,6 +1808,7 @@ def tools() -> tuple[Tool, ...]:
                 "max_results": {"type": "integer", "default": 100, "description": "Maximum matches returned or rewritten; an apply is refused when more matches exist."},
             },
             required=("pattern",),
+            read_only_when=lambda args: not args.get("apply"),
         ),
         Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly without the trash; the path is still snapshotted for undo."}}, required=("path",)),
         Tool(

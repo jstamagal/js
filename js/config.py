@@ -187,6 +187,7 @@ class Config:
     kernel_render_max_lines: int = _jsrc_field("kernel.render_max_lines")
     kernel_wait_seconds: int = _jsrc_field("kernel.wait_seconds")
     shell_wait_seconds: int = _jsrc_field("shell.wait_seconds")
+    max_parallel_tools: int = _jsrc_field("runtime.max_parallel_tools")
     allow_inline_code: bool = _jsrc_field("runtime.allow_inline_code")  # !{sh|python|c ...} inline-code execution; opt out via --im-a-pussy
     prefer_inherit: bool = _jsrc_field("subagents.prefer_inherit")  # subagents inherit the parent's model when true; when false they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = _jsrc_field("subagents.lock_model")  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
@@ -529,6 +530,7 @@ def from_env(
     kernel_render_max_lines = _int_knob(js_root_settings, "kernel.render_max_lines")
     kernel_wait_seconds = _int_knob(js_root_settings, "kernel.wait_seconds")
     shell_wait_seconds = _int_knob(js_root_settings, "shell.wait_seconds")
+    max_parallel_tools = max(1, _int_knob(js_root_settings, "runtime.max_parallel_tools") or 1)
     default_verbosity = _settings.default_value("kernel.verbosity")
     kernel_verbosity = str(_settings.get_dotted(js_root_settings, ("kernel", "verbosity"), default_verbosity) or default_verbosity).strip().lower()
     if kernel_verbosity not in ("quiet", "normal", "verbose"):
@@ -613,6 +615,7 @@ def from_env(
         kernel_render_max_lines=kernel_render_max_lines,
         kernel_wait_seconds=kernel_wait_seconds,
         shell_wait_seconds=shell_wait_seconds,
+        max_parallel_tools=max_parallel_tools,
         allow_inline_code=bool(_settings.knob(js_root_settings, "runtime.allow_inline_code")),
         prefer_inherit=prefer_inherit,
         lock_subagent_model=lock_subagent_model,
