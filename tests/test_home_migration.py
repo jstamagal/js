@@ -14,7 +14,7 @@ import string
 import time
 from pathlib import Path
 
-from js import cli, config, home, paths
+from js import cli, config, home, paths, session_store
 from js import messages as msgs
 
 
@@ -64,7 +64,8 @@ def test_first_run_moves_every_old_location_into_the_layout(tmp_path):
     assert (paths.login_store_dir() / "logins.toml").is_file()
     assert (paths.global_agents_dir() / "mine" / "01-prompt.md").is_file()
     assert (paths.global_skills_dir() / "s" / "SKILL.md").is_file()
-    assert (paths.sessions_root() / "defaultagent" / "old.jsonl").is_file()
+    # A session with no recorded start directory is filed under ~'s folder.
+    assert (session_store.folder_for(paths.user_home()) / "old.jsonl").is_file()
     assert (paths.transcript_root() / "defaultagent" / "t.log").is_file()
     assert (paths.model_catalog_dir() / "status.json").is_file()
     assert (paths.notes_dir() / "notes.md").read_text(encoding="utf-8") == "a note\n"
@@ -246,7 +247,9 @@ def test_across_filesystems_a_directory_lands_whole_then_leaves_the_source(tmp_p
     home.migrate_once(io.StringIO())
 
     target = paths.sessions_root()
-    assert (target / "a" / "one.jsonl").read_text(encoding="utf-8") == "1\n"
+    # The session is then filed by start directory; its record keeps what it had.
+    filed = session_store.folder_for(paths.user_home()) / "one.jsonl"
+    assert filed.read_text(encoding="utf-8").startswith("1\n")
     assert os.readlink(target / "a" / "linked") == str(nfs)
     assert not sessions.exists()
     assert nfs.is_dir()
@@ -272,7 +275,8 @@ def test_an_old_copy_that_cannot_be_removed_is_reported_after_the_move(tmp_path,
     steps = home.migrate_once(io.StringIO())
 
     assert [step.kind for step in steps if step.source == sessions] == ["move", "refuse"]
-    assert (paths.sessions_root() / "a" / "one.jsonl").read_text(encoding="utf-8") == "1\n"
+    filed = session_store.folder_for(paths.user_home()) / "one.jsonl"
+    assert filed.read_text(encoding="utf-8").startswith("1\n")
     assert (sessions / "a" / "one.jsonl").is_file()
 
 
@@ -422,3 +426,80 @@ def test_every_start_lays_out_the_whole_home(tmp_path, monkeypatch):
     assert names >= {"agents", "skills", "toolbox", "logins", "sessions", "state", "logs",
                      "cache", "work", "tmp", "plans", "probes"}
     assert {path.name for path in paths.layout_dirs()} <= names
+
+
+def _record(path: Path, *records: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        for record in records:
+            stream.write(json.dumps(record) + "\n")
+    return path
+
+
+def _meta(cwd: Path, ts: float = 100.0) -> dict:
+    return {"kind": "session_metadata", "version": 2, "ts": ts, "cwd": str(cwd), "agent": "defaultagent",
+            "model": "m", "caller_key": None, "job_id": None}
+
+
+def _msg(role: str, content: str, ts: float = 101.0, **extra) -> dict:
+    return {"kind": "message", "version": 1, "ts": ts, "message": {"role": role, "content": content, **extra}}
+
+
+def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path, monkeypatch, capsys):
+    project = tmp_path / "work" / "my_repo"
+    project.mkdir(parents=True)
+    old = _legacy()["data"] / "sessions" / "defaultagent"
+    generated = _record(old / "20260929T101208214271Z-acc53bcfc3ea7213.jsonl",
+                        _meta(project), _msg("user", "fix it"),
+                        _msg("assistant", "", 102.0, tool_calls=[{
+                            "id": "t1", "type": "function",
+                            "function": {"name": "task", "arguments": json.dumps(
+                                {"agent_id": "reviewer", "tasks": ["review the diff"]})}}]),
+                        _msg("tool", "looks fine", 110.0, tool_call_id="t1"))
+    _record(old / "merrygoround.jsonl", _meta(project), _msg("user", "named"))
+    _record(old / "nocwd.jsonl", _msg("user", "where was I"))
+    _record(old / "derived" / "abc123.jsonl", _meta(project), _msg("user", "keyed"))
+    _write(old / ".history", "+hello\n")
+    _write(old / "latest.json", json.dumps({"session_file": str(generated), "session_name": generated.name}))
+    child = _record(_legacy()["data"] / "sessions" / "reviewer" / "task-1789016792000-0123456789abcdef.jsonl",
+                    _msg("user", "review the diff", 103.0), _msg("assistant", "lgtm", 104.0))
+
+    home.migrate_once(io.StringIO())
+
+    folder = session_store.folder_for(project)
+    assert folder.name == "-" + str(project).strip("/").replace("/", "-").replace("_", "-")
+    filed = folder / generated.name
+    assert filed.is_file() and (folder / "merrygoround.jsonl").is_file()
+    assert (folder / "derived" / "abc123.jsonl").is_file()
+    assert (session_store.folder_for(paths.user_home()) / "nocwd.jsonl").is_file()
+    moved_child = session_store.subagent_folder(filed) / child.name
+    assert moved_child.is_file()
+    for path in (filed, folder / "merrygoround.jsonl", moved_child):
+        assert path.with_suffix(".txt").is_file()
+    assert not (paths.sessions_root() / "defaultagent").exists()
+    assert not (paths.sessions_root() / "reviewer").exists()
+    assert (paths.state_root() / "defaultagent" / "history").read_text(encoding="utf-8") == "+hello\n"
+    from js.session_catalog import first_metadata
+    assert first_metadata(moved_child)["agent"] == "reviewer"
+    assert first_metadata(moved_child)["parent"] == str(filed)
+
+    # The old name and a hash tail still resolve, from anywhere.
+    monkeypatch.chdir(tmp_path)
+    assert config.resolve_session_file(session_store.folder_for(tmp_path), generated.stem) == filed
+    assert config.resolve_session_file(session_store.folder_for(tmp_path), "3ea7213") == filed
+    assert config.resolve_session_file(session_store.folder_for(tmp_path), "merrygoround") == folder / "merrygoround.jsonl"
+    # --last finds the session latest.json named.
+    assert cli._latest_session_name("defaultagent") == str(filed)
+
+
+def test_the_dry_run_names_the_filing_and_moves_no_session(tmp_path, capsys):
+    project = tmp_path / "proj"
+    old = _record(_legacy()["data"] / "sessions" / "defaultagent" / "s.jsonl", _meta(project), _msg("user", "hi"))
+    before = old.read_bytes()
+
+    assert home.main([]) == 0
+
+    out = capsys.readouterr().out.splitlines()
+    assert any(_is(msgs.HOME_WOULD_REFILE, line) for line in out)
+    assert old.read_bytes() == before
+    assert not paths.home().exists()

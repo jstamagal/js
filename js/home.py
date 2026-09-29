@@ -6,6 +6,17 @@ Without --apply it prints what it would move. `migrate_once()` runs the same
 move at js startup, once: the marker `paths.home_migration_marker()` records
 that it ran, so later starts do nothing even if an old location reappears.
 
+After the moves, every agent in ~/.js/agents is converted to agent.yaml
+(`js.agent_migration`), and the sessions of each old per-agent folder
+(`sessions/<agent>/`) are filed by the directory they started in
+(`js.session_store`): a session goes to the folder of the cwd in its first
+start metadata, or of ~ when it has none; an old subagent run, which has no
+metadata, goes under the parent session whose task call carried its first
+message. Names are kept, so `--session <old name or hash tail>` still
+resolves. A session without an agent in its metadata gets a start record
+naming the old folder's agent, and each filed session gets its `.txt`. The
+old folder's `.history` and `latest.json` go to ~/.js/state/<agent>/.
+
 Every move is a rename of one entry, so a directory lands whole or not at
 all. A symlink is moved as the link; the walk never descends through one.
 When the destination already exists: an identical file or link drops the
@@ -22,19 +33,23 @@ import contextlib
 import errno
 import fcntl
 import filecmp
+import json
 import os
 import shutil
 import stat
 import sys
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
 from . import agent_migration
 from . import messages as msgs
 from . import paths
+from . import session_catalog
+from . import session_store
+from . import session_text
 
 # Entries of the old data directory that do not keep their name under ~/.js.
 # Every other entry of the old config and data directories lands at ~/.js/<name>.
@@ -350,6 +365,213 @@ def convert_agents(*, apply: bool) -> Iterator[Step]:
             yield from _agent_step(result)
 
 
+@dataclass
+class _OldSession:
+    """One session file of an old per-agent folder, as far as filing needs it."""
+
+    path: Path
+    folder: Path
+    metadata: dict | None = None
+    has_agent: bool = False
+    first_user: str | None = None
+    first_ts: float | None = None
+    tasks: list[tuple[float, str]] = field(default_factory=list)
+
+    @property
+    def relative(self) -> Path:
+        return self.path.relative_to(self.folder)
+
+
+def _task_texts(arguments) -> list[str]:
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return []
+    items = arguments.get("tasks") if isinstance(arguments, dict) else None
+    return [item.strip() for item in items if isinstance(item, str) and item.strip()] if isinstance(items, list) else []
+
+
+def _read_old_session(folder: Path, path: Path) -> _OldSession:
+    session = _OldSession(path, folder)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return session
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        ts = record.get("ts") if isinstance(record.get("ts"), (int, float)) else None
+        if session.first_ts is None and ts is not None:
+            session.first_ts = ts
+        if record.get("kind") == "session_metadata":
+            session.metadata = session.metadata or record
+            session.has_agent = session.has_agent or isinstance(record.get("agent"), str)
+            continue
+        message = record.get("message") if record.get("kind") == "message" else (
+            record if record.get("kind") is None else None)
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user" and session.first_user is None:
+            session.first_user = str(message.get("content") or "").strip()
+        for call in message.get("tool_calls") or ():
+            if isinstance(call, dict):
+                for text in _task_texts((call.get("function") or {}).get("arguments")):
+                    session.tasks.append((ts or 0.0, text))
+    return session
+
+
+def _parents(sessions: list[_OldSession]) -> dict[Path, _OldSession]:
+    """Each old subagent run's parent: a session without metadata whose first
+    message is the text of a task call, in the session that made the call
+    last before it started."""
+    calls: dict[str, list[tuple[float, _OldSession]]] = {}
+    for session in sessions:
+        for ts, text in session.tasks:
+            calls.setdefault(text, []).append((ts, session))
+    parents: dict[Path, _OldSession] = {}
+    for session in sessions:
+        if session.metadata is not None or not session.first_user:
+            continue
+        candidates = [(ts, parent) for ts, parent in calls.get(session.first_user, ()) if parent is not session]
+        if not candidates:
+            continue
+        started = session.first_ts if session.first_ts is not None else float("inf")
+        before = [item for item in candidates if item[0] <= started]
+        parents[session.path] = max(before or candidates, key=lambda item: item[0])[1]
+    return parents
+
+
+def _targets(sessions: list[_OldSession], parents: dict[Path, _OldSession]) -> dict[Path, Path]:
+    targets: dict[Path, Path] = {}
+    home_folder = session_store.folder_for(paths.user_home())
+
+    def target(session: _OldSession, depth: int = 0) -> Path:
+        if session.path in targets:
+            return targets[session.path]
+        parent = parents.get(session.path)
+        cwd = session.metadata.get("cwd") if session.metadata else None
+        if isinstance(cwd, str) and cwd:
+            where = session_store.folder_for(cwd) / session.relative
+        elif parent is not None and depth < len(sessions):
+            where = session_store.subagent_folder(target(parent, depth + 1)) / session.relative
+        else:
+            where = home_folder / session.relative
+        targets[session.path] = where
+        return where
+
+    for session in sessions:
+        target(session)
+    return targets
+
+
+def _liveness_files(path: Path) -> tuple[Path, Path]:
+    stem = f".{path.name}.liveness"
+    return path.parent / f"{stem}.json", path.parent / f"{stem}.lock"
+
+
+def _in_use(path: Path) -> bool:
+    state, _ = _liveness_files(path)
+    return state.exists() and session_catalog.session_in_flight(path)
+
+
+def _old_session_folders(apply: bool) -> list[Path]:
+    roots = [paths.sessions_root()]
+    if not apply:
+        roots.insert(0, paths.legacy_homes()["data"] / "sessions")
+    folders = []
+    for root in roots:
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            continue
+        folders.extend(entry for entry in entries
+                       if not session_store.is_folder_name(entry.name) and not entry.name.startswith(".")
+                       and entry.is_dir() and not entry.is_symlink())
+    return folders
+
+
+def _remove_empty_dirs(folder: Path) -> None:
+    for directory, _dirnames, _filenames in os.walk(folder, topdown=False):
+        with contextlib.suppress(OSError):
+            os.rmdir(directory)
+
+
+def _file_latest(folder: Path, targets: dict[Path, Path]) -> None:
+    """Point the agent's latest.json in state/ at where its latest session went."""
+    latest = folder / "latest.json"
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    old = payload.get("session_file") if isinstance(payload, dict) else None
+    moved = next((new for path, new in targets.items()
+                  if isinstance(old, str) and Path(old).name == path.name and path.parent.name == Path(old).parent.name
+                  and new.is_file()), None)
+    if moved is not None:
+        session_store.write_latest(paths.state_root() / folder.name, moved)
+    with contextlib.suppress(OSError):
+        latest.unlink()
+
+
+def refile_sessions(*, apply: bool) -> Iterator[Step]:
+    """File the sessions of every old per-agent folder by the directory they
+    started in. A dry run looks where the sessions are before the moves."""
+    folders = _old_session_folders(apply)
+    if not folders:
+        return
+    sessions = [_read_old_session(folder, path) for folder in folders
+                for path in sorted(folder.rglob(f"*{session_store.SUFFIX}"))
+                if path.is_file() and not path.is_symlink()]
+    parents = _parents(sessions)
+    targets = _targets(sessions, parents)
+    walk = _Walk(apply=apply)
+    for folder in folders:
+        filed = 0
+        for session in (item for item in sessions if item.folder == folder):
+            if _in_use(session.path):
+                yield Step("refuse", session.path, None, msgs.HOME_SESSION_IN_USE.text())
+                continue
+            target = targets[session.path]
+            outcome = list(walk.entry(session.path, target))
+            yield from (step for step in outcome if step.kind not in ("move", "relink"))
+            if not any(step.kind == "move" for step in outcome):
+                continue
+            filed += 1
+            for companion in sorted(session.path.parent.glob(f"{session.path.name}.bak*")):
+                yield from (step for step in walk.entry(companion, target.with_name(companion.name))
+                            if step.kind not in ("move", "relink"))
+            if not apply:
+                continue
+            for sidecar in _liveness_files(session.path):
+                with contextlib.suppress(OSError):
+                    sidecar.unlink()
+            if not session.has_agent:
+                parent = parents.get(session.path)
+                cwd = session.metadata.get("cwd") if session.metadata else None
+                session_catalog.record_session_start(
+                    target, cwd=cwd or paths.user_home(), agent=folder.name,
+                    mode="subagent" if parent is not None else None,
+                    parent=targets[parent.path] if parent is not None else None,
+                    ts=session.first_ts if session.first_ts is not None else target.stat().st_mtime)
+            else:
+                session_text.refresh(target)
+        if filed:
+            yield Step("refile", folder, None, msgs.plural(filed, "session"))
+        history = folder / ".history"
+        if history.is_file():
+            yield from walk.entry(history, paths.state_root() / folder.name / "history")
+        if apply:
+            _file_latest(folder, targets)
+            _remove_empty_dirs(folder)
+            if folder.exists():
+                yield Step("skip", folder, None, msgs.HOME_NOT_EMPTY.text())
+
+
 def steps(*, apply: bool) -> Iterator[Step]:
     """Every step of the migration, each performed as it is yielded when `apply` is true."""
     legacy = paths.legacy_homes()
@@ -358,6 +580,7 @@ def steps(*, apply: bool) -> Iterator[Step]:
     yield from walk.spread(legacy["config"], _CONFIG_RENAMES)
     yield from walk.spread(legacy["data"], _DATA_RENAMES)
     yield from convert_agents(apply=apply)
+    yield from refile_sessions(apply=apply)
 
 
 @contextlib.contextmanager
