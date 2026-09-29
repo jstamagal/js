@@ -815,9 +815,12 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
     """Trace and log a tool call a kernel cell makes while this call runs,
     the way a direct call is traced and logged."""
 
-    def observe(name: str, args: dict, result: Any, seconds: float, failure: str | None) -> None:
+    def observe(name: str, args: dict, result: Any, seconds: float, failure: str | None,
+                refused: bool = False) -> None:
         latency_ms = int(seconds * 1000)
-        if failure is None:
+        if refused:
+            telemetry.event("tool_call_refused", tool=name, via="kernel", refusal=result)
+        elif failure is None:
             telemetry.event("tool_ok", tool=name, via="kernel", latency_ms=latency_ms)
         else:
             telemetry.event("tool_exception", tool=name, via="kernel", error=failure,

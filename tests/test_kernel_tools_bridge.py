@@ -311,3 +311,63 @@ def test_a_stopped_bridge_serves_again_on_the_same_socket_and_token(bridge, tmp_
 
     assert bridge.serving() and bridge.token == token
     assert "read" in raw_request(bridge, names_request(bridge))["value"]
+
+
+def _guard_refusing(tool_name: str, seen: list[tuple[str, str]]):
+    """An `on` table whose tool_call handler refuses ``tool_name``; ``seen``
+    collects (event, tool) for every tool_call and tool_result it is shown."""
+    from js import events
+
+    hooks = events.EventHooks()
+
+    def dispatch(hook, emission):
+        name = emission.payload.get("name")
+        seen.append((emission.event, name))
+        if emission.event == "tool_call" and name == tool_name:
+            return events.EventHandlerResult(hook=hook, refusal=f"ERROR: no {tool_name} today")
+        return events.EventHandlerResult(hook=hook)
+
+    hooks.set_dispatcher(dispatch)
+    hooks.add("tool_call", "guard")
+    hooks.add("tool_result", "watch")
+    return hooks
+
+
+@needs_kernel
+def test_a_tool_call_guard_refuses_a_cells_call(ctx):
+    seen: list[tuple[str, str]] = []
+    ctx.tool_call_hooks = _guard_refusing("write", seen)
+    (ctx.cwd / "in.txt").write_text("kept\n")
+
+    result = cell(
+        "print('READ', tools.read('in.txt', show_line_numbers=False).strip())\n"
+        "try:\n"
+        "    tools.write(file_path='out.txt', content='x\\n')\n"
+        "except tools.ToolError as exc:\n"
+        "    print('REFUSED', exc)\n",
+        ctx,
+    )
+
+    assert "READ kept" in result
+    assert "REFUSED ERROR: no write today" in result
+    assert not (ctx.cwd / "out.txt").exists()
+    assert ("tool_call", "read") in seen and ("tool_result", "read") in seen
+    assert ("tool_call", "write") in seen and ("tool_result", "write") not in seen
+
+
+@needs_kernel
+def test_a_read_of_content_starting_with_error_is_a_value(ctx):
+    (ctx.cwd / "log.txt").write_text("ERROR: disk full at 03:00\nsecond line\n")
+
+    result = cell(
+        "text = tools.read('log.txt', show_line_numbers=False)\n"
+        "print('LINES', len(text.splitlines()))\n"
+        "try:\n"
+        "    tools.read('missing.txt')\n"
+        "except tools.ToolError:\n"
+        "    print('MISSING RAISED')\n",
+        ctx,
+    )
+
+    assert "LINES 2" in result
+    assert "MISSING RAISED" in result

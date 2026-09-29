@@ -18,8 +18,11 @@ The cell gets the handler's whole result. The per-result and per-turn caps
 exist to protect the model's context, and a cell's result reaches the model
 only through what the cell prints, which the kernel tool caps.
 
-The observer the kernel call was dispatched with (runtime._cell_call_observer)
-traces each call and logs it to the flight log, as a direct call is.
+The `on` table of the turn that runs the kernel call (ToolContext.tool_call_hooks)
+sees each call as a direct call: its tool_call handlers can refuse it, and
+tool_result fires with the result. The observer the kernel call was dispatched
+with (runtime._cell_call_observer) traces each call and logs it to the flight
+log, as a direct call is.
 
 One request is served at a time, in the order they arrive.
 """
@@ -37,7 +40,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .core import ToolContext, ToolResult, call_scope, call_tool, registry_scope
+from .. import jail as _jail
+from .core import Output, ToolContext, ToolResult, call_scope, call_tool, registry_scope
 
 # How long the server waits for one request's bytes after a connection opens.
 # The client sends its whole request before it waits, so this bounds only a
@@ -47,8 +51,10 @@ REQUEST_TIMEOUT = 30.0
 ACCEPT_SLICE = 0.25
 
 # Told about every call a cell makes: (tool name, arguments, result, seconds,
-# failure text or None). The runtime passes one that traces and logs the call.
-Observer = Callable[[str, dict, Any, float, "str | None"], None]
+# failure text or None), and refused=True for a call an `on tool_call` handler
+# refused, whose result is the refusal. The runtime passes one that traces and
+# logs the call.
+Observer = Callable[..., None]
 
 # Tools a cell cannot call, with the reason the refusal gives.
 _OWN_KERNEL = "it runs cells in this same kernel, which is busy running the calling cell"
@@ -271,21 +277,51 @@ class ToolBridge:
         if banned is not None:
             return {"error": banned}
         observer = self.observer
+        call_id = f"kernel-tools-{next(self._calls)}"
+        hooks = getattr(context, "tool_call_hooks", None)
+        refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
+        if refusal is not None:
+            if observer is not None:
+                observer(tool.name, arguments, refusal, 0.0, None, refused=True)
+            return {"error": refusal}
         started = time.monotonic()
         try:
-            with call_scope(f"kernel-tools-{next(self._calls)}"), registry_scope(registry, observer):
+            with call_scope(call_id), registry_scope(registry, observer):
                 result = call_tool(tool, arguments, context)
         except Exception as exc:  # noqa: BLE001 - a failing handler is the cell's exception
             failure = f"{type(exc).__name__}: {exc}"
-            result = f"ERROR running {tool.name}: {failure}"
+            result = _jail.shown(f"ERROR running {tool.name}: {failure}")
             if observer is not None:
                 observer(tool.name, arguments, result, time.monotonic() - started, failure)
+            _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
             return {"error": result}
         if observer is not None:
             observer(tool.name, arguments, result, time.monotonic() - started, None)
+        _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
         if isinstance(result, ToolResult) and result.is_error:
             return {"error": result.dehydrated()}
         value = _plain(result)
-        if isinstance(value, str) and value.startswith("ERROR"):
+        if isinstance(value, str) and value.startswith("ERROR") and not isinstance(result, Output):
             return {"error": value}
         return {"value": value}
+
+
+def _emit(hooks: Any, event: str, **payload: Any) -> Any:
+    """``event`` raised to ``hooks``, the `on` table of the turn whose kernel
+    call runs the cell; None when there is none or its handlers failed to run."""
+    if hooks is None:
+        return None
+    try:
+        return hooks.emit(event, **payload)
+    except Exception:  # noqa: BLE001 - a handler failure never breaks the call
+        return None
+
+
+def _hook_refusal(hooks: Any, call_id: str, name: str, arguments: dict) -> str | None:
+    """The refusal an `on tool_call` handler gives this call, or None. The
+    payload has the shape a direct call's has: arguments as JSON text."""
+    from .. import events
+
+    emission = _emit(hooks, "tool_call", id=call_id, name=name,
+                     arguments=json.dumps(arguments, default=str))
+    return events.refusal_of(emission)

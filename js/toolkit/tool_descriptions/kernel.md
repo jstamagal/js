@@ -100,8 +100,12 @@ cell and only what you print comes back.
 - The value is the text a direct call returns, whole: the result caps apply to
   what the cell prints, not to what a tool returns into it.
 - A refusal or failure raises `tools.ToolError` with the `ERROR` text.
+{{#if read}}
+  File content from `read` is a value even when it starts with `ERROR`.
+{{/if}}
 - Each call runs as a direct call would: only tools you can call yourself, with
-  the same argument checks, path limits, and read-before-write rule.
+  the same argument checks, path limits, read-before-write rule, and
+  `on tool_call` hooks, which can refuse it.
 {{#if patch}}
   A file a cell reads counts as read for a later `patch`.
 {{/if}}
@@ -110,6 +114,10 @@ cell and only what you print comes back.
   an `os.chdir` in a cell, pass absolute paths.
 - `tools.names()` lists what a cell can call. `kernel`, `toolbox`, subagent
   tools, and MCP tools are not callable from a cell; call them directly.
+- Interrupting a cell does not stop the tool call it is waiting on. The tool
+  runs to its end, and the cell's next tool call waits for it.
+- A cell left running in the background keeps calling tools while you make
+  direct calls, and its writes are not ordered against yours.
 
 Practical notes:
 - Intermediate state survives here and not in a one-shot script.

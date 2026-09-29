@@ -233,6 +233,12 @@ def _snapshot_raw_size(snapshot: Snapshot) -> int:
     return len(str(snapshot.get("target", "")).encode("utf-8"))
 
 
+class Output(str):
+    """A tool result that is the content the tool was asked for, such as a
+    file's text. A caller that tells a failure by its ERROR prefix treats an
+    Output as a value even when the content itself starts with ERROR."""
+
+
 @dataclass(frozen=True)
 class ToolResult:
     """A provider-facing mixed tool result plus a safe persistence descriptor."""
@@ -943,11 +949,13 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
         return _jail.Refusal(f"ERROR: {exc}")
+    output = isinstance(result, Output)
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
         result = f"{result}\n{rendered}"
-    return _as_jail_shows(result)
+    result = _as_jail_shows(result)
+    return Output(result) if output and not isinstance(result, Output) else result
 
 
 def _as_jail_shows(result: Any) -> Any:
