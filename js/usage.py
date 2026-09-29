@@ -222,19 +222,20 @@ def forget(session_file: Path | None) -> None:
 
 
 def charge(session_file: Path | None, call: CallUsage) -> UsageTotals:
-    """Add `call` to the session's totals and append its `usage` record."""
+    """Add `call` to the session's totals and append its `usage` record.
+    The append happens under the lock, so the records of one file are in the
+    order of their totals and the last one holds the largest."""
     with _LOCK:
         live = totals(session_file)
         live.add(call)
-        snapshot = live.as_dict()
-    if _persisted(session_file):
-        try:
-            session_store.append(Path(session_file), {
-                "kind": RECORD_KIND, "version": RECORD_VERSION, "ts": time.time(),
-                "call": call.as_dict(), "totals": snapshot,
-            })
-        except OSError:
-            pass  # accounting must never break the turn
+        if _persisted(session_file):
+            try:
+                session_store.append(Path(session_file), {
+                    "kind": RECORD_KIND, "version": RECORD_VERSION, "ts": time.time(),
+                    "call": call.as_dict(), "totals": live.as_dict(),
+                })
+            except OSError:
+                pass  # accounting must never break the turn
     return live
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -246,3 +247,18 @@ def test_wipe_starts_the_totals_again(tmp_path, monkeypatch, capsys):
     cli._cmd_wipe("", {"messages": []}, cfg)
 
     assert usage.totals(Path(cfg.session_file)).calls == 0
+
+
+def test_concurrent_charges_leave_the_file_with_the_final_totals(tmp_path):
+    session_file = tmp_path / "s.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    call = usage.CallUsage(model="m", provider=None, cost=None, input_tokens=1)
+    threads = [threading.Thread(target=lambda: [usage.charge(session_file, call) for _ in range(25)])
+               for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert usage.totals(session_file).input_tokens == 200
+    assert usage.load(session_file).input_tokens == 200

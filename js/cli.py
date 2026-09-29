@@ -2477,15 +2477,16 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             # second print here is the double-print bug. Only print when the
             # stream was suppressed (non-debug one-shot/pipe).
             with _transcript_stdio(telemetry):
-                if not debug and events is None:
+                if not debug:
                     content = message["content"].strip()
                     if (sink := _transcript_sink(telemetry)) is not None:
                         sink.write_assistant(content)
-                    with _mute_transcript_tee(_transcript_sink(telemetry)):
-                        display_mod.print_answer(
-                            content, sys.stdout,
-                            markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
-                        )
+                    if events is None:
+                        with _mute_transcript_tee(_transcript_sink(telemetry)):
+                            display_mod.print_answer(
+                                content, sys.stdout,
+                                markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
+                            )
                 if save:
                     _maybe_auto_compact(cfg, {
                         "system": system,
@@ -2516,21 +2517,29 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def _run_prompt_json(prompt: str, **kwargs) -> int:
-    """`_run_prompt` with its run written to stdout as JSON events
-    (`js.headless`). Everything else it prints goes to stderr. The last event
-    is `result`; a run that fails without an `error` event gets one carrying
-    the last line printed to stderr."""
+_json_events: headless.JsonEvents | None = None
+
+
+def _json_run(run: Callable[[], int]) -> int:
+    """Run `run` as a `--json` headless run: stdout carries only JSON events,
+    everything else printed goes to stderr, and the last event is `result`. A
+    run that fails without an `error` event gets one carrying the last line
+    printed to stderr."""
+    global _json_events
     events = headless.JsonEvents(sys.stdout)
     err = headless.LastLine(sys.stderr)
-    with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
-        try:
-            code = _run_prompt(prompt, events=events, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
-            msgs.warn(msgs.FAILED, error=_error_text(exc))
-            code = 1
+    _json_events = events
+    try:
+        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
+            try:
+                code = run()
+            except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
+                msgs.warn(msgs.FAILED, error=_error_text(exc))
+                code = 1
+    finally:
+        _json_events = None
     if code != 0 and not events.errored:
-        events.emit("error", message=_ANSI.sub("", err.last_line) or f"exit {code}", retryable=False)
+        _emit_failure(events, err.last_line, code)
     opened = events.session
     events.emit(
         "result", ok=code == 0, exit_code=code, text=events.final_text if code == 0 else "",
@@ -2538,6 +2547,27 @@ def _run_prompt_json(prompt: str, **kwargs) -> int:
         usage=None if opened is None else usage_mod.totals(
             Path(opened["file"]) if opened.get("file") else None).as_dict(),
     )
+    return code
+
+
+def _emit_failure(events: headless.JsonEvents, line: str, code: int) -> None:
+    message = _WARN_MARK.sub("", _ANSI.sub("", line))
+    events.emit("error", message=message or f"exit {code}", retryable=False)
+
+
+_WARN_MARK = re.compile(r"^\*+\s*")
+
+
+def _run_prompt_json(prompt: str, **kwargs) -> int:
+    """`_run_prompt` with its run written to stdout as JSON events
+    (`js.headless`). A failure without an `error` event gets one carrying the
+    last line printed to stderr before `_run_prompt` returned."""
+    events = _json_events
+    if events is None:
+        return _json_run(lambda: _run_prompt_json(prompt, **kwargs))
+    code = _run_prompt(prompt, events=events, **kwargs)
+    if code != 0 and not events.errored:
+        _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
     return code
 
 
@@ -3867,6 +3897,24 @@ def _main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
+    if _json_run_requested(args):
+        return _json_run(lambda: _run_args(args, dispatch_argv))
+    return _run_args(args, dispatch_argv)
+
+
+def _json_run_requested(args: argparse.Namespace) -> bool:
+    """Whether the command line is a `--json` headless run: a prompt or piped
+    stdin, and no mode that refuses `--json` or prints its own output."""
+    if not args.json or args.list or (args.prompt is None and sys.stdin.isatty()):
+        return False
+    return not (
+        args.commit or args.bench or args.compact or args.printonly is not None
+        or args.login is not None or args.logout or args.providers_json or args.logins_json
+        or args.models_json is not None or args.list_models is not None
+    )
+
+
+def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so

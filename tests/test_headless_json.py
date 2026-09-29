@@ -163,3 +163,42 @@ def test_a_failure_before_the_turn_still_ends_with_error_and_result(monkeypatch,
 def test_json_needs_a_headless_run(capsys):
     assert cli.main(["--json"]) == 2
     assert capsys.readouterr().out == ""
+
+
+def test_the_transcript_log_keeps_the_answer(monkeypatch, capsys, tmp_path):
+    code, _events_, _err = _run(monkeypatch, capsys, [_reply("JSON-ANSWER")], ["-p", "hi-json", "--json"])
+
+    assert code == 0
+    logs = [p.read_text(encoding="utf-8") for p in (tmp_path / ".js").rglob("*.log")]
+    log = next(text for text in logs if "hi-json" in text)
+    assert "JSON-ANSWER" in log
+
+
+@pytest.mark.parametrize("extra", [
+    ["--debug", "--debug-file", "trace.log"],
+    ["-C", "/nonexistent/dir/for/json"],
+])
+def test_a_command_line_refused_before_the_run_still_ends_with_error_and_result(monkeypatch, capsys, extra):
+    code, events, err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json", *extra])
+
+    assert code == 2
+    assert [e["type"] for e in events] == ["error", "result"]
+    assert events[0]["message"] and not events[0]["message"].startswith("*")
+    assert events[1]["exit_code"] == 2 and events[1]["ok"] is False
+    assert err.strip()
+
+
+def test_piped_stdin_with_json_is_a_headless_run(monkeypatch, capsys):
+    class Pipe:
+        def isatty(self):
+            return False
+
+        def read(self):
+            return "piped question"
+
+    monkeypatch.setattr(cli.sys, "stdin", Pipe())
+    code, events, _err = _run(monkeypatch, capsys, [_reply("piped answer")], ["--json"])
+
+    assert code == 0
+    assert [e["type"] for e in events][0] == "session"
+    assert events[-1]["type"] == "result" and events[-1]["text"] == "piped answer"

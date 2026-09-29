@@ -20,7 +20,10 @@ js -p "next step" --json --session reviews/parser-fix
 
 Every event has `type`. The first is `session` and the last is `result`. A
 subagent's events are not in the stream; its work shows as the parent's
-`task` tool call and result, and its tokens in the parent's `usage`.
+`task` tool call and result. Its calls are charged to the parent session too,
+so they show in the `session` totals of later `usage` events and in
+`result.usage`, but not in `turn_end.usage`, which counts the parent's own
+calls.
 
 | `type` | When | Fields |
 | --- | --- | --- |
@@ -32,12 +35,18 @@ subagent's events are not in the stream; its work shows as the parent's
 | `tool_result` | a call's result is recorded | `id`, `name`, `ok` (false for an error result), `bytes`, `lines`, `summary` (the first non-blank line, cut to 200 characters) |
 | `usage` | after each model call charged to the session, before that call's `message` | `model`, `provider`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `cost` (dollars, null when the model has no price), `session` (the session totals after this call) |
 | `error` | the turn or the run fails | `message`, `retryable` |
-| `turn_end` | the turn ends | `reason` (`stop`, `incomplete`, `error`, `cancelled`, `tool_error_limit`, `max_iterations`, `retry_budget_exhausted`), `usage` (this turn's totals), `finish_reason` and `incomplete_reason` when set |
+| `turn_end` | the turn ends | `reason` (`stop`, `incomplete`, `error`, `cancelled`, `tool_error_limit`, `max_iterations`, `retry_budget_exhausted`), `usage` (the totals of this turn's own calls), `finish_reason` and `incomplete_reason` when set |
 | `result` | last line | `ok`, `exit_code`, `text` (the final answer; empty on failure), `session` (the id), `usage` (the session totals) |
 
-A run that fails before the turn starts, such as a bad `--reasoning` value,
-writes `error` and `result` only. Its `error.message` is the line js printed
-to stderr.
+`text` deltas are not retracted. When a call fails after some text streamed
+and js retries it, the deltas of the failed attempt stay in the stream; the
+`message` events carry each finished call's text.
+
+A run that fails before the turn starts, such as a bad `--reasoning` value, a
+`-C` directory the jail refuses or `--debug` with `--debug-file`, writes
+`error` and `result` only. Its `error.message` is the line js printed to
+stderr. A command line argparse cannot parse (an unknown option) exits 2
+before js knows it is a `--json` run, and writes nothing to stdout.
 
 `usage` and totals objects carry `calls`, `input_tokens`, `output_tokens`,
 `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `cost` and

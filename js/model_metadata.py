@@ -686,8 +686,9 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     A call with a provider is priced only by that provider's own catalog row
     (or the rows its SDK or login maps to), so a local server running a model
     that some API sells is not charged that API's price. A call with no
-    provider goes through the gateway and is priced by the routed row. Reads
-    the catalog already cached; it never refreshes it.
+    provider goes through the gateway and is priced by the routed row. Looking
+    up a provider that is not built in refreshes a stale catalog, as every
+    provider lookup does; results are cached per model and provider.
     """
     current = current_catalog_status()
     if current is not None:
