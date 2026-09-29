@@ -10,6 +10,7 @@ from js import cli, events, setcmd, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.sampling import Sampling
+from repl_driver import run_blocking
 
 
 def _debug_records(path: Path) -> list[dict]:
@@ -138,28 +139,14 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     append_message(cfg.session_file, {"role": "user", "content": "existing"})
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["cause failure", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            line = next(self.lines)
-            if line == "exit":
-                return "exit"
-            return line
-
     def run_turn_stub(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["cause failure", "exit"])
 
     captured = capsys.readouterr()
-    assert actual == 0
     assert "RuntimeError: boom" in captured.out
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
@@ -176,28 +163,14 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
             seen.append((event, payload))
             return super().emit(event, **payload)
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["interrupt me", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            line = next(self.lines)
-            if line == "exit":
-                return "exit"
-            return line
-
     def run_turn_stub(*args, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli.events, "EventHooks", RecordingHooks)
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["interrupt me", "exit"])
 
-    assert actual == 0
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
     assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
@@ -209,25 +182,14 @@ def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input echo nope", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input echo nope", "hello", "exit"])
 
     records = _debug_records(debug_log)
-    assert actual == 0
     assert {
         "kind": "event_handler_error",
         "event": "input",
@@ -243,26 +205,15 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set runtime.debug on", "/on input echo nope", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
     monkeypatch.setattr(cli._paths, "state_root", lambda: state_root)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set runtime.debug on", "/on input echo nope", "hello", "exit"])
 
     records = _debug_records(debug_log)
-    assert actual == 0
     assert {
         "kind": "event_handler_error",
         "event": "input",
@@ -277,25 +228,14 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on cancel echo nope", "interrupt me", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on cancel echo nope", "interrupt me", "exit"])
 
     records = _debug_records(debug_log)
-    assert actual == 0
     assert {
         "kind": "event_handler_error",
         "event": "cancel",
@@ -312,13 +252,6 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
     calls = 0
     temperatures: list[float | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on cancel load cancel.irc", "interrupt me", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         nonlocal calls
         calls += 1
@@ -326,14 +259,10 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
             raise KeyboardInterrupt
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on cancel load cancel.irc", "interrupt me", "hello", "exit"])
 
-    assert actual == 0
     assert temperatures == [0.2]
 
 
@@ -343,24 +272,13 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     trace_overrides: list[bool] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input set runtime.trace on", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         trace_overrides.append(kwargs["trace_override"])
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input set runtime.trace on", "hello", "exit"])
 
-    assert actual == 0
     assert trace_overrides == [True]
 
 
@@ -370,24 +288,13 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input set compact.auto off", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input set compact.auto off", "hello", "exit"])
 
-    assert actual == 0
     assert temperatures == [0.9]
 
 
@@ -397,24 +304,13 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input set sampling.temperature 0.2", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input set sampling.temperature 0.2", "hello", "exit"])
 
-    assert actual == 0
     assert temperatures == [0.2]
 
 
@@ -425,24 +321,13 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     (tmp_path / "model.irc").write_text("set model.id hook-model\nbogus nope\n", encoding="utf-8")
     models: list[str] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input load model.irc", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         models.append(cfg_arg.model)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input load model.irc", "hello", "exit"])
 
-    assert actual == 0
     assert models == ["hook-model"]
 
 
@@ -459,24 +344,13 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     )
     seen: list[tuple[str | None, str | None, str | None]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input load provider.irc", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.provider_id, cfg_arg.provider_base_url, cfg_arg.provider_api_key))
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input load provider.irc", "hello", "exit"])
 
-    assert actual == 0
     assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
 
 
@@ -491,24 +365,13 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
     )
     seen: list[list[dict]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on input load tools.irc", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append(cfg_arg.settings.get("tools", {}).get("alias_profiles", []))
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on input load tools.irc", "hello", "exit"])
 
-    assert actual == 0
     assert seen == [[{"match": ["offline-test-model"], "aliases": {"read": "r"}}]]
 
 
@@ -518,24 +381,13 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     max_tool_result_bytes: list[int] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set limits.max_tool_result_bytes 123", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         max_tool_result_bytes.append(cfg_arg.max_tool_result_bytes)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set limits.max_tool_result_bytes 123", "hello", "exit"])
 
-    assert actual == 0
     assert max_tool_result_bytes == [123]
 
 
@@ -545,24 +397,13 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     prefer_inherit: list[bool] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set subagents.prefer_inherit on", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         prefer_inherit.append(cfg_arg.prefer_inherit)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set subagents.prefer_inherit on", "hello", "exit"])
 
-    assert actual == 0
     assert prefer_inherit == [True]
 
 
@@ -573,27 +414,16 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[bool, bool]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set subagents.lock_model on", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         task_tool = kwargs["tool_registry"].resolve("task")
         assert task_tool is not None
         params = task_tool.openai_spec()["function"]["parameters"]["properties"]
         seen.append((cfg_arg.lock_subagent_model, "model" in params))
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set subagents.lock_model on", "hello", "exit"])
 
-    assert actual == 0
     assert seen == [(True, False)]
 
 
@@ -607,9 +437,12 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     max_output_tokens: list[int | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        max_output_tokens.append(cfg_arg.max_output_tokens)
+
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+
+    run_blocking(cfg, [
                 "/set model.max_output_tokens 5000",
                 "hello",
                 "/set -model.max_output_tokens",
@@ -617,20 +450,6 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
                 "exit",
             ])
 
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        max_output_tokens.append(cfg_arg.max_output_tokens)
-
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    actual = cli.main(["--blocking"])
-
-    assert actual == 0
     assert max_output_tokens == [5000, None]
 
 
@@ -640,24 +459,13 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     reasoning_efforts: list[str | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set model.reasoning_effort max", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         reasoning_efforts.append(cfg_arg.reasoning_effort)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set model.reasoning_effort max", "hello", "exit"])
 
-    assert actual == 0
     # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
     # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
     assert reasoning_efforts == ["max"]
@@ -669,24 +477,13 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["hello", "exit"])
 
-    assert actual == 0
     assert seen == [("xhigh", "xhigh")]
 
 
@@ -696,24 +493,13 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set model.reasoning_effort off", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set model.reasoning_effort off", "hello", "exit"])
 
-    assert actual == 0
     assert seen == [("none", "none")]
 
 
@@ -726,29 +512,18 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+
+    run_blocking(cfg, [
                 "/set model.reasoning_effort off",
                 "/set model.reasoning_effort default",
                 "hello",
                 "exit",
             ])
 
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
-
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    actual = cli.main(["--blocking"])
-
-    assert actual == 0
     # the rejected `default` never mutated the setting -- still disabled from `off`
     assert seen == [("none", "none")]
 
@@ -759,29 +534,18 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
+    def run_turn_stub(cfg_arg, *args, **kwargs):
+        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
+
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+
+    run_blocking(cfg, [
                 "/set model.reasoning_effort off",
                 "/set -model.reasoning_effort",
                 "hello",
                 "exit",
             ])
 
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
-
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    actual = cli.main(["--blocking"])
-
-    assert actual == 0
     assert seen == [("xhigh", "xhigh")]
 
 
@@ -791,24 +555,13 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     traces: list[bool] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/set runtime.trace on", "hello", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg_arg, *args, **kwargs):
         traces.append(cfg_arg.trace)
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/set runtime.trace on", "hello", "exit"])
 
-    assert actual == 0
     assert traces == [True]
 
 
@@ -817,17 +570,6 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     params_seen: list[dict | None] = []
-
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter([
-                '/set provider.extra {"extra_body":{"live_flag":true}}',
-                "hello",
-                "exit",
-            ])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
 
     class FakeProvider:
         async def aclose(self):
@@ -847,16 +589,16 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
             assistant_message=ai.assistant_message("ok"),
         )
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.model_metadata, "resolve_max_output", lambda _model, _provider_id: None)
     monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, [
+                '/set provider.extra {"extra_body":{"live_flag":true}}',
+                "hello",
+                "exit",
+            ])
 
-    assert actual == 0
     assert len(params_seen) == 1
     assert params_seen[0] is not None
     assert params_seen[0].extra_body == {"live_flag": True}
@@ -870,13 +612,6 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
     calls = 0
     temperatures: list[float | None] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/on turn_end load turn-end.irc", "first", "second", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(*args, **kwargs):
         nonlocal calls
         calls += 1
@@ -886,14 +621,10 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
         temperatures.append(kwargs["sampling"].temperature)
         return None
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    actual = cli.main(["--blocking"])
+    run_blocking(cfg, ["/on turn_end load turn-end.irc", "first", "second", "exit"])
 
-    assert actual == 0
     assert temperatures == [0.2]
 
 
@@ -1385,22 +1116,12 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
     monkeypatch.chdir(tmp_path)
     turns: list[str] = []
 
-    class SessionStub:
-        def __init__(self, history=None, **kwargs):
-            self.lines = iter(["/skill nosuch", "/skill secret check the plan", "exit"])
-
-        def prompt(self, *args, **kwargs):
-            return next(self.lines)
-
     def run_turn_stub(cfg, system, messages, *args, **kwargs):
         turns.append(messages[-1]["content"])
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    assert cli.main(["--blocking"]) == 0
+    run_blocking(cfg, ["/skill nosuch", "/skill secret check the plan", "exit"])
 
     assert len(turns) == 1
     assert "user-only body" in str(turns[0])
