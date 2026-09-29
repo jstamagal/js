@@ -494,7 +494,7 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 
 def _tool_settings(tool_context: ToolContext | None) -> Any:
     """Live settings for the display dials; `/set ui.tools 3` reaches the next exchange."""
-    context = tool_context or T.DEFAULT_CONTEXT
+    context = tool_context or T.STOCK_CONTEXT
     return getattr(getattr(context, "config", None), "settings", None)
 
 
@@ -664,7 +664,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     if inline_cap is None:
         # Read from the active context rather than threading a fifth argument
         # through four dispatch signatures; subagent contexts inherit it.
-        inline_cap = int(getattr(T.DEFAULT_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
+        inline_cap = int(getattr(T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
@@ -818,8 +818,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
             _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True)
         return {}, result
 
-    active_registry = registry or T.DEFAULT_REGISTRY
-    context = tool_context or T.DEFAULT_CONTEXT
+    active_registry = registry or T.STOCK_REGISTRY
+    context = tool_context or T.STOCK_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
     if trace and not trace_together:
@@ -1227,9 +1227,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         max_out = model_metadata.resolve_max_output(model, provider_id)
     ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
     error_tracker = ToolErrorTracker()
-    base_registry = tool_registry or T.DEFAULT_REGISTRY
+    base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
-    active_context = tool_context or T.DEFAULT_CONTEXT
+    active_context = tool_context or T.STOCK_CONTEXT
     # Delegation inherits this turn's effective settings, not a fresh env load
     # or a stale config left on a reused context. Do not mutate the caller's cfg.
     active_context.config = replace(

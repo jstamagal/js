@@ -10,6 +10,7 @@ its `lines`, config loading collects its `error`s as boot warnings.
 
 from __future__ import annotations
 
+import copy
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -61,12 +62,13 @@ def render_value(spec: _s.SettingSpec, value) -> str:
 
 
 def show_lines(settings: dict, key: str | None = None) -> CommandResult:
-    """`show [key]` — every knob and its current value, or just one."""
+    """`show [key]` — every knob and its current value, or just one. A knob
+    the store does not hold shows its js/jsrc value, the value that runs."""
     if key is not None:
         spec = _s.spec_for(key)
         if spec is None:
             return CommandResult(handled=True, error=f"unknown knob: {key}")
-        value = _s.get_dotted(settings, spec.path)
+        value = _s.knob(settings, spec.key)
         return CommandResult(
             handled=True,
             lines=[
@@ -83,7 +85,7 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
                 lines.append("")
             lines.append(f"[{spec.section}]")
             current_section = spec.section
-        value = _s.get_dotted(settings, spec.path)
+        value = _s.knob(settings, spec.key)
         lines.append(f"  {spec.key} = {render_value(spec, value)}")
     return CommandResult(handled=True, lines=lines)
 
@@ -124,7 +126,7 @@ def show_lines_effective(
         if spec is None:
             return CommandResult(handled=True, error=f"unknown knob: {key}")
         live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.get_dotted(settings, spec.path))
+        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
         return CommandResult(
             handled=True,
             lines=[
@@ -142,7 +144,7 @@ def show_lines_effective(
             lines.append(f"[{spec.section}]")
             current_section = spec.section
         live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.get_dotted(settings, spec.path))
+        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
         lines.append(_annotate(f"  {spec.key} = {display}", live))
     return CommandResult(handled=True, lines=lines)
 
@@ -150,13 +152,6 @@ def show_lines_effective(
 # ---------------------------------------------------------------------------
 # set
 # ---------------------------------------------------------------------------
-
-def _prefix_spec(key: str) -> _s.SettingSpec | None:
-    for spec in _s.REGISTRY:
-        if key.startswith(spec.key + "."):
-            return spec
-    return None
-
 
 def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
@@ -177,7 +172,7 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     # section — stored with loose scalar coercion. Children of registered
     # non-map knobs are rejected so structured settings keep their validated shape.
     path = tuple(p for p in key.split(".") if p)
-    prefix_spec = _prefix_spec(key)
+    prefix_spec = _s.parent_spec(key)
     if prefix_spec is not None and prefix_spec.type != "map":
         return CommandResult(handled=True, error=f"unknown knob: {key}")
     if prefix_spec is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
@@ -207,38 +202,50 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str) -> CommandResult:
-    """`set -<key>` — clear a knob back to its default/unset state."""
+def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> CommandResult:
+    """`set -<key>` — clear a knob. With ``baseline`` (the layers below this
+    one), the knob takes the baseline's value; a knob the baseline does not
+    hold is removed from ``settings``."""
     spec = _s.spec_for(key)
     path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
     if not path:
         return CommandResult(handled=True, error=f"unknown knob: {key}")
     if spec is None:
-        prefix_spec = _prefix_spec(key)
+        prefix_spec = _s.parent_spec(key)
         if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
             return CommandResult(handled=True, error=f"unknown knob: {key}")
-    existed = _delete_dotted(settings, path)
-    display = render_value(spec, None) if spec is not None else "<unset>"
-    note = "" if existed else "  (already unset)"
+    missing = object()
+    before = _s.get_dotted(settings, path, missing)
+    restored = _s.get_dotted(baseline, path, missing) if baseline is not None else missing
+    _delete_dotted(settings, path)
+    if restored is not missing:
+        _s.set_dotted(settings, path, copy.deepcopy(restored))
+    after = _s.get_dotted(settings, path, missing)
+    changed = before is not after and before != after
     if spec is not None:
         key = spec.key
+        display = render_value(spec, None if after is missing else after)
+    else:
+        display = "<unset>" if after is missing else str(after)
+    note = "" if before is not missing else "  (already unset)"
     return CommandResult(
         handled=True,
-        changed=existed,
+        changed=changed,
         lines=[f"{key} = {display}{note}"],
-        changed_keys=[key] if existed else [],
+        changed_keys=[key] if changed else [],
     )
 
 
-def set_command(settings: dict, arg: str) -> CommandResult:
-    """`set` shows every value, `set key` shows one, `set -key` clears one,
-    `set key value` sets one."""
+def set_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
+    """`set` shows every value, `set key` shows one, `set -key` clears one
+    (back to its ``baseline`` value, see `apply_unset`), `set key value` sets
+    one."""
     parts = arg.split(maxsplit=1)
     if not parts:
         return show_lines(settings)
     key = parts[0]
     if key.startswith("-") and len(key) > 1:
-        return apply_unset(settings, key[1:])
+        return apply_unset(settings, key[1:], baseline)
     if len(parts) == 1:
         return show_lines(settings, key)
     return apply_set(settings, key, parts[1])
@@ -364,11 +371,12 @@ def config_owns(verb: str) -> bool:
     return verb == "set" or verb in _s.SPEC_BY_ALIAS
 
 
-def apply_config_line(settings: dict, line: str) -> CommandResult:
+def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -> CommandResult:
     """Apply one jsrc line to ``settings`` at config load. Comments/blanks are
     no-ops; a verb the settings layer does not own returns ``handled=False``.
-    `set -key` clears that knob. A bad `set` returns an ``error`` so the loader
-    can surface it without aborting."""
+    `set -key` puts that knob back to its ``baseline`` value (see
+    `apply_unset`). A bad `set` returns an ``error`` so the loader can surface
+    it without aborting."""
     parsed = split_command(line)
     if parsed is None:
         return CommandResult(handled=True)
@@ -379,7 +387,7 @@ def apply_config_line(settings: dict, line: str) -> CommandResult:
         arg = f"{verb} {arg}"
     parts = arg.split(maxsplit=1)
     if len(parts) == 1 and parts[0].startswith("-") and len(parts[0]) > 1:
-        return apply_unset(settings, parts[0][1:])
+        return apply_unset(settings, parts[0][1:], baseline)
     if len(parts) < 2:
         return CommandResult(handled=True, error=f"set needs a key and value: {line.strip()!r}")
     return apply_set(settings, parts[0], parts[1])

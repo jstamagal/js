@@ -490,7 +490,7 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
     try:
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
-        context = context or T.DEFAULT_CONTEXT
+        context = context or T.STOCK_CONTEXT
         tracker = getattr(context, "context_budget_state", None)
         if not hasattr(tracker, "calibrated_chars_per_token"):
             return configured
@@ -717,7 +717,7 @@ async def compact_now(
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
                             "flight_path": str(flight.path)}
-        rehydrated = _post_compact_rehydration(context or T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
+        rehydrated = _post_compact_rehydration(context or T.STOCK_CONTEXT, chars_per_token=chars_per_token)
         after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *messages[keep_from:]]
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
@@ -733,7 +733,7 @@ async def compact_now(
         M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from,
                                  forced=forced, trigger=recorded_trigger, rehydrated=rehydrated)
         messages[:] = after
-        tracker = getattr(context or T.DEFAULT_CONTEXT, "context_budget_state", None)
+        tracker = getattr(context or T.STOCK_CONTEXT, "context_budget_state", None)
         if tracker is not None:
             tracker.reset()
         result = f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"

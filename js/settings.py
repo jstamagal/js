@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import reasoning as _reasoning
+
 # What a line typed while a turn runs does: now = join the running turn at its
 # next tool boundary, batch = one message after the turn, one = one turn per line.
 STEER_MODES: tuple[str, ...] = ("now", "batch", "one")
@@ -378,12 +380,13 @@ def is_hex_colour(value: object) -> bool:
     """True for a `#rrggbb` string, the form the `ui.status_*` colours take."""
     return isinstance(value, str) and _HEX_COLOUR_RE.fullmatch(value) is not None
 
-# The only values `model.reasoning_effort` accepts. "off" disables reasoning
-# (stored as the literal "none"); everything else is rejected outright — no
+# The only values `model.reasoning_effort` accepts: the effort ladder in
+# js/reasoning.py, with its bottom stop "none" spelled "off" (stored as the
+# literal "none"). Everything else is rejected outright — no
 # default/auto/unset synonyms. Clearing the knob back to provider-default is
 # `set -model.reasoning_effort`, never a magic value here.
-REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
-_REASONING_EFFORT_ERROR = "expected off|minimal|low|medium|high|xhigh|max"
+REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
+_REASONING_EFFORT_ERROR = "expected " + "|".join(REASONING_EFFORT_VALUES)
 
 
 def steer_mode(value: Any) -> str:
@@ -566,7 +569,9 @@ def _parse_dotted_key(key: str) -> tuple[str, ...]:
     return parts
 
 
-def _prefix_spec(key: str) -> SettingSpec | None:
+def parent_spec(key: str) -> SettingSpec | None:
+    """The registered knob ``key`` sits under (`provider.extra` for
+    `provider.extra.organization`), or None."""
     for spec in REGISTRY:
         if key.startswith(spec.key + "."):
             return spec
@@ -614,7 +619,7 @@ def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
         if error is not None:
             raise ValueError(f"--extra {key}: {error}")
         return spec.path, value
-    prefix_spec = _prefix_spec(key)
+    prefix_spec = parent_spec(key)
     if prefix_spec is not None and prefix_spec.type != "map":
         raise ValueError(f"--extra unknown knob: {key}")
     return _parse_dotted_key(key), coerce_extra_value(raw_value)
@@ -679,7 +684,8 @@ _package_cache: tuple[Path, dict] | None = None
 
 def _package_settings() -> dict:
     """The settings `js/jsrc` sets, read once per path. Raises `DefaultsError`
-    naming the file when it is missing or a line in it does not apply."""
+    naming the file when it is missing, a line in it does not apply, or a
+    registered knob has no line in it."""
     global _package_cache
     path = PACKAGE_JSRC
     if _package_cache is not None and _package_cache[0] == path:
@@ -691,11 +697,21 @@ def _package_settings() -> dict:
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
+    listed: set[str] = set()
     for lineno, raw in enumerate(text.splitlines(), 1):
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
             problem = result.error or "not a set line"
             raise DefaultsError(f"js: {path}:{lineno}: {problem}")
+        parsed = setcmd.split_command(raw)
+        if parsed is not None:
+            name = parsed[1].split(maxsplit=1)[0] if parsed[0] == "set" else parsed[0]
+            spec = spec_for(name.removeprefix("-"))
+            if spec is not None:
+                listed.add(spec.key)
+    unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
+    if unlisted:
+        raise DefaultsError(f"js: {path}: no line for {', '.join(unlisted)}")
     _package_cache = (path, settings)
     return settings
 
@@ -759,7 +775,7 @@ def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
                 if error is None and target not in stack and len(stack) < setcmd.MAX_LOAD_DEPTH:
                     apply_file(target, stack)
                 continue
-            result = setcmd.apply_config_line(settings, raw)
+            result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
             if result.error:
                 warnings.append(f"{path}:{lineno}: {result.error}")
         stack.pop()
@@ -796,9 +812,6 @@ def collect_settings(
 # /save — snapshot the live settings back into a jsrc set-script
 # ---------------------------------------------------------------------------
 
-_MISSING = object()
-
-
 def _config_line_value(spec: SettingSpec, value: Any) -> str:
     """Render ``value`` as the right-hand side of a `set <key> <value>` line —
     the inverse of `coerce_value`, so a saved line reloads to the same value."""
@@ -810,19 +823,13 @@ def _config_line_value(spec: SettingSpec, value: Any) -> str:
 
 
 def settings_diff_lines(settings: dict) -> list[str]:
-    """A line for every knob whose current value differs from its `js/jsrc`
-    value, in REGISTRY order: `set <key> <value>`, or `set -<key>` for a knob
-    js/jsrc sets that is now unset. Secrets are written verbatim."""
+    """`set <key> <value>` lines for every knob whose current value differs
+    from its `js/jsrc` value, in REGISTRY order. A knob the store does not hold
+    runs on its js/jsrc value and gets no line. Secrets are written verbatim."""
     lines: list[str] = []
     for spec in REGISTRY:
-        value = get_dotted(settings, spec.path, _MISSING)
-        if value is _MISSING or value == "":
-            value = None
-        default = spec.default
-        if value == default:
-            continue
-        if value is None:
-            lines.append(f"set -{spec.key}")
+        value = get_dotted(settings, spec.path)
+        if value is None or value == "" or value == spec.default:
             continue
         lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
     return lines

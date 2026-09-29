@@ -39,7 +39,7 @@ def replay(monkeypatch, tmp_path):
     (prompts / "01-prompt.md").write_text("SYSTEM\n")
     cfg = replace(cfg, prompts_dir=prompts, project_dir=tmp_path)
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime.T, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     wire = []
 

@@ -7,6 +7,7 @@ start.
 
 from __future__ import annotations
 
+import copy
 import subprocess
 import sys
 from pathlib import Path
@@ -136,19 +137,76 @@ def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path)
     assert f"{path}:2" in str(raised.value)
 
 
-def test_set_dash_in_a_jsrc_clears_a_lower_layer(tmp_path):
-    global_cfg = tmp_path / "global"
-    project_cfg = tmp_path / "project"
-    global_cfg.write_text("set model.max_output_tokens 5000\n", encoding="utf-8")
-    project_cfg.write_text("set -model.max_output_tokens\nset -limits.max_read_lines\n", encoding="utf-8")
+def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
+    lines = [
+        line for line in settings.PACKAGE_JSRC.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("set limits.max_read_lines ")
+    ]
+    path = tmp_path / "jsrc"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
 
-    out = settings.collect_settings(config_paths=[global_cfg, project_cfg], env={})
+    with pytest.raises(SystemExit) as raised:
+        settings.seed_defaults()
 
-    assert settings.get_dotted(out, ("model", "max_output_tokens")) is None
-    assert settings.get_dotted(out, ("limits", "max_read_lines")) is None
+    message = str(raised.value)
+    assert len(message.splitlines()) == 1
+    assert str(path) in message
+    assert "limits.max_read_lines" in message
 
 
-def test_save_round_trips_a_cleared_knob_that_package_jsrc_sets(tmp_path):
+def _show_value(cfg, state, key: str, capsys) -> str:
+    capsys.readouterr()
+    assert cli._handle_command(f"/show {key}", state, cfg) is True
+    return capsys.readouterr().out.splitlines()[0].split("=", 1)[1].split()[0]
+
+
+def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, tmp_path, capsys):
+    project = _isolated_home(monkeypatch, tmp_path)
+    user = tmp_path / "config" / "js" / "jsrc"
+    user.parent.mkdir(parents=True)
+    user.write_text(
+        "set runtime.trace off\nset limits.max_read_lines 33\nset runtime.allow_inline_code off\n"
+        "set -runtime.trace\nset -limits.max_read_lines\nset -runtime.allow_inline_code\n",
+        encoding="utf-8",
+    )
+
+    cfg = from_env(save_session=False, cwd=project)
+    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
+
+    assert cfg.trace is settings.default_value("runtime.trace")
+    assert cfg.max_read_lines == settings.default_value("limits.max_read_lines")
+    assert cfg.allow_inline_code is settings.default_value("runtime.allow_inline_code")
+    assert _show_value(cfg, state, "runtime.trace", capsys) == (
+        "on" if cfg.trace else "off"
+    )
+    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == str(cfg.max_read_lines)
+    assert _show_value(cfg, state, "runtime.allow_inline_code", capsys) == (
+        "on" if cfg.allow_inline_code else "off"
+    )
+
+
+def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
+    monkeypatch, tmp_path, capsys,
+):
+    project = _isolated_home(monkeypatch, tmp_path)
+    user = tmp_path / "config" / "js" / "jsrc"
+    user.parent.mkdir(parents=True)
+    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    cfg = from_env(save_session=False, cwd=project)
+    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
+
+    assert cli._handle_command("/set limits.max_read_lines 5", state, cfg) is True
+    assert cli._handle_command("/set -limits.max_read_lines", state, cfg) is True
+
+    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == "33"
+    assert cli._cfg_for_live_state(cfg, state).max_read_lines == 33
+    assert cli._handle_command("/save", state, cfg) is True
+    reloaded = from_env(save_session=False, cwd=project)
+    assert reloaded.max_read_lines == 33
+
+
+def test_save_writes_no_line_for_a_knob_on_its_package_value(tmp_path):
     live = settings.seed_defaults()
     setcmd.set_command(live, "-limits.max_read_lines")
     setcmd.set_command(live, "limits.fetch_timeout_s 77")
@@ -157,9 +215,44 @@ def test_save_round_trips_a_cleared_knob_that_package_jsrc_sets(tmp_path):
     settings.save_settings_to_jsrc(target, live, stamp="t")
     reloaded = settings.collect_settings(config_paths=[target], env={})
 
-    assert settings.get_dotted(reloaded, ("limits", "max_read_lines")) is None
+    assert reloaded["limits"]["max_read_lines"] == settings.default_value("limits.max_read_lines")
     assert reloaded["limits"]["fetch_timeout_s"] == 77
     assert settings.settings_diff_lines(settings.seed_defaults()) == []
+
+
+def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
+    import ai.types.messages
+    import ai.types.usage
+
+    from js import runtime
+    from js.model_client import ModelStreamResult
+    from js.toolkit import build_default_registry
+
+    project = _isolated_home(monkeypatch, tmp_path)
+    user = tmp_path / "config" / "js" / "jsrc"
+    user.parent.mkdir(parents=True)
+    user.write_text(
+        "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n",
+        encoding="utf-8",
+    )
+    cfg = from_env(save_session=False, cwd=project)
+    reply = ModelStreamResult(
+        text="ok", tool_calls=[], reasoning="",
+        usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
+        assistant_message=ai.types.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text="ok")]),
+    )
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: reply)
+    context = ToolContext(cwd=tmp_path)
+
+    runtime.run_turn(
+        cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+        trace_override=False, tool_registry=build_default_registry().select([]),
+        tool_context=context, suppress_output=True,
+    )
+
+    assert context.user_agent == "knob-agent/3"
+    assert context.terminal_cols == 71
+    assert context.terminal_rows == 29
 
 
 def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tmp_path):

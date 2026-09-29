@@ -169,7 +169,7 @@ async def wire(mode):
     stats = []
     error = None
     try:
-        with patch.object(R.T, "DEFAULT_CONTEXT", context):
+        with patch.object(R.T, "STOCK_CONTEXT", context):
             await R.run_turn_async(
                 cfg,
                 "",

@@ -159,7 +159,7 @@ async def summary_fault(mode):
     error = None
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await C.compact_now(cfg, "", messages, forced=True)
@@ -194,7 +194,7 @@ async def no_prefix():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
+        patch.object(R.T, "STOCK_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
     ):
         outcome = await C.compact_now(cfg, "", messages, forced=True, preserve_from=0)
     observed(
@@ -218,7 +218,7 @@ async def expanding_summary():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
+        patch.object(R.T, "STOCK_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
     ):
         outcome = await C.compact_now(cfg, "", messages, forced=True)
     observed(
@@ -249,7 +249,7 @@ async def rehydration():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         await C.compact_now(cfg, "", messages, forced=True)
     loaded = M.load_messages(cfg.session_file)
@@ -362,7 +362,7 @@ async def run_loop(mode):
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await R.run_turn_async(
@@ -498,7 +498,7 @@ async def context_isolation():
     supports = "context" in inspect.signature(C.compact_now).parameters
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", foreign),
+        patch.object(R.T, "STOCK_CONTEXT", foreign),
     ):
         await C.compact_now(
             cfg, "", messages, forced=True, **({"context": own} if supports else {})
@@ -619,7 +619,7 @@ async def zero_usage_executor():
     with (
         patch.object(R, "run_turn_async", turn),
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await cli._do_turn(
@@ -681,7 +681,7 @@ async def recovery_rounds():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await R.run_turn_async(
@@ -719,7 +719,7 @@ async def small_window():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         await R.run_turn_async(
             cfg,
@@ -767,7 +767,7 @@ async def journal_sequence():
         elif op == "compact":
             with (
                 patch.object(MC, "stream_model_async", provider),
-                patch.object(R.T, "DEFAULT_CONTEXT", context),
+                patch.object(R.T, "STOCK_CONTEXT", context),
             ):
                 await C.compact_now(cfg, "", messages, forced=True)
         elif op == "resume":
@@ -855,7 +855,7 @@ async def compacted_turn_cancel(error=False):
             raise ai.ProviderAPIError("unavailable", provider="openai")
         raise asyncio.CancelledError()
 
-    with patch.object(R, "run_turn_async", turn), patch.object(R.T, "DEFAULT_CONTEXT", context):
+    with patch.object(R, "run_turn_async", turn), patch.object(R.T, "STOCK_CONTEXT", context):
         try:
             await cli._do_turn(
                 cfg,
@@ -924,7 +924,7 @@ async def between_turn_cancel():
     with (
         patch.object(R, "run_turn_async", turn),
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         task = asyncio.create_task(
             cli._do_turn(

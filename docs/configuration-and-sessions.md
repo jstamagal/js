@@ -19,12 +19,14 @@ In one line: `js/jsrc` < platform `jsrc` < project `.js/jsrc` < project
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. `set -<key>` clears a knob that a lower layer set.
+`#`. `set -<key>` drops what the layers in between set, so the knob takes its
+`js/jsrc` value again.
 
 `js/jsrc` holds one line per registered knob and is where every default value
 lives: change a number there and js starts with it. A knob it leaves unset is
-written `set -<key>`. If `js/jsrc` is missing or one of its lines does not
-apply, js stops at startup with one line naming the file.
+written `set -<key>`. If `js/jsrc` is missing, leaves out a registered knob,
+or holds a line that does not apply, js stops at startup with one line naming
+the file.
 
 No other `jsrc` exists until you write one: js does not create
 `~/.config/js/jsrc`. `/save` writes it, holding only the knobs whose live
@@ -194,7 +196,8 @@ generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
 on the first `=` only, so values may contain `=`.
 
 In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
-`set key` shows one value, and `set key value` changes the live setting.
+`set key` shows one value, `set key value` changes the live setting, and
+`set -key` puts it back to the value the session started with.
 `show [key]` lists every current value or only the requested key. Secret values
 such as `provider.api_key` render as `<set>` once set.
 

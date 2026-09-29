@@ -636,7 +636,7 @@ def test_retry_metadata_is_appended_and_resets_after_success():
 
 def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
     telemetry_events: list[tuple[str, dict]] = []
 
     class TelemetryStub:
@@ -687,7 +687,7 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_pa
     context.max_read_lines = 5000
     context.max_read_bytes = 0
     context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,
@@ -724,7 +724,7 @@ def test_a_clipped_read_does_not_revoke_an_earlier_read(tmp_path, monkeypatch):
     context.max_read_lines = 50_000
     context.max_read_bytes = 0
     context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,
@@ -1142,7 +1142,7 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
     b64 = base64.b64encode(_TINY_PNG).decode("ascii")
 
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
 
     call_messages: list[list[ai.messages.Message]] = []
 
@@ -1234,7 +1234,7 @@ def test_parallel_image_reads_keep_tool_results_contiguous(tmp_path, monkeypatch
         (tmp_path / name).write_bytes(_TINY_PNG)
 
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", context)
+    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
 
     call_messages: list[list[ai.messages.Message]] = []
 

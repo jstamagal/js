@@ -1090,14 +1090,14 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     if not compaction.get_bool(cfg, "auto"):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
-    turn_status = runtime.T.DEFAULT_CONTEXT.turn_status
+    turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
         with stream_transport.net_role("Compacting"):
             outcome = await compaction.maybe_auto_compact_async(
                 active_cfg,
                 state.setdefault("auto_compact", compaction.AutoCompactState()),
-                runtime.T.DEFAULT_CONTEXT,
+                runtime.T.STOCK_CONTEXT,
                 state.get("system") or "",
                 state.get("messages") or [],
                 lambda: runtime._resolve_context_window(
@@ -1544,7 +1544,9 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if len(parts) < 2 and not (parts and parts[0].startswith("-") and len(parts[0]) > 1):
         return _show_settings(state, cfg, parts[0] if parts else None)
-    return _apply_settings_result(setcmd.set_command(state["settings"], arg), state, cfg)
+    # `set -key` goes back to the value the session started with.
+    baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
+    return _apply_settings_result(setcmd.set_command(state["settings"], arg, baseline), state, cfg)
 
 
 def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
@@ -2927,7 +2929,7 @@ def _status_colours(state: dict) -> str:
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
     """The REPL status bar from live state: what is running, on what, how full."""
     live = state.get("settings") or {}
-    context = runtime.T.DEFAULT_CONTEXT
+    context = runtime.T.STOCK_CONTEXT
     provider = _provider_from_live_settings(live)[0] or state.get("provider_id") or cfg.provider_id
     model = _model_from_live_settings(live) or state.get("model") or cfg.model
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
@@ -3327,9 +3329,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{C.ORANGE}error: -C target is not a directory: {cd_target}{C.RESET}", file=sys.stderr)
             return 2
         os.chdir(cd_target)
-        # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
+        # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
-        runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+        runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
     # Fill unset env names from .env, cwd upward, then ~/.config/js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.

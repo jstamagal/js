@@ -1191,7 +1191,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
 def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeypatch, tmp_path):
     target = tmp_path / "worker.py"
     target.write_text("def task_backend():\n    return 'ready'\n", encoding="utf-8")
-    runtime_tools.DEFAULT_CONTEXT = ToolContext(cwd=tmp_path)
+    runtime_tools.STOCK_CONTEXT = ToolContext(cwd=tmp_path)
     calls: list[dict] = []
 
     def stream_stub(**kwargs):
