@@ -1700,11 +1700,13 @@ def _cmd_name(arg: str, state: dict, cfg: Config) -> str | None:
 
 @dataclass(frozen=True)
 class _SessionTarget:
-    """A session the picker chose to continue in: its file, start directory and agent."""
+    """A session the picker chose to continue in: its file, start directory and
+    agent, and whether it started under a -C jail rooted at that directory."""
 
     path: Path
     cwd: str | None
     agent: str | None
+    jailed: bool = False
 
 
 def _session_target(choice: session_picker.Choice) -> _SessionTarget:
@@ -1712,13 +1714,14 @@ def _session_target(choice: session_picker.Choice) -> _SessionTarget:
     branch first, in the parent's folder."""
     session = choice.session
     path = Path(session.path)
-    if choice.action == session_picker.BRANCH and choice.message is not None:
-        branch = branch_session(path, choice.message, cwd=session.cwd or Path.cwd(),
+    if choice.action == session_picker.BRANCH and choice.message_id is not None:
+        branch = branch_session(path, choice.message_id, cwd=session.cwd or Path.cwd(),
                                 agent=session.agent, mode="repl")
         msgs.say(msgs.SESSIONS_BRANCHED, parent=session_store.display_name(path),
-                 point=session_store.point_label(choice.message), name=session_store.display_name(branch))
+                 point=session_store.point_label(choice.message) if choice.message is not None else "-",
+                 name=session_store.display_name(branch))
         path = branch
-    return _SessionTarget(path, session.cwd, session.agent)
+    return _SessionTarget(path, session.cwd, session.agent, session.jailed)
 
 
 def _enter_session_dir(target: _SessionTarget) -> None:
@@ -1769,6 +1772,8 @@ def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
     argv = [sys.executable, "-m", "js", "--session", str(target.path)]
     if target.agent:
         argv += ["-a", target.agent]
+    if target.jailed and target.cwd:
+        argv += ["-C", target.cwd]
     if blocking:
         argv.append("--blocking")
     sys.stdout.flush()
@@ -3801,21 +3806,9 @@ def _main(argv: list[str] | None = None) -> int:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
-    if args.cd:
-        # -C is the jail: every tool that starts a process runs under
-        # bubblewrap, and the file tools stay inside DIR and the bound paths.
-        try:
-            jailed = _jail.enter(Path(args.cd).expanduser())
-        except _jail.JailError as exc:
-            msgs.warn(msgs.JAIL_REFUSED, error=exc)
-            return 2
-        os.chdir(jailed.root)
-        # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
-        # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
-        runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
     if args.session == "":
         # A bare --session opens the picker; the chosen session is resumed in
-        # its own directory and agent.
+        # its own directory and agent, jailed there when it started under -C.
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             msgs.warn(msgs.SESSIONS_NEEDS_TERMINAL)
             return 2
@@ -3831,6 +3824,20 @@ def _main(argv: list[str] | None = None) -> int:
         args.session = str(target.path)
         if target.agent:
             args.agent = target.agent
+        if target.jailed and target.cwd and not args.cd:
+            args.cd = target.cwd
+    if args.cd:
+        # -C is the jail: every tool that starts a process runs under
+        # bubblewrap, and the file tools stay inside DIR and the bound paths.
+        try:
+            jailed = _jail.enter(Path(args.cd).expanduser())
+        except _jail.JailError as exc:
+            msgs.warn(msgs.JAIL_REFUSED, error=exc)
+            return 2
+        os.chdir(jailed.root)
+        # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
+        # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
+        runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
     # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.

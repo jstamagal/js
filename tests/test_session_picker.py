@@ -42,6 +42,7 @@ def _session(path: str, **fields) -> Q.Session:
 class _Row:
     def __init__(self, number: int, who: str, text: str) -> None:
         self.number, self.who, self.ts, self.model = number, who, None, None
+        self.id = f"id{number}"
         self.text = text
 
     def heading(self) -> str:
@@ -152,7 +153,8 @@ def test_b_lists_messages_enter_branches_at_the_row_and_r_resumes_at_the_end():
     assert picker.message_cursor == 2
     picker.press("up")
     choice = picker.press("enter")
-    assert (choice.action, choice.session.path, choice.message) == (session_picker.BRANCH, "a", 2)
+    assert (choice.action, choice.session.path, choice.message, choice.message_id) == (
+        session_picker.BRANCH, "a", 2, "id2")
     choice = picker.press("r")
     assert (choice.action, choice.message) == (session_picker.RESUME, None)
 
@@ -278,9 +280,10 @@ def _write_session(cwd: Path, agent: str = "defaultagent") -> Path:
     return path
 
 
-def _choice(path: Path, cwd: Path, agent: str = "defaultagent", action=session_picker.RESUME, message=None):
-    session = Q.Session(path=str(path.resolve()), agent=agent, cwd=str(cwd.resolve()))
-    return session_picker.Choice(action, session, message)
+def _choice(path: Path, cwd: Path, agent: str = "defaultagent", action=session_picker.RESUME, message=None,
+            message_id=None, command=()):
+    session = Q.Session(path=str(path.resolve()), agent=agent, cwd=str(cwd.resolve()), command=tuple(command))
+    return session_picker.Choice(action, session, message, message_id)
 
 
 def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_switch(tmp_path, monkeypatch):
@@ -316,11 +319,14 @@ def test_slash_session_on_the_current_session_or_closed_keeps_the_repl(tmp_path,
 
 def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):
     parent = _write_session(tmp_path / "proj")
-    target = cli._session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH, message=1))
+    first = session_text.rows(parent)[0]
+    target = cli._session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH,
+                                         message=first.number, message_id=first.id))
     assert target.path != parent and target.path.parent == parent.parent
     start = first_metadata(target.path)
-    assert start["branched_from"] == {"session": str(parent.resolve()), "message": 1}
+    assert start["branched_from"] == {"session": str(parent.resolve()), "message": first.id}
     assert [m["role"] for m in M.load_replay_messages(target.path)] == ["user"]
+    assert session_text.render(target.path).splitlines()[3].endswith("#0001")
 
 
 def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monkeypatch):
@@ -338,6 +344,19 @@ def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monk
     assert ran["argv"][ran["argv"].index("--session") + 1] == str(tmp_path / "s.jsonl")
     assert ran["argv"][ran["argv"].index("-a") + 1] == "research"
     assert "--blocking" in ran["argv"]
+
+
+def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypatch):
+    path = _write_session(tmp_path / "proj")
+    target = cli._session_target(_choice(path, tmp_path / "proj", command=["js", "-C", "proj"]))
+    assert target.jailed
+    ran = {}
+    monkeypatch.setattr(cli.os, "execv", lambda program, argv: ran.update(argv=argv))
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
+    monkeypatch.chdir(Path.cwd())
+    cli._exec_session(target, blocking=False)
+    assert ran["argv"][ran["argv"].index("-C") + 1] == str((tmp_path / "proj").resolve())
+    assert not cli._session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
 
 
 class _Terminal:
@@ -379,3 +398,23 @@ def test_bare_session_resumes_the_choice_with_its_own_agent_and_dir(tmp_path, mo
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
     assert cli.main(["--session"]) == 2
     assert seen == {"session": str(path.resolve()), "agent": "research", "cwd": str(session_dir.resolve())}
+
+
+def test_bare_session_enters_the_jail_of_a_session_started_under_c(tmp_path, monkeypatch):
+    session_dir = tmp_path / "proj"
+    path = _write_session(session_dir)
+    monkeypatch.setattr(sys, "stdin", _Terminal())
+    monkeypatch.setattr(sys, "stdout", _Terminal())
+    monkeypatch.setattr(session_picker, "pick_session",
+                        lambda cwd, query="": _choice(path, session_dir, command=["js", "-C", str(session_dir)]))
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
+    monkeypatch.chdir(tmp_path)
+    entered = {}
+
+    def enter(root):
+        entered["root"] = root
+        raise cli._jail.JailError("no bwrap here")
+
+    monkeypatch.setattr(cli._jail, "enter", enter)
+    assert cli.main(["--session"]) == 2
+    assert entered["root"] == session_dir.resolve()

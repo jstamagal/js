@@ -131,6 +131,13 @@ class Session:
         return 0.0
 
     @property
+    def jailed(self) -> bool:
+        """Whether the session started under `-C`, which jails it in its start
+        directory."""
+        return any(part == "-C" or (part.startswith("-C") and not part.startswith("--"))
+                   for part in self.command[1:])
+
+    @property
     def model(self) -> str | None:
         """The model of the last stamp: what a resume comes back on."""
         stamp = self.last_stamp or {}

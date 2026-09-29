@@ -454,8 +454,9 @@ them without `a`. In the message list a tool row is labelled with the text the
 model wrote alongside the call, or else the call's first line.
 
 In the REPL, choosing another session ends the REPL and js starts again in
-that session. Choosing a branch point creates the branch in the parent's
-folder first.
+that session. A session whose first start ran under `-C` resumes under `-C`
+at its start directory. Choosing a branch point creates the branch in the
+parent's folder first.
 
 Search terms combine with AND:
 

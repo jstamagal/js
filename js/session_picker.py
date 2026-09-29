@@ -44,11 +44,13 @@ _PAGE = 10
 
 @dataclass(frozen=True)
 class Choice:
-    """What the operator picked: resume `session`, or branch it at message `message`."""
+    """What the operator picked: resume `session`, or branch it at the message
+    numbered `message`, whose record id is `message_id`."""
 
     action: str
     session: Q.Session
     message: int | None = None
+    message_id: str | None = None
 
 
 class _Closed:
@@ -253,7 +255,8 @@ class SessionPicker:
         elif key in _FIRST or key in _LAST:
             self.message_cursor = last if key in _LAST else 0
         elif key == "enter" and session is not None and self.message_rows:
-            return Choice(BRANCH, session, self.message_rows[self.message_cursor].number)
+            row = self.message_rows[self.message_cursor]
+            return Choice(BRANCH, session, row.number, getattr(row, "id", None))
         elif key == "r" and session is not None:
             return Choice(RESUME, session)
         elif key in ("escape", "q", "b"):
