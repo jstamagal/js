@@ -229,6 +229,26 @@ def test_a_session_resumes_on_the_model_it_was_switched_to(monkeypatch, tmp_path
     assert last_stamp(session)["model"] == "model-y"
 
 
+def test_the_async_repl_stamps_each_answer_with_the_model_it_ran_on(monkeypatch, tmp_path):
+    from repl_driver import run_async
+
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        messages.append({"role": "assistant", "content": f"on {cfg.model}"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    cfg = from_env()
+
+    run_async(monkeypatch, cfg, ["first", "/model model-y", "second"], model="model-x")
+
+    records = [json.loads(line) for line in cfg.session_file.read_text(encoding="utf-8").splitlines()]
+    stamps = [record["stamp"]["model"] for record in records
+              if record.get("kind") == "message" and record["message"]["role"] == "assistant"]
+    assert stamps == ["model-x", "model-y"]
+    assert last_stamp(cfg.session_file)["model"] == "model-y"
+
+
 def test_a_prompt_run_resumes_on_the_last_stamp_too(monkeypatch, tmp_path):
     monkeypatch.chdir(_dir(tmp_path, "work"))
     seen: list[str] = []
@@ -243,6 +263,21 @@ def test_a_prompt_run_resumes_on_the_last_stamp_too(monkeypatch, tmp_path):
     assert cli.main(["--session", "carry", "-p", "two"]) == 0
 
     assert seen == ["model-y", "model-y"]
+
+
+def test_the_stamped_provider_rides_only_where_routing_takes_it():
+    from types import SimpleNamespace
+
+    on_deepseek = SimpleNamespace(model="deepseek-v4-flash", provider_id="deepseek")
+
+    assert cli._resume_model_spec({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
+    assert cli._resume_model_spec({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
+        "deepseek/deepseek-v4-pro"
+    # A provider routing does not know as a prefix, or one with no login that
+    # is not the configured one, leaves the model id alone.
+    assert cli._resume_model_spec({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) == "a/b"
+    assert cli._resume_model_spec({"model": "gpt-x", "provider": "openai"}, on_deepseek) == "gpt-x"
+    assert cli._resume_model_spec({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
 
 
 # --- start metadata ----------------------------------------------------------------

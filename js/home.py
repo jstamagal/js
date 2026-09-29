@@ -502,16 +502,20 @@ def _remove_empty_dirs(folder: Path) -> None:
 
 
 def _file_latest(folder: Path, targets: dict[Path, Path]) -> None:
-    """Point the agent's latest.json in state/ at where its latest session went."""
+    """Point the agent's latest.json in state/ at where its latest session went.
+    The recorded path may predate the move into ~/.js; its tail under the
+    agent's folder names the session."""
     latest = folder / "latest.json"
     try:
         payload = json.loads(latest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
     old = payload.get("session_file") if isinstance(payload, dict) else None
+    old_parts = Path(old).parts if isinstance(old, str) else ()
     moved = next((new for path, new in targets.items()
-                  if isinstance(old, str) and Path(old).name == path.name and path.parent.name == Path(old).parent.name
-                  and new.is_file()), None)
+                  if path.is_relative_to(folder) and new.is_file()
+                  and old_parts[-len(path.relative_to(folder).parts) - 1:]
+                  == (folder.name, *path.relative_to(folder).parts)), None)
     if moved is not None:
         session_store.write_latest(paths.state_root() / folder.name, moved)
     with contextlib.suppress(OSError):

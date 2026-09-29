@@ -308,17 +308,20 @@ def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
     """The --model value that puts a resumed session back on its stamped model,
     or None when the configuration already resolves to it.
 
-    The stamped provider rides as a prefix only when it has a saved login:
-    that is the one prefix routing takes as authoritative."""
+    The stamped provider rides as a prefix only where routing takes the prefix
+    as the provider: it parses as a known provider, and it is the configured
+    one or has a saved login. Otherwise the model id goes alone."""
     model = stamp.get("model")
     if not isinstance(model, str) or not model:
         return None
-    provider = stamp.get("provider")
-    spec = model
-    if (isinstance(provider, str) and provider and provider != cfg.provider_id
-            and not model.startswith(f"{provider}/") and routing._saved_login(provider) is not None):
-        spec = f"{provider}/{model}"
-    return None if spec == cfg.model else spec
+    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
+    if model == cfg.model and (not provider or provider == cfg.provider_id):
+        return None
+    prefixed = f"{provider}/{model}"
+    if (provider and providers.parse_model_prefix(prefixed) == (provider, model)
+            and (provider == cfg.provider_id or routing._saved_login(provider) is not None)):
+        return prefixed
+    return None if model == cfg.model else model
 
 
 def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
