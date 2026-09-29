@@ -14,7 +14,6 @@ each description carries before conditional sections resolve.
 """
 from __future__ import annotations
 
-import argparse
 
 from . import messages as msgs
 
@@ -68,14 +67,11 @@ def _registry(names: list[str]) -> ToolRegistry | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="js.tooldiag",
-        description="Per-tool byte cost of model-facing descriptions and parameter schemas.",
-    )
+    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.text())
     parser.add_argument(
         "--surface",
         default="",
-        help="comma-separated tool names; default is the full default registry",
+        help=msgs.OPT_TOOLDIAG_SURFACE.text(),
     )
     args = parser.parse_args(argv)
     registry = _registry(parse_surface(args.surface))

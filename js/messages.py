@@ -1,8 +1,9 @@
 """Every string js shows the operator, by name.
 
 Code names an entry here and passes the values for its holes; the wording
-lives only in this file. Strings the model reads (tool results, prompts, tool
-descriptions) are not here.
+lives only in this file. Tool results, prompts and tool descriptions, which the
+model reads, are not here. The commit helper's entries are: the operator runs
+it, and the commit agent reads the same output through a shell.
 
 A `Message` is in one register:
 
@@ -12,11 +13,13 @@ A `Message` is in one register:
 
 Severity is colour, never a word. `WARN` paints in light yellow and `GRAVE`
 in light red, and only the holes: the values that tell the operator what
-happened. A message without holes is painted whole.
+happened. A message without holes is painted whole. `say` paints only a stream
+that is a terminal.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from dataclasses import dataclass
 from string import Formatter
@@ -47,10 +50,33 @@ class Message:
         channel that is not the screen, or that adds the slot itself."""
         return self.template.format(**fields)
 
-    def line(self, **fields: Any) -> str:
-        """The message as the screen shows it."""
-        body = _paint(self.template, fields, SEVERITY_COLOR[self.severity])
+    def line(self, *, colour: bool = True, **fields: Any) -> str:
+        """The message as the screen shows it. `colour=False` leaves the
+        severity paint off."""
+        body = _paint(self.template, fields, SEVERITY_COLOR[self.severity] if colour else "")
         return banner(body) if self.banner else body
+
+    def said(self, **fields: Any) -> Said:
+        """`text()` that keeps its entry, so a printer shows it with this
+        entry's slot and severity."""
+        return Said(self, fields)
+
+
+class Said(str):
+    """A filled message. It is its text; `message` and `fields` are what
+    produced it."""
+
+    message: Message
+    fields: dict[str, Any]
+
+    def __new__(cls, message: Message, fields: dict[str, Any]) -> Said:
+        said = super().__new__(cls, message.text(**fields))
+        said.message = message
+        said.fields = fields
+        return said
+
+    def __getnewargs__(self) -> tuple[Message, dict[str, Any]]:
+        return self.message, self.fields
 
 
 def banner(text: str) -> str:
@@ -77,14 +103,54 @@ def _paint(template: str, fields: dict[str, Any], color: str) -> str:
     return "".join(parts)
 
 
+def _is_terminal(stream: Any) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def line_for(message: Message, /, *, file: Any = None, **fields: Any) -> str:
+    """The line `say` prints to `file`, stdout by default."""
+    stream = file if file is not None else sys.stdout
+    return message.line(colour=_is_terminal(stream), **fields)
+
+
 def say(message: Message, /, *, file: Any = None, flush: bool = False, **fields: Any) -> None:
     """Print `message` to stdout, or to `file`."""
-    print(message.line(**fields), file=file if file is not None else sys.stdout, flush=flush)
+    stream = file if file is not None else sys.stdout
+    print(line_for(message, file=stream, **fields), file=stream, flush=flush)
+
+
+def say_said(said: Said, /, *, file: Any = None, flush: bool = False) -> None:
+    """Print a message `said()` made."""
+    say(said.message, file=file, flush=flush, **said.fields)
 
 
 def warn(message: Message, /, **fields: Any) -> None:
     """Print `message` to stderr."""
     say(message, file=sys.stderr, flush=True, **fields)
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    """argparse with its headings and its refusal in entries. A bad command
+    line prints the usage, then ARGUMENTS_REFUSED on stderr, and exits 2."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("formatter_class", _HelpFormatter)
+        super().__init__(*args, **kwargs)
+        self._positionals.title = ARGS_POSITIONALS.text()
+        self._optionals.title = ARGS_OPTIONS.text()
+
+    def error(self, message: str) -> Any:
+        self.print_usage(sys.stderr)
+        warn(ARGUMENTS_REFUSED, error=message)
+        self.exit(2)
+
+
+class _HelpFormatter(argparse.HelpFormatter):
+    def add_usage(self, usage: Any, actions: Any, groups: Any, prefix: str | None = None) -> None:
+        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.text() if prefix is None else prefix)
 
 
 def plural(n: int, word: str) -> str:
@@ -99,6 +165,9 @@ def plural(n: int, word: str) -> str:
 # Any failure whose text is already a whole sentence (an exception, a returned error).
 FAILED = Message("{error}", GRAVE)
 FAILED_WARN = Message("{error}", WARN)
+# A command's refusal that is not an entry of its own: a settings verb's
+# complaint, or a script line's.
+COMMAND_REFUSED = Message("{error}")
 
 # --- Session -----------------------------------------------------------------
 
@@ -110,11 +179,11 @@ TOOL_SURFACE_KEPT = Message("{error}. Tool surface unchanged.", WARN)
 
 # --- Compaction --------------------------------------------------------------
 
-# compact_now's result. Callers tell a compaction from a skip by the
-# `compacted:` start, so those words stay first.
-COMPACTED = Message("compacted: kept tail from message {keep_from}/{total} using {model}")
-COMPACT_SKIPPED_NO_PREFIX = Message("compact skipped: no new prefix to summarize")
-COMPACT_SKIPPED_SAVINGS = Message("compact skipped: saves {savings} tokens, needs {required}")
+# compact_now's result, as `said()`: compaction.compacted() tells a compaction
+# from a skip by the entry.
+COMPACTED = Message("Compacted. Kept the tail from message {keep_from}/{total}. Summary by {model}.")
+COMPACT_SKIPPED_NO_PREFIX = Message("Compaction skipped: no new prefix to summarize.")
+COMPACT_SKIPPED_SAVINGS = Message("Compaction skipped: saves {savings} tokens, needs {required}.")
 COMPACTION_DONE = Message("{result}")
 AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.", WARN)
 AUTO_COMPACT_PAUSED = Message(
@@ -129,7 +198,7 @@ DEFAULT_MODEL_SAVED = Message("Default model: {model}")
 DEFAULT_MODEL_NOT_SAVED = Message("Model: {model}. Not saved as default: {error}", GRAVE)
 MODELS_LIMIT_NOT_A_NUMBER = Message("/models: {value!r} is not a number.")
 NO_PROVIDER = Message("No provider set. Use /provider <id> first.")
-MODELS_NOT_LISTED = Message("Models not listed: {error}")
+MODELS_NOT_LISTED = Message("Models not listed: {error}", GRAVE)
 MODEL_ROW = Message("  {model}", banner=False)
 MORE_ROWS = Message("{count} more.", banner=False)
 PROVIDER_IS = Message("Provider: {provider}")
@@ -155,7 +224,7 @@ USAGE = Message("Usage: {usage}")
 MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
 MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
-SAVE_FAILED = Message("Not saved: {error}")
+SAVE_FAILED = Message("Not saved: {error}", GRAVE)
 SAVED = Message("Saved {lines} to {path}")
 SAVED_WITH_BACKUP = Message("Saved {lines} to {path}. Prior file backed up to {backup}")
 CONTEXT_WINDOW_SET = Message("Context window: {window} for {model} from the next request.")
@@ -166,7 +235,7 @@ ALIAS_IS_COMMAND = Message("alias {name}: {name} is a command.")
 LOAD_TOO_DEEP = Message("load: nesting too deep.")
 LOAD_CYCLE = Message("load: cycle at {path}")
 LOAD_NOT_FOUND = Message("load: no script at {path}")
-LOAD_UNREADABLE = Message("load: {path} not read: {error}")
+LOAD_UNREADABLE = Message("load: {path} not read: {error}", GRAVE)
 LOAD_NEEDS_ONE_PATH = Message("load needs exactly one path.")
 SCRIPT_LINE_FAILED = Message("{path}:{lineno}: {error}")
 LOADED = Message("Loaded {path}")
@@ -179,12 +248,13 @@ NO_JOBS = Message("No running jobs.", banner=False)
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
 NO_JOB_TO_CANCEL = Message("No matching job to cancel.")
 CANCELLING = Message("Cancelling {jobs}", WARN)
+NO_SUCH_SKILL = Message("No skill named {name!r}.")
 SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the input line.")
 HELP_HEADING = Message("Commands:", banner=False)
 HELP_ROW = Message("  {usage} {doc}", banner=False)
-HELP_ALIAS = Message("alias: {body}")
-HELP_ATTACH = Message("attach a file or image to that turn; quote paths with spaces")
-HELP_EXIT = Message("quit")
+HELP_ALIAS = Message("Alias: {body}")
+HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with spaces.")
+HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
 SESSION_PATH = Message("{path}", banner=False)
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
@@ -192,6 +262,184 @@ ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
+
+# --- /help: what each command does -------------------------------------------
+
+CMD_HELP = Message("Show this message.")
+CMD_SET = Message("List settings, show one, or change one. set -key clears one.")
+CMD_SHOW = Message("List every setting and its effective value.")
+CMD_SAVE = Message("Rewrite the global jsrc from the live settings, handlers and aliases.")
+CMD_LOAD = Message("Run each line of a file as a command. source is the same command.")
+CMD_ON = Message("List or register an event handler.")
+CMD_ALIAS = Message("List, show or define a command alias. alias -name removes one.")
+CMD_MODEL = Message("Switch model for this session. Bare opens the picker.")
+CMD_PICK_MODEL = Message("Open the interactive provider and model picker.")
+CMD_PROVIDER = Message("Show or switch the provider for this session.")
+CMD_BASEURL = Message("Set the provider base URL for this session. Bare clears it.")
+CMD_APIKEY = Message("Set the provider API key for this session. Bare clears it.")
+CMD_LOGIN = Message("Load or save a provider login.")
+CMD_LOGOUT = Message("Clear provider credentials for this session.")
+CMD_MODELS = Message("List the provider's models.")
+CMD_RESET = Message("Clear the conversation in-process. The session log keeps it.")
+CMD_WIPE = Message("Rotate the session file away and clear the conversation.")
+CMD_PERSONA = Message("Print the system prompt.")
+CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A state is eager, lazy or ban.")
+CMD_SKILL = Message(
+    "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
+CMD_TURNS = Message("Count the messages in context.")
+CMD_SESSION = Message("Print the session file path.")
+CMD_JOBS = Message("List running turns and subagents.")
+CMD_CANCEL = Message("Cancel a job by id, or the active turn.")
+CMD_FLUSH = Message("Drop all prompts queued behind the active turn.")
+CMD_COMPACT = Message("Append a compaction summary mark.")
+CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
+CMD_REFRESH_MODEL_CATALOG = Message("Force-refresh the local models.dev catalog now.")
+CMD_QUIT = Message("Quit. A note is kept for the next turn.")
+
+# --- js --help ----------------------------------------------------------------
+
+SHORT_HELP = Message(
+    "js — one agent, one terminal.\n"
+    "\n"
+    "RUN\n"
+    "  js                          Interactive REPL in this directory.\n"
+    "  js -p \"task\"                One prompt. Prints the answer.\n"
+    "  echo task | js -p           The same, from stdin.\n"
+    "  js -C DIR ...               Run as if launched from DIR.\n"
+    "\n"
+    "PICK\n"
+    "  -a NAME     Agent profile: ~/.js/agents/NAME\n"
+    "  -m MODEL    Provider/model, e.g. openai-codex/gpt-5.6-sol\n"
+    "  -r EFFORT   off|minimal|low|medium|high|xhigh|max\n"
+    "\n"
+    "STATE: sessions are saved by default. A driven agent normally wants that.\n"
+    "  -s NAME     Create or resume a named session.\n"
+    "  --session-key KEY   Derive a stable session from agent, cwd and key.\n"
+    "  --list [--json]     List every saved session.\n"
+    "  -n, --no-save\n"
+    "              Expensive throwaway choice: resume is unavailable, so the next\n"
+    "              run must re-read context. Use only for throwaway one-liners.\n"
+    "  --debug-file PATH   Full request trace, for debugging js.\n"
+    "\n"
+    "SCRIPTING\n"
+    "  -q          No resume hint after the answer. The session is still saved.\n"
+    "  -f PATH     Attach a file or image. Repeatable.\n"
+    "  --max-out N Max output tokens.\n"
+    "  --extra K=V One-off config, e.g. --extra limits.task_max_depth=3\n"
+    "\n"
+    "MORE\n"
+    "  js --login [PROVIDER]   Sign in.\n"
+    "  js --list-models        List the runnable models.\n"
+    "  js --commit             Run the commit agent.\n"
+    "  js --help-full          Every option.\n",
+    banner=False)
+
+# argparse: its headings, its refusal, and each option's help.
+ARGS_USAGE_PREFIX = Message("Usage: ")
+ARGS_POSITIONALS = Message("Arguments")
+ARGS_OPTIONS = Message("Options")
+ARGUMENTS_REFUSED = Message("{error}", GRAVE)
+OPT_HELP = Message("Show the short usage guide and exit.")
+OPT_HELP_FULL = Message("Show the complete option reference and exit.")
+OPT_LOGIN = Message("Interactive provider login. Without PROVIDER it lists the providers.")
+OPT_LOGOUT = Message("Remove a saved provider login.")
+OPT_PROMPT = Message("Run one prompt and print the final answer. Reads stdin when the value is omitted or '-'.")
+OPT_FILE = Message("Attach a file or image to a one-shot prompt. Repeatable. '-' reads stdin bytes.")
+OPT_AGENT = Message(
+    "Internal agent id. Sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>.")
+OPT_MODEL = Message("Override the configured or env model for this session or prompt.")
+OPT_URL = Message(
+    "Reach an endpoint with no saved login in one string: model[:api-key][[shape]][[effort]]@url. "
+    "Shape is openai, the default, responses or anthropic. Effort is the usual off..max ladder. "
+    "The key defaults to a dummy. E.g. qwen27b@http://foo/v1  |  "
+    "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
+    "Desugars to --extra model.id/provider.id/provider.base_url/provider.api_key, "
+    "so an explicit --extra still wins.")
+OPT_CD = Message(
+    "Run as if launched from DIR, like git -C. It binds the working directory for every mode: "
+    "-p, the REPL, --commit and the rest. DIR must exist.")
+OPT_DEBUG = Message(
+    "In prompt and --bench modes, stream the concise per-turn diagnostics and the answer live to the terminal: "
+    "run header, tool-call lines, per-call timing. The full request trace still goes only to the debug "
+    "autolog file.")
+OPT_DEBUG_FILE = Message(
+    "Also write the full byte-honest request trace to PATH: unclipped system prompt, full tool-schema JSON "
+    "with descriptions, the messages sent each call, and per-call timings. The clean final answer still "
+    "prints to stdout. runtime.debug_autolog always writes the same trace under logs/<agent>/<session>.log.")
+OPT_SESSION = Message("Create or resume a named session under ~/.js/sessions/<agent>.")
+OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
+OPT_NO_SAVE = Message(
+    "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
+    "and the next run must re-read context.")
+OPT_QUIET = Message("Suppress the resume hint after a one-shot prompt.")
+OPT_REASONING = Message(
+    "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. Any other value is rejected.")
+OPT_MAX_OUT = Message("Max output tokens per call.")
+OPT_BENCH = Message(
+    "Benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, "
+    "measuring TTFT, tok/s and turn time. Pair with --stats-json or --stats-csv.")
+OPT_STATS_JSON = Message("Write per-turn stats to PATH as JSON: ttft, tok/s, turn time, tokens.")
+OPT_STATS_CSV = Message("Write per-turn stats to PATH as CSV.")
+OPT_BLOCKING = Message(
+    "Run the legacy blocking REPL: input waits for the turn to finish, and ^C exits. The default runs one "
+    "async event loop, so input stays live while a turn streams and subagents run, and ^C cancels the "
+    "active turn.")
+OPT_EXTRA = Message(
+    "Set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. May be repeated. "
+    "Wins over env and all config files.")
+OPT_PRESET = Message(
+    "Layer jsrc.<name> preset files on top of the base config, in order. The last wins. "
+    "Comma-list and/or repeatable: --preset fast,debug. Looks for jsrc.<name> beside the global jsrc "
+    "and in project .js/. Still below env and --extra.")
+OPT_IGNORE_LOCAL = Message("Ignore project .js/jsrc and .js/jsrc.local.")
+OPT_IGNORE_GLOBAL = Message("Ignore the platform jsrc.")
+OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
+OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
+OPT_LAST = Message("Resume the most recently used session for this agent.")
+OPT_JSON = Message("With --list, print compact JSON objects one per line.")
+OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
+OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
+OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")
+OPT_LIST_MODELS = Message("Print human-readable models for PROVIDER and the exact --model values to pass.")
+OPT_REFRESH_MODEL_CATALOG = Message("Force-refresh js's local models.dev catalog now.")
+OPT_COMMIT = Message(
+    "Run the built-in commit agent against the target dir, the cwd by default. A missing repo is initialized.")
+OPT_COMPACT = Message("Compact an existing session id or path offline, append-only.")
+OPT_IM_A_PUSSY = Message(
+    "Opt out of inline-code execution for this run: !{{sh|python|c|node ...}} directives and ```!lang fences "
+    "stay as written instead of running. Inline code runs by default. Set runtime.allow_inline_code off or "
+    "JS_ALLOW_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
+    "always on.")
+OPT_PRINTONLY = Message(
+    "Dry run: assemble what would be sent and print it instead of calling the model, then exit. "
+    "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark a=everything. "
+    "The default is a. An optional :COUNT caps output lines. An optional :PATH writes to a file instead of "
+    "stdout, and an empty slot skips, e.g. p::/tmp/x.md. Unknown letters and unwritable paths are reported "
+    "and skipped. The run still succeeds.")
+OPT_TARGET = Message("Target path for built-in commit mode.")
+
+# `python -m js.home`, `python -m js.toolstats`, `python -m js.tooldiag`.
+HOME_DESCRIPTION = Message("Move the pre-~/.js locations into ~/.js.")
+OPT_HOME_APPLY = Message("Move. Without it, a dry run.")
+TOOLSTATS_DESCRIPTION = Message(
+    "Summarize one js session's tool traffic as a single JSON object: calls per tool, results that came "
+    "back as errors, assistant turns, bytes of arguments and results, and shell commands that reached for "
+    "a plain Unix tool where a dedicated tool may exist.")
+OPT_TOOLSTATS_PATH = Message("Session JSONL to summarize.")
+OPT_TOOLSTATS_LATEST = Message("Summarize the newest session instead of a path.")
+OPT_TOOLSTATS_DATA_DIR = Message("Directory holding sessions/. The js home by default.")
+OPT_TOOLSTATS_AGENT = Message("Restrict --latest to this agent's sessions.")
+OPT_TOOLSTATS_TAG = Message("Prefix the JSON line with this word, e.g. TOOLSTATS.")
+OPT_TOOLSTATS_EXTRA = Message("Extra key=value to include. Repeatable.")
+TOOLSTATS_NEEDS_PATH = Message("Give a session path or --latest.")
+TOOLDIAG_DESCRIPTION = Message("Per-tool byte cost of model-facing descriptions and parameter schemas.")
+OPT_TOOLDIAG_SURFACE = Message("Comma-separated tool names. The full default registry by default.")
+
+# --- js --list ------------------------------------------------------------------
+
+LIST_HEADINGS = Message("AGENT NAME MTIME SIZE TURNS IN-FLIGHT CWD JOB")
+LIST_YES = Message("yes")
+LIST_NO = Message("no")
 
 # --- One-shot and startup ----------------------------------------------------
 
@@ -267,6 +515,15 @@ BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AG
 COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.", GRAVE)
 STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.", GRAVE)
 STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.", GRAVE)
+# Raised as exception text and shown through FAILED.
+ATTACHMENT_NOT_FOUND = Message("Attachment not found: {path}")
+ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
+ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
+ATTACHMENT_IMAGE_TOO_LARGE = Message("Image attachment {path} is {size} bytes. The maximum is {limit} bytes.")
+SESSION_NAME_UNSAFE = Message("Session name is not a safe relative path: {session}")
+SESSION_NAME_TRAVERSAL = Message("Session name has an empty or traversal component: {session}")
+SESSION_NAME_ABSOLUTE = Message("Session name is not a relative path: {session}")
+SESSION_NAME_SUFFIX = Message("Session name has a suffix other than .jsonl: {session}")
 NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.", WARN)
 
 # --- REPL startup ------------------------------------------------------------
@@ -398,6 +655,8 @@ TOOL_PRESENT = Message("Present: {name} {version} at {path}, sha256 {sha}")
 TOOL_DOWNLOAD = Message("Download: {name} {version}, {asset}\n  {url}")
 TOOL_INSTALLED = Message("{state}: {path}. Asset sha256 {asset_sha}, executable sha256 {sha}")
 TOOL_INSTALL_FAILED = Message("Tool install failed: {error}", GRAVE)
+URLLIB_FALLBACK = Message(
+    "aria2c unavailable. {purpose} falls back to urllib: no segmented transfer, no resume across attempts.", WARN)
 
 # --- Moving into ~/.js -------------------------------------------------------
 
@@ -526,6 +785,25 @@ PROVIDER_NOT_CONFIGURED = Message(
     "Run `js --login {provider}` or `set provider.api_key <value>`.")
 
 # --- Tool policy table (/tools) ----------------------------------------------
+
+# tools.yaml and tool-chain entries that cannot be resolved: exception text.
+POLICY_UNREADABLE = Message("{path}: tools.yaml not read: {error}")
+POLICY_NOT_A_MAPPING = Message("{path}: tools.yaml must be a mapping of tags, ban and skills.")
+POLICY_UNKNOWN_KEYS = Message("{path}: unknown keys {keys}. Allowed: tags, ban, skills.")
+POLICY_TAGS_NOT_A_MAPPING = Message("{path}: tags must map a tag name to a list of entries.")
+POLICY_TAG_NAME_EMPTY = Message("{path}: tag name {name!r} must be a non-empty string.")
+POLICY_TAG_INTRINSIC = Message("{path}: tag {name!r} is intrinsic and cannot be redefined.")
+POLICY_TAG_NOT_A_LIST = Message("{path}: tags.{name} must be a list of noun:modifier entries.")
+POLICY_BAN_NOT_A_MAPPING = Message("{path}: ban must map a tool name to a list of argument patterns.")
+POLICY_BAN_NOT_A_LIST = Message("{path}: ban.{tool} must be a list of non-empty strings.")
+POLICY_SKILLS_NOT_A_LIST = Message("{path}: skills must be a list of family:name strings.")
+POLICY_ENTRY_NOT_A_STRING = Message("{where}: tool entry {entry!r} must be a string like read:eager.")
+POLICY_ENTRY_SHAPE = Message("{where}: tool entry {entry!r} is not noun:modifier, e.g. read:eager, shell:ban, tag:NAME.")
+POLICY_TAG_MODIFIER = Message("{where}: tool entry {entry!r}: only an intrinsic tag takes a modifier.")
+POLICY_BAD_MODIFIER = Message("{where}: tool entry {entry!r}: modifier must be eager, lazy or ban.")
+POLICY_TOOLS_NOT_A_LIST = Message("{where}: tools must be a list of noun:modifier entries.")
+POLICY_UNKNOWN_TAG = Message("{where}: {entry!r} names no tag in {config}. Known: {known}")
+POLICY_TAG_CYCLE = Message("{config}: tag cycle {cycle}")
 
 TOOL_CHAIN_ROW = Message("{tool:<{width}}  {state:<8}{decided}", banner=False)
 TOOL_CHAIN_TOOL = Message("Tool")

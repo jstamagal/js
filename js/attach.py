@@ -12,6 +12,7 @@ from collections.abc import Iterable
 
 import ai
 
+from . import messages as msgs
 from . import settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
@@ -136,7 +137,7 @@ def build_user_message(
 
     text = "\n\n".join(block for block in text_blocks if block)
     if not text and not file_parts:
-        raise AttachmentError("prompt is empty")
+        raise AttachmentError(msgs.PROMPT_EMPTY.text())
 
     if file_parts:
         content: list[object] = []
@@ -167,32 +168,31 @@ def _prepare_attachment(
 ) -> _PreparedAttachment:
     if raw_path == "-":
         if stdin_attachment is None:
-            raise AttachmentError("-f - requires piped stdin attachment bytes")
+            raise AttachmentError(msgs.STDIN_ATTACHMENT_NOT_PIPED.text())
         return _prepare_bytes(STDIN_ATTACHMENT_NAME, Path(STDIN_ATTACHMENT_NAME), stdin_attachment, cfg)
 
     path = _resolve_path(raw_path, cwd or Path.cwd())
     try:
         stat = path.stat()
     except OSError as exc:
-        raise AttachmentError(f"attachment not found: {raw_path}") from exc
+        raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.text(path=raw_path)) from exc
     if not path.is_file():
-        raise AttachmentError(f"attachment is not a regular file: {path}")
+        raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.text(path=path))
     try:
         with path.open("rb") as fh:
             header = fh.read(16)
     except OSError as exc:
-        raise AttachmentError(f"could not read attachment {path}: {exc}") from exc
+        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
 
     mime = _detect_visual_mime(path, header)
     if mime and mime.startswith("image/"):
         if stat.st_size > getattr(cfg, "max_file_bytes", stat.st_size):
             raise AttachmentError(
-                f"image attachment {path} is {stat.st_size} bytes; maximum is {cfg.max_file_bytes} bytes"
-            )
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=stat.st_size, limit=cfg.max_file_bytes))
         try:
             data = path.read_bytes()
         except OSError as exc:
-            raise AttachmentError(f"could not read attachment {path}: {exc}") from exc
+            raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
         return _prepare_image(str(path), mime, stat.st_size, data, cfg)
 
     cap = _text_cap(cfg)
@@ -200,7 +200,7 @@ def _prepare_attachment(
         with path.open("rb") as fh:
             data = fh.read(cap + 1)
     except OSError as exc:
-        raise AttachmentError(f"could not read attachment {path}: {exc}") from exc
+        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
     return _prepare_bytes(str(path), path, data, cfg, total_size=stat.st_size)
 
 
@@ -217,8 +217,7 @@ def _prepare_bytes(
     if mime and mime.startswith("image/"):
         if size > getattr(cfg, "max_file_bytes", size):
             raise AttachmentError(
-                f"image attachment {display_path} is {size} bytes; maximum is {cfg.max_file_bytes} bytes"
-            )
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=display_path, size=size, limit=cfg.max_file_bytes))
         return _prepare_image(display_path, mime, size, data, cfg)
 
     cap = _text_cap(cfg)

@@ -635,6 +635,11 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
 # --------------------------------------------------------------------------
 
 
+def compacted(result: str) -> bool:
+    """Whether a compact_now result is a compaction rather than a skip."""
+    return isinstance(result, msgs.Said) and result.message == msgs.COMPACTED
+
+
 def _compaction_summary_message(summary: str) -> dict:
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
@@ -707,11 +712,11 @@ async def compact_now(
                       min_savings=min_savings, keep_from=keep_from,
                       original_estimate=original_est, tail_estimate=tail_est)
         if keep_from <= 0 or not prefix_worth_summarizing(messages, keep_from):
-            result = msgs.COMPACT_SKIPPED_NO_PREFIX.text()
+            result = msgs.COMPACT_SKIPPED_NO_PREFIX.said()
             flight.finish("skipped", system, messages, result=result)
             return result
         if not forced and original_est - tail_est < min_savings:
-            result = msgs.COMPACT_SKIPPED_SAVINGS.text(savings=original_est - tail_est, required=min_savings)
+            result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=original_est - tail_est, required=min_savings)
             flight.finish("skipped", system, messages, result=result)
             return result
         compact_model = model or get_model(cfg)
@@ -736,7 +741,7 @@ async def compact_now(
             after = [_compaction_summary_message(summary), *messages[keep_from:]]
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
-            result = msgs.COMPACT_SKIPPED_SAVINGS.text(savings=savings, required=required_savings)
+            result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
@@ -747,7 +752,7 @@ async def compact_now(
         tracker = getattr(context or T.STOCK_CONTEXT, "context_budget_state", None)
         if tracker is not None:
             tracker.reset()
-        result = msgs.COMPACTED.text(keep_from=keep_from, total=original_len, model=compact_model)
+        result = msgs.COMPACTED.said(keep_from=keep_from, total=original_len, model=compact_model)
         flight.finish("success", system, messages, result=result, keep_from=keep_from)
         return result
     except BaseException as exc:
@@ -804,7 +809,7 @@ class AutoCompactOutcome:
     compacted: bool = False
     forced: bool = False
     result: str | None = None
-    notices: list[str] = field(default_factory=list)  # screen lines
+    notices: list[msgs.Said] = field(default_factory=list)  # for the screen
 
 
 async def maybe_auto_compact_async(
@@ -845,13 +850,13 @@ async def maybe_auto_compact_async(
         if fullness < notify_at:
             ac.notified = False
         elif not ac.notified:
-            out.notices.append(msgs.AUTO_COMPACT_ARMED.line(fullness=fullness))
+            out.notices.append(msgs.AUTO_COMPACT_ARMED.said(fullness=fullness))
             ac.notified = True
         return out
     if ac.paused:
         return out
     if fullness >= notify_at and not ac.notified:
-        out.notices.append(msgs.AUTO_COMPACT_ARMED.line(fullness=fullness))
+        out.notices.append(msgs.AUTO_COMPACT_ARMED.said(fullness=fullness))
         ac.notified = True
     out.forced = fullness >= force_at
     out.result = await compact_now(
@@ -865,7 +870,7 @@ async def maybe_auto_compact_async(
                          if hasattr(getattr(context, "context_budget_state", None), "__dict__") else None,
                      "tools": context.tool_registry.openai_specs() if getattr(context, "tool_registry", None) else []},
     )
-    out.compacted = out.result.startswith("compacted:")
+    out.compacted = compacted(out.result)
     if not out.compacted:
         return out
     if tracker is not None:
@@ -875,7 +880,7 @@ async def maybe_auto_compact_async(
     ac.consecutive += 1
     if ac.consecutive >= 2:
         ac.paused = True
-        out.notices.append(msgs.AUTO_COMPACT_PAUSED.line())
+        out.notices.append(msgs.AUTO_COMPACT_PAUSED.said())
     return out
 
 

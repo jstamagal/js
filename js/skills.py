@@ -193,10 +193,10 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
         return None
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
-        raise SkillInvocationError("usage: /skill <name> [request]")
+        raise SkillInvocationError(msgs.USAGE.text(usage="/skill <name> [request]"))
     loaded = load_skill(catalog, name, user=True)
     if loaded is None:
-        raise SkillInvocationError(f"no skill named {name!r}")
+        raise SkillInvocationError(msgs.NO_SUCH_SKILL.text(name=name))
     metadata = loaded.metadata
     header = [f"Base directory for this skill: {metadata.path.parent}"]
     if metadata.tools:

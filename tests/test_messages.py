@@ -4,13 +4,17 @@ go through the slot, and severity is colour, never a word."""
 from __future__ import annotations
 
 import ast
+import io
 import re
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from js import cli, colors as C, commit_helper, messages as msgs, stream_transport
+from js import cli, colors as C, commit_helper, home, paths, settings, stream_transport, tool_binaries
+from js import messages as msgs
 from js.promptexpand import expand_prompt
 from js.toolkit import policy
 from js.toolkit.registry import build_default_registry
@@ -135,6 +139,34 @@ def test_no_print_in_js_carries_a_dead_word_or_the_slot():
     assert found == []
 
 
+def _command_line_text(tree: ast.AST) -> list[ast.AST]:
+    """What argparse shows: help=, description= and parser.error(...), plus a
+    COMMANDS doc, the third argument of Command(...)."""
+    found: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name in ("add_argument", "ArgumentParser"):
+            found.extend(kw.value for kw in node.keywords if kw.arg in ("help", "description"))
+        elif name == "error" and isinstance(func, ast.Attribute) and "parser" in ast.unparse(func.value):
+            found.extend(node.args)
+        elif name == "Command" and len(node.args) >= 3:
+            found.append(node.args[2])
+    return found
+
+
+def test_command_line_help_and_command_docs_name_an_entry():
+    """No literal: the wording is in js/messages.py."""
+    literal = []
+    for path in _modules():
+        for value in _command_line_text(ast.parse(path.read_text(encoding="utf-8"))):
+            if _string_parts(value):
+                literal.append(f"{path.relative_to(JS_ROOT)}:{value.lineno}")
+    assert literal == []
+
+
 def test_the_slot_is_spelled_only_in_messages():
     spelled = [str(path.relative_to(JS_ROOT)) for path in _modules()
                if path.name != "messages.py" and f'"{msgs.BANNER}' in path.read_text(encoding="utf-8")]
@@ -180,3 +212,97 @@ def test_the_commit_helper_speaks_in_entries(tmp_path, capsys):
     err = capsys.readouterr().err.strip()
     assert err == msgs.STAGE_NO_CHANGES.text(path="nope.txt")
     assert "\x1b" not in out + err
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_help_lists_every_command_without_a_paren_aside_or_dead_word(capsys):
+    cli._cmd_help("", {"aliases": {"x": "set model.id y"}}, object())
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) > len(set(cli.COMMANDS.values()))
+    assert _clean(lines) == []
+
+
+@pytest.mark.parametrize("flag", ["--help", "--help-full"])
+def test_the_help_screens_carry_no_paren_aside_or_dead_word(flag, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main([flag])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out and _clean(out) == []
+
+
+def test_a_bad_command_line_is_refused_through_the_slot(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--no-such-flag"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err.splitlines()
+    assert err[-1].startswith(msgs.banner("")) and "--no-such-flag" in err[-1]
+    assert _clean(err) == []
+
+
+def test_no_setting_doc_carries_a_paren_aside():
+    """A call like fetch() or min(a, b) is code; an aside opens after a space."""
+    assert [spec.key for spec in settings.REGISTRY if re.search(r"(^|\s)\(", spec.doc)] == []
+
+
+def test_say_paints_a_terminal_and_nothing_else():
+    terminal, pipe = _Terminal(), io.StringIO()
+    msgs.say(msgs.NOT_SAVED_NO_RESUME, file=terminal)
+    msgs.say(msgs.NOT_SAVED_NO_RESUME, file=pipe)
+    assert terminal.getvalue() == msgs.NOT_SAVED_NO_RESUME.line() + "\n"
+    assert pipe.getvalue() == msgs.banner(msgs.NOT_SAVED_NO_RESUME.text()) + "\n"
+
+
+def test_a_command_refusal_shows_in_its_entry_severity(monkeypatch):
+    """A usage slip is not painted; a failure is painted in its entry's colour."""
+    terminal = _Terminal()
+    monkeypatch.setattr(sys, "stdout", terminal)
+    monkeypatch.setitem(cli.COMMANDS, "boom", cli.Command(
+        lambda arg, state, cfg: msgs.SAVE_FAILED.said(error="disk full"), "boom", msgs.CMD_HELP))
+
+    cli._handle_command("/compact-auto maybe", {}, object())
+    cli._handle_command("/boom", {}, object())
+
+    usage, failure = terminal.getvalue().splitlines()
+    assert usage == msgs.USAGE.line(usage="/compact-auto on|off")
+    assert "\x1b" not in usage
+    assert failure == msgs.SAVE_FAILED.line(error="disk full")
+    assert msgs.SEVERITY_COLOR[msgs.SAVE_FAILED.severity] in failure
+
+
+def test_a_refused_home_move_shows_in_its_entry_severity(tmp_path):
+    legacy_jsrc = paths.legacy_homes()["config"] / "jsrc"
+    legacy_jsrc.parent.mkdir(parents=True, exist_ok=True)
+    legacy_jsrc.write_text("old\n", encoding="utf-8")
+    paths.global_config_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.global_config_file().write_text("new\n", encoding="utf-8")
+    terminal = _Terminal()
+
+    steps = home.migrate_once(terminal)
+
+    assert [step.kind for step in steps] == ["refuse"]
+    said = home.describe(steps[0], apply=True)
+    assert said.message is msgs.HOME_REFUSED
+    assert terminal.getvalue() == said.message.line(**said.fields) + "\n"
+    assert msgs.SEVERITY_COLOR[msgs.HOME_REFUSED.severity] in terminal.getvalue()
+
+
+def test_offline_compaction_reports_through_the_slot(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *a, **kw: SimpleNamespace(session_file="s.jsonl"))
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system="S"))
+    monkeypatch.setattr(cli.M, "load_replay_messages", lambda path: [])
+    monkeypatch.setattr(cli.compaction, "compact_now_sync",
+                        lambda *a, **kw: msgs.COMPACT_SKIPPED_NO_PREFIX.said())
+    assert cli._run_compact_offline("s") == 0
+    assert capsys.readouterr().out.strip() == msgs.banner(msgs.COMPACT_SKIPPED_NO_PREFIX.text())
+
+
+def test_the_urllib_fallback_is_an_entry_on_stderr_once_per_purpose(monkeypatch, capsys):
+    monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
+    tool_binaries.warn_urllib_fallback("x")
+    tool_binaries.warn_urllib_fallback("x")
+    assert capsys.readouterr().err.splitlines() == [msgs.banner(msgs.URLLIB_FALLBACK.text(purpose="x"))]

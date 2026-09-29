@@ -68,8 +68,8 @@ def test_survey_reports_staged_and_unstaged_hunks_for_same_file(repo, capsys):
 
     assert commit_helper.main(["survey"]) == 0
     out = capsys.readouterr().out
-    staged_section = out.split(msgs.SURVEY_STAGED.text(), 1)[1].split(msgs.SURVEY_UNSTAGED.text(), 1)[0]
-    unstaged_section = out.split(msgs.SURVEY_UNSTAGED.text(), 1)[1]
+    staged_at, unstaged_at = out.index(msgs.SURVEY_STAGED.text()), out.index(msgs.SURVEY_UNSTAGED.text())
+    staged_section, unstaged_section = out[staged_at:unstaged_at], out[unstaged_at:]
     assert "line2_STAGED" in staged_section
     assert "line28_UNSTAGED" not in staged_section
     assert "line28_UNSTAGED" in unstaged_section
@@ -77,8 +77,8 @@ def test_survey_reports_staged_and_unstaged_hunks_for_same_file(repo, capsys):
     # The staged section's hunk numbers don't address `stage` (only unstaged
     # hunks are stageable) — its header must not carry the `stage <file> <n>`
     # instruction, or the model can silently stage the wrong region.
-    assert "stage <file>" not in msgs.SURVEY_STAGED.text()
-    assert "stage <file>" in msgs.SURVEY_UNSTAGED.text()
+    assert "stage <file>" not in staged_section
+    assert "stage <file>" in unstaged_section
 
 
 def test_stage_subset_of_hunks(repo):

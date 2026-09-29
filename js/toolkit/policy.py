@@ -77,40 +77,40 @@ def load_tools_config(path: Path | None = None) -> ToolsConfig:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise ToolPolicyError(f"{path}: cannot read tools.yaml: {' '.join(str(exc).split())}") from exc
+        raise ToolPolicyError(msgs.POLICY_UNREADABLE.text(path=path, error=' '.join(str(exc).split()))) from exc
     if data is None:
         return ToolsConfig(path=path)
     if not isinstance(data, dict):
-        raise ToolPolicyError(f"{path}: tools.yaml must be a mapping of tags, ban and skills")
+        raise ToolPolicyError(msgs.POLICY_NOT_A_MAPPING.text(path=path))
     unknown = sorted(str(key) for key in data if key not in ("tags", "ban", "skills"))
     if unknown:
-        raise ToolPolicyError(f"{path}: unknown key(s) {', '.join(unknown)}; allowed: tags, ban, skills")
+        raise ToolPolicyError(msgs.POLICY_UNKNOWN_KEYS.text(path=path, keys=', '.join(unknown)))
 
     tags: dict[str, tuple[Any, ...]] = {}
     raw_tags = data.get("tags") or {}
     if not isinstance(raw_tags, dict):
-        raise ToolPolicyError(f"{path}: tags must map a tag name to a list of entries")
+        raise ToolPolicyError(msgs.POLICY_TAGS_NOT_A_MAPPING.text(path=path))
     for name, entries in raw_tags.items():
         if not isinstance(name, str) or not name.strip():
-            raise ToolPolicyError(f"{path}: tag name {name!r} must be a non-empty string")
+            raise ToolPolicyError(msgs.POLICY_TAG_NAME_EMPTY.text(path=path, name=name))
         if name in INTRINSIC_TAGS:
-            raise ToolPolicyError(f"{path}: tag {name!r} is intrinsic and cannot be redefined")
+            raise ToolPolicyError(msgs.POLICY_TAG_INTRINSIC.text(path=path, name=name))
         if not isinstance(entries, list):
-            raise ToolPolicyError(f"{path}: tags.{name} must be a list of noun:modifier entries")
+            raise ToolPolicyError(msgs.POLICY_TAG_NOT_A_LIST.text(path=path, name=name))
         tags[name] = tuple(entries)
 
     bans: dict[str, tuple[str, ...]] = {}
     raw_bans = data.get("ban") or {}
     if not isinstance(raw_bans, dict):
-        raise ToolPolicyError(f"{path}: ban must map a tool name to a list of argument patterns")
+        raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_MAPPING.text(path=path))
     for tool_name, patterns in raw_bans.items():
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
-            raise ToolPolicyError(f"{path}: ban.{tool_name} must be a list of non-empty strings")
+            raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_LIST.text(path=path, tool=tool_name))
         bans[str(tool_name).strip().lower()] = tuple(patterns)
 
     raw_skills = data.get("skills") or []
     if not isinstance(raw_skills, list) or not all(isinstance(s, str) and s.strip() for s in raw_skills):
-        raise ToolPolicyError(f"{path}: skills must be a list of family:name strings")
+        raise ToolPolicyError(msgs.POLICY_SKILLS_NOT_A_LIST.text(path=path))
     return ToolsConfig(tags=tags, bans=bans, skills=tuple(s.strip() for s in raw_skills), path=path)
 
 
@@ -130,24 +130,22 @@ class Entry:
 
 def parse_entry(raw: Any, where: str) -> Entry:
     if not isinstance(raw, str):
-        raise ToolPolicyError(f"{where}: tool entry {raw!r} must be a string like read:eager")
+        raise ToolPolicyError(msgs.POLICY_ENTRY_NOT_A_STRING.text(where=where, entry=raw))
     text = raw.strip()
     noun, sep, rest = text.partition(":")
     noun, rest = noun.strip().lower(), rest.strip()
     if not sep or not noun or not rest:
-        raise ToolPolicyError(
-            f"{where}: tool entry {text!r} is not noun:modifier (read:eager, shell:ban, tag:NAME)"
-        )
+        raise ToolPolicyError(msgs.POLICY_ENTRY_SHAPE.text(where=where, entry=text))
     if noun == "tag":
         name, _, modifier = rest.partition(":")
         name, modifier = name.strip(), modifier.strip()
         if modifier and name not in INTRINSIC_TAGS:
-            raise ToolPolicyError(f"{where}: tool entry {text!r}: only an intrinsic tag takes a modifier")
+            raise ToolPolicyError(msgs.POLICY_TAG_MODIFIER.text(where=where, entry=text))
         if modifier and modifier not in MODIFIERS:
-            raise ToolPolicyError(f"{where}: tool entry {text!r}: modifier must be eager, lazy or ban")
+            raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
         return Entry(text, "tag", modifier or "eager", tag=name)
     if rest not in MODIFIERS:
-        raise ToolPolicyError(f"{where}: tool entry {text!r}: modifier must be eager, lazy or ban")
+        raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
     return Entry(text, noun, rest)
 
 
@@ -156,7 +154,7 @@ def parse_entries(raw: Any, where: str) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ToolPolicyError(f"{where}: tools must be a list of noun:modifier entries")
+        raise ToolPolicyError(msgs.POLICY_TOOLS_NOT_A_LIST.text(where=where))
     return tuple(parse_entry(item, where).text for item in raw)
 
 
@@ -197,11 +195,10 @@ def expand(entries: Iterable[Any], config: ToolsConfig, where: str) -> tuple[Rul
             if entry.tag not in config.tags:
                 known = ", ".join(sorted((*config.tags, *INTRINSIC_TAGS)))
                 raise ToolPolicyError(
-                    f"{where}: {entry.text!r} names no tag in {config.where} (known: {known})"
-                )
+                    msgs.POLICY_UNKNOWN_TAG.text(where=where, entry=entry.text, config=config.where, known=known))
             if entry.tag in stack:
                 cycle = " > ".join(f"tag:{name}" for name in (*stack, entry.tag))
-                raise ToolPolicyError(f"{config.where}: tag cycle {cycle}")
+                raise ToolPolicyError(msgs.POLICY_TAG_CYCLE.text(config=config.where, cycle=cycle))
             walk(config.tags[entry.tag], f"{config.where} tags.{entry.tag}",
                  (*via, entry.text), (*stack, entry.tag))
 

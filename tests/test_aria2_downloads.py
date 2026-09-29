@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import tool_binaries
+from js import messages as msgs, tool_binaries
 from js.toolkit import ToolContext
 from js.toolkit import process_net
 
@@ -377,16 +377,19 @@ def test_aria2c_is_a_known_system_tool() -> None:
 
 
 def test_missing_aria2_fallback_is_visible_and_preserves_binary_result(
-    transfer_server, monkeypatch, tmp_path: Path
+    transfer_server, monkeypatch, tmp_path: Path, capsys
 ) -> None:
     base_url, _state = transfer_server
     monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
 
-    with pytest.warns(RuntimeWarning, match="falling back to urllib"):
-        result = process_net.fetch(
-            f"{base_url}/file",
-            context=ToolContext(cwd=tmp_path),
-        )
+    result = process_net.fetch(
+        f"{base_url}/file",
+        context=ToolContext(cwd=tmp_path),
+    )
+
+    assert capsys.readouterr().err.strip() == msgs.URLLIB_FALLBACK.line(
+        colour=False, purpose="fetch() response transfer")
 
     assert result == (
         f"BINARY_RESPONSE content-type=application/octet-stream size={len(_PAYLOAD)} bytes "

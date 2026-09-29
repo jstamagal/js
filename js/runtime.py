@@ -1602,7 +1602,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 return False
             finally:
                 turn_status.compacting = False
-            if not result.startswith("compacted:"):
+            if not compaction.compacted(result):
                 telemetry.event("context_compaction_skipped", phase=phase, reason=result)
                 return False
             reclaimed += before_chars - compaction.history_chars(messages)

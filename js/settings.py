@@ -22,6 +22,7 @@ import copy
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,8 +103,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "multi-model setup use compact.context_window_overrides instead.",
                 env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str",
-                "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
-                "any other value is rejected. Clear with `set -model.reasoning_effort`.",
+                "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. "
+                "Any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
     SettingSpec("model.vision", "bool",
                 "Send image bytes to the active model: on/off; unset = detect from "
@@ -135,11 +136,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
     SettingSpec("ui.editing_mode", "str",
-                "Input line key bindings in the async screen: emacs (Enter sends) or vi "
-                "(multi-line buffer; Esc then `:` opens the ex line, `:x` sends)."),
+                "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
+                "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),
     # --- provider ---
     SettingSpec("provider.id", "str",
-                "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
+                "Explicit js provider id, e.g. deepseek, openai-codex, ollama.",
                 env="JS_PROVIDER", empty=EMPTY_NONE, aliases=("provider",)),
     SettingSpec("provider.base_url", "str",
                 "Explicit provider base URL; unset = provider default.",
@@ -214,10 +215,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum concurrent subagent workers per task call; minimum 1."),
     # --- kernel ---
     SettingSpec("kernel.verbosity", "str",
-                "How much of each kernel/toolbox call is rendered to your terminal: "
-                "quiet (errors and interrupts only), normal (code, output, timing, "
-                "namespace), verbose (stdout/stderr/display split out, plus kernel "
-                "lifecycle and toolbox activity). Affects only what you see; the model "
+                "How much of each kernel/toolbox call is rendered to your terminal. "
+                "quiet: errors and interrupts only. normal: code, output, timing, "
+                "namespace. verbose: stdout, stderr and display split out, plus kernel "
+                "lifecycle and toolbox activity. Affects only what you see; the model "
                 "always receives the full result.",
                 env="JS_KERNEL_VERBOSITY"),
     SettingSpec("kernel.render_max_lines", "int",
@@ -241,13 +242,13 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 env="JS_TRACE", empty=EMPTY_OFF),
     SettingSpec("runtime.steer", "str",
                 "What a line typed while a turn runs does. now: it reaches the model "
-                "at the turn's next tool boundary, as a user message (a turn with no "
-                "boundary left gets it after it ends, as with batch). batch: every "
+                "at the turn's next tool boundary, as a user message. A turn with no "
+                "boundary left gets it after it ends, as with batch. batch: every "
                 "line typed during the turn goes in as ONE message after it ends. "
                 "one: each line is its own turn, in order."),
     SettingSpec("runtime.debug_autolog", "bool",
-                "Append the full request trace (unclipped system prompt, tool-schema "
-                "JSON, and the messages sent each call) to ~/.js/logs/<agent>/<session>.log. "
+                "Append the full request trace to ~/.js/logs/<agent>/<session>.log: the "
+                "unclipped system prompt, tool-schema JSON, and the messages sent each call. "
                 "This trace never prints to the terminal, only to the file.",
                 env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
     SettingSpec("runtime.debug_autolog_dir", "str",
@@ -275,8 +276,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Context window tokens for fullness math; unset = models.dev metadata.",
                 empty=EMPTY_NONE),
     SettingSpec("compact.context_window_overrides", "map",
-                "Per-model context windows, keyed 'provider/model' (most specific) or "
-                "'model'. For surfaces models.dev has no row for — a subscription "
+                "Per-model context windows, keyed 'provider/model' or 'model'. "
+                "'provider/model' is the more specific. For surfaces models.dev has no row for — a subscription "
                 "endpoint serving the same model id as the public API with a different "
                 "usable window.", empty=EMPTY_NONE),
     SettingSpec("compact.context_window_fallback", "int",
@@ -316,7 +317,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("compact.model", "str",
                 "Model used to write the compaction summary; 'same' = active model."),
     SettingSpec("compact.summary_max_tokens", "int",
-                "Max tokens for the compaction summary (hard-capped at 8192)."),
+                "Max tokens for the compaction summary. Capped at 8192."),
     SettingSpec("compact.pre_hook", "str",
                 "Optional shell command whose stdout guides compaction.",
                 empty=EMPTY_NONE),
@@ -346,8 +347,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
                 empty=EMPTY_NONE),
     SettingSpec("mcp.request_timeout_s", "float",
-                "Seconds an MCP request (initialize, list, call, read) waits for its "
-                "server's reply."),
+                "Seconds an MCP request waits for its server's reply: initialize, "
+                "list, call or read."),
     # --- sampling ---
     SettingSpec("sampling.temperature", "float",
                 "Provider-default sampling temperature; unset = do not send.",
@@ -700,7 +701,7 @@ def _package_settings() -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise DefaultsError(msgs.DEFAULTS_MISSING.line(path=path)) from None
+        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_MISSING, file=sys.stderr, path=path)) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -709,7 +710,8 @@ def _package_settings() -> dict:
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
             problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.text()
-            raise DefaultsError(msgs.DEFAULTS_BAD_LINE.line(location=f"{path}:{lineno}", error=problem))
+            raise DefaultsError(msgs.line_for(msgs.DEFAULTS_BAD_LINE, file=sys.stderr, location=f"{path}:{lineno}",
+                                              error=problem))
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = parsed[1].split(maxsplit=1)[0] if parsed[0] == "set" else parsed[0]
@@ -718,7 +720,7 @@ def _package_settings() -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise DefaultsError(msgs.DEFAULTS_UNLISTED.line(path=path, keys=", ".join(unlisted)))
+        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_UNLISTED, file=sys.stderr, path=path, keys=", ".join(unlisted)))
     _package_cache = (path, settings)
     return settings
 

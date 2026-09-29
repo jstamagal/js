@@ -18,7 +18,6 @@ from the source.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import errno
 import fcntl
@@ -67,14 +66,14 @@ def _short(path: Path) -> str:
     return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text
 
 
-def describe(step: Step, *, apply: bool) -> str:
+def describe(step: Step, *, apply: bool) -> msgs.Said:
     source, target = _short(step.source), _short(step.target) if step.target else ""
     entry = {
         ("move", True): msgs.HOME_MOVED, ("move", False): msgs.HOME_WOULD_MOVE,
         ("duplicate", True): msgs.HOME_REMOVED_DUPLICATE, ("duplicate", False): msgs.HOME_WOULD_REMOVE_DUPLICATE,
         ("rmdir", True): msgs.HOME_REMOVED_EMPTY, ("rmdir", False): msgs.HOME_WOULD_REMOVE_EMPTY,
     }.get((step.kind, apply)) or (msgs.HOME_REFUSED if apply else msgs.HOME_WOULD_REFUSE)
-    return entry.text(source=source, target=target, reason=step.reason)
+    return entry.said(source=source, target=target, reason=step.reason)
 
 
 def _lstat(path: Path) -> os.stat_result | None:
@@ -293,11 +292,11 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
                 return []
             for step in steps(apply=True):
                 done.append(step)
-                print(msgs.banner(describe(step, apply=True)), file=stream)
+                msgs.say_said(describe(step, apply=True), file=stream)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
-        print(msgs.HOME_MIGRATION_FAILED.line(home=_short(paths.home()), error=exc), file=stream)
+        msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
     return done
 
 
@@ -326,14 +325,14 @@ def sweep_tmp(now: float | None = None) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="js.home", description=__doc__.splitlines()[0])
-    parser.add_argument("--apply", action="store_true", help="move; default is a dry run")
+    parser = msgs.ArgumentParser(prog="js.home", description=msgs.HOME_DESCRIPTION.text())
+    parser.add_argument("--apply", action="store_true", help=msgs.OPT_HOME_APPLY.text())
     args = parser.parse_args(argv)
     found: list[Step] = []
     with _locked_home() if args.apply else contextlib.nullcontext():
         for step in steps(apply=args.apply):
             found.append(step)
-            print(describe(step, apply=args.apply), flush=True)
+            msgs.say_said(describe(step, apply=args.apply), flush=True)
     if not found:
         msgs.say(msgs.HOME_NOTHING_TO_MOVE, home=_short(paths.home()))
     return 1 if any(step.kind == "refuse" for step in found) else 0

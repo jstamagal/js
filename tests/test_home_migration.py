@@ -9,10 +9,20 @@ import errno
 import io
 import json
 import os
+import re
+import string
 import time
 from pathlib import Path
 
 from js import cli, config, home, paths
+from js import messages as msgs
+
+
+def _is(entry: msgs.Message, line: str) -> bool:
+    """Whether `line` is `entry` as the screen shows it, whatever its holes hold."""
+    pattern = "".join(re.escape(literal) + (".+" if name is not None else "")
+                      for literal, name, _spec, _conv in string.Formatter().parse(entry.template))
+    return re.fullmatch(re.escape(msgs.banner("")) + pattern, line) is not None
 
 
 def _legacy() -> dict[str, Path]:
@@ -159,8 +169,8 @@ def test_dry_run_changes_nothing_and_apply_does_the_same_moves(tmp_path, capsys)
 
     assert home.main(["--apply"]) == 0
     applied = capsys.readouterr().out.splitlines()
-    moved = [line for line in applied if "->" in line]
-    assert len(moved) == len([line for line in preview if "->" in line])
+    moved = [line for line in applied if _is(msgs.HOME_MOVED, line)]
+    assert moved and len(moved) == len([line for line in preview if _is(msgs.HOME_WOULD_MOVE, line)])
     for old in _legacy().values():
         assert not os.path.lexists(old)
 

@@ -23,7 +23,6 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-import warnings
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -165,14 +164,17 @@ def resolve_binary(executable: str) -> str | None:
     return shutil.which(executable)
 
 
+# The purposes warn_urllib_fallback has reported in this process.
+_URLLIB_FALLBACK_REPORTED: set[str] = set()
+
+
 def warn_urllib_fallback(purpose: str) -> None:
-    """Make loss of aria2c's transfer guarantees visible without changing results."""
-    warnings.warn(
-        f"aria2c is unavailable; {purpose} is falling back to urllib without "
-        "segmented transfer or cross-attempt resume",
-        RuntimeWarning,
-        stacklevel=2,
-    )
+    """Make loss of aria2c's transfer guarantees visible without changing
+    results: once per purpose per process, on stderr."""
+    if purpose in _URLLIB_FALLBACK_REPORTED:
+        return
+    _URLLIB_FALLBACK_REPORTED.add(purpose)
+    msgs.warn(msgs.URLLIB_FALLBACK, purpose=purpose)
 
 
 def aria2_argv(

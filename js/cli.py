@@ -75,43 +75,9 @@ from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
 
-_SHORT_HELP = """js — one agent, one terminal.
-
-RUN
-  js                          interactive REPL in this directory
-  js -p "task"                one prompt, print the answer
-  echo task | js -p           same, from stdin
-  js -C DIR ...               run as if launched from DIR
-
-PICK
-  -a NAME     agent profile (~/.js/agents/NAME)
-  -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
-  -r EFFORT   off|minimal|low|medium|high|xhigh|max
-
-STATE (sessions are saved by default — this is what a driven agent normally wants)
-  -s NAME     create or resume a named session
-  --session-key KEY   derive a stable session from agent + cwd + key
-  --list [--json]     list every saved session
-  -n, --no-save
-              expensive throwaway choice: resume is unavailable, so the next
-              run must re-read context. Use only for throwaway one-liners.
-  --debug-file PATH   full request trace, for debugging js
-
-SCRIPTING
-  -q          no resume hint after the answer (the session is still saved)
-  -f PATH     attach a file or image (repeatable)
-  --max-out N max output tokens
-  --extra K=V one-off config, e.g. --extra limits.task_max_depth=3
-
-MORE
-  js --login [PROVIDER]   sign in      js --list-models
-  js --commit             commit agent js --help-full
-"""
-
-
 class _ShortHelpAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        parser._print_message(_SHORT_HELP, sys.stdout)
+        parser._print_message(msgs.SHORT_HELP.text(), sys.stdout)
         parser.exit()
 
 
@@ -352,7 +318,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
         return 0
 
-    headings = ("AGENT", "NAME", "MTIME", "SIZE", "TURNS", "IN-FLIGHT", "CWD", "JOB")
+    headings = tuple(msgs.LIST_HEADINGS.text().split())
     rows = []
     for record in records:
         identity = record["caller_key"]
@@ -365,7 +331,7 @@ def _print_session_list(*, json_lines: bool) -> int:
                 datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
                 str(record["size"]),
                 str(record["user_turns"]),
-                "yes" if record["in_flight"] else "no",
+                (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).text(),
                 record["cwd"] or "-",
                 identity or "-",
             )
@@ -1109,7 +1075,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     finally:
         turn_status.compacting = False
     for notice in outcome.notices:
-        print(notice)
+        msgs.say_said(notice)
     if outcome.result is not None:
         msgs.say(msgs.COMPACTION_DONE, result=outcome.result)
 
@@ -1275,16 +1241,16 @@ def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
         try:
             max_models = int(arg.split()[0])
         except ValueError:
-            return msgs.MODELS_LIMIT_NOT_A_NUMBER.text(value=arg.split()[0])
+            return msgs.MODELS_LIMIT_NOT_A_NUMBER.said(value=arg.split()[0])
     provider_id = _state_value(state, "provider_id", cfg.provider_id)
     provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
     provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
     if not provider_id:
-        return msgs.NO_PROVIDER.text()
+        return msgs.NO_PROVIDER.said()
     try:
         model_ids = _models_for_provider(provider_id, provider_base_url, provider_api_key)
     except Exception as e:  # noqa: BLE001
-        return msgs.MODELS_NOT_LISTED.text(error=f"{type(e).__name__}: {e}")
+        return msgs.MODELS_NOT_LISTED.said(error=f"{type(e).__name__}: {e}")
     for mid in model_ids[:max_models]:
         msgs.say(msgs.MODEL_ROW, model=mid)
     if len(model_ids) > max_models:
@@ -1321,7 +1287,7 @@ def _cmd_apikey(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split()
     if not parts:
-        return msgs.USAGE.text(usage="/login <name> [apikey] [baseurl] [provider]")
+        return msgs.USAGE.said(usage="/login <name> [apikey] [baseurl] [provider]")
     name = parts[0]
     key, url, ptype = (parts[1:] + [None, None, None])[:3]
     if key is None and url is None and ptype is None:
@@ -1333,7 +1299,7 @@ def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
     # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
     prov = providers.get_provider(ptype or name)
     if ptype is None and prov is None:
-        return msgs.LOGIN_UNKNOWN_PROVIDER.text(name=name)
+        return msgs.LOGIN_UNKNOWN_PROVIDER.said(name=name)
     sdk = prov.effective_sdk_provider_id if prov is not None else ptype
     canonical = providers.normalize_provider_id(name) or name
     logins.save_login(logins.Login(
@@ -1475,7 +1441,7 @@ class Command:
 
     run: Callable[[str, dict, Config], str | None]
     usage: str
-    doc: str
+    doc: msgs.Message
     complete: str | None = None  # argument completion source (see replcomplete)
     turn_state: bool = False     # clears/rotates/compacts the live message list
 
@@ -1559,15 +1525,15 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
     name = parts[0].lower().lstrip("/")
     if name.startswith("-") and len(name) > 1:
         if aliases.pop(name[1:], None) is None:
-            return msgs.NO_ALIAS.text(name=name[1:])
+            return msgs.NO_ALIAS.said(name=name[1:])
         return None
     if len(parts) == 1:
         if name not in aliases:
-            return msgs.NO_ALIAS.text(name=name)
+            return msgs.NO_ALIAS.said(name=name)
         msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
         return None
     if name in COMMANDS:
-        return msgs.ALIAS_IS_COMMAND.text(name=name)
+        return msgs.ALIAS_IS_COMMAND.said(name=name)
     aliases[name] = parts[1].strip()
     msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
     return None
@@ -1582,15 +1548,15 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     if error:
         return error
     if len(stack) >= setcmd.MAX_LOAD_DEPTH:
-        return msgs.LOAD_TOO_DEEP.text()
+        return msgs.LOAD_TOO_DEEP.said()
     if path in stack:
-        return msgs.LOAD_CYCLE.text(path=path)
+        return msgs.LOAD_CYCLE.said(path=path)
     if not path.is_file():
-        return msgs.LOAD_NOT_FOUND.text(path=path)
+        return msgs.LOAD_NOT_FOUND.said(path=path)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as e:
-        return msgs.LOAD_UNREADABLE.text(path=path, error=f"{type(e).__name__}: {e}")
+        return msgs.LOAD_UNREADABLE.said(path=path, error=f"{type(e).__name__}: {e}")
     stack.append(path)
     try:
         for lineno, raw in enumerate(lines, 1):
@@ -1598,7 +1564,7 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
                 continue
             error = _run_script_line(raw, state, cfg)
             if error:
-                return msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=error)
+                return msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error)
     finally:
         stack.pop()
     msgs.say(msgs.LOADED, path=path)
@@ -1616,7 +1582,7 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     try:
         count, backup = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
     except OSError as exc:
-        return msgs.SAVE_FAILED.text(error=f"{type(exc).__name__}: {exc}")
+        return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
     if backup is not None:
         msgs.say(msgs.SAVED_WITH_BACKUP, lines=msgs.plural(count, "line"), path=path, backup=backup.name)
     else:
@@ -1677,7 +1643,7 @@ def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
         return None
     if arg:
         if not arg.isdigit():
-            return msgs.USAGE.text(usage="/cancel [id]. Bare cancels the active turn.")
+            return msgs.USAGE.said(usage="/cancel [id]. Bare cancels the active turn.")
         targets = [j for j in sup.jobs() if j.id == int(arg)]
     else:
         targets = sup.jobs("turn")
@@ -1695,14 +1661,14 @@ def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
     value = arg.strip().lower()
     if value not in ("on", "off"):
-        return msgs.USAGE.text(usage="/compact-auto on|off")
+        return msgs.USAGE.said(usage="/compact-auto on|off")
     return _apply_settings_result(setcmd.apply_set(state["settings"], "compact.auto", value), state, cfg)
 
 
 def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
     model, focus, ok = _split_compact_model(arg)
     if not ok:
-        return msgs.USAGE.text(usage="/compact [-m model] [focus]")
+        return msgs.USAGE.said(usage="/compact [-m model] [focus]")
     forced = focus == "up to here"
     if forced:
         focus = ""
@@ -1711,7 +1677,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         with stream_transport.net_role("Compacting"):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
     except Exception as e:  # noqa: BLE001
-        return msgs.COMPACTION_FAILED.text(error=f"{type(e).__name__}: {e}")
+        return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
     msgs.say(msgs.COMPACTION_DONE, result=result)
     return None
 
@@ -1742,13 +1708,13 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
     """Bare `/skill` lists the skills. `/skill <name> [request]` typed at the
     input line never reaches the table: it is a turn (see _handle_command)."""
     if arg:
-        return msgs.SKILL_IS_A_TURN.text()
+        return msgs.SKILL_IS_A_TURN.said()
     _print_skill_catalog()
     return None
 
 
 def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
-    rows = [(f"/{c.usage}", c.doc) for c in dict.fromkeys(COMMANDS.values())]
+    rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
     rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
     rows += [("@path/to/file", msgs.HELP_ATTACH.text()), ("exit", msgs.HELP_EXIT.text())]
     width = max(len(usage) for usage, _doc in rows)
@@ -1758,49 +1724,49 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-_LOAD = Command(_cmd_load, "load <file>", "run each line of a file as a command (also: source)", complete="path")
+_LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
-    "help": Command(_cmd_help, "help", "show this message"),
-    "set": Command(_cmd_set, "set [key [value]]", "list settings, show one, or change one; set -key clears one",
+    "help": Command(_cmd_help, "help", msgs.CMD_HELP),
+    "set": Command(_cmd_set, "set [key [value]]", msgs.CMD_SET,
                    complete="set"),
-    "show": Command(_cmd_show, "show [key]", "list every setting and its effective value", complete="keys"),
-    "save": Command(_cmd_save, "save", "rewrite the global jsrc from the live settings, handlers and aliases"),
+    "show": Command(_cmd_show, "show [key]", msgs.CMD_SHOW, complete="keys"),
+    "save": Command(_cmd_save, "save", msgs.CMD_SAVE),
     **{verb: _LOAD for verb in setcmd.LOAD_VERBS},
-    "on": Command(_cmd_on, "on [[^]event command]", "list or register an event handler", complete="events"),
-    "alias": Command(_cmd_alias, "alias [name [command]]", "list, show or define a command alias; alias -name removes"),
-    "model": Command(_cmd_model, "model [name]", "switch model for this session; bare opens the picker"),
-    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", "open the interactive provider/model picker"),
-    "provider": Command(_cmd_provider, "provider [id]", "show or switch the provider for this session",
+    "on": Command(_cmd_on, "on [[^]event command]", msgs.CMD_ON, complete="events"),
+    "alias": Command(_cmd_alias, "alias [name [command]]", msgs.CMD_ALIAS),
+    "model": Command(_cmd_model, "model [name]", msgs.CMD_MODEL),
+    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", msgs.CMD_PICK_MODEL),
+    "provider": Command(_cmd_provider, "provider [id]", msgs.CMD_PROVIDER,
                         complete="names"),
-    "baseurl": Command(_cmd_baseurl, "baseurl [url]", "set the provider base URL for this session (bare clears)"),
-    "apikey": Command(_cmd_apikey, "apikey [key]", "set the provider API key for this session (bare clears)"),
-    "login": Command(_cmd_login, "login <name> [apikey] [baseurl] [provider]", "load or save a provider login",
+    "baseurl": Command(_cmd_baseurl, "baseurl [url]", msgs.CMD_BASEURL),
+    "apikey": Command(_cmd_apikey, "apikey [key]", msgs.CMD_APIKEY),
+    "login": Command(_cmd_login, "login <name> [apikey] [baseurl] [provider]", msgs.CMD_LOGIN,
                      complete="names"),
-    "logout": Command(_cmd_logout, "logout", "clear provider credentials for this session"),
-    "models": Command(_cmd_models, "models [limit]", "list the provider's models"),
-    "reset": Command(_cmd_reset, "reset", "clear the conversation in-process; the jsonl keeps it", turn_state=True),
-    "wipe": Command(_cmd_wipe, "wipe", "rotate the session file away and clear the conversation", turn_state=True),
-    "persona": Command(_cmd_persona, "persona", "print the system prompt"),
-    "tools": Command(_cmd_tools, "tools", "show each tool's state (eager/lazy/ban) and the entry that decided it"),
+    "logout": Command(_cmd_logout, "logout", msgs.CMD_LOGOUT),
+    "models": Command(_cmd_models, "models [limit]", msgs.CMD_MODELS),
+    "reset": Command(_cmd_reset, "reset", msgs.CMD_RESET, turn_state=True),
+    "wipe": Command(_cmd_wipe, "wipe", msgs.CMD_WIPE, turn_state=True),
+    "persona": Command(_cmd_persona, "persona", msgs.CMD_PERSONA),
+    "tools": Command(_cmd_tools, "tools", msgs.CMD_TOOLS),
     "skill": Command(_cmd_skill, "skill [name [request]]",
-                     "list skills; with a name, send that skill's instructions (user-only ones too) with the request"),
+                     msgs.CMD_SKILL),
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
-                     "turns", "count the messages in context"),
+                     "turns", msgs.CMD_TURNS),
     "session": Command(lambda arg, state, cfg: msgs.say(msgs.SESSION_PATH, path=cfg.session_file),
-                       "session", "print the session file path"),
-    "jobs": Command(_cmd_jobs, "jobs", "list running turns/subagents"),
-    "cancel": Command(_cmd_cancel, "cancel [id]", "cancel a job by id, or the active turn"),
+                       "session", msgs.CMD_SESSION),
+    "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
+    "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
     # The async REPL drains its loop-owned queue before a line reaches the
     # table; this entry runs everywhere else, where nothing queues.
     "flush": Command(lambda arg, state, cfg: msgs.say(msgs.NO_QUEUED_PROMPTS),
-                     "flush", "drop all prompts queued behind the active turn"),
-    "compact": Command(_cmd_compact, "compact [-m model] [focus]", "append a compaction summary mark",
+                     "flush", msgs.CMD_FLUSH),
+    "compact": Command(_cmd_compact, "compact [-m model] [focus]", msgs.CMD_COMPACT,
                        turn_state=True),
-    "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", "toggle auto-compaction"),
+    "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", msgs.CMD_COMPACT_AUTO),
     "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
-                                     "force-refresh the local models.dev catalog now"),
-    "quit": Command(_cmd_quit, "quit [note]", "quit; a note is kept for the next turn"),
+                                     msgs.CMD_REFRESH_MODEL_CATALOG),
+    "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
 }
 
 
@@ -1818,12 +1784,12 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
         if body is None:
             return False, None
         if depth >= _MAX_ALIAS_DEPTH:
-            return True, msgs.ALIAS_TOO_DEEP.text(name=verb)
+            return True, msgs.ALIAS_TOO_DEEP.said(name=verb)
         expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
         handled, error = _run_command(expanded, state, cfg, depth + 1)
-        return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.text(name=verb, verb=expanded.split()[0])
+        return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
     if command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
-        return True, msgs.TURN_RUNNING.text(command=f"/{verb}")
+        return True, msgs.TURN_RUNNING.said(command=f"/{verb}")
     return True, command.run(arg, state, cfg)
 
 
@@ -1831,7 +1797,7 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
     """One line from a file of commands: an unknown verb is an error."""
     handled, error = _run_command(line, state, cfg)
     if not handled:
-        return msgs.UNKNOWN_COMMAND.text(verb=setcmd.split_command(line)[0])
+        return msgs.UNKNOWN_COMMAND.said(verb=setcmd.split_command(line)[0])
     return error
 
 
@@ -1846,8 +1812,10 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if not line.startswith("/") or _is_skill_invocation(line):
         return False
     handled, error = _run_command(line, state, cfg)
-    if error:
-        msgs.say(msgs.FAILED, error=error)
+    if isinstance(error, msgs.Said):
+        msgs.say_said(error)
+    elif error:
+        msgs.say(msgs.COMMAND_REFUSED, error=error)
     return handled
 
 
@@ -2211,11 +2179,11 @@ def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
     return _run_prompt(*args, **kwargs)
 
 
-def _bench_row_line(row: dict) -> str:
+def _bench_row_line(row: dict) -> msgs.Said:
     if not row.get("ok"):
-        return msgs.BENCH_FAILED.line(name=row["name"], error=row.get("error") or "failed")
+        return msgs.BENCH_FAILED.said(name=row["name"], error=row.get("error") or "failed")
     ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
-    return msgs.BENCH_ROW.line(name=row["name"], tokens=row.get("output_tokens", 0),
+    return msgs.BENCH_ROW.said(name=row["name"], tokens=row.get("output_tokens", 0),
                                tps=row.get("tok_per_s", 0.0), ttft=ttft, wall=row.get("wall_s") or 0.0)
 
 
@@ -2324,7 +2292,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
         }
         rows.append(row)
-        print(_bench_row_line(row), file=sys.stderr)
+        msgs.say_said(_bench_row_line(row), file=sys.stderr)
         if interrupted:
             break
 
@@ -2494,7 +2462,7 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1
-    print(result)
+    msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
 def _providers_json() -> list[dict]:
@@ -3442,70 +3410,53 @@ def main(argv: list[str] | None = None) -> int:
         from . import login_cli
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help="show the short usage guide and exit")
-    parser.add_argument("--help-full", action="help", help="show the complete option reference and exit")
-    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
-    parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
-    parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
-    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
-    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>")
-    parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
+    parser = msgs.ArgumentParser(add_help=False)
+    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help=msgs.OPT_HELP.text())
+    parser.add_argument("--help-full", action="help", help=msgs.OPT_HELP_FULL.text())
+    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.text())
+    parser.add_argument("--logout", metavar="PROVIDER", help=msgs.OPT_LOGOUT.text())
+    parser.add_argument("-p", "--prompt", nargs="?", const="-", help=msgs.OPT_PROMPT.text())
+    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help=msgs.OPT_FILE.text())
+    parser.add_argument("-a", "--agent", help=msgs.OPT_AGENT.text())
+    parser.add_argument("-m", "--model", help=msgs.OPT_MODEL.text())
     parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
-                        help="reach an endpoint with no saved login in one string: "
-                             "model[:api-key][[shape]][[effort]]@url. Shape is openai "
-                             "(default), responses, or anthropic; effort is the usual "
-                             "off..max ladder; the key defaults to a dummy. "
-                             "e.g. qwen27b@http://foo/v1  |  "
-                             "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
-                             "Desugars to --extra model.id/provider.id/provider.base_url/"
-                             "provider.api_key, so an explicit --extra still wins.")
-    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
-    parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
+                        help=msgs.OPT_URL.text())
+    parser.add_argument("-C", dest="cd", metavar="DIR", help=msgs.OPT_CD.text())
+    parser.add_argument("-d", "--debug", action="store_true", help=msgs.OPT_DEBUG.text())
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help=msgs.OPT_DEBUG_FILE.text())
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help="create or resume a named session under ~/.js/sessions/<agent>")
-    session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
-    parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
-    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
-    parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
-    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
-    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
-    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
-    parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
+    session_group.add_argument("-s", "--session", help=msgs.OPT_SESSION.text())
+    session_group.add_argument("--session-key", metavar="KEY", help=msgs.OPT_SESSION_KEY.text())
+    parser.add_argument("-n", "--no-save", action="store_true", help=msgs.OPT_NO_SAVE.text())
+    parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.text())
+    parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.text())
+    parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.text())
+    parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.text())
+    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.text())
+    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.text())
+    parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.text())
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
-                        help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
-                             "May be repeated. Wins over env and all config files.")
+                        help=msgs.OPT_EXTRA.text())
     parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
-                        help="layer jsrc.<name> preset files on top of the base config, in order "
-                             "(last wins). Comma-list and/or repeatable: --preset fast,debug. Looks for "
-                             "jsrc.<name> beside the global jsrc and in project .js/. Still below env/--extra.")
-    parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
-    parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
-    parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
-    parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
-    parser.add_argument("--last", action="store_true", help="resume the most recently used session for this agent")
-    parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
-    parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
-    parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
-    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
-    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
-    parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
-    parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
-    parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
+                        help=msgs.OPT_PRESET.text())
+    parser.add_argument("--ignore-local", action="store_true", help=msgs.OPT_IGNORE_LOCAL.text())
+    parser.add_argument("--ignore-global", action="store_true", help=msgs.OPT_IGNORE_GLOBAL.text())
+    parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.text())
+    parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.text())
+    parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.text())
+    parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.text())
+    parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.text())
+    parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.text())
+    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.text())
+    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.text())
+    parser.add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.text())
+    parser.add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.text())
+    parser.add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.text())
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
-                        help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
-                             "and ```!lang fences are left literal instead of running. Inline code runs by "
-                             "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
-                             "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
+                        help=msgs.OPT_IM_A_PUSSY.text())
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
-                        help="dry run: assemble what would be sent and print it instead of calling the model, "
-                             "then exit. LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded "
-                             "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
-                             ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
-                             "Never errors — unknown letters and unwritable paths print a warning and are skipped.")
-    parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
+                        help=msgs.OPT_PRINTONLY.text())
+    parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so

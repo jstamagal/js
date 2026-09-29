@@ -359,5 +359,5 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
 
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, context=context)
 
-    assert result.startswith("compacted:")
+    assert cli.compaction.compacted(result)
     assert any("rehydrated-marker" in str(m.get("content")) for m in messages) is reattached
