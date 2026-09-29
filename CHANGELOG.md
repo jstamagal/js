@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Tool exchanges at `ui.tools` 0-3 (`js-q7v.3`, `js-knk`).** Level 1 (the
+  default) prints one metrics line per exchange; level 2 adds the highlighted
+  call and a result preview ending in `...` and shown/total metrics, replacing
+  the old `[…truncated]` preview; level 3 prints the whole result. Each
+  exchange carries one ASCII `>` marker, so a saved transcript can be grepped
+  for it; the `▸`/`◂` glyphs are gone. Tool output, tool arguments and model
+  text pass through `clean()`, which strips escape sequences and control bytes,
+  so a model catting a binary no longer leaves the terminal needing `reset`.
+
+- **Markdown answers (`js-d6m.3`).** On a terminal, finished Markdown blocks are
+  rendered once and committed; only the last block is live. `ui.markdown off`
+  or a non-terminal stdout writes plain text.
+
 - **Reasoning on screen (`js-q7v.2`).** Thinking now streams separately from the
   answer and stays visible by default. `/set ui.reasoning 0–3` controls display;
   the standard async screen supports auto-collapse and Ctrl-R expansion without

@@ -4,9 +4,8 @@ Network-related messages from the core system js module use ANSI 16 light yellow
 """
 
 CYAN     = "\033[96m"  # banner, status accents
-MAGENTA  = "\033[95m"  # tool-call trace
+MAGENTA  = "\033[95m"  # banner labels
 YELLOW   = "\033[93m"  # input prompt
-WHITE    = "\033[97m"  # assistant text (high contrast on dark term)
 GREEN    = "\033[92m"  # banner footer, ok markers
 ORANGE   = "\033[91m"  # errors (bright red reads orange)
 GREY     = "\033[90m"  # dim metadata (resume markers, truncated notes)

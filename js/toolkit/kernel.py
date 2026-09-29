@@ -191,6 +191,9 @@ def render_execution(
 ) -> None:
     if level == "quiet" and not error and not interrupted:
         return
+    from ..display import clean
+
+    code, stdout, stderr, display, error = (clean(part) for part in (code, stdout, stderr, display, error))
     from rich.panel import Panel
     from rich.syntax import Syntax
     from rich.table import Table
@@ -268,8 +271,10 @@ def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
         return
     from rich.text import Text
 
+    from ..display import clean
+
     console = _console()
-    lines = message.splitlines() or [""]
+    lines = clean(message).splitlines() or [""]
     shown, hidden = _clip("\n".join(lines), render_max_lines(context))
     for line in shown.splitlines():
         console.print(Text("· ", style="dim") + Text(line, style=style))

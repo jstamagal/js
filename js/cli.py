@@ -30,6 +30,7 @@ from . import supervisor
 
 from . import attach, codex_auth, colors as C
 from . import compaction
+from . import display as display_mod
 from . import dotenv
 from . import endpoint_uri
 from . import events
@@ -612,6 +613,14 @@ class _StdoutTee:
         except Exception:
             pass
         self._sink.write(text)
+
+    def write_unlogged(self, text: str) -> None:
+        """Terminal-only material (a live region redrawn in place) skips the log."""
+        try:
+            write = getattr(self._primary, "write_unlogged", self._primary.write)
+            write(text)
+        except Exception:
+            pass
 
     def flush(self) -> None:
         try:
@@ -1965,7 +1974,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     if (sink := _transcript_sink(telemetry)) is not None:
                         sink.write_assistant(content)
                     with _mute_transcript_tee(_transcript_sink(telemetry)):
-                        print(content)
+                        display_mod.print_answer(
+                            content, sys.stdout,
+                            markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
+                        )
                 if save:
                     _maybe_auto_compact(cfg, {
                         "system": system,
@@ -2114,7 +2126,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         if reasoning is not None:
             turn_kwargs["reasoning_effort_override"] = reasoning_override
         if not quiet:
-            print(f"{C.CYAN}▸ bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
+            print(f"{C.CYAN}bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
         ok, err = True, None
         t_wall = time.time()
         try:
@@ -2685,7 +2697,13 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_eof=on_eof,
     )
     previous_reasoning_factory = telemetry.reasoning_factory
+    previous_display_factory = telemetry.display_factory
     telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
+    telemetry.display_factory = lambda markdown: display_mod.Display(
+        sys.stdout.write,
+        live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
+        flush=sys.stdout.flush,
+    )
     try:
         with screen.capture_stdio(loop, scrollback, app):
             if banner:
@@ -2693,6 +2711,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             await app.run_async()
     finally:
         telemetry.reasoning_factory = previous_reasoning_factory
+        telemetry.display_factory = previous_display_factory
         supervisor.set_current(None)
         # Graceful quit (EOF / exit): let queued and in-flight turns finish
         # before teardown so submitted work isn't silently dropped. To abandon a

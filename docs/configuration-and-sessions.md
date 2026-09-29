@@ -61,7 +61,10 @@ as `<set>`.
 | `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
 | `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| `runtime.trace` | `on` | Show the per-turn run line, per-call stats and tool exchanges as the model runs; `ui.tools` sets how much of each exchange. |
+| `ui.tools` | `1` | Tool exchange display: `0` nothing, `1` one metrics line (`read: 4054B 292L`), `2` the call plus the first `ui.tools_preview_lines` result lines, `...` and shown/total metrics, `3` the call plus the whole result. |
+| `ui.tools_preview_lines` | `12` | Lines of a tool's command and of its result shown at `ui.tools 2`. |
+| `ui.markdown` | `on` | Render assistant Markdown on a terminal; off writes the text as it arrives. Output that is not a terminal is always plain text. |
 | `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
 | `compact.auto` | `on` | Automatic cache-aware context compaction. |
 | `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
@@ -159,7 +162,7 @@ coercion as `set`.
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
 | `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
 | `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| `JS_TRACE` | `runtime.trace` | `on` | Show the per-turn run line, per-call stats and tool exchanges as the model runs. |
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and

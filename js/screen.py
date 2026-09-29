@@ -55,7 +55,10 @@ class Scrollback:
     def __init__(self) -> None:
         self.buffer = Buffer(read_only=True, document=Document("", 0))
         self._pending = ""
-        self._reasoning: list[ReasoningBlock] = []
+        # Replaceable regions (reasoning blocks, the live answer block), in
+        # buffer order; each keeps its offsets current as text around it moves.
+        self._spans: list[ReasoningBlock | AnswerSpan] = []
+        self._answer: AnswerSpan | None = None
 
     def append(self, text: str) -> None:
         if _ON_CONSOLE:
@@ -78,10 +81,10 @@ class Scrollback:
         trimmed = "\n".join(lines[-SCROLLBACK_LINES:])
         removed = len(text) - len(trimmed)
         if removed:
-            for block in self._reasoning:
+            for block in self._spans:
                 block.start = max(0, block.start - removed)
                 block.end = max(0, block.end - removed)
-            self._reasoning[:] = [block for block in self._reasoning if block.end > 0]
+            self._spans[:] = [block for block in self._spans if block.end > 0]
         self.buffer.set_document(
             Document(trimmed, len(trimmed) if follow else max(0, min(cursor - removed, len(trimmed)))),
             bypass_readonly=True,
@@ -93,24 +96,40 @@ class Scrollback:
     def reasoning(self, level: int) -> ReasoningBlock:
         self.flush()
         block = ReasoningBlock(self, level, len(self.buffer.text))
-        self._reasoning.append(block)
+        self._spans.append(block)
         return block
 
-    def _render_reasoning(self, block: ReasoningBlock, *, new_text: bool = False) -> None:
+    def answer_update(self, rendered: str) -> None:
+        """Show `rendered` as the live answer block, replacing the previous one."""
+        if self._answer is None:
+            self.flush()
+            self._answer = AnswerSpan(len(self.buffer.text))
+            self._spans.append(self._answer)
+        self._answer.text = rendered
+        self._render_span(self._answer, new_text=True)
+
+    def answer_commit(self, rendered: str) -> None:
+        """Replace the live answer block with its final text and close it."""
+        self.answer_update(rendered)
+        if self._answer in self._spans:
+            self._spans.remove(self._answer)
+        self._answer = None
+
+    def _render_span(self, block: ReasoningBlock | AnswerSpan, *, new_text: bool = False) -> None:
         self.flush()
         doc = self.buffer.document
-        if block not in self._reasoning:
+        if block not in self._spans:
             if not new_text:
                 return
             block.start = block.end = len(doc.text)
-            self._reasoning.append(block)
+            self._spans.append(block)
         rendered = block.render()
         if _ON_CONSOLE:
             rendered = _CONSOLE_UNDRAWABLE.sub("", rendered)
         end = block.end
         change = len(rendered) - (end - block.start)
         text = doc.text[:block.start] + rendered + doc.text[end:]
-        for following in self._reasoning:
+        for following in self._spans:
             if following is not block and following.start >= end:
                 following.start += change
                 following.end += change
@@ -123,13 +142,27 @@ class Scrollback:
         self._set_text(text, cursor, follow=doc.is_cursor_at_the_end)
 
     def toggle_reasoning(self) -> bool:
-        blocks = [block for block in self._reasoning if block.level and block.text]
+        blocks = [
+            block for block in self._spans
+            if isinstance(block, ReasoningBlock) and block.level and block.text
+        ]
         collapse = not any(block.collapsed for block in blocks)
         for block in blocks:
             block.manual = True
             block.collapsed = collapse
-            self._render_reasoning(block)
+            self._render_span(block)
         return bool(blocks)
+
+
+class AnswerSpan:
+    """The live answer block: rendered Markdown that is replaced until committed."""
+
+    def __init__(self, position: int) -> None:
+        self.start = self.end = position
+        self.text = ""
+
+    def render(self) -> str:
+        return self.text
 
 
 class ReasoningBlock:
@@ -157,17 +190,17 @@ class ReasoningBlock:
 
     def append(self, text: str) -> None:
         self.text += text
-        self.owner._render_reasoning(self, new_text=True)
+        self.owner._render_span(self, new_text=True)
 
     def answer_started(self) -> None:
         if self.level == 1 and not self.manual and not self.collapsed:
             self.collapsed = True
-            self.owner._render_reasoning(self)
+            self.owner._render_span(self)
 
     def finish(self, tokens: int | None = None) -> None:
         self.tokens = tokens
         self.answer_started()
-        self.owner._render_reasoning(self)
+        self.owner._render_span(self)
 
 
 class ScreenReasoningDisplay:
@@ -192,6 +225,30 @@ class ScreenReasoningDisplay:
 
     def finish(self, tokens: int | None = None) -> None:
         self._loop.call_soon_threadsafe(self._apply, "finish", tokens)
+
+
+class ScreenLive:
+    """`display.LiveSurface` over the scrollback. Calls are queued on the loop
+    in the same order as ordinary stdout writes."""
+
+    def __init__(self, loop, scrollback: Scrollback, app: Application) -> None:
+        self._loop, self._scrollback, self._app = loop, scrollback, app
+
+    def width(self) -> int:
+        try:
+            return max(20, self._app.output.get_size().columns - 1)
+        except Exception:  # noqa: BLE001 - output not attached yet
+            return 79
+
+    def _apply(self, method: str, rendered: str) -> None:
+        getattr(self._scrollback, method)(rendered)
+        self._app.invalidate()
+
+    def update(self, rendered: str) -> None:
+        self._loop.call_soon_threadsafe(self._apply, "answer_update", rendered)
+
+    def commit(self, rendered: str) -> None:
+        self._loop.call_soon_threadsafe(self._apply, "answer_commit", rendered)
 
 
 class _ScreenStdout:

@@ -109,6 +109,7 @@ REPL commands:
 /on [event handler]           list or register event hooks
 /set model.reasoning_effort high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
+/set ui.tools 3                show every tool call and its whole result
 /set compact.auto off
 /on turn_start set compact.auto off
 /turns
@@ -147,6 +148,21 @@ auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
 token counts. In the standard async screen, **Ctrl-R** toggles retained reasoning
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
+
+Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
+one line per exchange, `> read: 4054B 292L`, with the exit status when a shell
+command exits nonzero; `2` shows the call with its command highlighted, the
+first `ui.tools_preview_lines` lines of the result, `...` when there is more,
+and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
+`3` shows the call and the whole result. Each exchange starts with one `>`
+line, so `grep '> shell'` over a saved transcript finds every shell call. Tool
+output, tool arguments and model text are stripped of escape sequences and
+control bytes before the terminal sees them.
+
+Assistant Markdown is rendered on a terminal: each finished block (paragraph,
+list, fenced code) is highlighted once and stays put; only the block still
+being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
+Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued prompts. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
