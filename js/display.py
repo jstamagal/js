@@ -316,8 +316,8 @@ _HEADER_VALUE_CHARS = 80
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
 _SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
-# A `read` result line: `N:hash|` before the file's own text.
-_READ_GUTTER = re.compile(r"^\d+:[0-9a-f]+\|")
+# A `read` result line: `N|` before the file's own text.
+_READ_GUTTER = re.compile(r"^\d+\|")
 
 
 @dataclass
@@ -501,7 +501,7 @@ def _highlight_lines(lines: list[str], lexer: str, width: int) -> list[str]:
 def _read_body_lines(lines: list[tuple[str, bool]], args: dict | None,
                      width: int) -> list[str] | None:
     """A `read` result's lines with the file text highlighted by the file's
-    type. `N:hash|` gutters, and lines without one when others have one (the
+    type. `N|` gutters, and lines without one when others have one (the
     paging note), stay plain. None when the file type has no lexer."""
     if not isinstance(args, dict) or not lines:
         return None

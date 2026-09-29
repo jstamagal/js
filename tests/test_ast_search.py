@@ -57,9 +57,9 @@ def test_ast_search_matches_and_rewrites_hyphen_leading_yaml_pattern(tmp_path):
 
     assert matched.splitlines() == [
         f"{target}:2",
-        f"2:{fs._line_hash('  - read')}|  - read",
+        "2|  - read",
         f"{target}:3",
-        f"3:{fs._line_hash('  - shell')}|  - shell",
+        "3|  - shell",
     ]
 
     dry_run = ast_search(
@@ -94,9 +94,9 @@ def test_ast_search_matches_calls_across_layout_but_only_parsed_code(tmp_path):
     actual = ast_search("foo($$$ARGS)", path="calls.txt", lang="Python", context=context)
 
     expected_source = ["foo(1)", "foo(", "    1,", "    2,", ")"]
-    expected = [f"{target}:1", f"1:{fs._line_hash(expected_source[0])}|{expected_source[0]}", f"{target}:2"]
+    expected = [f"{target}:1", f"1|{expected_source[0]}", f"{target}:2"]
     expected.extend(
-        f"{line_number}:{fs._line_hash(line)}|{line}"
+        f"{line_number}|{line}"
         for line_number, line in enumerate(expected_source[1:], start=2)
     )
     assert actual.splitlines() == expected
@@ -111,7 +111,7 @@ def test_ast_search_limits_and_deduplicates_results(tmp_path):
     first = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
     second = ast_search("foo($ARG)", path="calls.py", max_results=1, context=context)
 
-    assert first.startswith(f"{target}:1\n1:{fs._line_hash('foo(1)')}|foo(1)")
+    assert first.startswith(f"{target}:1\n1|foo(1)")
     assert "[additional matches omitted" in first
     assert second == first + "\n[deduplicated repeated search]"
 

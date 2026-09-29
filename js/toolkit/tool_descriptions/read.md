@@ -2,9 +2,11 @@ Read one file: text, PDF, image, or notebook. PDFs come back as extracted text,
 images as images when the model has vision. A notebook (.ipynb) comes back as
 its cells, each with its id, source and a summary of its outputs; edit cells
 with notebook_edit. A line or byte range reads a notebook's raw JSON. Text comes
-back as `12:ab|content`: line number, short hash of the line, then the text.
-Lines are returned whole, however long they are. The prefix is not file
-content; strip it when you quote text back into an edit.
+back as `12|content`: line number, then the text. Lines are returned whole,
+however long they are. The prefix is not file content; strip it when you quote
+text back into an edit. Reading the same lines again while the file is
+unchanged returns a short note naming the earlier read call whose result still
+shows them.
 
 A long file stops at a line limit and says how to continue; use `range` for the
 rest. `range` also takes a byte range, `start_byte` (0-based offset) and

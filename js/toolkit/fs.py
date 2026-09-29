@@ -110,10 +110,6 @@ def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
-def _line_hash(line: str) -> str:
-    return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
-
-
 def _result_page_bytes(context: ToolContext) -> int:
     """Bytes of text one tool result can carry to the model whole: half the
     tighter of the inline spill cap and the hard result cap, leaving room for
@@ -308,7 +304,7 @@ def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
 def _format_numbered_lines(lines: list[str], start_line: int) -> str:
     out: list[str] = []
     for idx, line in enumerate(lines, start=start_line):
-        out.append(f"{idx}:{_line_hash(line)}|{line}")
+        out.append(f"{idx}|{line}")
     return "\n".join(out)
 
 
@@ -565,6 +561,9 @@ def fs_read(
     end = min(total, page_end, raw_end or page_end)
 
     selected = all_lines[start - 1:end]
+    numbered = bool(show_line_numbers)
+    read_key = (content_hash, start, end, numbered)
+    earlier = context.shown_read(target, read_key)
     context.remember_read(
         target,
         content_hash,
@@ -574,14 +573,21 @@ def fs_read(
         whole_file=start == 1 and end == total,
     )
     context.remember_content(target, content_hash, data)
-    # Lines are returned whole: `read` pages by line, not by column, so a cut
-    # line is unreachable content. max_read_bytes/max_read_lines bound the read,
-    # and the tool-result spill bounds what reaches the model.
-    body = _format_numbered_lines(selected, start) if show_line_numbers else "\n".join(selected)
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
-    return f"{body}{suffix}"
+    if earlier is not None:
+        return (
+            f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
+            f"(hash {content_hash}); that result is current.{suffix}"
+        )
+    # Lines are returned whole: `read` pages by line, not by column, so a cut
+    # line is unreachable content. max_read_bytes/max_read_lines bound the read,
+    # and the tool-result spill bounds what reaches the model.
+    body = _format_numbered_lines(selected, start) if numbered else "\n".join(selected)
+    result = f"{body}{suffix}"
+    context.offer_read(target, read_key, result)
+    return result
 
 
 def _read_call(target: Path, start_line: int, end_line: int | None = None) -> str:
@@ -853,6 +859,141 @@ def _transform_read_ranges(
     return merged
 
 
+# Characters the fuzzy match reads as their ASCII form: smart quotes, Unicode
+# dashes and minus, and the no-break and typographic spaces. Each one maps to
+# one character, so a line's length is kept up to its trailing whitespace.
+_FUZZY_CHARS = str.maketrans({
+    **dict.fromkeys("\u2018\u2019\u201a\u201b", "'"),
+    **dict.fromkeys("\u201c\u201d\u201e\u201f", '"'),
+    **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212", "-"),
+    **dict.fromkeys("\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+                    "\u202f\u205f\u3000", " "),
+})
+
+
+def _line_parts(line: str) -> tuple[str, str, str]:
+    """A line split into its text, its trailing whitespace and its line ending."""
+    content = line.rstrip("\r\n")
+    body = content.rstrip()
+    return body, content[len(body):], line[len(content):]
+
+
+def _fuzzy_view(text: str) -> tuple[str, list[int]]:
+    """*text* with each line's trailing whitespace dropped and _FUZZY_CHARS
+    replaced, and for each character of that view the index in *text* of the
+    character it stands for."""
+    view: list[str] = []
+    origin: list[int] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        body, trailing, ending = _line_parts(line)
+        view.append(body.translate(_FUZZY_CHARS))
+        origin.extend(range(offset, offset + len(body)))
+        offset += len(body) + len(trailing)
+        view.append(ending)
+        origin.extend(range(offset, offset + len(ending)))
+        offset += len(ending)
+    return "".join(view), origin
+
+
+def _keep_untouched_chars(original: str, old: str, new: str) -> str:
+    """*new*, one line, with the characters it keeps from *old* taken from
+    *original*, the file's line that *old* matched. A kept character the file
+    writes in a non-ASCII form stays in its ASCII form where the edit inserts
+    that same ASCII character right beside it, so lengthening an en dash to
+    ``--`` gives ``--``."""
+    orig_body, orig_trailing, orig_ending = _line_parts(original)
+    old_body, old_trailing, old_ending = _line_parts(old)
+    new_body, new_trailing, new_ending = _line_parts(new)
+    if len(orig_body) != len(old_body):
+        return new
+    opcodes = difflib.SequenceMatcher(None, old_body, new_body, autojunk=False).get_opcodes()
+    body: list[str] = []
+    for index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
+        if tag != "equal":
+            body.append(new_body[j1:j2])
+            continue
+        kept = list(orig_body[i1:i2])
+        before = new_body[opcodes[index - 1][3]:opcodes[index - 1][4]] if index else ""
+        after = new_body[opcodes[index + 1][3]:opcodes[index + 1][4]] if index + 1 < len(opcodes) else ""
+        position = i1
+        while position < i2 and orig_body[position] != old_body[position] and before.endswith(old_body[position]):
+            kept[position - i1] = old_body[position]
+            position += 1
+        position = i2 - 1
+        while position >= i1 and orig_body[position] != old_body[position] and after.startswith(old_body[position]):
+            kept[position - i1] = old_body[position]
+            position -= 1
+        body.append("".join(kept))
+    trailing = orig_trailing if old_trailing == new_trailing else new_trailing
+    ending = orig_ending if old_ending == new_ending else new_ending
+    return "".join(body) + trailing + ending
+
+
+def _keep_untouched(original: str, old: str, new: str) -> str:
+    """The replacement for *original*, the file text that *old* matched after
+    fuzzy normalisation: *new*, with every line and character the edit left as
+    it was in *old* taken from *original*, byte for byte."""
+    orig_lines = original.splitlines(keepends=True)
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    if len(orig_lines) == len(old_lines) - 1:
+        # The whitespace-only last line of *old* matched no whitespace in the
+        # file, so the match ends at the line ending before it.
+        orig_lines.append("")
+    if len(orig_lines) != len(old_lines):
+        return new
+    out: list[str] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        None, old_lines, new_lines, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            out.extend(orig_lines[i1:i2])
+        elif tag == "replace" and i2 - i1 == j2 - j1:
+            out.extend(
+                _keep_untouched_chars(orig, before, after)
+                for orig, before, after in zip(
+                    orig_lines[i1:i2], old_lines[i1:i2], new_lines[j1:j2], strict=True
+                )
+            )
+        else:
+            out.extend(new_lines[j1:j2])
+    return "".join(out)
+
+
+def _widen_over_whitespace(
+    text: str, old: str, positions: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Fuzzy match spans in *text* grown over the whitespace _fuzzy_view drops
+    from *old*: the end over up to as many whitespace characters as *old*'s
+    last line ends with, when that line has no line ending, and the start back
+    over up to as many as *old*'s first line holds, when that line is only
+    whitespace. A span never grows into its neighbour."""
+    lines = old.splitlines(keepends=True)
+    first_body, first_trailing, first_ending = _line_parts(lines[0])
+    last_body, last_trailing, last_ending = _line_parts(lines[-1])
+    back = len(first_trailing) if first_ending and not first_body else 0
+    forward = 0 if last_ending else len(last_trailing)
+
+    def blank(char: str) -> bool:
+        return char.isspace() and char not in "\r\n"
+
+    widened: list[tuple[int, int]] = []
+    for index, (start, end) in enumerate(positions):
+        floor = widened[-1][1] if widened else 0
+        ceiling = positions[index + 1][0] if index + 1 < len(positions) else len(text)
+        for _ in range(back):
+            if start <= floor or not blank(text[start - 1]):
+                break
+            start -= 1
+        for _ in range(forward):
+            if end >= ceiling or not blank(text[end]):
+                break
+            end += 1
+        widened.append((start, end))
+    return widened
+
+
 def _apply_edit(
     text: str,
     old: str,
@@ -863,10 +1004,16 @@ def _apply_edit(
     target: Path,
     context: ToolContext,
     seen_ranges: list[tuple[int, int]],
-) -> tuple[str, int, list[tuple[int, int]]] | str:
-    """Apply one exact replacement to ``text`` in memory. Returns the updated text
-    and its match count, or an ERROR string. Line endings are normalised per edit
-    against the text as it stands *now*, so a later edit sees an earlier one's result."""
+) -> tuple[str, int, list[tuple[int, int]], bool] | str:
+    """Apply one replacement to ``text`` in memory. Returns the updated text,
+    its match count, the read coverage moved to it, and whether the match was
+    fuzzy; or an ERROR string. Line endings are normalised per edit against the
+    text as it stands *now*, so a later edit sees an earlier one's result.
+
+    When ``old`` is not in the text exactly, it is matched in _fuzzy_view of
+    both, each match grows over the whitespace that view dropped from ``old``
+    (_widen_over_whitespace), and the replacement keeps the file's own bytes
+    wherever the edit left ``old`` as it was (_keep_untouched)."""
     line_ending = _detect_line_ending(text)
     if any(char in text or char in new for char in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
         return f"ERROR: {label}unsupported line separator; patch requires LF, CRLF, or CR lines"
@@ -879,7 +1026,12 @@ def _apply_edit(
             f"ERROR: {label}old_string and new_string are identical after "
             "line-ending normalization, so this edit would not change the file"
         )
+    haystack, needle, origin = text, old_norm, None
     occurrences = _count_overlapping(text, old_norm)
+    if occurrences == 0:
+        haystack, origin = _fuzzy_view(text)
+        needle = _fuzzy_view(old_norm)[0]
+        occurrences = _count_overlapping(haystack, needle) if needle else 0
     if occurrences == 0:
         return f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
     if occurrences > 1 and not replace_all:
@@ -887,14 +1039,28 @@ def _apply_edit(
     positions: list[tuple[int, int]] = []
     cursor = 0
     while True:
-        start = text.find(old_norm, cursor)
+        start = haystack.find(needle, cursor)
         if start < 0:
             break
-        end = start + len(old_norm)
-        positions.append((start, end))
+        end = start + len(needle)
+        positions.append((start, end) if origin is None else (origin[start], origin[end - 1] + 1))
         cursor = end
         if not replace_all:
             break
+    fuzzy = origin is not None
+    if fuzzy:
+        positions = _widen_over_whitespace(text, old_norm, positions)
+    replacements = [
+        _keep_untouched(text[start:end], old_norm, new_norm) if fuzzy else new_norm
+        for start, end in positions
+    ]
+    if fuzzy and all(text[start:end] == replacement
+                     for (start, end), replacement in zip(positions, replacements, strict=True)):
+        return (
+            f"ERROR: {label}old_string matched only after normalising quotes, dashes and "
+            "whitespace, and new_string differs from it only there, so this edit would not "
+            "change the file"
+        )
     line_ranges = [_line_span(text, start, end) for start, end in positions]
     guard = context.require_read(
         target,
@@ -907,11 +1073,11 @@ def _apply_edit(
     updated = text
     transformed = seen_ranges
     line_delta = new_norm.count(line_ending) - old_norm.count(line_ending)
-    for start, end in reversed(positions):
+    for (start, end), replacement in reversed(list(zip(positions, replacements, strict=True))):
         start_line, end_line = _line_span(updated, start, end)
-        updated = updated[:start] + new_norm + updated[end:]
+        updated = updated[:start] + replacement + updated[end:]
         transformed = _transform_read_ranges(transformed, start_line, end_line, line_delta)
-    return updated, len(positions), transformed
+    return updated, len(positions), transformed, fuzzy
 
 
 def patch(
@@ -1004,6 +1170,7 @@ def patch(
         total_lines = max(1, len(source.splitlines()))
         seen_ranges = [(1, total_lines)]
     replacements = 0
+    fuzzy_edits = 0
     for index, (old_text, new_text, edit_replace_all) in enumerate(pending, start=1):
         applied = _apply_edit(
             updated,
@@ -1017,8 +1184,9 @@ def patch(
         )
         if isinstance(applied, str):
             return applied
-        updated, count, seen_ranges = applied
+        updated, count, seen_ranges, fuzzy = applied
         replacements += count if edit_replace_all else 1
+        fuzzy_edits += fuzzy
 
     data = updated.encode("utf-8")
     context.snapshot(target)
@@ -1039,6 +1207,9 @@ def patch(
         summary = f"{len(pending)} edit{'s' if len(pending) != 1 else ''}"
     else:
         summary = f"{replacements} replacement{'s' if replacements != 1 else ''}"
+    if fuzzy_edits:
+        who = f"{fuzzy_edits} of them" if batch else "old_string"
+        summary += f", {who} matched after normalising quotes, dashes and whitespace"
     return f"patched {target} ({summary}, hash {content_hash})\n{diff}"
 
 
@@ -1760,7 +1931,7 @@ def tools() -> tuple[Tool, ...]:
                     "additionalProperties": False,
                     "description": "Optional line range or byte range for partial reads.",
                 },
-                "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its anchored line number."},
+                "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its line number."},
             },
             required=("file_path",),
             read_only=True,
