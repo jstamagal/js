@@ -1,7 +1,11 @@
 # Sessions, the ~/.js home, and the fixes around them
 
 Design agreed with the operator on 2026-09-29. Nothing here is built yet.
-Each section names the bead that carries it.
+Beads: epic js-1g1.
+
+The harness is for the agent. Layouts and formats here are chosen first for
+an agent working with ripgrep and head; the operator's picker reads the same
+files.
 
 ## 1. The ~/.js home migration, done right
 
@@ -29,8 +33,10 @@ The automatic migration stays. The fixed one:
    roots being loaded. Every dropped entry is printed, per agent.
 3. Rewrites a moved relative symlink so it resolves to the same absolute
    target it did before the move.
-4. Flattens `sessions/<agent>/*.jsonl` into one `sessions/` directory (see
-   §2). Doing it here means sessions move once.
+4. Re-files sessions by start directory, puts subagent runs under their
+   parent, and writes each session's `.txt` transcript (see §2). Doing it
+   here means sessions move once. Migrated sessions keep their file names,
+   so `--session <old name or hash tail>` still resolves.
 5. Prints one line per move, as today, and writes the marker.
 
 Separately, `paths.ensure_home()` creates every directory of the layout on
@@ -79,8 +85,55 @@ yoda's and darkstar's lists are gathered and shown before editing.
 
 ### Storage
 
-- One flat `~/.js/sessions/` directory. The agent is recorded inside the
-  file, not in the path.
+Sessions are filed by the directory they were started in, as Claude Code
+does. The directory name is the start path with `/` and `_` replaced by `-`;
+the exact path is in the session header.
+
+```
+~/.js/sessions/
+  -home-ronald-rump/
+  -home-ronald-rump-js/
+    2026-09-29T0802-6d65.jsonl     the record (source of truth, append-only)
+    2026-09-29T0802-6d65.txt       readable transcript, regenerated from the jsonl
+    merrygoround6969420.jsonl      a named session, filed where it was created
+    merrygoround6969420.txt
+    2026-09-29T0802-6d65/          that session's subagent runs
+      task-1789016792-c0d9.jsonl
+  -home-ronald-rump-js-js-toolkit/
+```
+
+- An agent in `~/js/js/toolkit` greps
+  `~/.js/sessions/-home-ronald-rump-js-js-toolkit/*.txt`. A prefix glob
+  (`-home-ronald-rump-js*`) covers a whole tree, like `dir:~/js/**`.
+- New generated names are `YYYY-MM-DDTHHMM-xxxx`: readable, short, and `ls`
+  order is time order. Named sessions keep their names.
+- Subagent runs live in a folder named after their parent, so a plain grep of
+  a project folder does not hit them.
+
+**The `.txt` transcript**, rewritten whenever the session changes:
+
+```
+agent: defaultagent   dir: /home/ronald_rump/js   mode: repl
+models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
+started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
+branched-from: -
+tags: js · linux admin
+
+#0001 08:02 you  APE
+#0014 08:31 you  the spilled result is one line, read can't get past it
+#0015 08:31 tool:shell  🦍 look at the spill file  $ wc -lc result-8716….txt  → exit 0, 91984B
+#0016 08:32 ape  the file has no real newlines, it's escaped JSON…
+```
+
+- A fixed header: `head -6 *.txt` summarises a folder.
+- One numbered message per line (multi-line messages continue indented), so
+  `rg -n` hits are readable and citable as `#0014`.
+- Tool calls show their label (the model's accompanying text), the command's
+  first line, exit and size. Output is not in the `.txt`; it is in the
+  `.jsonl` at the same message number.
+
+**The record** (`.jsonl`):
+
 - **Every assistant message carries a stamp:** model, provider, reasoning
   level. Resume uses the last stamp, so a session resumes on the model it
   was last talking to, not the one it started with. Today only session
@@ -91,6 +144,14 @@ yoda's and darkstar's lists are gathered and shown before editing.
 - `/name <text>` appends a pinned title record. There are no model-written
   titles: the operator's first message is nearly always "APE", and
   generated titles in other harnesses are usually wrong.
+
+**`--session`:**
+
+- `js --session` alone opens the picker.
+- `js --session NAME` creates or resumes a session by name, as today; scripts
+  rely on it. Lookup is the current directory's folder first, then every
+  folder. A name found in two folders is refused with both paths listed.
+- A generated name or a unique tail of it (`--session 6d65`) resumes, as today.
 
 ### Session kinds
 
@@ -107,8 +168,8 @@ yoda's and darkstar's lists are gathered and shown before editing.
 
 ### The picker
 
-Opened by `/session` in the REPL or `js --resume` (`-r` is taken by
-`--reasoning`). It never opens on its own.
+Opened by `/session` in the REPL or a bare `js --session`. It never opens on
+its own.
 
 Default screen:
 
