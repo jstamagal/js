@@ -325,10 +325,12 @@ class Jail:
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
         # The jail's /tmp is private, so the host /tmp is as hidden as the
-        # tmpfs trees: a PATH directory or interpreter there is bound back too.
-        unseen = [*hidden, Path("/tmp")]
+        # tmpfs trees: a PATH directory or interpreter under it is bound back
+        # too. /tmp itself stays the private one.
+        host_tmp = Path("/tmp")
         implicit = [b for b in implicit
-                    if any(_under(b.path, h) for h in unseen) and not covered(b.path)]
+                    if (any(_under(b.path, h) for h in hidden) or host_tmp in b.path.parents)
+                    and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
         for bind in binds:

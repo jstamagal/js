@@ -178,7 +178,9 @@ takes the effort as thinking (`js/reasoning.py`):
 - Every other model gets `thinking: {"type": "enabled", "budget_tokens": N}`:
   minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000. The
   budget leaves 1024 tokens of `max_tokens` for the answer; with no known output
-  cap, `max_tokens` is the budget plus 8192. `off` sends no thinking.
+  cap, `max_tokens` is the budget plus 8192. `off` sends no thinking. With a
+  budget, js sends no `sampling.temperature` or `sampling.top_k`: Anthropic
+  rejects either alongside budget thinking.
 
 A `thinking` object in `provider.extra` replaces the one js builds.
 
@@ -197,6 +199,15 @@ Codex reasoning item's encrypted content are stored on the assistant record as
 `reasoning_from`. They are sent back, on every later turn and after resume, only
 to that same provider and model; after a model switch the record falls back to
 its plain `reasoning_content` and the rules above.
+
+A signature is bound to the history before it (Anthropic's preserved-thinking
+check), so js drops the signed parts that follow any edit it makes to earlier
+history: after the first tool result that clearing blanks, on the tail a
+keep-tail compaction keeps (in memory and on resume), and after a user message
+whose attached files are left out of the history. Parts before the edit keep
+replaying. If the provider still refuses a replayed signature ("Invalid
+`signature` in `thinking` block"), the request is retried once with no signed
+reasoning in the history, and the history keeps none from then on.
 
 ### Reasoning display
 

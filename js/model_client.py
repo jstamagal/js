@@ -12,7 +12,7 @@ import base64
 import contextvars
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Literal
@@ -105,6 +105,21 @@ def _friendly_provider_error(
     # SDK type, retryability and structured overflow fields. The SDK diagnostic
     # is also more useful here than suggesting login for an oversized request.
     return None
+
+
+# Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
+# `signature` in `thinking` block. The block is bound to a different
+# conversation. ..." (the preserved-thinking prefix check) or the same leading
+# clause alone (an undecryptable signature).
+_SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+
+
+def is_signed_reasoning_rejection(exc: BaseException) -> bool:
+    """Whether ``exc`` is the provider refusing a replayed signed reasoning block."""
+    if not isinstance(exc, ai.ProviderBadRequestError):
+        return False
+    haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
+    return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
 
 
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
@@ -972,6 +987,11 @@ async def stream_model_async(
                 reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
             if plan.max_tokens is not None:
                 output_max_tokens = plan.max_tokens
+        thinking = extra_body.get("thinking")
+        if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            # Budget thinking takes no temperature or top_k: Anthropic answers
+            # either with a 400.
+            sampling = replace(sampling, temperature=None, top_k=None)
     elif reasoning_effort is not None and not is_minimax:
         # Direct DeepSeek steers reasoning via its own budget (below), not the
         # OpenAI effort knob. Codex and any openai-SDK endpoint take the effort

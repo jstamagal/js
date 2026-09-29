@@ -186,6 +186,11 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
         reasoning = message.get("reasoning_content")
         if reasoning:
             total += estimate_text_tokens(reasoning, chars_per_token=chars_per_token)
+        # Signed reasoning replays its provider payload too: a signature, or a
+        # Codex item's encrypted content, which runs to kilobytes.
+        for part in message.get("reasoning_parts") or []:
+            if isinstance(part, dict) and part.get("provider_metadata"):
+                total += estimate_text_tokens(_jsonish(part["provider_metadata"]), chars_per_token=chars_per_token)
         if role == "tool":
             total += estimate_text_tokens(message.get("tool_call_id", ""), chars_per_token=chars_per_token)
             total += estimate_text_tokens(message.get("name", ""), chars_per_token=chars_per_token)

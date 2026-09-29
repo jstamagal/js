@@ -129,6 +129,25 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
 # An assistant message's reasoning: the text, and the signed parts with the
 # provider and model they came from (`model_client.signed_reasoning_parts`).
 _REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from"})
+SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from")
+
+
+def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
+    """Remove the signed reasoning of every message from ``start`` on, in place.
+
+    A signature (an Anthropic thinking signature, a Codex encrypted item) is
+    bound to the history before it, so once js edits an earlier message the
+    signed reasoning after that edit cannot be replayed. Each changed message
+    is replaced by a copy that keeps ``reasoning_content``. Returns how many
+    messages changed.
+    """
+    changed = 0
+    for index in range(max(0, start), len(messages)):
+        msg = messages[index]
+        if isinstance(msg, dict) and any(key in msg for key in SIGNED_REASONING_KEYS):
+            messages[index] = {k: v for k, v in msg.items() if k not in SIGNED_REASONING_KEYS}
+            changed += 1
+    return changed
 
 
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
@@ -216,8 +235,10 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
                         keep_from = int(data.get("keep_from", len(messages)))
                         keep_from = max(0, min(keep_from, len(messages)))
                         rehydrated = data.get("rehydrated")
+                        tail = messages[keep_from:]
+                        drop_signed_reasoning(tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
-                                       *([rehydrated] if rehydrated else []), *messages[keep_from:]]
+                                       *([rehydrated] if rehydrated else []), *tail]
                 continue
             if rec.kind != "message" or rec.message is None:
                 continue

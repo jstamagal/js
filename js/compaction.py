@@ -198,7 +198,9 @@ def microcompact(
 
     Leaves the newest ``keep_recent`` tool results untouched (the model is
     usually still working with those) and ignores results already small enough
-    that clearing them buys nothing. Returns (results_cleared, chars_reclaimed).
+    that clearing them buys nothing. Signed reasoning after the first cleared
+    result is dropped (`memory.drop_signed_reasoning`). Returns
+    (results_cleared, chars_reclaimed).
     """
     indexes = [
         i for i, m in enumerate(messages)
@@ -211,6 +213,7 @@ def microcompact(
         indexes = indexes[:-keep_recent] if keep_recent < len(indexes) else []
     cleared = 0
     reclaimed = 0
+    first: int | None = None
     for i in indexes:
         body = messages[i]["content"]
         if len(body) < min_chars:
@@ -218,6 +221,9 @@ def microcompact(
         messages[i] = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
         cleared += 1
         reclaimed += len(body) - len(MICROCOMPACT_CLEARED_MESSAGE)
+        first = i if first is None else first
+    if first is not None:
+        M.drop_signed_reasoning(messages, first + 1)
     return cleared, reclaimed
 
 
@@ -247,7 +253,8 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
         {"message_index": index, "tool_call_id": old.get("tool_call_id"),
          "tool_name": old.get("name"), "original_chars": len(old["content"]),
          "replacement_chars": len(new["content"])}
-        for index, (old, new) in enumerate(zip(before, messages, strict=True)) if old != new
+        for index, (old, new) in enumerate(zip(before, messages, strict=True))
+        if old != new and old.get("role") == "tool"
     ]
     flight.record("cleared_results", results=changed, cleared=cleared,
                   reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=400)
@@ -565,14 +572,10 @@ def _run_pre_hook(cfg: Config) -> str:
     return stdout.strip()
 
 
-# Signatures and encrypted reasoning items: opaque to the summarizer.
-_SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from")
-
-
 def _summary_prompt(messages: list[dict], focus: str, guidance: str) -> str:
     headings = "\n".join(f"## {h}" for h in _COMPACTION_HEADINGS)
     readable = [
-        {k: v for k, v in m.items() if k not in _SIGNED_REASONING_KEYS} if isinstance(m, dict) else m
+        {k: v for k, v in m.items() if k not in M.SIGNED_REASONING_KEYS} if isinstance(m, dict) else m
         for m in messages
     ]
     payload = json.dumps(readable, ensure_ascii=False, indent=2, default=str)
@@ -747,11 +750,15 @@ async def compact_now(
             token_budget=get_nonnegative_int(cfg, "rehydrate_token_budget"),
             per_file_tokens=get_nonnegative_int(cfg, "rehydrate_max_tokens_per_file"),
         )
-        after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *messages[keep_from:]]
+        # The kept tail's signed reasoning was produced with the summarized
+        # prefix in front of it.
+        tail = messages[keep_from:]
+        M.drop_signed_reasoning(tail)
+        after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *tail]
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
             rehydrated = None
-            after = [_compaction_summary_message(summary), *messages[keep_from:]]
+            after = [_compaction_summary_message(summary), *tail]
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)

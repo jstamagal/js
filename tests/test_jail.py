@@ -164,6 +164,13 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
             assert code == 0, result
 
 
+def test_the_host_tmp_on_path_does_not_replace_the_private_tmp(jailed):
+    argv = jail.active().argv(["true"], env_path=f"/tmp{os.pathsep}/usr/bin")
+
+    binds = [argv[i + 1:i + 3] for i, arg in enumerate(argv) if arg.endswith("bind") or arg.endswith("bind-try")]
+    assert [src for src, dst in binds if dst == "/tmp"] == [str(jail.active().tmp)]
+
+
 @needs_bwrap
 def test_network_stays_on(jailed, tmp_path):
     client = shutil.which("curl")

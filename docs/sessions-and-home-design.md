@@ -370,8 +370,8 @@ How it is built (`js/jail.py`):
   bound in the jail and also at their own path. They last for the js
   process, so a file one command leaves in `/tmp` is there for the next. The
   file tools map `/tmp/…` and `~/.js/tmp/…` to them.
-- PATH directories and the kernel's interpreter under a hidden tree or the
-  host `/tmp` are bound back with every symlinked directory on the way
+- PATH directories and the kernel's interpreter under a hidden tree or under
+  the host `/tmp` (not `/tmp` itself, which stays the private one) are bound back with every symlinked directory on the way
   (`jail.reach`), so a venv interpreter that links into
   `~/.local/share/uv/python`, or a venv in a checkout under `/tmp`, still
   starts.

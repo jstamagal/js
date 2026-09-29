@@ -438,32 +438,45 @@ def _assistant_message_with_tool_calls(
     *,
     diagnostic_suffix: str = "",
 ) -> ai.messages.Message:
-    """Replace raw SDK tool-call parts with the normalized batch."""
-    original = {
-        part.tool_call_id: part
-        for part in message.parts
-        if isinstance(part, ai.types.messages.ToolCallPart)
-    }
-    parts = [
-        part
-        for part in message.parts
-        if not isinstance(part, ai.types.messages.ToolCallPart)
-    ]
-    if diagnostic_suffix:
-        parts.append(ai.types.messages.TextPart(text=diagnostic_suffix))
+    """Replace raw SDK tool-call parts with the normalized batch.
+
+    Parts keep their order and the diagnostic text goes before the first call.
+    A signed reasoning part that follows a call the batch dropped is left out:
+    its signature covers the parts before it.
+    """
+    kept = {call.id: call for call in calls}
+    parts: list[Any] = []
+    placed: set[str] = set()
+    dropped_call = False
+    suffix = diagnostic_suffix
+
+    def _place_suffix() -> None:
+        nonlocal suffix
+        if suffix:
+            parts.append(ai.types.messages.TextPart(text=suffix))
+            suffix = ""
+
+    for part in message.parts:
+        if isinstance(part, ai.types.messages.ToolCallPart):
+            _place_suffix()
+            call = kept.get(part.tool_call_id)
+            if call is None or call.id in placed:
+                dropped_call = True
+                continue
+            placed.add(call.id)
+            parts.append(part.model_copy(update={"tool_name": call.name, "tool_args": call.arguments()}))
+        elif isinstance(part, ai.types.messages.ReasoningPart) and part.provider_metadata and dropped_call:
+            continue
+        else:
+            parts.append(part)
+    _place_suffix()
     for call in calls:
-        prior = original.get(call.id)
-        if prior is None:
-            part = ai.types.messages.ToolCallPart(
+        if call.id not in placed:
+            parts.append(ai.types.messages.ToolCallPart(
                 tool_call_id=call.id,
                 tool_name=call.name,
                 tool_args=call.arguments(),
-            )
-        else:
-            part = prior.model_copy(
-                update={"tool_name": call.name, "tool_args": call.arguments()}
-            )
-        parts.append(part)
+            ))
     if not parts:
         parts.append(ai.types.messages.TextPart(text=""))
     return message.model_copy(update={"parts": parts})
@@ -1743,7 +1756,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             incomplete_reason: str | None = None
             budget_checked = False
             transport_retries = 0
-            for attempt in range(3 + compaction.MAX_OVERFLOW_ROUNDS):
+            signed_reasoning_dropped = False
+            for attempt in range(4 + compaction.MAX_OVERFLOW_ROUNDS):
                 t0 = time.time()
                 try:
                     if mcp_host is not None:
@@ -1896,6 +1910,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         )
                         if compacted:
                             continue
+                    if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
+                        # The provider refused a replayed signature (an edit js
+                        # made before it, or a system or tool change): replay
+                        # the history without signed reasoning, once.
+                        signed_reasoning_dropped = True
+                        dropped = memory.drop_signed_reasoning(messages)
+                        telemetry.event("signed_reasoning_dropped", model=model, messages=dropped,
+                                        error=f"{type(e).__name__}: {e}")
+                        ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
+                        _trace_req["sent"] = 0
+                        _trace_req["schemas"] = True
+                        continue
                     if e.is_retryable:
                         telemetry.event("retriable_error", model=model,
                                         error=f"{type(e).__name__}: {e}", attempt=attempt)
@@ -1987,13 +2013,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if reasoning:
                 history_assistant_record["reasoning_content"] = reasoning
             assert result is not None
-            signed_reasoning = (
-                model_client.signed_reasoning_parts(result.assistant_message)
-                if assistant_message_override is None else None
-            )
-            if signed_reasoning:
-                history_assistant_record["reasoning_parts"] = signed_reasoning
-                history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
             if not isinstance(provider_metadata, dict):
                 provider_metadata = None
             incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
@@ -2008,6 +2027,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     pending_calls,
                     diagnostic_suffix=batch_diagnostic_suffix,
                 )
+            # The signed parts as this turn replays them, after batch normalization.
+            signed_reasoning = (
+                model_client.signed_reasoning_parts(assistant_message)
+                if assistant_message_override is None else None
+            )
+            if signed_reasoning:
+                history_assistant_record["reasoning_parts"] = signed_reasoning
+                history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))

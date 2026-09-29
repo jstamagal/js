@@ -18,6 +18,7 @@ import pytest
 from js import logins, memory, model_client, runtime
 from js.config import from_env
 from js.logins import Login
+from js.sampling import Sampling
 from js.toolkit import ToolContext
 
 
@@ -71,7 +72,16 @@ class _Wire:
         self.script = list(script or [])
         self.bodies: list[dict] = []
 
+    refuse: frozenset[int] = frozenset()
+
     def respond(self, request: httpx2.Request) -> httpx2.Response:
+        if len(self.bodies) in self.refuse:
+            # Anthropic's 400 for a thinking block bound to another conversation.
+            self.bodies.append(json.loads(request.content))
+            return httpx2.Response(400, json={"type": "error", "error": {
+                "type": "invalid_request_error",
+                "message": "messages.1.content.0: Invalid `signature` in `thinking` block. "
+                           "The block is bound to a different conversation."}})
         self.bodies.append(json.loads(request.content))
         kwargs = self.script.pop(0) if self.script else {}
         return httpx2.Response(200, headers={"Content-Type": "text/event-stream"},
@@ -89,7 +99,7 @@ class _Wire:
 
 def _send(monkeypatch, *, provider: str, model: str, effort: str | None,
           max_out: int | None, base: str | None = None,
-          extra: dict | None = None) -> dict:
+          extra: dict | None = None, sampling: Sampling | None = None) -> dict:
     wire = _Wire(model)
     wire.install(monkeypatch)
 
@@ -98,7 +108,7 @@ def _send(monkeypatch, *, provider: str, model: str, effort: str | None,
             model_id=model, provider_id=provider, provider_base_url=base,
             provider_api_key="fixture", messages=[ai.user_message("hi")], tools=None,
             max_output_tokens=max_out, reasoning_effort=effort, on_text=lambda _c: None,
-            provider_extra=extra,
+            provider_extra=extra, sampling=sampling,
         )
 
     asyncio.run(drive())
@@ -221,6 +231,15 @@ def test_thinking_in_provider_extra_wins(monkeypatch):
                  max_out=32000, extra={"thinking": mine})
 
     assert body["thinking"] == mine
+
+
+def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
+    sampling = Sampling(temperature=0.2, top_k=40)
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
+                 max_out=32000, sampling=sampling)
+
+    assert body["thinking"]["type"] == "enabled"
+    assert "temperature" not in body and "top_k" not in body
 
 
 # --- signatures -------------------------------------------------------------
@@ -356,3 +375,153 @@ def test_the_reduced_history_view_drops_signed_reasoning_with_the_text():
     }
 
     assert memory._strip_orphan_reasoning([record]) == [{"role": "assistant", "content": "ok"}]
+
+
+# --- edits to earlier history -------------------------------------------------
+#
+# A thinking signature is bound to the history before it. After js edits an
+# earlier message, the signed thinking after the edit is not replayed.
+
+
+def _signed_call(n: int) -> dict:
+    return {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": f"call_{n}", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        "reasoning_content": f"t{n}",
+        "reasoning_parts": [{"text": f"t{n}", "provider_metadata": {"anthropic": {"signature": f"S{n}"}}}],
+        "reasoning_from": {"provider": "anthropic", "model": "claude-opus-5-5"},
+    }
+
+
+def _result(n: int) -> dict:
+    return {"role": "tool", "tool_call_id": f"call_{n}", "name": "read", "content": f"body {n} " * 100}
+
+
+def _three_tool_rounds() -> list[dict]:
+    return [{"role": "user", "content": "go"},
+            _signed_call(1), _result(1), _signed_call(2), _result(2), _signed_call(3), _result(3)]
+
+
+def _wire_signatures(monkeypatch, messages: list[dict]) -> list[list[str]]:
+    """The thinking signatures of each assistant turn as the Anthropic body carries them."""
+    wire = _Wire("claude-opus-5-5")
+    wire.install(monkeypatch)
+
+    async def drive():
+        return await model_client.stream_model_async(
+            model_id="claude-opus-5-5", provider_id="anthropic", provider_base_url=None,
+            provider_api_key="fixture",
+            messages=model_client.history_to_ai_messages(
+                "SYSTEM", messages, provider_id="anthropic", model_id="claude-opus-5-5"),
+            tools=None, max_output_tokens=4096, reasoning_effort="high", on_text=lambda _c: None,
+        )
+
+    asyncio.run(drive())
+    return [[b["signature"] for b in blocks if b["type"] == "thinking"]
+            for blocks in _assistant_blocks(wire.bodies[0])]
+
+
+def test_signed_thinking_after_a_cleared_tool_result_is_not_replayed(monkeypatch):
+    from js import compaction
+
+    messages = _three_tool_rounds()
+    cleared, _ = compaction.microcompact(messages, keep_recent=1)
+
+    assert cleared == 2
+    assert _wire_signatures(monkeypatch, messages) == [["S1"], [], []]
+
+
+def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, tmp_path):
+    from js import compaction
+    from test_config_compaction_layers import _compact_test_cfg
+
+    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights"), "tail_tokens": 1})
+
+    async def summarize(*_a, **_kw):
+        return "summary"
+
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    messages = _three_tool_rounds()
+    messages[0] = {"role": "user", "content": "go " * 2000}
+    asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, preserve_from=3))
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant", "tool"]
+    assert _wire_signatures(monkeypatch, messages) == [[], []]
+    resumed = memory.load_replay_messages(cfg.session_file)
+    assert resumed == messages
+
+
+def test_signed_thinking_after_a_user_message_that_lost_its_attachment_is_not_replayed():
+    from js import cli
+
+    runtime_message = {"role": "user", "content": [ai.types.messages.TextPart(text="see"),
+                                                   ai.types.messages.FilePart(data=b"png", media_type="image/png")]}
+    history_message = {"role": "user", "content": "see"}
+    messages = [runtime_message, _signed_call(1), _result(1)]
+    cli._replace_runtime_user_message(messages, runtime_message, history_message, 0)
+
+    assert messages[0] == history_message
+    assert "reasoning_parts" not in messages[1]
+
+    plain = {"role": "user", "content": "see"}
+    messages = [plain, _signed_call(1), _result(1)]
+    cli._replace_runtime_user_message(messages, plain, dict(plain), 0)
+
+    assert "reasoning_parts" in messages[1]
+
+
+def test_a_refused_signature_is_retried_once_without_signed_thinking(claude):
+    cfg, wire, context = claude
+    wire.refuse = frozenset({1})
+    messages = [{"role": "user", "content": "first"}]
+    _turn(cfg, messages, context)
+    messages.append({"role": "user", "content": "next"})
+    _turn(cfg, messages, context)
+
+    assert len(wire.bodies) == 3
+    assert _assistant_blocks(wire.bodies[1]) == [[_SIGNED_BLOCK, {"type": "text", "text": "ok"}]]
+    assert _assistant_blocks(wire.bodies[2]) == [[{"type": "text", "text": "ok"}]]
+    assert "reasoning_parts" not in messages[1]
+    assert messages[-1]["reasoning_parts"]
+
+
+def test_a_second_refusal_in_one_request_is_raised(claude):
+    cfg, wire, context = claude
+    wire.refuse = frozenset({1, 2})
+    messages = [{"role": "user", "content": "first"}]
+    _turn(cfg, messages, context)
+    messages.append({"role": "user", "content": "next"})
+
+    with pytest.raises(ai.ProviderBadRequestError):
+        _turn(cfg, messages, context)
+    assert len(wire.bodies) == 3
+
+
+def _signed(text: str, sig: str) -> ai.types.messages.ReasoningPart:
+    return ai.thinking(text, provider_metadata={"anthropic": {"signature": sig}})
+
+
+def _call(call_id: str) -> ai.types.messages.ToolCallPart:
+    return ai.types.messages.ToolCallPart(tool_call_id=call_id, tool_name="read", tool_args="{}")
+
+
+def test_a_normalized_batch_keeps_each_signed_part_between_its_calls():
+    message = ai.assistant_message(_signed("a", "S1"), _call("c1"), _signed("b", "S2"), _call("c2"))
+    calls = [runtime._PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
+    normalized = runtime._assistant_message_with_tool_calls(message, calls)
+
+    shape = [p.provider_metadata["anthropic"]["signature"] if p.kind == "reasoning" else p.tool_call_id
+             for p in normalized.parts]
+    assert shape == ["S1", "c1", "S2", "c2"]
+    assert [p.get("after_calls") for p in model_client.signed_reasoning_parts(normalized)] == [None, 1]
+
+
+def test_a_signed_part_after_a_dropped_call_is_left_out():
+    message = ai.assistant_message(_signed("a", "S1"), _call("c1"), _call("dup"), _signed("b", "S2"), _call("c2"))
+    calls = [runtime._PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
+    normalized = runtime._assistant_message_with_tool_calls(message, calls, diagnostic_suffix="capped")
+
+    shape = [p.provider_metadata["anthropic"]["signature"] if p.kind == "reasoning"
+             else p.tool_call_id if p.kind == "tool_call" else p.text
+             for p in normalized.parts]
+    assert shape == ["S1", "capped", "c1", "c2"]
