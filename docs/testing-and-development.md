@@ -152,12 +152,31 @@ The offline suite covers:
 
 ## Development Style
 
-Prefer tests through public behavior:
+Test the function that does the thing:
 
-- CLI `main()` for CLI behavior.
+- `cli.main()` only for what main itself does: argument parsing and
+  validation, reading stdin into the prompt, dispatch to a mode, and what a
+  launch sets up. A `/command` goes through `cli._handle_command`, a
+  one-shot prompt through `cli._run_prompt`, and a REPL session through
+  `tests/repl_driver.py` (`run_blocking` for `_blocking_repl`, `run_async`
+  for `_repl_main`).
 - `runtime.run_turn()` with fake `js.model_client.stream_model` stubs for runtime behavior.
 - real tool handlers with `ToolContext(tmp_path)` for tool behavior.
 - `tmp_path` for filesystem isolation.
+
+Assert on behavior, not on the operator's wording: a message printed to the
+terminal is checked for having been printed and for the data it carries (a
+path, a name, a count), not its phrasing. Text a model or a program reads is
+a contract and is matched exactly: tool results, tool descriptions,
+commit_helper output, JSON payloads, the `-p` answer on stdout.
+
+The offline suite touches no network. `tests/conftest.py` gives every test
+its own HOME and points the models.dev catalog at one local copy per worker;
+a js subprocess started in the test's HOME also needs the
+`home_model_catalog` fixture. A test waits on an event or a gate file, not
+on the clock: tool waits that exist to be outlasted (`ToolContext.
+kernel_wait_seconds`, `capped_process.READER_GRACE_S`) are shortened in the
+test instead of slept through.
 
 This project intentionally favors granular commits:
 
