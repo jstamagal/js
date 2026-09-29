@@ -190,6 +190,8 @@ COMPACTION_DONE = Message("{result}")
 AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.", WARN)
 AUTO_COMPACT_PAUSED = Message(
     "Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.", WARN)
+AUTO_COMPACT_BREAKER = Message(
+    "Auto-compaction paused after {failures} failed summaries in a row. /compact retries it.", WARN)
 SUMMARY_SPLIT = Message("Summary too large. Summarizing both halves, depth {depth}.", WARN)
 CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {error}", GRAVE)
 
@@ -599,6 +601,8 @@ NET_ROLE_CONNECTING = Message("{role}: connecting {url}")
 NET_ROLE_CONNECTING_AGENT = Message("{role}: connecting {url}  agent={agent}")
 NET_ROLE_CONNECTED = Message("{role}: connected: {host}  {ms}ms")
 NET_COMPACTING = Message("Compacting: {model} via {url}")
+NET_CACHE_BREAK = Message(
+    "Prompt cache break: cache read {before} -> {after} tokens (-{drop:.0%}), {idle}s since the last request")
 NET_DNS_FAILURE = Message("DNS failure")
 NET_TIMEOUT = Message("Timeout")
 NET_CONNECT_FAILED = Message("Connection failed")

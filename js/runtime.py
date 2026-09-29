@@ -1657,13 +1657,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _trace_req["sent"] = 0
             _trace_req["schemas"] = True
             active_context.compacted_during_turn = True
+            compaction.history_rewritten(active_context)
 
         # 1. Old tool-result bodies are the bulk of a long turn and cost no
-        #    model call to drop.
-        cleared, reclaimed = compaction.clear_for_budget(
-            messages, cfg=active_compact_cfg, system=system, trigger=trigger,
-            flight_data=flight_data, over_budget=_over_budget,
-        )
+        #    model call to drop. Rewriting them mid-history busts the prompt
+        #    cache, so they are cleared only once the cache has expired, or when
+        #    the provider has already refused the request (force).
+        cleared = 0
+        if force or compaction.cache_expired(active_compact_cfg, active_context):
+            cleared, reclaimed = compaction.clear_for_budget(
+                messages, cfg=active_compact_cfg, system=system, trigger=trigger,
+                flight_data=flight_data, over_budget=_over_budget,
+            )
+        else:
+            telemetry.event("context_clearing_deferred", phase=phase,
+                            cache_age_s=time.time() - active_context.last_request_at)
         if cleared:
             _history_changed()
             telemetry.event("context_results_cleared", phase=phase, cleared=cleared)
@@ -1672,6 +1680,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
         async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
             nonlocal reclaimed
+            if compaction.auto_paused(active_compact_cfg, active_context):
+                telemetry.event("context_compaction_skipped", phase=phase, reason="paused_after_failures")
+                return False
             before_chars = compaction.history_chars(messages)
             turn_status.compacting = True
             try:
@@ -1685,6 +1696,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
                 telemetry.event("context_compaction_failed", phase=phase,
                                 error=f"{type(exc).__name__}: {exc}")
+                if (paused := compaction.record_auto_failure(active_compact_cfg, active_context)) is not None:
+                    msgs.say_said(paused, file=sys.stderr, flush=True)
                 return False
             finally:
                 turn_status.compacting = False
@@ -1814,6 +1827,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
                     active_context.last_incomplete_reason = incomplete_reason
                     active_context.last_max_output_tokens = max_out
+                    _cache_break = compaction.note_response(
+                        active_context, model_key=f"{provider_id}/{model}",
+                        cache_read=active_context.last_cached_tokens, now=time.time(),
+                    )
+                    if _cache_break is not None:
+                        telemetry.event("prompt_cache_break", model=model, line=_cache_break)
+                        stream_transport.say_for_caller(2, _cache_break)
                     telemetry.event("turn_complete", model=model,
                                     latency_ms=int((time.time() - t0) * 1000),
                                     finish_reason=finish, n_tool_calls=len(pending_calls),
@@ -1887,6 +1907,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _trace_req["sent"] = 0
                             _trace_req["schemas"] = True
                             active_context.compacted_during_turn = True
+                            compaction.history_rewritten(active_context)
                             continue
                         compacted = await _maybe_compact_request_for_budget(
                             phase="overflow_recovery",

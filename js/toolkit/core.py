@@ -409,6 +409,17 @@ class ToolContext:
     last_output_tokens: int = 0
     last_max_output_tokens: int | None = None
     last_incomplete_reason: str | None = None
+    # Wall-clock time the last main-conversation response finished; None
+    # until one has. Compaction reads it as the age of the prompt cache.
+    last_request_at: float | None = None
+    # Cache-read tokens of the last response and the model that served it:
+    # the baseline the next comparable response is measured against. None
+    # after a deliberate history rewrite.
+    cache_read_baseline: int | None = None
+    cache_read_model: str = ""
+    # Automatic summaries that failed in a row; compact.max_summary_failures
+    # of them pause automatic compaction until a summary succeeds.
+    summary_failures: int = 0
     turn_status: TurnStatus = field(default_factory=TurnStatus)
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)

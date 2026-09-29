@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 from dataclasses import replace
 
@@ -30,30 +31,40 @@ def _overflow():
     )
 
 
+def _summary_request(text: str) -> tuple[list[str], str]:
+    """(user entries in the request's conversation, its previous summary)."""
+    conversation = text.split("<conversation>\n", 1)[1].split("\n</conversation>", 1)[0]
+    previous = ""
+    if "<previous-summary>" in text:
+        previous = text.split("<previous-summary>\n", 1)[1].split("\n</previous-summary>", 1)[0]
+    return re.findall(r"^\[User\]: (.*)$", conversation, re.MULTILINE), previous
+
+
 @pytest.mark.parametrize("persistent", [False, True])
 def test_summary_partitions_through_real_boundary(monkeypatch, tmp_path, persistent):
     payloads = []
     error = _overflow()
 
     async def sdk(**kwargs):
-        text = kwargs["messages"][0].parts[0].text
-        payloads.append(json.loads(text.split("Session messages JSON:\n", 1)[1]))
+        payloads.append(_summary_request(kwargs["messages"][0].parts[0].text))
         if persistent or len(payloads) == 1:
             raise error
-        return _result(text=";".join(m["content"] for m in payloads[-1]))
+        entries, previous = payloads[-1]
+        return _result(text=";".join(([previous] if previous else []) + entries))
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = [{"role": "user", "content": f"entry {i}"} for i in range(32)]
+    entries = [m["content"] for m in messages]
     call = compaction.summarize(_config(tmp_path), "offline-test", messages, "", "")
     if persistent:
         with pytest.raises(ai.ProviderAPIError) as caught:
             asyncio.run(call)
         assert caught.value is error
-        assert [len(p) for p in payloads] == [32, 16, 8, 4]
+        assert [len(p[0]) for p in payloads] == [32, 16, 8, 4]
     else:
         summary = asyncio.run(call)
-        assert all(m["content"] in summary for m in messages)
-        assert payloads == [messages, messages[:16], messages[16:]]
+        assert payloads == [(entries, ""), (entries[:16], ""), (entries[16:], "")]
+        assert all(entry in summary for entry in entries)
 
 
 @pytest.mark.parametrize("kind", ["overflow", "429", "503", "fatal"])
