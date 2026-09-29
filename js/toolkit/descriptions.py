@@ -36,7 +36,8 @@ Two independent conditional axes flip parts of a description on and off:
 from __future__ import annotations
 
 import re
-import sys
+
+from .. import messages as msgs
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
@@ -71,7 +72,7 @@ def _warn_once(message: str) -> None:
     if message in _WARNED:
         return
     _WARNED.add(message)
-    print(f"warning: tool description: {message}", file=sys.stderr)
+    msgs.warn(msgs.DESCRIPTION_PROBLEM, problem=message)
 
 
 def description_dir() -> Path:
@@ -130,11 +131,11 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
             return m.group(0)
         body = m.group("body")
         if "{{#if" in body or "{{#unless" in body:
-            _warn_once(f"{label}nested {{{{#if}}}}/{{{{#unless}}}} block is unsupported; left literal")
+            _warn_once(msgs.DESCRIPTION_NESTED_BLOCK.text(label=label))
             return m.group(0)
         names = m.group("names").split()
         if not names:
-            _warn_once(f"{label}conditional block names no tool; left literal")
+            _warn_once(msgs.DESCRIPTION_BLOCK_NAMES_NO_TOOL.text(label=label))
             return m.group(0)
         keep = any(n in active for n in names)
         if m.group("kind") == "unless":
@@ -145,5 +146,5 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
     # A marker surviving where every BALANCED block (escaped ones still match the
     # block regex) has been stripped is a genuinely unpaired open/close tag.
     if _STRAY_MARKER.search(_NAME_BLOCK.sub("", text)):
-        _warn_once(f"{label}unbalanced {{{{#if}}}}/{{{{#unless}}}} tag; left literal")
+        _warn_once(msgs.DESCRIPTION_UNBALANCED.text(label=label))
     return rendered.strip()

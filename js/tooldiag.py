@@ -15,7 +15,8 @@ each description carries before conditional sections resolve.
 from __future__ import annotations
 
 import argparse
-import sys
+
+from . import messages as msgs
 
 from .toolkit.core import compact_json
 from .toolkit.descriptions import render_tool_name_sections
@@ -79,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     registry = _registry(parse_surface(args.surface))
     if registry is None:
-        print("js: tooldiag: surface matched no tools", file=sys.stderr)
+        msgs.warn(msgs.TOOLDIAG_NO_TOOLS)
         return 1
     print(render_table(registry, [tool.name for tool in registry.tools]))
     return 0

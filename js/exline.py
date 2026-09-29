@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from . import colors as C
+from . import messages as msgs
 from . import paths
 
 NOTES_FILE = "notes.txt"
@@ -81,7 +81,7 @@ async def run_ex(
             path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(editor.text + "\n", encoding="utf-8")
-            print(f"{C.GREY}(buffer written to {path}; not sent){C.RESET}")
+            msgs.say(msgs.BUFFER_WRITTEN, path=path)
         elif verb == "x":
             await editor.submit()
         elif verb == "q":
@@ -103,6 +103,6 @@ async def run_ex(
         elif shutil.which(verb):
             await edit_buffer(editor, [verb, *shlex.split(arg)])
         else:
-            print(f"{C.ORANGE}not an editor command, js command or program: {verb}{C.RESET}")
+            msgs.say(msgs.EX_UNKNOWN, verb=verb)
     except (OSError, UnicodeError, ValueError) as e:
-        print(f"{C.ORANGE}:{verb}: {type(e).__name__}: {e}{C.RESET}")
+        msgs.say(msgs.EX_FAILED, verb=verb, error=f"{type(e).__name__}: {e}")

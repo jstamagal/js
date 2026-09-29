@@ -19,11 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from collections import Counter
 from pathlib import Path
 
 from . import paths as _paths
+from . import messages as msgs
 
 _SEGMENT_SPLIT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
 _READ_CMDS = {"cat", "head", "tail", "less", "more", "bat"}
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.latest:
         path = latest_session(args.data_dir or _paths.sessions_root().parent, args.agent)
         if path is None:
-            print("js: toolstats: no session found", file=sys.stderr)
+            msgs.warn(msgs.TOOLSTATS_NO_SESSION)
             return 1
     elif args.path:
         path = Path(args.path)

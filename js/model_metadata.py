@@ -27,6 +27,7 @@ from modelsdotdev._internal import data as modelsdotdev_data
 from modelsdotdev._internal import sync as modelsdotdev_sync
 
 from . import codex_auth, model_matching, paths, providers, settings as _settings, stream_transport
+from . import messages as msgs
 
 _CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
@@ -520,12 +521,12 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
         if current is None:
             raise RuntimeError(_refresh_failure)
         return current
-    stream_transport.say_or_print(3, "updating models.dev cache...")
+    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.text())
     try:
         status = refresh_catalog(force=True)
     except Exception as exc:
         _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
-        stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {_refresh_failure}")
+        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.text(error=_refresh_failure))
         if current is not None:
             _activate_database(current.db_path)
             return current

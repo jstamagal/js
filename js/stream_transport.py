@@ -27,6 +27,7 @@ from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
 from . import colors as C
+from . import messages as msgs
 
 
 @dataclass(frozen=True)
@@ -99,7 +100,7 @@ def say_or_print(level: int, text: str) -> None:
     """A network line that predates the channel: the channel decides while a
     sink is installed; otherwise it prints to stderr as a `***` line."""
     if _sink is None:
-        print(f"*** {text}", file=sys.stderr)
+        print(msgs.banner(text), file=sys.stderr)
     else:
         say(level, text)
 
@@ -140,7 +141,7 @@ def _host(url: str) -> str:
 
 
 def _banner(text: str) -> str:
-    return f"{C.BR_YELLOW}*** {text}{C.RESET}"
+    return f"{C.BR_YELLOW}{msgs.banner(text)}{C.RESET}"
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -167,16 +168,22 @@ def describe_failure(exc: BaseException) -> str:
             "Temporary failure in name resolution", "No address associated with hostname",
         )):
             host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return f"{C.BR_RED}DNS failure{C.BR_YELLOW}: {host}".rstrip(": ")
+            return _failure(msgs.NET_DNS_FAILURE, host)
     for err in chain:
         if isinstance(err, (httpx2.TimeoutException, TimeoutError)):
             host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return f"{C.BR_RED}Timeout{C.BR_YELLOW}: {host}".rstrip(": ")
+            return _failure(msgs.NET_TIMEOUT, host)
     for err in chain:
         if isinstance(err, (httpx2.ConnectError, ConnectionError)):
             host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return f"{C.BR_RED}Connection failed{C.BR_YELLOW}: {host} {err}".strip()
+            return _failure(msgs.NET_CONNECT_FAILED, f"{host} {err}".strip())
     return f"{C.BR_RED}{type(exc).__name__}{C.BR_YELLOW}: {exc}"
+
+
+def _failure(kind: msgs.Message, detail: str) -> str:
+    """A failure line: the kind of failure painted hot, then what it names."""
+    head = f"{C.BR_RED}{kind.text()}{C.BR_YELLOW}"
+    return f"{head}: {detail}" if detail else head
 
 
 def _request_host(err: BaseException) -> str:
@@ -207,11 +214,11 @@ class NetCall:
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
         if label == "Compacting":
-            return f"Compacting: {self._model} via {self._url}"
+            return msgs.NET_COMPACTING.text(model=self._model, url=self._url)
         if label:
-            suffix = f"  (agent={agent})" if agent else ""
-            return f"{label}: connecting {self._url}{suffix}"
-        return f"Connecting: {self._url}"
+            entry = msgs.NET_ROLE_CONNECTING_AGENT if agent else msgs.NET_ROLE_CONNECTING
+            return entry.text(role=label, url=self._url, agent=agent)
+        return msgs.NET_CONNECTING.text(url=self._url)
 
     def request_sent(self) -> None:
         """The transport is sending the request: the handshake clock starts here,
@@ -225,8 +232,11 @@ class NetCall:
             return
         self._connected = True
         ms = int((time.perf_counter() - self._started) * 1000)
-        who = f"{self._role.label}: connected" if self._role.label else "Connected"
-        say(2, f"{who}: {host or _host(self._url)}  {ms}ms")
+        host = host or _host(self._url)
+        if self._role.label:
+            say(2, msgs.NET_ROLE_CONNECTED.text(role=self._role.label, host=host, ms=ms))
+        else:
+            say(2, msgs.NET_CONNECTED.text(host=host, ms=ms))
 
     def received(self, n: int) -> None:
         self.connected()

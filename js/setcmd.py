@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import events as _events
+from . import messages as msgs
 from . import settings as _s
 
 
@@ -67,7 +68,7 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
     if key is not None:
         spec = _s.spec_for(key)
         if spec is None:
-            return CommandResult(handled=True, error=f"unknown knob: {key}")
+            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
         value = _s.knob(settings, spec.key)
         return CommandResult(
             handled=True,
@@ -110,7 +111,7 @@ class LiveValue:
 
 
 def _annotate(line: str, live: LiveValue | None) -> str:
-    return line if live is None else f"{line}  (live: {live.source})"
+    return line if live is None else msgs.SETTING_LIVE.text(line=line, source=live.source)
 
 
 def show_lines_effective(
@@ -124,7 +125,7 @@ def show_lines_effective(
     if key is not None:
         spec = _s.spec_for(key)
         if spec is None:
-            return CommandResult(handled=True, error=f"unknown knob: {key}")
+            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
         live = overlay.get(spec.key)
         display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
         return CommandResult(
@@ -174,7 +175,7 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     path = tuple(p for p in key.split(".") if p)
     prefix_spec = _s.parent_spec(key)
     if prefix_spec is not None and prefix_spec.type != "map":
-        return CommandResult(handled=True, error=f"unknown knob: {key}")
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     if prefix_spec is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
         value = _s.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
@@ -185,7 +186,7 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
             changed_keys=[key],
         )
 
-    return CommandResult(handled=True, error=f"unknown knob: {key}")
+    return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
 
 
 def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
@@ -209,11 +210,11 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
     spec = _s.spec_for(key)
     path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
     if not path:
-        return CommandResult(handled=True, error=f"unknown knob: {key}")
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     if spec is None:
         prefix_spec = _s.parent_spec(key)
         if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
-            return CommandResult(handled=True, error=f"unknown knob: {key}")
+            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     missing = object()
     before = _s.get_dotted(settings, path, missing)
     restored = _s.get_dotted(baseline, path, missing) if baseline is not None else missing
@@ -227,11 +228,11 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
         display = render_value(spec, None if after is missing else after)
     else:
         display = "<unset>" if after is missing else str(after)
-    note = "" if before is not missing else "  (already unset)"
+    entry = msgs.SETTING_ALREADY_UNSET if before is missing else msgs.SETTING_VALUE
     return CommandResult(
         handled=True,
         changed=changed,
-        lines=[f"{key} = {display}{note}"],
+        lines=[entry.text(key=key, value=display)],
         changed_keys=[key] if changed else [],
     )
 
@@ -270,9 +271,9 @@ def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
     """`on` lists handlers; `on [^]event handler` registers one."""
     parts = arg.split(maxsplit=1)
     if not parts:
-        return CommandResult(handled=True, lines=event_lines(hooks) or ["(no event handlers)"])
+        return CommandResult(handled=True, lines=event_lines(hooks) or [msgs.NO_EVENT_HANDLERS.text()])
     if len(parts) < 2:
-        return CommandResult(handled=True, error="on needs an event and handler")
+        return CommandResult(handled=True, error=msgs.ON_NEEDS_TWO.text())
     handler = parts[1].strip()
     if handler.startswith("="):
         handler = handler[1:].lstrip()
@@ -340,7 +341,7 @@ def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
     except ValueError as e:
         return None, str(e)
     if len(parts) != 1:
-        return None, "load needs exactly one path"
+        return None, msgs.LOAD_NEEDS_ONE_PATH.text()
     path = Path(parts[0]).expanduser()
     if not path.is_absolute():
         path = base / path
@@ -389,5 +390,5 @@ def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -
     if len(parts) == 1 and parts[0].startswith("-") and len(parts[0]) > 1:
         return apply_unset(settings, parts[0][1:], baseline)
     if len(parts) < 2:
-        return CommandResult(handled=True, error=f"set needs a key and value: {line.strip()!r}")
+        return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.text(line=line.strip()))
     return apply_set(settings, parts[0], parts[1])

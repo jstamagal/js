@@ -21,10 +21,10 @@ from typing import Any
 
 import ai
 
-from . import colors as C
 from . import context_budget
 from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
 from . import memory as M
+from . import messages as msgs
 from . import model_client
 from . import model_metadata
 from . import routing
@@ -231,7 +231,7 @@ def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger:
             details=flight_data, operation="tool-result-clearing",
         )
     except OSError as exc:
-        print(f"[COMPACT FAILURE] tool-result-clearing flight setup: {exc}", file=sys.stderr, flush=True)
+        msgs.warn(msgs.CLEARING_FLIGHT_FAILED, error=exc)
         raise
 
 
@@ -607,7 +607,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             middle = len(head) // 2
             if (flight := ACTIVE_FLIGHT.get()) is not None:
                 flight.record("summary_overflow", depth=depth, split_at=middle, error=str(exc), messages=head)
-            print(f"  {C.ORANGE}(summary too large; summarizing both halves, depth {depth + 1}){C.RESET}", flush=True)
+            msgs.say(msgs.SUMMARY_SPLIT, depth=depth + 1, flush=True)
             left = await summarize_chunk(head[:middle], depth + 1)
             right = await summarize_chunk(head[middle:], depth + 1)
             return left + "\n\n" + right
@@ -707,11 +707,11 @@ async def compact_now(
                       min_savings=min_savings, keep_from=keep_from,
                       original_estimate=original_est, tail_estimate=tail_est)
         if keep_from <= 0 or not prefix_worth_summarizing(messages, keep_from):
-            result = "compact skipped: no new prefix to summarize"
+            result = msgs.COMPACT_SKIPPED_NO_PREFIX.text()
             flight.finish("skipped", system, messages, result=result)
             return result
         if not forced and original_est - tail_est < min_savings:
-            result = f"compact skipped: estimated savings {original_est - tail_est} tokens < {min_savings}"
+            result = msgs.COMPACT_SKIPPED_SAVINGS.text(savings=original_est - tail_est, required=min_savings)
             flight.finish("skipped", system, messages, result=result)
             return result
         compact_model = model or get_model(cfg)
@@ -736,7 +736,7 @@ async def compact_now(
             after = [_compaction_summary_message(summary), *messages[keep_from:]]
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
-            result = f"compact skipped: replacement saves {savings} tokens < {required_savings}"
+            result = msgs.COMPACT_SKIPPED_SAVINGS.text(savings=savings, required=required_savings)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
@@ -747,7 +747,7 @@ async def compact_now(
         tracker = getattr(context or T.STOCK_CONTEXT, "context_budget_state", None)
         if tracker is not None:
             tracker.reset()
-        result = f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"
+        result = msgs.COMPACTED.text(keep_from=keep_from, total=original_len, model=compact_model)
         flight.finish("success", system, messages, result=result, keep_from=keep_from)
         return result
     except BaseException as exc:
@@ -804,7 +804,7 @@ class AutoCompactOutcome:
     compacted: bool = False
     forced: bool = False
     result: str | None = None
-    notices: list[str] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)  # screen lines
 
 
 async def maybe_auto_compact_async(
@@ -845,13 +845,13 @@ async def maybe_auto_compact_async(
         if fullness < notify_at:
             ac.notified = False
         elif not ac.notified:
-            out.notices.append(f"(context {fullness:.0%} full; auto-compaction armed)")
+            out.notices.append(msgs.AUTO_COMPACT_ARMED.line(fullness=fullness))
             ac.notified = True
         return out
     if ac.paused:
         return out
     if fullness >= notify_at and not ac.notified:
-        out.notices.append(f"(context {fullness:.0%} full; auto-compaction armed)")
+        out.notices.append(msgs.AUTO_COMPACT_ARMED.line(fullness=fullness))
         ac.notified = True
     out.forced = fullness >= force_at
     out.result = await compact_now(
@@ -875,10 +875,7 @@ async def maybe_auto_compact_async(
     ac.consecutive += 1
     if ac.consecutive >= 2:
         ac.paused = True
-        out.notices.append(
-            "(auto-compaction paused after two consecutive turns; "
-            "resumes when context drops below trigger)"
-        )
+        out.notices.append(msgs.AUTO_COMPACT_PAUSED.line())
     return out
 
 

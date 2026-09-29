@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import messages as msgs
 from .. import paths as _paths
 from . import kernel as _kernel
 from .core import Tool, ToolContext
@@ -593,7 +594,7 @@ def toolbox(
         _kernel.render_event(context, level, problem, style="bold red")
         return problem
     if started_now:
-        _kernel.render_event(context, level, f"kernel started in {session.cwd}",
+        _kernel.render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd),
                              verbose_only=True)
     loaded, problems = load_into_kernel(session, cwd)
     if loaded:

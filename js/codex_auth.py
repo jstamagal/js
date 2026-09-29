@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from . import messages as msgs
+
 if TYPE_CHECKING:
     from .logins import Login
 
@@ -344,9 +346,8 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
     for server in servers:
         server.expected_state = state
         server.timeout = 1.0
-    print("Opening browser for OpenAI Codex login...")
-    print(f"If it does not open, visit:\n{url}")
-    print("Over SSH or if the callback page cannot connect, paste the full callback URL here and press Enter.")
+    msgs.say(msgs.OAUTH_OPENING, service="OpenAI Codex", url=url)
+    msgs.say(msgs.OAUTH_PASTE_CALLBACK)
     deadline = time.monotonic() + timeout_s
     sel = selectors.DefaultSelector()
     winner: _CallbackServer | None = None
@@ -384,7 +385,7 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
                             ):
                                 raise ValueError("Invalid callback")
                         except (ValueError, UnicodeError):
-                            print("Invalid callback URL or state mismatch. Paste the URL from this login attempt.")
+                            msgs.say(msgs.OAUTH_BAD_CALLBACK)
                             continue
                         winner = servers[0]
                         winner.received_state = state
@@ -442,10 +443,7 @@ def login_device(*, open_browser: bool = True) -> Login:
         except (TypeError, ValueError):
             poll_interval = 5.0 + _DEVICE_POLL_SAFETY_MARGIN
 
-        print("OpenAI Codex login")
-        print(f"  URL:  {DEVICE_AUTH_URL}")
-        print(f"  Code: {user_code}")
-        print("Waiting for authorization...")
+        msgs.say(msgs.OAUTH_DEVICE, service="OpenAI Codex", url=DEVICE_AUTH_URL, code=user_code)
         if open_browser:
             webbrowser.open(DEVICE_AUTH_URL)
 
@@ -550,7 +548,7 @@ def save_refreshed_login(refreshed: Login) -> None:
     try:
         logins.save_login(refreshed)
     except logins.LoginsCorruptError as exc:
-        print(f"*** warning: could not save refreshed OpenAI Codex login: {exc}", file=sys.stderr)
+        msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error=exc)
 
 
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
@@ -571,8 +569,3 @@ async def ensure_fresh_login_async(
     if persist:
         save_refreshed_login(refreshed)
     return refreshed
-
-
-def abort(message: str) -> None:
-    print(message, file=sys.stderr)
-    raise SystemExit(1)

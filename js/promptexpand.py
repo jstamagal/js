@@ -43,11 +43,11 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 from . import paths, settings
+from . import messages as msgs
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 
 __all__ = ["expand_prompt", "PromptExpansionError"]
@@ -172,8 +172,8 @@ def expand_prompt(
         except PromptExpansionError as exc:
             if on_error == "raise":
                 raise
-            # Degrade: keep the directive literal, warn once, don't brick startup.
-            print(f"js: prompt directive left literal: {exc}", file=sys.stderr)
+            # Keep the directive as written, warn, and let startup go on.
+            msgs.warn(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
             return m.group(0)
 
     return _DIRECTIVE.sub(_resolve, text)

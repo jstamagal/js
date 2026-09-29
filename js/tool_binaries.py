@@ -18,7 +18,6 @@ import platform
 import shutil
 import stat
 import subprocess
-import sys
 import tarfile
 import tempfile
 import time
@@ -29,6 +28,8 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import messages as msgs
 
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
@@ -509,7 +510,7 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
         brewed = _provision_aria2_via_brew(tools_dir)
         if brewed is not None:
-            print(f"present: aria2 (Homebrew) at {brewed}")
+            msgs.say(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
             missing = [m for m in missing if not m.startswith("aria2:")]
         else:
             missing = [m for m in missing if not m.startswith("aria2:")] + [
@@ -530,25 +531,20 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
                 with destination.open("wb") as output:
                     shutil.copyfileobj(response, output)
 
-    print(f"js tool directory: {tools_dir}")
+    msgs.say(msgs.TOOL_DIR, path=tools_dir)
     for spec in specs:
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
             for _member, name, checksum in spec.companions
         ):
-            print(
-                f"present: {spec.name} {spec.version} at {target} "
-                f"(sha256 {spec.executable_sha256})"
-            )
+            msgs.say(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
+                     sha=spec.executable_sha256)
             continue
-        print(f"download: {spec.name} {spec.version} ({spec.asset})")
-        print(f"  {spec.url}")
+        msgs.say(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
         state = install_download(spec, tools_dir=tools_dir, downloader=download)
-        print(
-            f"{state}: {target} (asset sha256 {spec.asset_sha256}; "
-            f"executable sha256 {spec.executable_sha256})"
-        )
+        msgs.say(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
+                 sha=spec.executable_sha256)
     if missing:
         raise InstallError("toolkit incomplete:\n" + "\n".join(missing))
 
@@ -556,7 +552,7 @@ def main() -> int:
     try:
         install_all()
     except (DownloadError, InstallError, OSError, urllib.error.URLError) as exc:
-        print(f"!! tool install failed: {exc}", file=sys.stderr)
+        msgs.warn(msgs.TOOL_INSTALL_FAILED, error=exc)
         return 1
     return 0
 

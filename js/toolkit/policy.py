@@ -29,7 +29,6 @@ modifier (`tag:read_only:lazy`); without one it means eager.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
@@ -39,6 +38,7 @@ from typing import Any
 import yaml
 
 from .. import paths
+from .. import messages as msgs
 from .core import Tool
 
 MODIFIERS = ("eager", "lazy", "ban")
@@ -233,8 +233,10 @@ def warn_unmatched(tools: Sequence[Tool], rules: Sequence[Rule], agent_id: str |
         if rule.entry.noun == "tag" or rule.entry.is_glob:
             continue
         if not any(rule.matches(tool) for tool in tools):
-            owner = f" for agent {agent_id!r}" if agent_id else ""
-            print(f"js: tool entry {rule.label!r}{owner} matched no tool; ignoring", file=sys.stderr)
+            if agent_id:
+                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
+            else:
+                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
 
 
 @dataclass(frozen=True)

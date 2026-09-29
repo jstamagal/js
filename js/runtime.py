@@ -28,6 +28,7 @@ from jsonschema import validators as jsonschema_validators
 from . import colors as C
 from . import context_budget
 from . import display
+from . import messages as msgs
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
 from . import paths
@@ -299,7 +300,7 @@ class Telemetry:
             try:
                 self.trace_sink.write("FLIGHT " + json.dumps(rec, default=str) + "\n")
             except OSError as exc:
-                print(f"[FLIGHT LOG ERROR] {exc}", file=sys.stderr, flush=True)
+                msgs.warn(msgs.FLIGHT_LOG_FAILED, error=exc)
         if not self.debug_log:
             return
         try:
@@ -1375,7 +1376,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         except Exception:  # noqa: BLE001 — registry internals
             _ntools = "?"
         _bits.append(f"tools={_ntools}")
-        print(f"{display.CHROME}run  {'  '.join(_bits)}{C.RESET}", flush=True)
+        print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(_bits))}{C.RESET}", flush=True)
 
     # One Display per streamed answer, opened at its first chunk and finished
     # when the stream ends.
@@ -1595,7 +1596,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         tail_tokens=tail_tokens, context=active_context,
                     )
             except Exception as exc:  # noqa: BLE001
-                print(f"[COMPACT FAILURE] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
                 telemetry.event("context_compaction_failed", phase=phase,
                                 error=f"{type(exc).__name__}: {exc}")
                 return False
@@ -1763,9 +1764,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
                             _cache = f"  cache {_pct:.0f}%"
                         _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                        print(f"{display.CHROME}{_label + ': ' if _label else ''}{int(_elapsed * 1000)}ms  "
-                              f"finish={finish}  tool_calls={len(pending_calls)}  "
-                              f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
+                        _stats = msgs.CALL_STATS.text(
+                            ms=int(_elapsed * 1000), finish=finish, tool_calls=len(pending_calls),
+                            tokens=_out_tok, tps=_tps, ttft=_ttft, cache=_cache)
+                        print(f"{display.CHROME}{_label + ': ' if _label else ''}{_stats}{C.RESET}", flush=True)
                     break
                 except ai.ProviderAPIError as e:
                     # Finish any partially streamed text before we retry or abort,
@@ -1833,7 +1835,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     raise
             else:
                 stream_transport.report_held_failure()
-                print(f"{C.ORANGE}*** Tool-loop retry budget exhausted.{C.RESET}")
+                msgs.say(msgs.RETRY_BUDGET_EXHAUSTED)
                 _end_turn("retry_budget_exhausted")
                 return
 
@@ -1940,7 +1942,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     payload["incomplete_reason"] = incomplete_reason
                 _emit_event("response", **payload)
             if incomplete_reason and not suppress_output:
-                print(f"{C.ORANGE}warning: response incomplete ({incomplete_reason}){C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.RESPONSE_INCOMPLETE, reason=incomplete_reason)
 
             if not pending_calls:
                 if incomplete_reason:
@@ -2045,9 +2047,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
                     telemetry.event("steered", message_index=len(messages) - 1)
                     if not suppress_output:
-                        print(f"{C.GREY}(→ steered){C.RESET}", flush=True)
+                        msgs.say(msgs.STEERED, flush=True)
 
-        print(f"{C.ORANGE}*** Tool loop hit max iterations: {cfg.max_tool_iterations}{C.RESET}")
+        msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         _end_turn("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
         # turn_start is emitted unconditionally and every normal/handled exit

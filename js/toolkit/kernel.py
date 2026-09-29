@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import messages as msgs
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
@@ -221,7 +222,7 @@ def render_execution(
         body, hidden = _clip(error or "cell interrupted", limit)
         console.print(Text(f"kernel[{cell}] {head}: ", style="bold red") + Text(body))
         if hidden:
-            console.print(Text(f"  ... {hidden} more lines (full text went to the model)",
+            console.print(Text("  " + msgs.KERNEL_MORE_LINES.text(count=hidden),
                                style="dim"))
         return
 
@@ -248,14 +249,14 @@ def render_execution(
         shown, hidden = _clip(body.rstrip("\n"), limit)
         grid.add_row(label, Text(shown, style=style or None))
         if hidden:
-            grid.add_row("", Text(f"... {hidden} more lines (full text went to the model)",
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
                                   style="dim"))
 
     if error:
         shown, hidden = _clip(error.rstrip("\n"), limit)
         grid.add_row("error", Text(shown, style="red"))
         if hidden:
-            grid.add_row("", Text(f"... {hidden} more lines (full text went to the model)",
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
                                   style="dim"))
     if interrupted:
         grid.add_row("stopped", Text("SIGINT sent; namespace intact", style="bold yellow"))
@@ -263,7 +264,7 @@ def render_execution(
         grid.add_row("defined", Text(", ".join(added), style="green"))
     if removed:
         grid.add_row("gone", Text(", ".join(removed), style="red"))
-    grid.add_row("namespace", Text(", ".join(namespace) if namespace else "(none)"))
+    grid.add_row("namespace", Text(", ".join(namespace) if namespace else msgs.NONE_VALUE.text()))
     for image in images:
         grid.add_row("image", Text(str(image), style="blue"))
 
@@ -941,7 +942,7 @@ def kernel(
         return problem
     notes: list[str] = []
     if started_now:
-        render_event(context, level, f"kernel started in {session.cwd}", verbose_only=True)
+        render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd), verbose_only=True)
         notes.append(f"kernel started (cwd {session.cwd})")
 
     if restart:
@@ -951,7 +952,7 @@ def kernel(
             message = f"ERROR: kernel restart failed: {type(exc).__name__}: {exc}"
             render_event(context, level, message, style="bold red")
             return message
-        render_event(context, level, "kernel restarted — namespace cleared", style="yellow")
+        render_event(context, level, msgs.KERNEL_RESTARTED.text(), style="yellow")
         notes.append("kernel restarted; the namespace is empty")
         if mode == "run" and not code.strip():
             return "\n".join([*notes, "NAMESPACE (none)"])

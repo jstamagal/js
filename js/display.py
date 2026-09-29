@@ -29,6 +29,7 @@ from rich.markdown import Markdown
 from rich.syntax import Syntax
 
 from . import colors as C
+from . import messages as msgs
 from . import settings as _settings
 
 # String sequences (OSC, DCS, SOS, PM, APC) run to BEL or ST, 7- or 8-bit.
@@ -427,7 +428,7 @@ def render_tool_call(name: str, args: dict | None, level: int, *, preview: int =
     body_key = _BODY_ARG.get(name)
     parts = [f"{TOOL_MARKER} {clean(name)}"]
     if malformed:
-        parts.append("<malformed args>")
+        parts.append(msgs.TOOL_ARGS_UNPARSED.text())
     for key, value in args.items():
         if key == body_key or value is None or value == "":
             continue
@@ -443,7 +444,7 @@ def render_tool_call(name: str, args: dict | None, level: int, *, preview: int =
             code = "\n".join(lines[:preview])
         out.append(render_code(code, _lexer(name, args, code), width))
         if hidden:
-            out.append(f"{CHROME}... +{hidden} lines{C.RESET}\n")
+            out.append(f"{CHROME}{msgs.TOOL_MORE_LINES.text(count=hidden)}{C.RESET}\n")
     return "".join(out)
 
 
