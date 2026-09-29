@@ -319,3 +319,16 @@ def test_each_builtin_skill_names_its_upstream_source():
         assert re.fullmatch(
             r"SOURCE: https://github\.com/[\w.-]+/[\w.-]+/tree/[0-9a-f]{40}/\S+", sources[0]
         ), skill_md
+
+
+def test_malformed_skill_warns_on_one_line_once(tmp_path, capsys):
+    package = tmp_path / "package"
+    bad = _write(package / "charts" / "SKILL.md", "---\nname: charts\ndescription: [unclosed\n---\nbody")
+
+    for _ in range(3):
+        catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+        assert catalog.get("charts") is None
+
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert str(bad) in lines[0]

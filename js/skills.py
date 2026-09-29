@@ -16,6 +16,8 @@ from . import paths
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _MAX_DESCRIPTION = 500
+# Discovery runs on every turn; each distinct warning prints once per process.
+_WARNED: set[str] = set()
 # The skills js ships, vendored as js/skills/<name>/SKILL.md.
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
@@ -247,28 +249,23 @@ def discover_skills(
                 try:
                     record = _index_skill(path, source)
                 except ValueError as exc:
-                    print(
-                        f"WARNING: skipping malformed skill {path}: {exc}",
-                        file=sys.stderr,
-                    )
+                    _warn_once(f"WARNING: skipping malformed skill {path}: {exc}")
                     continue
                 key = record.metadata.name.casefold()
                 prior = root_records.get(key)
                 if prior is not None:
-                    print(
+                    _warn_once(
                         f"WARNING: skipping malformed skill {path}: duplicate skill name "
-                        f"{record.metadata.name!r} in {root}: {prior.metadata.path} and {path}",
-                        file=sys.stderr,
+                        f"{record.metadata.name!r} in {root}: {prior.metadata.path} and {path}"
                     )
                     continue
                 root_records[key] = record
             for key, record in root_records.items():
                 prior = layer_records.get(key)
                 if prior is not None:
-                    print(
+                    _warn_once(
                         f"WARNING: skill {record.metadata.name!r} at {record.metadata.path} "
-                        f"shadows {prior.metadata.path}",
-                        file=sys.stderr,
+                        f"shadows {prior.metadata.path}"
                     )
             layer_records.update(root_records)
         selected.update(layer_records)
@@ -310,19 +307,36 @@ def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any], str, int]
         return {}, text, 0
     match = re.search(r"\r?\n---[ \t]*(?:\r?\n|$)", text[3:])
     if match is None:
-        raise ValueError(f"frontmatter in {path} is missing a closing ---")
+        raise ValueError("frontmatter is missing a closing ---")
     start = 3 + match.start()
     end = 3 + match.end()
     yaml_text = text[text.find("\n") + 1:start]
     try:
         manifest = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML frontmatter in {path}: {exc}") from exc
+        raise ValueError(f"invalid YAML frontmatter: {_yaml_problem(exc)}") from exc
     if manifest is None:
         manifest = {}
     if not isinstance(manifest, dict):
-        raise ValueError(f"frontmatter in {path} must be a mapping")
+        raise ValueError("frontmatter must be a mapping")
     return manifest, text[end:], end
+
+
+def _yaml_problem(exc: yaml.YAMLError) -> str:
+    """The parser's complaint and its SKILL.md line, without the source excerpt."""
+    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    mark = getattr(exc, "problem_mark", None)
+    # Mark lines count from 0 within the frontmatter, which starts on line 2.
+    return f"{problem} (line {mark.line + 2})" if mark is not None else problem
+
+
+def _warn_once(message: str) -> None:
+    """Print a discovery warning as one line, once per process."""
+    line = " ".join(message.split())
+    if line in _WARNED:
+        return
+    _WARNED.add(line)
+    print(line, file=sys.stderr)
 
 
 def _string_field(path: Path, manifest: dict[str, Any], field: str) -> str:
@@ -330,7 +344,7 @@ def _string_field(path: Path, manifest: dict[str, Any], field: str) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
-        raise ValueError(f"{field} frontmatter in {path} must be a string")
+        raise ValueError(f"{field} frontmatter must be a string")
     return value.strip()
 
 
@@ -342,7 +356,7 @@ def _bool_field(path: Path, manifest: dict[str, Any], field: str) -> bool:
         return value
     if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
         return value.strip().lower() == "true"
-    raise ValueError(f"{field} frontmatter in {path} must be true or false")
+    raise ValueError(f"{field} frontmatter must be true or false")
 
 
 def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -350,15 +364,15 @@ def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise ValueError(f"tools frontmatter in {path} must be a list of strings")
+        raise ValueError("tools frontmatter must be a list of strings")
     tools: list[str] = []
     seen: set[str] = set()
     for item in value:
         if not isinstance(item, str) or not _TOOL_RE.fullmatch(item.strip()):
-            raise ValueError(f"tools frontmatter in {path} must contain safe non-empty strings")
+            raise ValueError("tools frontmatter must contain safe non-empty strings")
         tool = item.strip()
         if tool in seen:
-            raise ValueError(f"tools frontmatter in {path} contains duplicate {tool!r}")
+            raise ValueError(f"tools frontmatter contains duplicate {tool!r}")
         seen.add(tool)
         tools.append(tool)
     return tuple(tools)
@@ -366,7 +380,7 @@ def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
 
 def _validate_name(path: Path, name: str) -> None:
     if not _NAME_RE.fullmatch(name) or ".." in name:
-        raise ValueError(f"unsafe skill name {name!r} in {path}")
+        raise ValueError(f"unsafe skill name {name!r}")
 
 
 def _derive_description(body: str, name: str) -> str:

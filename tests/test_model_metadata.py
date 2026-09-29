@@ -7,7 +7,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from js import model_metadata
+
+
+@pytest.fixture(autouse=True)
+def _no_prior_refresh_failure(monkeypatch):
+    monkeypatch.setattr(model_metadata, "_refresh_failure", None)
 
 
 class _FakeModel:
@@ -181,6 +188,34 @@ def test_ensure_fresh_catalog_warns_and_keeps_current_on_refresh_failure(monkeyp
     err = capsys.readouterr().err
     assert "*** updating models.dev cache..." in err
     assert "*** warning: models.dev cache refresh failed: RuntimeError: offline" in err
+
+
+def test_failed_refresh_is_tried_once_per_process(monkeypatch, tmp_path: Path, capsys):
+    old_time = datetime.now(tz=UTC) - timedelta(days=5)
+    custom = tmp_path / "custom.sqlite"
+    _write_metadata_db(custom, generated_at=old_time.isoformat())
+    monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "status.json")
+    attempts: list[str] = []
+
+    def fail_refresh(**_kwargs):
+        attempts.append("try")
+        raise OSError("[Errno -3] Temporary failure\nin name resolution")
+
+    monkeypatch.setattr(model_metadata, "_generate_database", fail_refresh)
+
+    statuses = [model_metadata.ensure_fresh_catalog() for _ in range(3)]
+
+    assert attempts == ["try"]
+    assert all(status is not None and status.db_path == custom for status in statuses)
+    warnings = [line for line in capsys.readouterr().err.splitlines() if "refresh failed" in line]
+    assert len(warnings) == 1
+    assert "name resolution" in warnings[0]
+
+    # An explicit refresh still tries.
+    model_metadata.ensure_fresh_catalog(force=True)
+    assert attempts == ["try", "try"]
 
 
 def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):
