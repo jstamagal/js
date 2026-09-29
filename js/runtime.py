@@ -4,7 +4,7 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import asyncio
 import contextlib
 import inspect
@@ -1211,15 +1211,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None,
              mcp_host: Any = None,
-             steer: Callable[[], dict | None] | None = None) -> None:
+             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
     `messages` in place so the caller can persist new entries.
 
     ``steer`` is called at each tool boundary: after a batch's results are
-    recorded, when another model call follows. A user message it returns is
-    appended there, so the model reads it before choosing its next tool call.
+    recorded, when another model call follows. It returns a user message or
+    None, directly or as an awaitable. A returned message is appended there, so
+    the model reads it before choosing its next tool call.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -2026,6 +2027,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 return
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
                 steered = steer()
+                if inspect.isawaitable(steered):
+                    steered = await steered
                 if steered is not None:
                     messages.append(steered)
                     ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))

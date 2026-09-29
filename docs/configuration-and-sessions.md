@@ -62,6 +62,7 @@ as `<set>`.
 | `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
 | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
 | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| `runtime.steer` | `now` | What a line typed while a turn runs does. `now`: it reaches the model at the turn's next tool boundary, as a user message; a turn with no boundary left gets it after it ends. `batch`: every line typed during the turn goes in as one message after it ends. `one`: each line is its own turn, in order. |
 | `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
 | `compact.auto` | `on` | Automatic cache-aware context compaction. |
 | `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |

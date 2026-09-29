@@ -2633,14 +2633,21 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     _append_turn(cfg, user_bundle.history_message)
     steered: list[attach.UserMessageBundle] = []
 
-    def take_steer() -> dict | None:
+    async def take_steer() -> dict | None:
+        # The inbox is loop-owned: it is read and cleared here, on the loop.
+        # Attachment reads and encoding run in the executor. Settings that an
+        # input hook changes apply from the next turn, through _do_turn's
+        # post-turn delta sync.
         if not steer_inbox:
             return None
         text = "\n".join(steer_inbox)
         steer_inbox.clear()
         steer_text, steer_attachments = attach.split_repl_attachments(text)
+        _emit_repl_event(state, telemetry, "input", text=steer_text, attachments=steer_attachments)
         try:
-            built = attach.build_user_message(steer_text, steer_attachments, turn_cfg)
+            built = await loop.run_in_executor(
+                None, attach.build_user_message, steer_text, steer_attachments, turn_cfg
+            )
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}")
             return None

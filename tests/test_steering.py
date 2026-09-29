@@ -213,6 +213,11 @@ class _Harness:
         while not self.hold_started.is_set():
             await asyncio.sleep(0.01)
 
+    def transcript(self) -> str:
+        found = list((self.tmp_path / ".local" / "share" / "js" / "transcript").rglob("*.log"))
+        assert len(found) == 1, found
+        return found[0].read_text()
+
     def session(self) -> list[dict]:
         found = list((self.tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
         assert len(found) == 1, found
@@ -312,3 +317,44 @@ def test_flush_drops_lines_waiting_to_steer(monkeypatch, tmp_path):
     assert len(h.calls) == 2
     assert all("never mind" not in text for call in h.calls for text in _user_texts(call))
     assert [m["role"] for m in h.session()] == ["user", "assistant", "tool", "assistant"]
+
+
+def test_steered_line_is_in_the_transcript_where_the_model_receives_it(monkeypatch, tmp_path):
+    h = _Harness(monkeypatch, tmp_path)
+
+    async def script(on_line, h):
+        await on_line("first")
+        await h.wait_hold()
+        await on_line("actually check the logs")
+        h.hold_release.set()
+
+    h.run(script)
+
+    # The line was typed before the tool returned; the transcript has it after
+    # the tool result, where it entered the conversation.
+    log = h.transcript()
+    assert log.count("actually check the logs") == 1
+    assert log.index("first") < log.index("held") < log.index("actually check the logs")
+
+
+def test_steered_line_goes_through_the_input_event(monkeypatch, tmp_path):
+    h = _Harness(monkeypatch, tmp_path)
+    inputs: list[str] = []
+    real_emit = cli._emit_repl_event
+
+    def recording_emit(state, telemetry, event, **payload):
+        if event == "input":
+            inputs.append(payload["text"])
+        return real_emit(state, telemetry, event, **payload)
+
+    monkeypatch.setattr(cli, "_emit_repl_event", recording_emit)
+
+    async def script(on_line, h):
+        await on_line("first")
+        await h.wait_hold()
+        await on_line("actually check the logs")
+        h.hold_release.set()
+
+    h.run(script)
+
+    assert inputs == ["first", "actually check the logs"]
