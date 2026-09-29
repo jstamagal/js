@@ -28,7 +28,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Shell output past the cap | **head kept, tail lost** ✔ | whole stream to file | head + tail | tail + spill file |
 | Stale-edit guard | per line range, returns recovery diff | per-file mtime | none | none |
 | `patch` result shows the diff | yes | no | no | no |
-| Fuzzy match on edit | no (nearest-line hint) | quote styles | 4 looser passes | NFKC + quotes |
+| Fuzzy match on edit | yes, quotes, dashes, spaces, trailing whitespace; keeps untouched bytes (js-1g1.15) | quote styles | 4 looser passes | NFKC + quotes |
 | Oversized result spill | byte + line continuation named | preview + path | none | bash/MCP only |
 | Long shell jobs | handle, never killed | backgrounded | session id | blocks |
 | Async subagents | no | yes, notification | yes, mailbox | ? |
@@ -65,7 +65,8 @@ pi retries once. Codex does not recover inside a normal turn.
 **Edit safety is the strictest, and cheap to recover from.**
 - A stale edit is refused, and js returns the diff between what was read and what is on disk now. Coverage is tracked per line range (`fs.py:138`). A stale edit costs one turn in js and two in Claude Code. Codex and pi have no guard.
 - `patch` returns the diff it wrote. None of the others show the model its own edit.
-- A miss gets "closest line is N" (`fs.py:768`).
+- A miss gets "closest line is N" (`fs._nearest_hint`).
+- A near-miss on smart quotes, Unicode dashes, no-break spaces or trailing whitespace still applies, and every line and character the edit kept is written back from the file (`fs._keep_untouched`, js-1g1.15).
 - Batch edits are all-or-nothing, and each edit sees the result of the one before it.
 
 **Shell never kills a long job.** It hands back `HANDLE n RUNNING` with poll, wait and kill, and later reads return only new bytes. This is on par with Claude Code and Codex. pi blocks.
@@ -95,13 +96,13 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Clearing old results busts the prompt cache.** `microcompact` rewrites mid-history results whenever the budget trips (`compaction.py:192`). Claude Code clears only after the cache TTL has already expired.
 
-**`read` prefixes every line with `N:hash|`, and `patch` can't use it.** It costs tokens on every read line. The stale guard already catches changes without it.
+**`read` prefixed every line with `N:hash|`, and `patch` couldn't use it.** Done in js-1g1.15: the gutter is `N|`. The stale guard catches changes without a hash.
 
 **`task` blocks the parent until every child finishes.** A slow child stalls the whole turn. Claude Code and Codex return immediately and deliver the result later.
 
 **Lazy loading costs a round trip, and its ranking is weak.** "Do not load and call that tool in the same response." Discovery ranks by token overlap (`discovery.py:97`), while all three others use BM25. Claude Code expands tool references inline, within the same response.
 
-**`patch` has no fuzzy fallback.** A smart quote the model pasted costs a turn in js and nothing in the other three.
+**`patch` had no fuzzy fallback.** Done in js-1g1.15: a smart quote the model typed as `"` no longer costs a turn.
 
 **Sessions are filed per agent, and the model is recorded only at start.** Resume can come back on the wrong model. Both are fixed by the design in `docs/sessions-and-home-design.md` and are being built now (js-1g1.2).
 
@@ -142,8 +143,8 @@ pi retries once. Codex does not recover inside a normal turn.
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | `compaction.microcompact` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | `task` gets a job handle like `shell` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | `discovery.ranked_entries` |
-| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | `fs._apply_edit` |
-| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | `_reconcile_read_delivery` |
+| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
+| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ToolContext.shown_read`, kept only while the earlier result is in history |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | resume path |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |

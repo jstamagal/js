@@ -572,8 +572,8 @@ def fs_read(
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
     if earlier is not None:
         return (
-            f"{target} lines {start}-{end} are unchanged since read call {earlier} "
-            f"returned them (hash {content_hash}); that result is current.{suffix}"
+            f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
+            f"(hash {content_hash}); that result is current.{suffix}"
         )
     # Lines are returned whole: `read` pages by line, not by column, so a cut
     # line is unreachable content. max_read_bytes/max_read_lines bound the read,

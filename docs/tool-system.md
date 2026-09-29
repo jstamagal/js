@@ -146,7 +146,7 @@ The filename must match the registered tool name for core/wiki tools.
 Generated agent tools build descriptions at runtime.
 
 These descriptions are not comments. They are model-facing contract text,
-explicit about ambiguity and failure modes: when to read first, what line anchors mean, how to patch, when to
+explicit about ambiguity and failure modes: when to read first, what the line-number gutter means, how to patch, when to
 use `cwd`, how tasks run, and what not to infer.
 
 Tests check description files for registered tools and protect the canonical
@@ -225,7 +225,11 @@ and known content sit behind `ToolContext._coverage_lock`, and coverage is
 recorded per call id: when the runtime clips a read's result, only that call's
 share is narrowed, and lines another read of the same file delivered stay
 read. The runtime forgets the per-call shares (`settle_reads`) once the batch
-cap has run. Trace and telemetry writes hold one lock, so an exchange prints
+cap has run. The same settle records the line reads the batch delivered whole,
+by call id and a hash of their text; before the next dispatch the runtime keeps
+only those whose text is still in the history (`keep_shown_reads`), so an
+unchanged re-read returns a note naming the earlier call only while that result
+is there. Trace and telemetry writes hold one lock, so an exchange prints
 whole; spill files are written to a temporary name and renamed.
 
 Inside the `task` tool, multiple task strings also run concurrently.
@@ -271,7 +275,10 @@ discovered and loaded by catalog id.
 
 `read` records that a file was read and remembers its hash. `write` and `patch`
 require a prior read before changing existing files. New file creation does not
-require a prior read.
+require a prior read. `patch` matches `old_string` exactly first, then in a
+view that drops trailing whitespace and reads smart quotes, Unicode dashes and
+no-break spaces as ASCII; a match found that way is replaced over the original
+text, keeping the file's bytes wherever the edit kept `old_string`.
 
 Edit operations snapshot prior state for `undo`:
 
@@ -355,7 +362,7 @@ For another Python project, the behavior to preserve is:
 - `agent.yaml` tool selection
 - `Tool` plus `ToolContext` separation
 - read-before-write state in context
-- exact patch/multi-patch behavior
+- patch/multi-patch behavior: exact match first, then the normalised fallback
 - in-process undo snapshots
 - `shell.program` shell execution
 - task parallelism and child context isolation
