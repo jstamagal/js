@@ -51,10 +51,17 @@ def run_blocking(cfg, lines, **state_kwargs) -> dict:
 
 
 def run_async(monkeypatch, cfg, lines, **state_kwargs) -> dict:
-    """Each line reaches the async REPL's Enter handler in order, then EOF.
+    """Each line reaches the async REPL's Enter handler in order, then EOF
+    once every turn they started has ended (EOF cancels a running turn).
 
     `lines` may instead be an async function; it is called with the Enter
-    handler and EOF follows when it returns."""
+    handler and EOF follows when it returns and the turns have ended."""
+    queues = []
+    turn_consumer = cli._turn_consumer
+
+    def recording_consumer(queue, *args, **kwargs):
+        queues.append(queue)
+        return turn_consumer(queue, *args, **kwargs)
 
     class AppStub:
         def __init__(self, on_line, on_eof):
@@ -66,6 +73,8 @@ def run_async(monkeypatch, cfg, lines, **state_kwargs) -> dict:
             else:
                 for line in lines:
                     await self._on_line(line.strip())
+            for queue in queues:
+                await queue.join()
             self._on_eof()
 
         def exit(self):
@@ -77,6 +86,7 @@ def run_async(monkeypatch, cfg, lines, **state_kwargs) -> dict:
     def build_app_stub(*, on_line, on_eof, **_kwargs):
         return AppStub(on_line, on_eof), cli.screen.Scrollback()
 
+    monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
     monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
     monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
     state, prompt_spec = repl_state(cfg, **state_kwargs)

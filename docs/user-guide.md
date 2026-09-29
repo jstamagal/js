@@ -189,7 +189,9 @@ on the left, `agent/session cache N%` on the right, and while a turn runs a
 spinner in the middle with the output-token count, the running tool and its
 elapsed seconds, or `compacting`. On a narrow terminal it drops the cache
 figure first, then shortens the model name, then drops the provider, the
-token count and the agent id; the clock, spinner and session id stay. Its
+token count and the agent id; the clock, spinner and session stay. A session
+started with `--session NAME` shows its whole name, cut short with `…` when
+nothing else is left to drop. Its
 colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
@@ -232,8 +234,9 @@ A line typed while a turn runs is handled by `runtime.steer`:
 - `one`: each line is its own turn, in order.
 
 Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
-one line per exchange, `> read: 4054B 292L`, with the exit status when a shell
-command exits nonzero; `2` shows the call with its command highlighted, the
+one line per exchange, `> read js/display.py: 4054B 292L`, with the exit status
+when a shell command exits nonzero. The line names the call by its key argument,
+shortened to fit: a path, a search pattern, the first line of a command, a URL; `2` shows the call with its command highlighted, the
 first `ui.tools_preview_lines` lines of the result, `...` when there is more,
 and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
 `3` shows the call and the whole result, with the text of a `read` source file
@@ -250,7 +253,13 @@ being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
 Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
-drops them without touching the turn.
+drops them without touching the turn. `exit` or Ctrl-D during a turn does what
+Ctrl-C does, keeping the partial answer and marking the turn interrupted, and
+the screen closes once the turn has ended.
+
+Resuming a session in the screen shows its last `ui.resume_exchanges` exchanges
+(3 by default, 0 for none) as a turn draws them, below the startup lines and
+the `*** Resumed` and `*** Model` notices.
 
 ### Prompt history and keys
 

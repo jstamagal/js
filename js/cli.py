@@ -3289,6 +3289,18 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     )
 
 
+def _resume_view(state: dict, width: int) -> str:
+    """The last `ui.resume_exchanges` exchanges of the session, drawn at `width`."""
+    live = state.get("settings") or {}
+    count = settings.knob(live, "ui.resume_exchanges")
+    return display_mod.render_exchanges(
+        state["messages"], count if isinstance(count, int) else 0,
+        prompt=f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}", width=width,
+        level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
+        markdown=display_mod.markdown_enabled(live),
+    )
+
+
 async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. The screen has three regions (scrollback, status, input); turn
@@ -3327,7 +3339,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if handled:
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             if not state["running"]:
-                app.exit()
+                await close()
             return
         if sup.turn_active() and _steer_mode(state) == "now":
             # The turn writes it to the transcript where the model receives it.
@@ -3342,7 +3354,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     def on_interrupt() -> None:
         # ^C cancels the active turn AND drops anything queued behind it —
         # otherwise the queue keeps draining prompts the operator meant to
-        # abort. The drain-on-quit path (EOF) stays intact.
+        # abort.
         if sup.turn_active():
             n = sup.cancel_kind("turn")
             msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
@@ -3350,8 +3362,34 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if flushed:
             msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
 
-    def on_eof() -> None:
+    async def wind_down() -> None:
+        # Cancels the running turn, and any turn the consumer starts from a
+        # line it took before the queue emptied, and waits for them to end.
+        drop_pending()
+        joined = loop.create_task(queue.join())
+        while not joined.done() and not consumer.done():
+            sup.cancel_kind("turn")
+            await asyncio.wait({joined}, timeout=0.05)
+        joined.cancel()
+
+    closing: list[asyncio.Future] = []
+
+    async def close_screen() -> None:
+        on_interrupt()
+        await wind_down()
+        app.exit()
+
+    def close() -> asyncio.Future:
+        # exit and EOF cancel a running turn as ^C does. The screen closes
+        # once it has ended, so everything the turn prints lands in the
+        # scrollback.
+        if not closing:
+            closing.append(asyncio.ensure_future(close_screen()))
+        return closing[0]
+
+    def on_eof() -> asyncio.Future:
         state["running"] = False
+        return close()
 
     async def on_ex(line: str, editor: screen.InputEditor) -> None:
         await exline.run_ex(
@@ -3386,27 +3424,28 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     ticker = loop.create_task(screen.tick(app, sup.turn_active))
     try:
         with screen.capture_stdio(loop, scrollback, app):
-            stream_transport.install_sink(stream_transport.NetSink(
-                level=lambda: _live_ui_int(state, "net"),
-                emit=lambda line: print(line, flush=True),
-            ))
-            if banner:
-                print(banner)
-            await app.run_async()
+            try:
+                stream_transport.install_sink(stream_transport.NetSink(
+                    level=lambda: _live_ui_int(state, "net"),
+                    emit=lambda line: print(line, flush=True),
+                ))
+                if banner:
+                    print(banner)
+                print(_resume_view(state, screen.ScreenLive(loop, scrollback, app).width()), end="")
+                await app.run_async()
+            finally:
+                # Whatever still runs ends while stdout is the scrollback, so
+                # nothing reaches the terminal after the screen has closed.
+                await wind_down()
+                for task in closing:
+                    with contextlib.suppress(Exception):
+                        await task
     finally:
         stream_transport.install_sink(None)
         ticker.cancel()
         telemetry.reasoning_factory = previous_reasoning_factory
         telemetry.display_factory = previous_display_factory
         supervisor.set_current(None)
-        # Graceful quit (EOF / exit): let queued and in-flight turns finish
-        # before teardown so submitted work isn't silently dropped. To abandon a
-        # long turn, cancel it with ^C first, then quit.
-        # join() also covers a line the consumer has taken but not yet spawned
-        # (its cfg snapshot waits for a running command).
-        if not consumer.done():
-            with contextlib.suppress(Exception):
-                await queue.join()
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await consumer
@@ -4129,6 +4168,9 @@ def _main(argv: list[str] | None = None) -> int:
         msgs.warn(msgs.FAILED, error=e)
         return 2
 
+    # Startup notices go out with the banner, which the screen shows before
+    # its prompt.
+    notices: list[str] = []
     # Resuming with no --model comes back on the model of the session's last
     # stamp, not the config default; with no --reasoning, on its reasoning
     # level. An explicit flag still wins. A stamp that matches what config
@@ -4140,7 +4182,7 @@ def _main(argv: list[str] | None = None) -> int:
         remembered_model = _resume_model_spec(resumed, cfg)
         if remembered_model:
             args.model = remembered_model
-            msgs.say(msgs.RESUMED_MODEL, model=remembered_model)
+            notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=remembered_model))
     resumed_reasoning = _resume_reasoning(resumed, cfg) if resumed is not None and args.reasoning is None else None
 
     try:
@@ -4194,11 +4236,11 @@ def _main(argv: list[str] | None = None) -> int:
     messages = M.load_replay_messages(cfg.session_file)
     _restore_workspace(cfg)
     if messages:
-        msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
+        notices.append(msgs.line_for(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message")))
     elif args.session is not None:
         # Asked for a specific session and got nothing. Silence here reads as a
         # successful resume, so an empty one has to say so.
-        msgs.say(msgs.EMPTY_SESSION, path=cfg.session_file)
+        notices.append(msgs.line_for(msgs.EMPTY_SESSION, path=cfg.session_file))
     if args.no_save:
         # -n with --session reads the named session and writes nothing back.
         cfg = replace(cfg, session_file=Path(os.devnull))
@@ -4214,7 +4256,7 @@ def _main(argv: list[str] | None = None) -> int:
         notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
         messages.append(notice)
         _append_turn(cfg, notice)
-        msgs.say(msgs.PROMPT_CHANGED)
+        notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
@@ -4255,6 +4297,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     banner = "\n".join([
         msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
+        *notices,
         *(msgs.FAILED.line(error=error) for error in [*rc_errors, *key_errors]),
     ])
     transcript_stack = contextlib.ExitStack()
@@ -4269,6 +4312,7 @@ def _main(argv: list[str] | None = None) -> int:
         _queue_switch(state, blocking=False)
         return code
     print(banner)
+    print(_resume_view(state, display_mod.terminal_width() - 1), end="")
     try:
         _blocking_repl(cfg, state, telemetry, session, prompt_spec)
     finally:
