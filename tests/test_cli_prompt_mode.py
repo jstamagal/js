@@ -59,8 +59,8 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert actual.sessions_dir == expected_agent_dir
     latest = json.loads((expected_agent_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
-    # First-run template is written to the platform config dir.
-    assert (tmp_path / ".config" / "js" / "jsrc").exists()
+    # No jsrc means no file: only /save writes one.
+    assert not (tmp_path / ".config" / "js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)

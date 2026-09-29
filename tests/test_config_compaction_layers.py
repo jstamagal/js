@@ -35,23 +35,21 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     assert cfg.prompt_roots[0].name == "prompts"
 
 
-def test_default_fetch_timeout_and_template_cover_limits_and_compact(tmp_path):
+def test_default_fetch_timeout_and_package_jsrc_cover_limits_and_compact():
     out = settings.collect_settings(config_paths=[], env={})
-    assert out["limits"]["fetch_timeout_s"] == settings.DEFAULT_FETCH_TIMEOUT_S
-    assert out["limits"]["inline_code_timeout_s"] == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
-    target = tmp_path / "jsrc"
-    settings.write_default_template(target)
-    text = target.read_text(encoding="utf-8")
-    template_keys = {
-        line.split()[1]
+    assert out["limits"]["fetch_timeout_s"] == settings.default_value("limits.fetch_timeout_s")
+    assert out["limits"]["inline_code_timeout_s"] == settings.default_value("limits.inline_code_timeout_s")
+    text = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
+    jsrc_keys = {
+        line.split()[1].lstrip("-")
         for line in text.splitlines()
-        if line.startswith("#set ")
+        if line.startswith("set ")
     }
     assert {
         "limits.inline_code_timeout_s",
         "compact.context_window",
         "compact.tail_tokens",
-    } <= template_keys
+    } <= jsrc_keys
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):

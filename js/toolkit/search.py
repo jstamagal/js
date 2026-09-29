@@ -35,10 +35,11 @@ def _http_body(
     secrets: tuple[str, ...] = (),
     retry_without_auth_on: tuple[int, ...] = (),
     timeout: float,
+    user_agent: str,
 ) -> bytes | str:
     """Fetch a response body, optionally retrying once without Authorization."""
     data = None
-    all_headers = {"User-Agent": "js-agent/0.1", **(headers or {})}
+    all_headers = {"User-Agent": user_agent, **(headers or {})}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         all_headers.setdefault("Content-Type", "application/json")
@@ -81,6 +82,7 @@ def _http_json(
     secrets: tuple[str, ...] = (),
     retry_without_auth_on: tuple[int, ...] = (),
     timeout: float,
+    user_agent: str,
 ) -> dict[str, Any] | str:
     """One JSON-object round-trip. Returns a mapping, or an ERROR string."""
     body = _http_body(
@@ -91,6 +93,7 @@ def _http_json(
         secrets=secrets,
         retry_without_auth_on=retry_without_auth_on,
         timeout=timeout,
+        user_agent=user_agent,
     )
     if isinstance(body, str):
         return body
@@ -175,6 +178,7 @@ def serper_search(
         payload={"q": query, "num": _bounded_int(num, 8, minimum=1, maximum=100)},
         secrets=(key,),
         timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
     )
     if isinstance(reply, str):
         return reply
@@ -220,6 +224,7 @@ def tavily_search(
         },
         secrets=(key,),
         timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
     )
     if isinstance(reply, str):
         return reply
@@ -262,6 +267,7 @@ def exa_search(
         },
         secrets=(key,),
         timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
     )
     if isinstance(reply, str):
         return reply
@@ -334,6 +340,7 @@ def docs_search(
         secrets=(key,) if key is not None else (),
         retry_without_auth_on=(401, 403) if key is not None else (),
         timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
     )
     if isinstance(found, str):
         return found
@@ -370,6 +377,7 @@ def docs_search(
         secrets=(key,) if key is not None else (),
         retry_without_auth_on=(401, 403) if key is not None else (),
         timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
     )
     if isinstance(body, str):
         return body

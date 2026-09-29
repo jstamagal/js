@@ -11,6 +11,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from .. import settings as _settings
 from ..mcp_config import MCPConfiguration, MCPServer
 from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
 from ..toolkit.discovery import ranked_entries, search_tokens
@@ -169,7 +170,6 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
 
 
 MAX_PUBLIC_TOOL_NAME = 64
-DEFAULT_REQUEST_TIMEOUT = 10.0
 
 
 def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TOOL_NAME) -> str:
@@ -336,8 +336,12 @@ class MCPHost:
         client_factory: Callable[..., MCPClient] = MCPClient,
         telemetry: Any = None,
         event_sink: Callable[..., Any] | None = None,
-        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        request_timeout: float | None = None,
     ) -> None:
+        if request_timeout is None:
+            request_timeout = getattr(config, "request_timeout_s", None)
+        if request_timeout is None:
+            request_timeout = _settings.default_value("mcp.request_timeout_s")
         if request_timeout <= 0:
             raise ValueError("MCP request timeout must be positive")
         self.config = config

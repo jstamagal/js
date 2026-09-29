@@ -284,7 +284,6 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     unset_spec = settings.SettingSpec(
         "sampling.temperature",
         "float",
-        None,
         "Provider-default sampling temperature.",
         empty=settings.EMPTY_UNSET,
     )
@@ -294,13 +293,6 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     assert setcmd.render_value(unset_spec, None) == "<unset>"
     sampling = setcmd.show_lines(live_settings, "sampling.temperature")
     assert sampling.lines[0] == "sampling.temperature = <unset>"
-    template = "\n".join(settings._template_lines())
-    assert "# Per-turn sampling overrides. Default display is <unset>;" in template
-    # RULING A: "unset" is no longer a magic clear-token, so the template no
-    # longer suggests typing it as a settable value — the commented example
-    # line is just the bare key, blank.
-    assert "#set sampling.temperature" in template
-    assert "#set sampling.temperature unset" not in template
 
 
 def test_secret_values_are_masked_when_shown():

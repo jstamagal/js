@@ -117,7 +117,7 @@ def test_code_exchange_builds_a_login_with_the_bearer_as_the_api_key():
     login = xai_auth.login_from_token(token)
     assert login.provider_id == xai_auth.XAI_PROVIDER_ID
     assert login.provider_api_key == "access-1"
-    assert login.provider_base_url == xai_auth.DEFAULT_XAI_BASE_URL
+    assert login.provider_base_url == xai_auth.XAI_BASE_URL
     assert login.xai_refresh_token == "refresh-1"
     assert login.xai_token_endpoint == "https://auth.x.ai/oauth/token"
 
@@ -179,7 +179,7 @@ def test_login_needs_refresh_tracks_expiry():
 def test_provider_is_registered_against_the_xai_endpoint():
     provider = providers.get_provider(xai_auth.XAI_PROVIDER_ID)
     assert provider is not None
-    assert provider.default_base_url == xai_auth.DEFAULT_XAI_BASE_URL
+    assert provider.default_base_url == xai_auth.XAI_BASE_URL
     assert provider.transport == "openai"
 
 

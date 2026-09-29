@@ -367,8 +367,8 @@ def config_owns(verb: str) -> bool:
 def apply_config_line(settings: dict, line: str) -> CommandResult:
     """Apply one jsrc line to ``settings`` at config load. Comments/blanks are
     no-ops; a verb the settings layer does not own returns ``handled=False``.
-    A bad `set` returns an ``error`` so the loader can surface it without
-    aborting."""
+    `set -key` clears that knob. A bad `set` returns an ``error`` so the loader
+    can surface it without aborting."""
     parsed = split_command(line)
     if parsed is None:
         return CommandResult(handled=True)
@@ -378,6 +378,8 @@ def apply_config_line(settings: dict, line: str) -> CommandResult:
     if verb != "set":
         arg = f"{verb} {arg}"
     parts = arg.split(maxsplit=1)
+    if len(parts) == 1 and parts[0].startswith("-") and len(parts[0]) > 1:
+        return apply_unset(settings, parts[0][1:])
     if len(parts) < 2:
         return CommandResult(handled=True, error=f"set needs a key and value: {line.strip()!r}")
     return apply_set(settings, parts[0], parts[1])

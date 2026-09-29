@@ -38,13 +38,23 @@ from .config import Config
 # --------------------------------------------------------------------------
 
 
-def get(cfg: Config, key: str, default: Any = None) -> Any:
+# A reader called without a default falls back to the knob's js/jsrc value.
+_JSRC = object()
+
+
+def _fallback(key: str, default: Any) -> Any:
+    return _settings.default_value(f"compact.{key}") if default is _JSRC else default
+
+
+def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
+    default = _fallback(key, default)
     settings = getattr(cfg, "settings", {}) or {}
     compact = settings.get("compact", {}) if isinstance(settings, dict) else {}
     return compact.get(key, default) if isinstance(compact, dict) else default
 
 
-def get_bool(cfg: Config, key: str, default: bool) -> bool:
+def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
+    default = _fallback(key, default)
     value = get(cfg, key, default)
     if isinstance(value, bool):
         return value
@@ -57,7 +67,8 @@ def get_bool(cfg: Config, key: str, default: bool) -> bool:
     return default
 
 
-def get_int(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
+def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -72,9 +83,10 @@ def get_int(cfg: Config, key: str, default: int, *, max_value: int | None = None
     return value
 
 
-def get_nonnegative_int(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
+def get_nonnegative_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
     """Like get_int but 0 is a legal value, not a request for the default —
     a buffer of 0 is a real choice."""
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -89,7 +101,8 @@ def get_nonnegative_int(cfg: Config, key: str, default: int, *, max_value: int |
     return value
 
 
-def get_float(cfg: Config, key: str, default: float, *, max_value: float | None = None) -> float:
+def get_float(cfg: Config, key: str, default: Any = _JSRC, *, max_value: float | None = None) -> float:
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -105,7 +118,7 @@ def get_float(cfg: Config, key: str, default: float, *, max_value: float | None 
 
 
 def get_model(cfg: Config) -> str:
-    raw = get(cfg, "model", "same")
+    raw = get(cfg, "model")
     if not isinstance(raw, str):
         return cfg.model
     model = raw.strip()
@@ -277,7 +290,7 @@ def clear_for_budget(
     Starts with ``compact.clear_keep_recent`` intact results and halves that
     each round down to one. An explicit zero clears all eligible results.
     Returns (results_cleared, chars_reclaimed)."""
-    keep_recent = get_nonnegative_int(cfg, "clear_keep_recent", _settings.DEFAULT_COMPACT_CLEAR_KEEP_RECENT)
+    keep_recent = get_nonnegative_int(cfg, "clear_keep_recent")
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data)
     try:
         flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
@@ -388,9 +401,9 @@ def _post_compact_rehydration(
 
 
 def thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = get_float(cfg, "notify_threshold", 0.50, max_value=1.0)
-    trigger_at = get_float(cfg, "trigger_threshold", 0.80, max_value=1.0)
-    force_at = get_float(cfg, "force_threshold", 0.90, max_value=1.0)
+    notify_at = get_float(cfg, "notify_threshold", max_value=1.0)
+    trigger_at = get_float(cfg, "trigger_threshold", max_value=1.0)
+    force_at = get_float(cfg, "force_threshold", max_value=1.0)
     if not (notify_at <= trigger_at <= force_at):
         return 0.50, 0.80, 0.90
     return notify_at, trigger_at, force_at
@@ -401,7 +414,7 @@ def configured_context_window(cfg: Config, resolve_window: Any) -> int:
     window = get_int(cfg, "context_window", 0)
     if window <= 0:
         window = int(resolve_window() or 0)
-    return window if window > 0 else get_int(cfg, "context_window_fallback", 1_000_000)
+    return window if window > 0 else get_int(cfg, "context_window_fallback")
 
 
 def effective_context_window(cfg: Config, context_window: int) -> int:
@@ -421,9 +434,9 @@ def effective_context_window(cfg: Config, context_window: int) -> int:
     # happens. Cap it the way Claude Code does (min(max_output, 20k)).
     reserve = min(
         max(0, int(max_out or 0)),
-        get_nonnegative_int(cfg, "summary_reserve_tokens", 20_000),
+        get_nonnegative_int(cfg, "summary_reserve_tokens"),
     )
-    buffer_tokens = get_nonnegative_int(cfg, "buffer_tokens", 4096)
+    buffer_tokens = get_nonnegative_int(cfg, "buffer_tokens")
     # Never let the reserve eat the whole window on a model with a huge declared
     # output cap; keep at least half the window addressable for input.
     return max(context_window // 2, context_window - reserve - buffer_tokens)
@@ -455,7 +468,7 @@ def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> i
     reads 0, does nothing, and the history that caused the failure survives
     into the next attempt unchanged.
     """
-    cpt = get_float(cfg, "chars_per_token", 4.0)
+    cpt = get_float(cfg, "chars_per_token")
     try:
         return (
             context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
@@ -473,7 +486,7 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
     estimator drifts far enough that "keep 16k of tail" kept something quite
     different from 16k.
     """
-    configured = get_float(cfg, "chars_per_token", 4.0)
+    configured = get_float(cfg, "chars_per_token")
     try:
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
@@ -677,8 +690,8 @@ async def compact_now(
     try:
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
-            tail_tokens = get_int(cfg, "tail_tokens", 16384)
-        min_savings = get_int(cfg, "min_savings_tokens", 400)
+            tail_tokens = get_int(cfg, "tail_tokens")
+        min_savings = get_int(cfg, "min_savings_tokens")
         original_len = len(messages)
         keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
         if preserve_from is not None:

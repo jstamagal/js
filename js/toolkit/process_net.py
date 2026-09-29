@@ -41,7 +41,8 @@ from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
 
 
-_ENV_ALLOW = _settings.DEFAULT_SHELL_ENV_ALLOW
+# The js/jsrc limits.shell_env_allow, for a context whose own value is not a list.
+_ENV_ALLOW = tuple(_settings.default_value("limits.shell_env_allow"))
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
@@ -239,9 +240,9 @@ def shell(
     command = text_or_default(command)
     if not command.strip():
         return "ERROR: command is required for action=\"run\""
-    wait_s = int_or_default(timeout, int(getattr(context, "shell_wait_seconds", _settings.DEFAULT_SHELL_WAIT_SECONDS)), minimum=1)
+    wait_s = int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     workdir = context.resolve_path(cwd) if cwd else context.cwd
-    configured_allow = getattr(context, "shell_env_allow", _ENV_ALLOW)
+    configured_allow = context.shell_env_allow
     if not isinstance(configured_allow, (list, tuple, set, frozenset)):
         configured_allow = _ENV_ALLOW
     allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
@@ -298,7 +299,7 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
                 job, result, description, job.allowed, job.safe_env, since_last=True)
         return f"killed handle {job.id} after {job.process.elapsed():.0f}s\n" + _render_finished(
             job, result, description, job.allowed, job.safe_env, since_last=True)
-    wait_s = 0 if action == "poll" else int_or_default(timeout, _settings.DEFAULT_SHELL_WAIT_SECONDS, minimum=1)
+    wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     with _blocking_on(context, job):
         result = job.process.wait(wait_s)
     if result is None:
@@ -401,7 +402,6 @@ def _stream_download(
         f"SAVED_RESPONSE path={target} size={written} bytes "
         f"content-type={content_type or 'unknown'}"
     )
-_DEFAULT_USER_AGENT = "js-agent/0.1"
 _TEXT_MEDIA_TYPES = {
     "application/csv",
     "application/ecmascript",
@@ -486,7 +486,7 @@ def _set_header(headers: dict[str, str], name: str, value: str) -> None:
     headers[name] = value
 
 
-def _normalize_headers(headers: Any) -> dict[str, str] | str:
+def _normalize_headers(headers: Any, user_agent: str) -> dict[str, str] | str:
     normalized: dict[str, str] = {}
     if headers is None:
         pass
@@ -510,7 +510,7 @@ def _normalize_headers(headers: Any) -> dict[str, str] | str:
     else:
         return "ERROR: headers must be a mapping or a list of 'Name: value' strings"
     if not any(key.lower() == "user-agent" for key in normalized):
-        normalized["User-Agent"] = _DEFAULT_USER_AGENT
+        normalized["User-Agent"] = user_agent
     return normalized
 
 
@@ -765,7 +765,7 @@ def fetch(
         return "ERROR: missing ToolContext"
     try:
         method_name = (text_or_default(method, "GET") or "GET").upper()
-        normalized_headers = _normalize_headers(headers)
+        normalized_headers = _normalize_headers(headers, context.user_agent)
         if isinstance(normalized_headers, str):
             return normalized_headers
         data = _request_body(normalized_headers, body, json_body)

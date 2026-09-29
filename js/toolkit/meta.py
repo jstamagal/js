@@ -11,6 +11,7 @@ import secrets
 import time
 from typing import Any
 
+from .. import settings as _settings
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
@@ -18,14 +19,33 @@ from .descriptions import load_description
 from .sanitize import int_or_default
 
 
-_DEFAULT_TASK_DEPTH = 2
-# Concurrency ceiling for a single fan-out. The parent tool-dispatch pool is 32
-# threads (cli.py); a sub-fan-out sits well below that so one wide `task(...)`
-# — or a nested one two levels deep — can't storm the provider with dozens of
-# simultaneous calls. Kept a module default (not a settings knob) to stay inside
-# the meta/registry surface; `context.subagent_max_workers` overrides it when a
-# future knob threads one through.
-_DEFAULT_SUBAGENT_MAX_WORKERS = 8
+# The ToolContext settings a subagent takes from its parent. A subagent gets its
+# own kernel (kernel_session stays None) but inherits how loudly it renders —
+# the operator watching one terminal wants one verbosity, not one per agent.
+_INHERITED_FIELDS = (
+    "max_read_lines",
+    "max_file_bytes",
+    "max_read_bytes",
+    "max_tool_result_bytes",
+    "max_tool_result_inline_bytes",
+    "max_bash_output_ceiling",
+    "max_bash_output_bytes",
+    "fetch_timeout_s",
+    "browse_timeout_s",
+    "download_timeout_s",
+    "max_download_bytes",
+    "task_max_depth",
+    "subagent_max_workers",
+    "shell_env_allow",
+    "user_agent",
+    "terminal_cols",
+    "terminal_rows",
+    "kernel_verbosity",
+    "kernel_render_max_lines",
+    "kernel_wait_seconds",
+    "shell_wait_seconds",
+    "model",
+)
 
 
 def _filename_limit(directory: Path) -> int:
@@ -82,29 +102,8 @@ def _task_text(item: Any) -> str:
 
 
 def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContext:
-    child = ToolContext(
-        cwd=parent.cwd,
-        max_read_lines=parent.max_read_lines,
-        max_file_bytes=parent.max_file_bytes,
-        max_read_bytes=getattr(parent, "max_read_bytes", 256 * 1024),
-        max_tool_result_bytes=parent.max_tool_result_bytes,
-        max_tool_result_inline_bytes=getattr(parent, "max_tool_result_inline_bytes", 51_200),
-        max_bash_output_ceiling=getattr(parent, "max_bash_output_ceiling", 150_000),
-        max_bash_output_bytes=parent.max_bash_output_bytes,
-        fetch_timeout_s=parent.fetch_timeout_s,
-        browse_timeout_s=getattr(parent, "browse_timeout_s", 60),
-        download_timeout_s=getattr(parent, "download_timeout_s", 300),
-        max_download_bytes=getattr(parent, "max_download_bytes", 0),
-        task_max_depth=getattr(parent, "task_max_depth", _DEFAULT_TASK_DEPTH),
-        # A subagent gets its own kernel (kernel_session stays None here) but
-        # inherits how loudly it renders — the operator watching one terminal
-        # wants one verbosity, not one per agent.
-        kernel_verbosity=getattr(parent, "kernel_verbosity", "normal"),
-        kernel_render_max_lines=getattr(parent, "kernel_render_max_lines", 24),
-        kernel_wait_seconds=getattr(parent, "kernel_wait_seconds", 5),
-        shell_wait_seconds=getattr(parent, "shell_wait_seconds", 30),
-        model=getattr(parent, "model", ""),
-    )
+    inherited = {name: getattr(parent, name) for name in _INHERITED_FIELDS if hasattr(parent, name)}
+    child = ToolContext(cwd=parent.cwd, **inherited)
     child.tool_registry = registry
     child.agent_id = agent
     child.task_depth = getattr(parent, "task_depth", 0) + 1
@@ -406,12 +405,9 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
 
 def _subagent_worker_cap(context: ToolContext, total: int) -> int:
     """Concurrency ceiling for one fan-out: at most `total` workers, never above
-    the configured/module width limit."""
-    limit = int_or_default(
-        getattr(context, "subagent_max_workers", _DEFAULT_SUBAGENT_MAX_WORKERS),
-        _DEFAULT_SUBAGENT_MAX_WORKERS,
-        minimum=1,
-    )
+    limits.subagent_max_workers."""
+    default = _settings.default_value("limits.subagent_max_workers")
+    limit = int_or_default(getattr(context, "subagent_max_workers", default), default, minimum=1)
     return max(1, min(total, limit))
 
 
@@ -445,7 +441,8 @@ def _prepare_fan_out(
             None,
         )
 
-    max_depth = int_or_default(getattr(context, "task_max_depth", _DEFAULT_TASK_DEPTH), _DEFAULT_TASK_DEPTH, minimum=1)
+    default_depth = _settings.default_value("limits.task_max_depth")
+    max_depth = int_or_default(getattr(context, "task_max_depth", default_depth), default_depth, minimum=1)
     if getattr(context, "task_depth", 0) >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None
 

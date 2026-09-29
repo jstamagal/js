@@ -12,6 +12,9 @@ from pathlib import Path
 from platformdirs import user_config_path, user_data_path
 
 APP_NAME = "js"
+# The agent a run uses when neither --agent nor JS_AGENT names one: the
+# prompt directory shipped as prompts/defaultagent.
+STOCK_AGENT = "defaultagent"
 
 
 def config_dir() -> Path:

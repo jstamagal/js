@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from ..paths import state_root
+from .. import settings as _settings
+from ..paths import STOCK_AGENT, state_root
 
 
 Handler = Callable[..., Any]
@@ -303,30 +304,41 @@ class TurnStatus:
             setattr(self, name, spec.default)
 
 
+def _knob(key: str) -> Any:
+    """A ToolContext field whose default is knob ``key``'s js/jsrc value."""
+    return field(default_factory=lambda: _settings.default_value(key))
+
+
 @dataclass
 class ToolContext:
     """Mutable state shared across tool calls in a js process."""
 
     cwd: Path = field(default_factory=Path.cwd)
-    max_read_lines: int = 2_000
-    max_file_bytes: int = 2_000_000
-    max_read_bytes: int = 256 * 1024
-    max_tool_result_bytes: int = 256 * 1024
-    max_bash_output_bytes: int = 256 * 1024
-    max_bash_output_ceiling: int = 150_000
-    max_tool_result_inline_bytes: int = 51_200
-    fetch_timeout_s: int = 15
-    browse_timeout_s: int = 60
-    download_timeout_s: int = 300
-    max_download_bytes: int = 0           # 0 = unlimited; save= streams to disk
-    task_max_depth: int = 2
-    subagent_max_workers: int = 8
+    max_read_lines: int = _knob("limits.max_read_lines")
+    max_file_bytes: int = _knob("limits.max_file_bytes")
+    max_read_bytes: int = _knob("limits.max_read_bytes")
+    max_tool_result_bytes: int = _knob("limits.max_tool_result_bytes")
+    max_bash_output_bytes: int = _knob("limits.max_bash_output_bytes")
+    max_bash_output_ceiling: int = _knob("limits.max_bash_output_ceiling")
+    max_tool_result_inline_bytes: int = _knob("limits.max_tool_result_inline_bytes")
+    fetch_timeout_s: int = _knob("limits.fetch_timeout_s")
+    browse_timeout_s: int = _knob("limits.browse_timeout_s")
+    download_timeout_s: int = _knob("limits.download_timeout_s")
+    max_download_bytes: int = _knob("limits.max_download_bytes")  # 0 = unlimited; save= streams to disk
+    task_max_depth: int = _knob("limits.task_max_depth")
+    subagent_max_workers: int = _knob("limits.subagent_max_workers")
+    shell_env_allow: tuple[str, ...] = field(
+        default_factory=lambda: tuple(_settings.default_value("limits.shell_env_allow"))
+    )
+    user_agent: str = _knob("tools.user_agent")
+    terminal_cols: int = _knob("tools.terminal_cols")
+    terminal_rows: int = _knob("tools.terminal_rows")
     vision_enabled: bool = False
     model: str = ""                       # model id, for toolbox revision provenance
-    kernel_verbosity: str = "normal"      # quiet | normal | verbose terminal render
-    kernel_render_max_lines: int = 24     # per-section line cap on that render
-    kernel_wait_seconds: int = 5          # seconds a kernel call waits for a submitted cell
-    shell_wait_seconds: int = 30          # seconds a shell call waits before returning a handle
+    kernel_verbosity: str = _knob("kernel.verbosity")  # quiet | normal | verbose terminal render
+    kernel_render_max_lines: int = _knob("kernel.render_max_lines")  # per-section line cap on that render
+    kernel_wait_seconds: int = _knob("kernel.wait_seconds")  # seconds a kernel call waits for a submitted cell
+    shell_wait_seconds: int = _knob("shell.wait_seconds")  # seconds a shell call waits before returning a handle
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
@@ -526,7 +538,7 @@ class ToolContext:
         if session == Path(os.devnull).resolve(strict=False):
             store = None
         else:
-            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or "defaultagent"
+            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or STOCK_AGENT
             safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"

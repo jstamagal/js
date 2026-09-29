@@ -366,7 +366,7 @@ def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeyp
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "verbose")
     cfg = jsconfig.from_env(save_session=False, cwd=tmp_path)
     assert cfg.kernel_verbosity == "verbose"
-    assert cfg.kernel_render_max_lines == jssettings.DEFAULT_KERNEL_RENDER_MAX_LINES
+    assert cfg.kernel_render_max_lines == jssettings.default_value("kernel.render_max_lines")
 
     # a value outside the three levels falls back rather than reaching the render
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "shouting")

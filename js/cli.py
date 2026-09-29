@@ -334,7 +334,7 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     if cfg.session_file == Path(os.devnull) or not state.get("messages"):
         return
     resume = "js"
-    if cfg.agent_id != "defaultagent":
+    if cfg.agent_id != _paths.STOCK_AGENT:
         resume += f" --agent {shlex.quote(cfg.agent_id)}"
     model = state.get("model")
     if isinstance(model, str) and model:
@@ -1087,7 +1087,7 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here."""
-    if not compaction.get_bool(cfg, "auto", True):
+    if not compaction.get_bool(cfg, "auto"):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
     turn_status = runtime.T.DEFAULT_CONTEXT.turn_status
@@ -1162,7 +1162,6 @@ def _is_active_model_id_line(line: str) -> bool:
 def _persist_default_model_id(model_id: str) -> tuple[Path | None, str | None]:
     config_path = _paths.global_config_file()
     try:
-        settings.write_default_template(config_path)
         if config_path.exists():
             lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
         else:
@@ -2760,7 +2759,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
 
 def _steer_mode(state: dict) -> str:
     return settings.steer_mode(
-        settings.get_dotted(state["settings"], ("runtime", "steer"), settings.DEFAULT_STEER)
+        settings.knob(state["settings"], "runtime.steer")
     )
 
 
@@ -2910,7 +2909,9 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return len(_take_queued(queue))
 
 
-def _live_ui_int(state: dict, key: str, default: int) -> int:
+def _live_ui_int(state: dict, key: str) -> int:
+    """A 0-3 `ui.<key>` level from live settings; its js/jsrc value when bad."""
+    default = settings.default_value(f"ui.{key}")
     value = settings.get_dotted(state.get("settings") or {}, ("ui", key), default)
     return value if isinstance(value, int) and value in range(4) else default
 
@@ -2918,8 +2919,8 @@ def _live_ui_int(state: dict, key: str, default: int) -> int:
 def _status_colours(state: dict) -> str:
     live = state.get("settings") or {}
     return screen.status_style(
-        settings.get_dotted(live, ("ui", "status_fg"), screen.STATUS_FG),
-        settings.get_dotted(live, ("ui", "status_bg"), screen.STATUS_BG),
+        settings.knob(live, "ui.status_fg"),
+        settings.knob(live, "ui.status_bg"),
     )
 
 
@@ -2938,7 +2939,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     if turn_active:
         throbber = screen.throbber_frame(now)
         phase, output_tokens = screen.turn_centre(
-            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net", 2) >= 2,
+            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net") >= 2,
         )
     return screen.status_line(
         width,
@@ -3036,7 +3037,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_eof=on_eof,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         status_colours=lambda: _status_colours(state),
-        editing_mode=lambda: settings.get_dotted(state["settings"], ("ui", "editing_mode"), "emacs"),
+        editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
     )
     previous_reasoning_factory = telemetry.reasoning_factory
@@ -3051,7 +3052,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     try:
         with screen.capture_stdio(loop, scrollback, app):
             stream_transport.install_sink(stream_transport.NetSink(
-                level=lambda: _live_ui_int(state, "net", 2),
+                level=lambda: _live_ui_int(state, "net"),
                 emit=lambda line: print(line, flush=True),
             ))
             if banner:
@@ -3359,7 +3360,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             last_agent = validate_agent_id(
-                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", "defaultagent")
+                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -3373,7 +3374,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             mode_agent = "commit" if args.commit else None
             effective_agent = validate_agent_id(
-                args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
+                args.agent or mode_agent or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)

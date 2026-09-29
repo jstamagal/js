@@ -58,7 +58,6 @@ class PromptExpansionError(ValueError):
     unreadable file, malformed token)."""
 
 
-_DEFAULT_TIMEOUT_S = 300
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # One combined scanner: fenced block | inline | env shorthand. Matched in this
@@ -95,8 +94,8 @@ def expand_prompt(
     *,
     allow_code: bool = False,
     env: dict | None = None,
-    timeout_s: int = _DEFAULT_TIMEOUT_S,
-    max_output_bytes: int = settings.DEFAULT_MAX_BASH_OUTPUT_BYTES,
+    timeout_s: int | None = None,
+    max_output_bytes: int | None = None,
     on_error: str = "warn",
 ) -> str:
     """Return ``text`` with ``{{VAR}}`` / ``!{sub ...}`` / ```` ```!sub ```` directives expanded.
@@ -117,9 +116,16 @@ def expand_prompt(
     ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
     code subsystems (sh/bash/python/node/c) always execute against the real
     process environment.
+
+    ``timeout_s`` and ``max_output_bytes`` left None take the js/jsrc values of
+    limits.inline_code_timeout_s and limits.max_bash_output_bytes.
     """
     if "{{" not in text and "!{" not in text and "```!" not in text:
         return text
+    if timeout_s is None:
+        timeout_s = settings.default_value("limits.inline_code_timeout_s")
+    if max_output_bytes is None:
+        max_output_bytes = settings.default_value("limits.max_bash_output_bytes")
 
     environ = os.environ if env is None else env
 

@@ -63,25 +63,24 @@ STDERR = "\033[93m"
 CODE_THEME = "ansi_dark"
 
 
-def _setting(settings: Any, key: str, default: Any) -> Any:
-    if not isinstance(settings, dict):
-        return default
-    return _settings.get_dotted(settings, tuple(key.split(".")), default)
+def _setting(settings: Any, key: str) -> Any:
+    """Knob ``key`` from live settings; its js/jsrc value when absent."""
+    return _settings.knob(settings if isinstance(settings, dict) else None, key)
 
 
 def tools_level(settings: Any) -> int:
     """`ui.tools` from live settings: 0 nothing, 1 metrics, 2 preview, 3 whole."""
-    level = _setting(settings, "ui.tools", 1)
-    return level if isinstance(level, int) and level in range(4) else 1
+    level = _setting(settings, "ui.tools")
+    return level if isinstance(level, int) and level in range(4) else _settings.default_value("ui.tools")
 
 
 def preview_lines(settings: Any) -> int:
-    lines = _setting(settings, "ui.tools_preview_lines", 12)
-    return lines if isinstance(lines, int) and lines > 0 else 12
+    lines = _setting(settings, "ui.tools_preview_lines")
+    return lines if isinstance(lines, int) and lines > 0 else _settings.default_value("ui.tools_preview_lines")
 
 
 def markdown_enabled(settings: Any) -> bool:
-    return _setting(settings, "ui.markdown", True) is not False
+    return _setting(settings, "ui.markdown") is not False
 
 
 def terminal_width() -> int:

@@ -127,15 +127,15 @@ set limits.task_max_depth true
     actual = from_env(save_session=False)
 
     assert actual.max_output_tokens is None
-    assert actual.max_tool_iterations == settings.DEFAULT_MAX_TOOL_ITERATIONS
-    assert actual.max_tool_calls_per_message == settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
-    assert actual.max_bash_output_bytes == settings.DEFAULT_MAX_BASH_OUTPUT_BYTES
-    assert actual.max_tool_result_bytes == settings.DEFAULT_MAX_TOOL_RESULT_BYTES
-    assert actual.fetch_timeout_s == settings.DEFAULT_FETCH_TIMEOUT_S
-    assert actual.inline_code_timeout_s == settings.DEFAULT_INLINE_CODE_TIMEOUT_S
-    assert actual.max_read_lines == settings.DEFAULT_MAX_READ_LINES
-    assert actual.max_file_bytes == settings.DEFAULT_MAX_FILE_BYTES
-    assert actual.task_max_depth == settings.DEFAULT_TASK_MAX_DEPTH
+    assert actual.max_tool_iterations == settings.default_value("limits.max_tool_iterations")
+    assert actual.max_tool_calls_per_message == settings.default_value("limits.max_tool_calls_per_message")
+    assert actual.max_bash_output_bytes == settings.default_value("limits.max_bash_output_bytes")
+    assert actual.max_tool_result_bytes == settings.default_value("limits.max_tool_result_bytes")
+    assert actual.fetch_timeout_s == settings.default_value("limits.fetch_timeout_s")
+    assert actual.inline_code_timeout_s == settings.default_value("limits.inline_code_timeout_s")
+    assert actual.max_read_lines == settings.default_value("limits.max_read_lines")
+    assert actual.max_file_bytes == settings.default_value("limits.max_file_bytes")
+    assert actual.task_max_depth == settings.default_value("limits.task_max_depth")
 
 def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
