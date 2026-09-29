@@ -1425,6 +1425,36 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     assert all(set(item) == expected_fields for item in records)
 
 
+def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    time.tzset()
+    try:
+        now = int(time.time()) // 60 * 60
+        # Folder order is a, b; time order is b-new, a-mid, b-old.
+        made = {}
+        for folder, name, age in (("a", "a-mid", 120), ("b", "b-old", 180), ("b", "b-new", 60)):
+            path = session_store.folder_for(tmp_path / folder) / f"{name}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"role":"user","content":"hi"}\n', encoding="utf-8")
+            os.utime(path, (now - age, now - age))
+            made[name] = now - age
+
+        assert cli._print_session_list(json_lines=True) == 0
+        records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [item["name"] for item in records] == ["b-new", "a-mid", "b-old"]
+
+        assert cli._print_session_list(json_lines=False) == 0
+        rows = capsys.readouterr().out.splitlines()[1:]
+        assert [row.split()[1] for row in rows] == ["b-new", "a-mid", "b-old"]
+        newest = rows[0]
+        assert time.strftime("%H:%M", time.localtime(made["b-new"])) in newest
+        assert time.strftime("%H:%M", time.gmtime(made["b-new"])) not in newest
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
 def test_list_flag_prints_the_session_list(monkeypatch):
     calls: list[bool] = []
     monkeypatch.setattr(cli, "_print_session_list", lambda *, json_lines: calls.append(json_lines) or 0)

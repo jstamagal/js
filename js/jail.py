@@ -50,6 +50,11 @@ class JailError(Exception):
     """A path the jail does not let a tool reach. The message is one line."""
 
 
+class Refusal(str):
+    """A tool result that reports a JailError. Retrying the call cannot change
+    it, so the runtime gives it no retry count."""
+
+
 @dataclass(frozen=True)
 class Bind:
     path: Path
@@ -271,7 +276,12 @@ class Jail:
         for area in areas:
             if _under(real, area.path) and (best is None or len(area.path.parts) >= len(best.path.parts)):
                 best = area
-        if best is None:
+        # The jail's /tmp and ~/.js/tmp hold only what this process's tools put
+        # there; a missing path in them is a host path the jail does not show.
+        private_miss = (not write and _under(mapped, self.private)
+                        and not _under(Path(os.path.abspath(path)), self.private)
+                        and not os.path.lexists(mapped))
+        if best is None or private_miss:
             raise JailError(
                 f"{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths"
             )

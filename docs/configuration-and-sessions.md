@@ -437,7 +437,10 @@ does not hit it. The children of an unsaved run are not saved either.
 
 `js --session` (no name) or `/session [query]` in the REPL lists every session,
 newest first, across every directory and agent. `•` marks sessions started in
-the current directory; branches sit under the session they came from.
+the current directory; branches sit under the session they came from. A
+session started with `--session NAME` shows NAME in the last column, before
+its tags. `js --list` prints every session file as a table, newest first,
+with local times.
 
 | key | does |
 |---|---|
@@ -446,7 +449,7 @@ the current directory; branches sit under the session they came from.
 | `/` | type a search query; Enter keeps it, Esc clears it |
 | `b` | the message list: Enter branches at the highlighted message, `r` resumes at the end, Esc goes back |
 | `i` | the file path, model stamps, estimated token count and branch parent |
-| `a` | also show the hidden kinds (below), marked in the tags column |
+| `a` | also show the hidden kinds (below), marked in the last column |
 | Esc | clear the query, or close |
 
 Hidden until `a`: **empty** sessions (nothing came back), **quick** ones (one
@@ -530,6 +533,11 @@ a `parent`. Message and mark records form the conversation path: each one's
 first. A start or title record's `parent` is the message or mark it follows,
 and no record names it as its parent. Replay reads the file in order and does
 not use ids.
+
+A record's `ts` is when its message happened. The operator's message is written
+when the turn starts; the rest of a turn is written when the turn ends, and
+each of those records still carries its own time: an assistant message when
+the model's response finished, a tool result when the tool finished.
 
 Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,

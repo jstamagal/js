@@ -902,7 +902,7 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     try:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
-        return f"ERROR: {exc}"
+        return _jail.Refusal(f"ERROR: {exc}")
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)

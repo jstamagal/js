@@ -29,6 +29,7 @@ from jsonschema import validators as jsonschema_validators
 from . import colors as C
 from . import context_budget
 from . import display
+from . import jail as _jail
 from . import messages as msgs
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
@@ -605,6 +606,8 @@ class ToolErrorTracker:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record(self, tool_name: str, result: str) -> str:
+        if isinstance(result, _jail.Refusal):
+            return result
         with self._lock:
             if not result.startswith("ERROR"):
                 self.errors.pop(tool_name, None)
@@ -919,9 +922,11 @@ class _DispatchProgress:
 
     stopped: threading.Event = field(default_factory=threading.Event)
     records: dict[str, tuple[_PendingToolCall, dict, Any]] = field(default_factory=dict)
+    finished: dict[str, float] = field(default_factory=dict)   # call id -> when its result came
 
     def record(self, pc: _PendingToolCall, args: dict, result: Any) -> None:
         self.records[pc.id] = (pc, args, result)
+        self.finished[pc.id] = time.time()
 
 
 def _dispatch_tool_calls(
@@ -1549,7 +1554,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
         if partial_reasoning:
             record["reasoning_content"] = partial_reasoning
-        messages.append(record)
+        messages.append(memory.note_time(record))
 
     def _close_text(reasoning_tokens: int | None = None) -> None:
         nonlocal answer_display
@@ -2006,7 +2011,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))
-            messages.append(history_assistant_record)
+            messages.append(memory.note_time(history_assistant_record))
             # Recorded in full now; a later ^C in this turn must not re-append it.
             streamed_text["value"] = ""
             streamed_reasoning.clear()
@@ -2112,7 +2117,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             batch_tool_msgs.append(built)
                         else:
                             batch_media_msgs.append(built)
-                    messages.extend(_history_tool_result_message(canonical_pc, result_value))
+                    done_at = progress.finished.get(pc.id)
+                    messages.extend(memory.note_time(item, done_at)
+                                    for item in _history_tool_result_message(canonical_pc, result_value))
                 ai_convo.extend(batch_tool_msgs)
                 ai_convo.extend(batch_media_msgs)
             if error_tracker.limit_reached():
@@ -2125,7 +2132,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
                 final_error = {"role": "assistant", "content": failure}
                 ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-                messages.append(final_error)
+                messages.append(memory.note_time(final_error))
                 _emit_event("error", error=failure, retryable=False)
                 _end_turn("tool_error_limit")
                 return
@@ -2134,7 +2141,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 if inspect.isawaitable(steered):
                     steered = await steered
                 if steered is not None:
-                    messages.append(steered)
+                    messages.append(memory.note_time(steered))
                     ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
                     telemetry.event("steered", message_index=len(messages) - 1)
                     if not suppress_output:

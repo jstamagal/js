@@ -8,10 +8,13 @@
   execs it (~3ms) on every later run.  Intended use in a prompt file:
 
       ```!sh
-      sh ~/js/tools/envctx.c
+      sh "$JS_ROOT/tools/envctx.c"
       ```
 
-  or inline:  !{sh sh ~/js/tools/envctx.c}
+  or inline:  !{sh sh "$JS_ROOT/tools/envctx.c"}
+
+  js exports JS_ROOT, the directory holding its package and tools/, before
+  it expands the prompt.
 
   Rebuilds automatically when this file is newer than the cached binary.
   Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count.

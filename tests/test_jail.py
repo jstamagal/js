@@ -235,6 +235,40 @@ def test_tmp_is_private_and_shared_with_the_file_tools(jailed):
 
 
 @needs_bwrap
+def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
+    """A /tmp path absent from the jail's private /tmp is outside the jail; the
+    refusal names the path the model gave and carries no retry count."""
+    host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
+    try:
+        (host_dir / "x.txt").write_text("host-only\n")
+        calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+
+        records = runtime._dispatch_tool_calls(
+            calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+            build_default_registry(), jailed,
+        )
+
+        result = records[0][2]
+        assert result.startswith("ERROR:")
+        assert "outside the jail" in result
+        assert str(jail.active().private) not in result
+        assert "<retry>" not in result
+        assert "host-only" not in result
+    finally:
+        shutil.rmtree(host_dir, ignore_errors=True)
+
+
+def test_a_jail_refusal_gets_no_retry_count_and_other_errors_do():
+    tracker = runtime.ToolErrorTracker()
+
+    refused = tracker.record("read", jail.Refusal("ERROR: /x is outside the jail"))
+    failed = tracker.record("read", "ERROR: no such file: /y")
+
+    assert "<retry>" not in refused
+    assert "<retry>" in failed
+
+
+@needs_bwrap
 def test_jail_bind_shows_paths_read_only_unless_rw(jailed, tmp_path):
     extra = tmp_path / "extra"
     extra.mkdir()
