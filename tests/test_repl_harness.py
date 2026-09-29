@@ -1403,3 +1403,15 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
     assert len(turns) == 1
     assert "user-only body" in str(turns[0])
     assert "check the plan" in str(turns[0])
+
+
+def test_bare_skill_command_lists_builtin_skills_without_a_turn(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    state = {"messages": []}
+
+    assert cli._handle_command("/skill", state, make_cfg(tmp_path)) is True
+
+    out = capsys.readouterr().out
+    assert state["messages"] == []
+    for name in ("grilling", "grill-me", "wayfinder"):
+        assert name in out

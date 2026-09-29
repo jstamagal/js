@@ -1306,6 +1306,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark (-m model picks the summarizer)
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
+  {C.YELLOW}/skill{C.RESET}            list skills (built-in, global, project)
   {C.YELLOW}/skill <name> [request]{C.RESET} send a skill's instructions (user-only ones too) with your request
   {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
   {C.YELLOW}exit{C.RESET}             quit
@@ -1560,6 +1561,9 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line == "/refresh-model-catalog":
         _force_refresh_model_catalog()
+        return True
+    if line == "/skill":
+        _print_skill_catalog()
         return True
     if line == "/save":
         _handle_save(state, cfg)
@@ -2600,6 +2604,18 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
                 await job.task  # _do_turn persists partial work on cancel; keep looping
         finally:
             queue.task_done()
+
+
+def _print_skill_catalog() -> None:
+    """`/skill` alone lists every discovered skill; user-only ones are marked."""
+    catalog = skills.discover_skills(Path.cwd())
+    if not catalog.skills:
+        print(f"{C.GREY}(no skills found){C.RESET}")
+        return
+    for skill in catalog.skills:
+        mark = " [user-only]" if not skill.model_invocable else ""
+        print(f"{C.YELLOW}{skill.name}{C.RESET}{mark} {C.GREY}({skill.source}){C.RESET} {skill.description}")
+    print(f"{C.GREY}/skill <name> [request] sends one with your request{C.RESET}")
 
 
 def _expand_skill_line(prompt_text: str) -> str:
