@@ -118,6 +118,13 @@ class ToolRegistry:
         return TurnToolSurface(self, cwd, mcp_host=mcp_host)
 
 
+def _search_text(tool: Tool, present: set[str]) -> str:
+    """The full description and schema text discovery ranks a native tool on."""
+    rendered = render_tool_name_sections(tool.description, present, tool=tool.name)
+    schema = tool.openai_spec()["function"]["parameters"]
+    return f"{rendered} {discovery.schema_search_text(schema)}"
+
+
 def _catalog_summary(description: str, present: set[str], tool: str) -> str:
     """Index the opening paragraph, not the first hard-wrapped line.
 
@@ -307,6 +314,7 @@ class TurnToolSurface:
                 _catalog_summary(tool.description, present, tool.name),
                 "native",
                 tool.source,
+                search_text=_search_text(tool, present),
             )
             for item_id, tool in self._lazy.items()
         )

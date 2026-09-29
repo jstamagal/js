@@ -99,7 +99,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **`task` blocks the parent until every child finishes.** A slow child stalls the whole turn. Claude Code and Codex return immediately and deliver the result later.
 
-**Lazy loading costs a round trip, and its ranking is weak.** "Do not load and call that tool in the same response." Discovery ranks by token overlap (`discovery.py:97`), while all three others use BM25. Claude Code expands tool references inline, within the same response.
+**Lazy loading costs a round trip.** "Do not load and call that tool in the same response." Claude Code expands tool references inline, within the same response. The ranking is fixed in js-1g1.16: discovery now uses BM25 over the split name, the description and the schema, like the other three, and a call to an unloaded tool names the exact load call.
 
 **`patch` has no fuzzy fallback.** A smart quote the model pasted costs a turn in js and nothing in the other three.
 
@@ -141,7 +141,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | `compaction.py:567`, `runtime.py:1599` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | `compaction.microcompact` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | `task` gets a job handle like `shell` |
-| BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | `discovery.ranked_entries` |
+| BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | done in js-1g1.16: `discovery.ranked_entries`, `CatalogEntry.search_text` |
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | `fs._apply_edit` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | `_reconcile_read_delivery` |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |

@@ -617,7 +617,7 @@ surface has lazy native tools, skills, or configured MCP servers.
 
 Parameters:
 
-- `query`: intent or words to search with token matching and ranked partial matches. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
+- `query`: intent or words to search. Entries rank by BM25: the name (split at `_` and camelCase, plus a few intent words for native tools) counts double, added to the id, source, full description and the schema's property names and descriptions. Plurals fold to their singular; stop words carry no weight. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
 - `offset`: continue the same query and filters at `next_offset` when `truncated` is true. Each page has at most 40 entries and reports `total`; very large identifiers are omitted with an explicit count rather than shortened into invalid load ids.
 - `kind`: optional `native`, `skill`, or `mcp` filter. Use `mcp` to connect all
   eligible configured servers and fetch their catalogs.
@@ -629,6 +629,9 @@ MCP server tools are model-facing as `<normalized_server>__<normalized_tool>`.
 Their full remote schemas are absent until discovery connects the server and a
 later `load` call loads that exact catalog id. The schema is emitted on the next
 model call, never retroactively in the batch which loaded it.
+
+A call to a tool that is in the catalog but not loaded returns an `ERROR` that
+names the exact load call, such as `tool_discovery {"load":"native:shell"}`.
 
 The canonical resource and prompt controls are:
 

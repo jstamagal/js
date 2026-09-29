@@ -244,6 +244,9 @@ class CatalogEntry:
     kind: str
     source: str
     loadable: bool = True
+    # Words discovery ranks on but never shows: the full description and the
+    # schema's property names and descriptions.
+    search_text: str = ""
 
 
 @dataclass(frozen=True)
