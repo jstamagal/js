@@ -69,7 +69,15 @@ from .config import (
     validate_agent_id,
     vision_enabled_for_model,
 )
-from .session_catalog import acquire_session, catalog_sessions, last_session_model, record_session_start
+from . import session_store
+from .session_catalog import (
+    acquire_session,
+    append_title,
+    catalog_sessions,
+    last_stamp,
+    record_session_start,
+    session_title,
+)
 from .tool_binaries import resolve_binary
 from .toolkit import policy as tool_policy
 from .toolkit.registry import registry_for_roots
@@ -211,8 +219,15 @@ def _replace_runtime_user_message(
             return
 
 
-def _persist_turn_messages(cfg: Config, messages: list[dict]) -> None:
-    M.persist_messages(cfg.session_file, messages)
+def _session_stamp(cfg: Config, reasoning: str | None = None) -> dict:
+    """The stamp for assistant messages a turn on `cfg` writes."""
+    return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
+                       reasoning if reasoning is not None else getattr(cfg, "reasoning_effort", None))
+
+
+def _persist_turn_messages(cfg: Config, messages: list[dict], reasoning: str | None = None) -> None:
+    """Persist the turn; `cfg` is the one the turn ran on, so its stamp is the turn's model."""
+    M.persist_messages(cfg.session_file, messages, stamp=_session_stamp(cfg, reasoning))
 
 
 def _turn_user_index(messages: list[dict], user_message: dict) -> int | None:
@@ -238,7 +253,7 @@ def _session_hint_arg(cfg: Config) -> str:
     try:
         return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
     except ValueError:
-        return str(cfg.session_file)
+        return session_store.display_name(cfg.session_file)
 
 
 _session_leases = threading.local()
@@ -255,12 +270,14 @@ def _session_scope(func):
             _session_leases.items = leases
         start = len(leases)
         old_caller_key = getattr(_session_leases, "caller_key", None)
+        old_start = getattr(_session_leases, "start", None)
         try:
             return func(*args, **kwargs)
         finally:
             while len(leases) > start:
                 leases.pop().release()
             _session_leases.caller_key = old_caller_key
+            _session_leases.start = old_start
 
     return wrapped
 
@@ -275,12 +292,15 @@ def _activate_saved_session(
     if cfg.session_file == Path(os.devnull):
         return
     effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
+    start = getattr(_session_leases, "start", None) or {}
     record_session_start(
         cfg.session_file,
         cwd=Path.cwd(),
         caller_key=effective_key,
         agent=cfg.agent_id,
         model=model or cfg.model,
+        mode=start.get("mode"),
+        command=start.get("command"),
     )
     lease = acquire_session(cfg.session_file)
     _session_leases.items.append(lease)
@@ -300,22 +320,41 @@ def _announce_generated_session(cfg: Config) -> None:
 
 
 def _latest_session_name(agent_id: str) -> str | None:
-    """The most recently started session for *agent_id*, or None when there is none.
+    """The most recently started session file for *agent_id*, or None when there is none.
 
-    A recorded name that no longer resolves to a file is treated as absent rather
+    A recorded session that no longer exists is treated as absent rather
     than resurrected, so --last never creates an empty session."""
-    latest_file = _paths.sessions_root() / agent_id / "latest.json"
-    try:
-        payload = json.loads(latest_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    latest = session_store.read_latest(_paths.state_root() / agent_id)
+    return str(latest) if latest is not None else None
+
+
+def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
+    """The --model value that puts a resumed session back on its stamped model,
+    or None when the configuration already resolves to it.
+
+    The stamped provider rides as a prefix only where routing takes the prefix
+    as the provider: it parses as a known provider, and it is the configured
+    one or has a saved login. Otherwise the model id goes alone."""
+    model = stamp.get("model")
+    if not isinstance(model, str) or not model:
         return None
-    if not isinstance(payload, dict):
+    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
+    if model == cfg.model and (not provider or provider == cfg.provider_id):
         return None
-    session_file = payload.get("session_file")
-    if not isinstance(session_file, str) or not Path(session_file).is_file():
+    prefixed = f"{provider}/{model}"
+    if (provider and providers.parse_model_prefix(prefixed) == (provider, model)
+            and (provider == cfg.provider_id or routing._saved_login(provider) is not None)):
+        return prefixed
+    return None if model == cfg.model else model
+
+
+def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
+    """The reasoning level of the last stamp, when it is valid and differs from the configured one."""
+    raw = stamp.get("reasoning")
+    if not isinstance(raw, str) or not raw:
         return None
-    name = payload.get("session_name")
-    return name if isinstance(name, str) and name else None
+    value, error = _validate_cli_reasoning(raw)
+    return value if error is None and value != cfg.reasoning_effort else None
 
 
 def _print_resume_hint(cfg: Config, state: dict) -> None:
@@ -366,7 +405,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             identity = str(record["job_id"]) if identity is None else f"{identity}/{record['job_id']}"
         rows.append(
             (
-                record["agent"],
+                record["agent"] or "-",
                 record["name"],
                 datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
                 str(record["size"]),
@@ -716,7 +755,7 @@ def _mute_transcript_tee(sink):
 
 def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
     """Resolve the per-session autolog path, or None when autolog is off. Mirrors
-    how sessions/<agent>/<session>.jsonl is built, one directory over in logs/."""
+    the session file's name, under logs/<agent>/."""
     if not _live_bool_setting(
         live_settings, ("runtime", "debug_autolog"), settings.knob_attr(cfg, "debug_autolog", "runtime.debug_autolog")
     ):
@@ -1638,6 +1677,23 @@ def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _cmd_name(arg: str, state: dict, cfg: Config) -> str | None:
+    if cfg.session_file == Path(os.devnull):
+        msgs.say(msgs.SESSION_NOT_SAVED_TITLE)
+        return None
+    title = " ".join(arg.split())
+    if title:
+        append_title(cfg.session_file, title)
+        msgs.say(msgs.SESSION_TITLED, title=title)
+        return None
+    current = session_title(cfg.session_file)
+    if current:
+        msgs.say(msgs.SESSION_TITLE, title=current)
+    else:
+        msgs.say(msgs.SESSION_UNTITLED)
+    return None
+
+
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
     M.append_mark(cfg.session_file, "session_reset")
@@ -1795,6 +1851,7 @@ COMMANDS: dict[str, Command] = {
                      "turns", msgs.CMD_TURNS),
     "session": Command(lambda arg, state, cfg: msgs.say(msgs.SESSION_PATH, path=cfg.session_file),
                        "session", msgs.CMD_SESSION),
+    "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
     "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
     # The async REPL drains its loop-owned queue before a line reaches the
@@ -2012,6 +2069,14 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
     if announce_generated is None:
         announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
+    # A resumed session continues on the model, provider and reasoning of its
+    # last stamp unless this run names them. Read before this start records its own.
+    resumed = last_stamp(cfg.session_file) if cfg.session_file != Path(os.devnull) else None
+    if resumed is not None:
+        if model is None:
+            model = _resume_model_spec(resumed, cfg)
+        if reasoning is None:
+            reasoning_override = _resume_reasoning(resumed, cfg)
     _activate_saved_session(
         cfg,
         caller_key=caller_key,
@@ -2083,7 +2148,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
         "call_stats": call_stats,
     }
-    if reasoning is not None:
+    if reasoning_override is not None:
         turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
@@ -2136,7 +2201,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
             )
             if save:
-                _persist_turn_messages(cfg, messages)
+                _persist_turn_messages(cfg, messages, reasoning_override)
         finally:
             if trace_sink is not None:
                 trace_sink.close()
@@ -2175,9 +2240,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     if show_continue:
                         hint = _session_hint_arg(cfg)
                         cont = resume_prefix or "js"
-                        # Plain -p has no resume_prefix; the session lives under
-                        # sessions/<agent>, so a non-default agent MUST be echoed or
-                        # the resume looks in the wrong dir and 404s the .jsonl.
+                        # Plain -p has no resume_prefix; a resume runs the `agent`
+                        # setting unless told otherwise, so a non-default agent MUST
+                        # be echoed or the session continues under the wrong agent.
                         # (wiki/commit already fold the agent into resume_prefix.)
                         if resume_prefix is None and agent:
                             cont += f" --agent {shlex.quote(agent)}"
@@ -2738,7 +2803,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         _restore_history_forms(state["messages"], user_bundle, steered, before_len)
-        _persist_turn_messages(cfg, state["messages"])
+        _persist_turn_messages(turn_cfg, state["messages"])
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
         _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
@@ -2747,7 +2812,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             print()
             msgs.say(msgs.TURN_INTERRUPTED_KEPT)
             _restore_history_forms(state["messages"], user_bundle, steered, before_len)
-            _persist_turn_messages(cfg, state["messages"])
+            _persist_turn_messages(turn_cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
@@ -2760,7 +2825,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         msgs.say(msgs.FAILED, error=_error_text(e))
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             _restore_history_forms(state["messages"], user_bundle, steered, before_len)
-            _persist_turn_messages(cfg, state["messages"])
+            _persist_turn_messages(turn_cfg, state["messages"])
         else:
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
         M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
@@ -3238,7 +3303,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 user_bundle.history_message,
                 before_len,
             )
-            _persist_turn_messages(cfg, state["messages"])
+            _persist_turn_messages(turn_cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
@@ -3257,7 +3322,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                     user_bundle.history_message,
                     before_len,
                 )
-                _persist_turn_messages(cfg, state["messages"])
+                _persist_turn_messages(turn_cfg, state["messages"])
                 M.append_mark(cfg.session_file, "turn_interrupted")
                 state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
             else:
@@ -3272,7 +3337,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             if _turn_has_progress(state["messages"], user_bundle.runtime_message):
                 _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
                                               user_bundle.history_message, before_len)
-                _persist_turn_messages(cfg, state["messages"])
+                _persist_turn_messages(turn_cfg, state["messages"])
             else:
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
@@ -3434,8 +3499,11 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
 @_session_scope
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
-    # Before anything reads or writes ~/.js: move the old locations in, once.
+    # Before anything reads or writes ~/.js: move the old locations in, once,
+    # then make sure every directory of the layout is there.
     _home.migrate_once()
+    with contextlib.suppress(OSError):
+        _paths.ensure_home()
     _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
@@ -3469,7 +3537,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-d", "--debug", action="store_true", help=msgs.OPT_DEBUG.text())
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help=msgs.OPT_DEBUG_FILE.text())
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help=msgs.OPT_SESSION.text())
+    session_group.add_argument("-s", "--session", nargs="?", const="", metavar="NAME", help=msgs.OPT_SESSION.text())
     session_group.add_argument("--session-key", metavar="KEY", help=msgs.OPT_SESSION_KEY.text())
     parser.add_argument("-n", "--no-save", action="store_true", help=msgs.OPT_NO_SAVE.text())
     parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.text())
@@ -3502,6 +3570,11 @@ def main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
+    if args.session == "":
+        # A bare --session is the session picker's.
+        msgs.warn(msgs.SESSION_PICKER_NOT_BUILT)
+        return 2
+    _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so
         # an explicit --extra on the same command line still overrides a field
@@ -3688,6 +3761,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 stdin_text = _read_stdin_if_piped()
                 extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+        _session_leases.start["mode"] = "commit"
         return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
@@ -3718,6 +3792,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             stdin_text = _read_stdin_if_piped()
             prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+        _session_leases.start["mode"] = "-p" if args.prompt is not None else "pipe"
         generated_session = (
             not args.no_save
             and args.session is None
@@ -3740,6 +3815,7 @@ def main(argv: list[str] | None = None) -> int:
         return result
 
     os.environ["JS_MODE"] = "repl"
+    _session_leases.start["mode"] = "repl"
     try:
         cfg = _cfg_from_env_compat(
             args.session,
@@ -3754,16 +3830,19 @@ def main(argv: list[str] | None = None) -> int:
         msgs.warn(msgs.FAILED, error=e)
         return 2
 
-    # Resuming with no --model comes back on the model the session was using,
-    # not the config default. An explicit --model still wins. A remembered model
-    # that matches what config already resolved is left alone: applying it as an
-    # explicit override would put an otherwise fine launch through the
-    # login gate for a model it was going to use anyway.
-    if args.model is None:
-        remembered_model = last_session_model(cfg.session_file)
-        if remembered_model and remembered_model != cfg.model:
+    # Resuming with no --model comes back on the model of the session's last
+    # stamp, not the config default; with no --reasoning, on its reasoning
+    # level. An explicit flag still wins. A stamp that matches what config
+    # already resolved is left alone: applying it as an explicit override would
+    # put an otherwise fine launch through the login gate for a model it was
+    # going to use anyway.
+    resumed = last_stamp(cfg.session_file)
+    if args.model is None and resumed is not None:
+        remembered_model = _resume_model_spec(resumed, cfg)
+        if remembered_model:
             args.model = remembered_model
             msgs.say(msgs.RESUMED_MODEL, model=remembered_model)
+    resumed_reasoning = _resume_reasoning(resumed, cfg) if resumed is not None and args.reasoning is None else None
 
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
@@ -3833,6 +3912,8 @@ def main(argv: list[str] | None = None) -> int:
             msgs.warn(msgs.BAD_REASONING, value=args.reasoning, error=effort_error)
             return 2
         settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
+    elif resumed_reasoning is not None:
+        settings.set_dotted(live_settings, ("model", "reasoning_effort"), resumed_reasoning)
     if args.max_out is not None:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     elif (prompt_spec.max_output_tokens is not None

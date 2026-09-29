@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
-import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
 from pathlib import Path
 
 from . import messages as msgs
 from . import paths as _paths
+from . import session_store as _session_store
 from . import providers as _providers
 from . import settings as _settings
 from . import routing as _routing
@@ -199,22 +197,10 @@ class Config:
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
 
 
-def _session_timestamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-
-
 def _reserve_session(agent_dir: Path, sessions_dir: Path) -> Path:
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    for _ in range(16):
-        path = sessions_dir / f"{_session_timestamp()}-{secrets.token_hex(8)}.jsonl"
-        try:
-            with path.open("x", encoding="utf-8"):
-                pass
-        except FileExistsError:
-            continue
-        _write_latest_session(agent_dir, path)
-        return path
-    raise RuntimeError(f"could not reserve unique session under {sessions_dir}")
+    path = _session_store.reserve(sessions_dir)
+    _session_store.write_latest(agent_dir, path)
+    return path
 
 
 def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
@@ -242,42 +228,47 @@ def _relative_session_path(session: str) -> Path:
     return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
 
 
-def _existing_tail_match(
-    sessions_dir: Path, relative_path: Path, resolved_sessions_dir: Path
-) -> Path | None:
+def _existing_tail_match(root: Path, relative_path: Path, resolved_root: Path, first: int = 1) -> Path | None:
     """Find an existing session named by the trailing components of *relative_path*.
 
-    `<name>`, `<name>.jsonl`, `<dir>/<name>` and a whole pasted
-    `~/.js/sessions/<agent>/<name>.jsonl` all name one session, because
+    `<name>`, `<name>.jsonl`, `<folder>/<name>` and a whole pasted
+    `~/.js/sessions/<folder>/<name>.jsonl` all name one session, because
     that is how the flag reads to anyone pasting a path back out of `--list`.
     Without this, the leading components are taken literally and mkdir'd, so the
     paste silently opens an empty session instead of the one it names.
 
     Only ever resolves to a file that already exists; never creates."""
     parts = relative_path.parts
-    for start in range(1, len(parts)):
-        candidate = sessions_dir.joinpath(*parts[start:])
+    for start in range(first, len(parts)):
+        candidate = root.joinpath(*parts[start:])
         if not candidate.is_file():
             continue
-        if not candidate.resolve(strict=True).is_relative_to(resolved_sessions_dir):
+        if not candidate.resolve(strict=True).is_relative_to(resolved_root):
             continue
         return candidate
     return None
 
 
 def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False) -> Path:
-    """Resolve a safe session name, optionally reserving it when absent."""
+    """Resolve a session name to its file, optionally creating it in `sessions_dir`.
+
+    `sessions_dir` is the current directory's folder. An existing session is
+    looked up there first, then in every folder (`js.session_store.find`); a
+    name that more than one other folder holds is refused. A new session is
+    only ever created in `sessions_dir`."""
     raw_path = Path(session).expanduser()
+    root = _paths.sessions_root()
+    resolved_root = root.resolve(strict=False)
     resolved_sessions_dir = sessions_dir.resolve(strict=False)
 
-    # Existing absolute paths inside this agent remain a compatibility seam. New
+    # An existing absolute path to any session is accepted as it is. New
     # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
         if raw_path.suffix != ".jsonl" or not raw_path.is_file():
             raise ValueError(f"session path must be an existing .jsonl file: {session}")
         resolved_path = raw_path.resolve(strict=True)
-        if not resolved_path.is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+        if not resolved_path.is_relative_to(resolved_root):
+            raise ValueError(f"session path must be inside {root}: {session}")
         return raw_path
 
     relative_path = _relative_session_path(session)
@@ -291,9 +282,13 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
             raise ValueError(f"session path must be a .jsonl file: {session}")
         return concrete_path
 
-    tail_match = _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
-    if tail_match is not None:
-        return tail_match
+    found = (
+        _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
+        or _existing_tail_match(root, relative_path, resolved_root, first=0)
+        or _session_store.find(session, relative_path, sessions_dir)
+    )
+    if found is not None:
+        return found
 
     if not create:
         raise ValueError(f"session must identify an existing .jsonl file: {session}")
@@ -316,29 +311,6 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
         if not concrete_path.is_file() or not concrete_path.resolve(strict=True).is_relative_to(resolved_sessions_dir):
             raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session}") from None
     return concrete_path
-
-
-def _write_latest_session(agent_dir: Path, session_file: Path) -> None:
-    latest_file = agent_dir / "latest.json"
-    tmp_file = agent_dir / f".latest.{secrets.token_hex(6)}.tmp"
-    latest_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file.write_text(
-        json.dumps(
-            {
-                "session_file": str(session_file),
-                "session_name": session_file.relative_to(agent_dir).as_posix(),
-            },
-            separators=(",", ":"),
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp_file, latest_file)
-
-
-def _reserve_default_session(agent_dir: Path, sessions_dir: Path) -> Path:
-    return _reserve_session(agent_dir, sessions_dir)
-
 
 
 def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path) -> Path:
@@ -574,8 +546,10 @@ def from_env(
 
     mcp = mcp_config.resolve(js_root_settings, agent_id)
 
-    sessions_dir = _paths.sessions_root() / agent_id
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+    # Sessions are filed by the directory js started in; what belongs to the
+    # agent across directories (its latest session, the REPL input history)
+    # lives in its state dir.
+    sessions_dir = _session_store.folder_for(project_dir)
     state_dir = _paths.state_root() / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -583,9 +557,9 @@ def from_env(
     if session_name is not None:
         session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
         if save_session:
-            _write_latest_session(sessions_dir, session_file)
+            _session_store.write_latest(state_dir, session_file)
     elif save_session:
-        session_file = _reserve_default_session(sessions_dir, sessions_dir)
+        session_file = _reserve_session(state_dir, sessions_dir)
     else:
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
@@ -594,7 +568,7 @@ def from_env(
 
     return Config(
         agent_id=agent_id,
-        agent_dir=sessions_dir,
+        agent_dir=state_dir,
         model=model,
         provider_id=provider_id,
         provider_base_url=provider_base_url,
@@ -620,7 +594,7 @@ def from_env(
         trace=trace,
         sessions_dir=sessions_dir,
         session_file=session_file,
-        history_file=sessions_dir / ".history",
+        history_file=state_dir / "history",
         prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,

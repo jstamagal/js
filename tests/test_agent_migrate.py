@@ -54,6 +54,7 @@ def test_dry_run_changes_nothing(tmp_path):
 
 def test_apply_writes_agent_yaml_and_the_agent_loads_the_same_settings(tmp_path):
     agent = _agent(tmp_path, "builder", {"00-tools.yaml": OLD_MANIFEST, "01-prompt.md": "BUILD\n"})
+    _agent(tmp_path, "reviewer", {"01-prompt.md": "REVIEW\n"})
 
     result = agent_migrate.migrate_agent_dir(agent, apply=True)
 
@@ -119,3 +120,38 @@ def test_main_walks_a_root_skips_symlinks_and_only_writes_with_apply(tmp_path, c
     assert agent_migrate.main(["--apply", str(root)]) == 0
     assert (agent / "agent.yaml").exists() and not (agent / "00-tools.yaml").exists()
     assert (elsewhere / "00-tools.yaml").exists() and not (elsewhere / "agent.yaml").exists()
+
+
+def test_entries_that_match_no_tool_are_dropped_and_the_rest_kept(tmp_path):
+    root = tmp_path / "agents"
+    agent = _agent(root, "builder", {"00-tools.yaml": (
+        "tools:\n  - read\n  - multi_patch\n  - sibling\n  - wiki_*\n  - artifact_*\n"
+        "  - tag:read_only\n  - shell:ban\n"), "01-prompt.md": "X\n"})
+    _agent(root, "sibling", {"01-prompt.md": "S\n"})
+
+    result = agent_migrate.migrate_agent_dir(agent, apply=True)
+
+    assert result.action == "migrate"
+    assert sorted(result.dropped) == ["artifact_*", "multi_patch"]
+    assert persona.load_prompt_spec(agent).tool_selectors == (
+        "read:eager", "sibling:eager", "wiki_*:eager", "tag:read_only", "shell:ban")
+
+
+def test_an_existing_agent_yaml_loses_only_its_dead_entries(tmp_path, capsys):
+    root = tmp_path / "agents"
+    text = "# keep me\nmodel: m1\ntools:\n  - read:eager  # files\n  - grep:eager\n  - sem_search:lazy\n"
+    agent = _agent(root, "old", {"agent.yaml": text, "01.md": "X\n"})
+    clean = _agent(root, "clean", {"agent.yaml": "tools:\n  - read:eager\n", "01.md": "X\n"})
+
+    assert agent_migrate.main([str(root)]) == 0
+    assert (agent / "agent.yaml").read_text(encoding="utf-8") == text
+
+    assert agent_migrate.main(["--apply", str(root)]) == 0
+
+    rewritten = (agent / "agent.yaml").read_text(encoding="utf-8")
+    assert "# keep me" in rewritten and "# files" in rewritten
+    assert persona.load_prompt_spec(agent).tool_selectors == ("read:eager",)
+    assert persona.load_prompt_spec(agent).model == "m1"
+    assert (clean / "agent.yaml").read_text(encoding="utf-8") == "tools:\n  - read:eager\n"
+    out = capsys.readouterr().out
+    assert "grep" in out and "sem_search" in out

@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from js import cli, runtime, settings
+from js import paths as _paths
+from js import session_store
 from js import messages as msgs
 from js.config import Config
 from js.memory import load_messages
@@ -79,19 +81,19 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
 
     actual = from_env()
 
-    # Platformdirs layout: sessions/state live under the platform data dir.
-    expected_agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    # Sessions are filed by start directory; what is the agent's lives in its state dir.
+    expected_sessions_dir = tmp_path / ".js" / "sessions" / session_store.slug(Path.cwd())
     expected_state_dir = tmp_path / ".js" / "state" / "defaultagent"
     assert actual.agent_id == "defaultagent"
-    assert actual.agent_dir == expected_agent_dir
-    assert actual.history_file == expected_agent_dir / ".history"
-    assert actual.session_file.parent == expected_agent_dir
+    assert actual.agent_dir == expected_state_dir
+    assert actual.history_file == expected_state_dir / "history"
+    assert actual.session_file.parent == expected_sessions_dir
     assert actual.session_file.suffix == ".jsonl"
     assert actual.session_file.exists()
     assert actual.debug_log == expected_state_dir / "debug.log"
     assert actual.prompts_dir.name == "defaultagent"
-    assert actual.sessions_dir == expected_agent_dir
-    latest = json.loads((expected_agent_dir / "latest.json").read_text(encoding="utf-8"))
+    assert actual.sessions_dir == expected_sessions_dir
+    latest = json.loads((expected_state_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
     # No jsrc means no file: only /save writes one.
     assert not (tmp_path / ".js" / "jsrc").exists()
@@ -125,9 +127,10 @@ def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, 
 
     assert len(set(session_files)) == 10
     for session_file in session_files:
-        assert session_file.parent == tmp_path / ".js" / "sessions" / "defaultagent"
+        assert session_file.parent == session_store.folder_for(Path.cwd())
+        assert session_store.is_generated(session_file.stem)
         assert session_file.exists()
-    latest = json.loads((tmp_path / ".js" / "sessions" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
+    latest = json.loads((tmp_path / ".js" / "state" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(session_files[-1])
 
 
@@ -151,7 +154,9 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     actual = cli.main(["--agent", "../../etc", "-p", "ignored"])
 
     assert actual == 2
-    assert not (tmp_path / ".js").exists()
+    # Every start lays out ~/.js; a refused id adds nothing to it or beside it.
+    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(_paths.layout_dirs())
+    assert not (tmp_path / "etc").exists()
 
 
 @pytest.mark.parametrize(
@@ -298,7 +303,7 @@ def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, t
 
     from js.config import from_env
 
-    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    sessions_dir = session_store.folder_for(Path.cwd())
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "foo-20260519T010203000000Z-deadbeefcafebabe.jsonl"
     existing.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -320,7 +325,7 @@ def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
 
     from js.config import from_env
 
-    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    sessions_dir = session_store.folder_for(Path.cwd())
 
     actual = from_env()
 
@@ -331,7 +336,7 @@ def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
 def test_config_existing_absolute_session_path_loads_exact_file(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
-    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    sessions_dir = session_store.folder_for(Path.cwd())
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "foo-20260519T010203000000Z-deadbeefcafebabe.jsonl"
     existing.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -453,7 +458,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
     actual = cli._run_prompt("Reply with MODEL_HINT_OK", model="hint-model")
 
     output = capsys.readouterr().out
-    session_file = next((tmp_path / ".js" / "sessions" / "defaultagent").glob("*.jsonl"))
+    session_file = next((session_store.folder_for(Path.cwd())).glob("*.jsonl"))
     assert actual == 0
     assert output.splitlines()[0] == "MODEL_HINT_OK"
     assert _continue_args(output) == ["js", "--model", "hint-model", "--session", session_file.stem]
@@ -467,7 +472,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
     config_dir = tmp_path / ".js"
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text("set model.id from-config\n", encoding="utf-8")
-    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    session_dir = session_store.folder_for(Path.cwd())
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-env-model.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -500,9 +505,8 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
     actual = cli._run_prompt("Reply with GENERATED_OK")
 
     captured = capsys.readouterr()
-    # New layout: sessions live directly under the per-agent dir.
-    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
-    session_files = list(agent_dir.glob("*.jsonl"))
+    # Sessions are filed by the directory js started in.
+    session_files = list(session_store.folder_for(Path.cwd()).glob("*.jsonl"))
     assert actual == 0
     assert len(session_files) == 1
     session_file = session_files[0]
@@ -512,7 +516,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
         {"role": "user", "content": "Reply with GENERATED_OK"},
         {"role": "assistant", "content": "GENERATED_OK"},
     ]
-    latest = json.loads((agent_dir / "latest.json").read_text(encoding="utf-8"))
+    latest = json.loads((tmp_path / ".js" / "state" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(session_file)
 
 
@@ -529,12 +533,10 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     actual = cli._run_prompt("Reply with NO_SAVE_OK", save=False)
 
     captured = capsys.readouterr()
-    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     assert actual == 0
     assert captured.out == "NO_SAVE_OK\n"
-    assert not (agent_dir / "latest.json").exists()
-    assert not list(agent_dir.glob("*.jsonl"))
-    assert not (agent_dir / ".no-save.jsonl").exists()
+    assert not (tmp_path / ".js" / "state" / "defaultagent" / "latest.json").exists()
+    assert not list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
 
 
 # Agent drivers read this stderr line after a headless run as the signal that
@@ -748,7 +750,7 @@ def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):
 
 def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    session_dir = session_store.folder_for(Path.cwd())
     session_dir.mkdir(parents=True)
     session_file = session_dir / "compact-session.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -831,7 +833,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    session_dir = session_store.folder_for(Path.cwd())
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-model.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -859,20 +861,16 @@ def test_short_session_and_agent_aliases_parse(monkeypatch):
     assert (calls[0]["agent"], calls[0]["session"]) == ("scoped", "short-session")
 
 
-def test_agent_scopes_session_lookup(monkeypatch, tmp_path, capsys):
+def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    # Sessions live directly under the platform data sessions/<agent>/ dir.
-    scoped_dir = tmp_path / ".js" / "sessions" / "scoped"
-    default_dir = tmp_path / ".js" / "sessions" / "defaultagent"
-    scoped_dir.mkdir(parents=True)
-    default_dir.mkdir(parents=True)
-    session_name = "scoped-session.jsonl"
-    scoped_session = scoped_dir / session_name
-    default_session = default_dir / session_name
+    # Sessions are filed by start directory, not by agent: the name finds the
+    # session whatever agent runs it.
+    folder = session_store.folder_for(Path.cwd())
+    folder.mkdir(parents=True)
+    scoped_session = folder / "scoped-session.jsonl"
     cli.M.append_message(scoped_session, {"role": "user", "content": "scoped old"})
-    cli.M.append_message(default_session, {"role": "user", "content": "default old"})
     loaded_prompt_dirs = []
 
     def completion_stub(**kwargs):
@@ -889,9 +887,8 @@ def test_agent_scopes_session_lookup(monkeypatch, tmp_path, capsys):
 
     output = capsys.readouterr().out
     assert actual == 0
-    # The resume hint must name the agent: the session lives under
-    # sessions/scoped, so an agent-less `js --session ...` would resolve against
-    # sessions/defaultagent and 404 the .jsonl.
+    # The resume hint must name the agent: an agent-less `js --session ...`
+    # runs the `agent` setting and would continue the session under it.
     assert _continue_args(output) == ["js", "--agent", "scoped", "--session", "scoped-session"]
     assert loaded_prompt_dirs[0].name == "scoped"
     assert load_messages(scoped_session) == [
@@ -899,7 +896,6 @@ def test_agent_scopes_session_lookup(monkeypatch, tmp_path, capsys):
         {"role": "user", "content": "Reply with SCOPED_SESSION_OK"},
         {"role": "assistant", "content": "SCOPED_SESSION_OK"},
     ]
-    assert load_messages(default_session) == [{"role": "user", "content": "default old"}]
 
 
 def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
@@ -1326,7 +1322,7 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
 
     assert cli._run_prompt("first", session="caller/nested", show_continue=False) == 0
     assert cli._run_prompt("second", session="caller/nested", show_continue=False) == 0
-    nested = tmp_path / ".js" / "sessions" / "defaultagent" / "caller" / "nested.jsonl"
+    nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
     assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
 
 
@@ -1341,7 +1337,7 @@ def test_session_key_resumes_the_same_derived_session(monkeypatch, tmp_path, cap
 
     assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "third"]) == 0
     assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "fourth"]) == 0
-    derived = list((tmp_path / ".js" / "sessions" / "defaultagent" / "derived").glob("*.jsonl"))
+    derived = list((session_store.folder_for(project) / "derived").glob("*.jsonl"))
     assert len(derived) == 1
     assert [message["content"] for message in load_messages(derived[0])] == ["third", "OK", "fourth", "OK"]
     capsys.readouterr()
@@ -1366,14 +1362,13 @@ def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeyp
 
 def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    root = tmp_path / ".js" / "sessions"
-    old = root / "old" / "legacy.jsonl"
-    nested = root / "agent" / "caller" / "nested.jsonl"
+    old = session_store.folder_for(tmp_path / "old") / "legacy.jsonl"
+    nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
     old.parent.mkdir(parents=True)
     old.write_text('{"role":"user","content":"old"}\n', encoding="utf-8")
     cli.M.append_message(nested, {"role": "user", "content": "new"})
     from js.session_catalog import record_session_start
-    record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9)
+    record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9, agent="agent")
     monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
     assert cli._print_session_list(json_lines=False) == 0
@@ -1384,11 +1379,12 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     assert cli._print_session_list(json_lines=True) == 0
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert {(item["agent"], item["name"]) for item in records} == {
-        ("old", "legacy"),
+        (None, "legacy"),
         ("agent", "caller/nested"),
     }
-    assert next(item for item in records if item["agent"] == "old")["user_turns"] == 1
-    expected_fields = {"agent", "name", "path", "mtime", "size", "user_turns", "in_flight", "cwd", "caller_key", "job_id", "model"}
+    assert next(item for item in records if item["name"] == "legacy")["user_turns"] == 1
+    expected_fields = {"agent", "name", "folder", "path", "mtime", "size", "user_turns", "in_flight", "cwd",
+                       "caller_key", "job_id", "model", "mode", "title"}
     assert all(set(item) == expected_fields for item in records)
 
 
@@ -1442,7 +1438,7 @@ def test_json_is_scoped_to_list(monkeypatch):
 @pytest.mark.parametrize("failure, status", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
 def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, debug, failure, status):
     monkeypatch.setenv("HOME", str(tmp_path))
-    session = tmp_path / ".js/sessions/defaultagent/interrupted.jsonl"
+    session = session_store.folder_for(Path.cwd()) / "interrupted.jsonl"
     user = {"role": "user", "content": "inspect tests"}
     exchange = [
         {"role": "assistant", "content": "checking", "tool_calls": [
@@ -1489,7 +1485,7 @@ def test_prompt_interrupt_keeps_streamed_partial(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(runtime.model_client, "stream_model_async", interrupted)
     assert cli._run_prompt("explain", session="partial") == 130
-    session = tmp_path / ".js/sessions/defaultagent/partial.jsonl"
+    session = session_store.folder_for(Path.cwd()) / "partial.jsonl"
     assert load_messages(session) == [
         {"role": "user", "content": "explain"},
         {"role": "assistant", "content": "partial answer", "incomplete_reason": "cancelled"},

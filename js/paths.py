@@ -3,18 +3,21 @@
 One home: `~/.js/`. Project-local `.js/` files (jsrc, jsrc.local, agents,
 skills, toolbox) stay with the project and are not named here.
 
+`ensure_home()` creates every directory of the layout on each start, so the
+whole structure is always there:
+
     ~/.js/
-      jsrc              the user layer (what /save writes)
+      jsrc  JS.md  tools.yaml  tags.yaml     files; not created, only read
       agents/  skills/  toolbox/
-      logins/           credential store and its model-list cache
-      sessions/         session JSONL, per agent
-      state/            undo store, debug logs, kernel artifacts, spilled results
-      logs/             autolog, transcript, compaction flights
-      cache/            modelsdotdev catalog
-      work/             what the agent must not lose; `:n` notes
-      tmp/              js's scratch; stale entries are cleared on start
-      plans/            the plan tool
-      probes/           browser probes and terminal snapshots
+      logins/        credentials and the model-list cache
+      sessions/      every session, filed by the directory it started in
+      state/         undo store, kernel output, spilled results, commit backups
+      logs/          logs, transcripts
+      cache/         models.dev catalog, env probe cache, session search index
+      work/          agent keepers; `:n` notes
+      tmp/           agent junk; entries older than a day are cleared on start
+      plans/         plan tool output
+      probes/        browser screenshots, terminal snapshots
 
 The locations js used before this layout are listed in `legacy_homes()`;
 `js.home` moves them here.
@@ -166,6 +169,30 @@ def browser_probes_dir() -> Path:
 
 def terminal_snapshots_dir() -> Path:
     return probes_dir() / "terminal"
+
+
+def layout_dirs() -> tuple[Path, ...]:
+    """The directories `ensure_home()` creates, in the order the layout lists them."""
+    return (
+        global_agents_dir(),
+        global_skills_dir(),
+        global_toolbox_dir(),
+        login_store_dir(),
+        sessions_root(),
+        state_root(),
+        logs_root(),
+        cache_root(),
+        work_dir(),
+        home() / "tmp",
+        plans_dir(),
+        probes_dir(),
+    )
+
+
+def ensure_home() -> None:
+    """Create every directory of the layout that is missing."""
+    for directory in layout_dirs():
+        directory.mkdir(parents=True, exist_ok=True)
 
 
 def _xdg_base(variable: str, default: Path) -> Path:

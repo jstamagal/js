@@ -120,7 +120,12 @@ returns one `ERROR:` line naming the pattern and runs nothing.
 read; an agent dir that has one fails to load with a line naming
 `agent.yaml`. `just migrate-agents` (dry run; `--apply` to write) converts
 them: bare selectors become `NAME:eager`, `reasoning_effort` becomes
-`reasoning`.
+`reasoning`, and an entry that matches no tool is dropped and named. An
+entry is kept when it is a `tag:` entry, a glob that matches at least one
+tool, or a name that is a tool or an agent in the repo prompts, the global
+agents dir or a root given on the command line. The same pass drops dead
+entries from agents that already have `agent.yaml`. The ~/.js home migration
+runs this conversion on every agent it moves (`js/agent_migration.py`).
 
 ## Tool Descriptions
 

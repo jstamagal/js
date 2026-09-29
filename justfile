@@ -277,14 +277,16 @@ check: lint deps-fresh
 tool-bytes *args:
     uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
 
-# move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml. dry run
-# unless --apply; --show prints each agent.yaml. default root: the global
+# move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml and drop
+# tools entries that match no tool, also from existing agent.yaml files. dry
+# run unless --apply; --show prints each agent.yaml. default root: the global
 # agents dir. just migrate-agents --apply ~/.js/agents .js/agents
 migrate-agents *args:
     uv run {{ browser-extra }} python scripts/migrate_agents.py {{ args }}
 
-# move the old js config, data and inbox directories into ~/.js. dry run
-# unless --apply. js does this once by itself on first start.
+# move the old js config, data and inbox directories into ~/.js, convert the
+# moved agents and file the old sessions by start directory. dry run unless
+# --apply. js does this once by itself on first start.
 migrate-home *args:
     uv run python -m js.home {{ args }}
 

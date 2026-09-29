@@ -437,13 +437,17 @@ command string.
 
 ## Sessions And Memory
 
-Saved sessions live under `~/.js/`:
+Saved sessions are filed by the directory js started in:
 
 ```text
-~/.js/sessions/<agent_id>/<session>.jsonl
+~/.js/sessions/<start-dir>/<session>.jsonl   the record
+~/.js/sessions/<start-dir>/<session>.txt     a readable transcript
+~/.js/sessions/<start-dir>/<session>/        its subagent runs
 ```
 
-Each agent id has isolated session state. A `wiki-*` agent session is not a `defaultagent` session. Use `--session` to continue a specific saved session.
+`<start-dir>` is the absolute path with `/` and `_` replaced by `-`. Use
+`--session NAME` to continue a saved session from any directory, and `/name
+<text>` to title one. See [configuration-and-sessions.md](configuration-and-sessions.md).
 
 The memory layer is append-only JSONL plus control marks:
 

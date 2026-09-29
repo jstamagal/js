@@ -265,13 +265,15 @@ project.
   logins/
     logins.toml
     models-cache.json
-  sessions/<agent_id>/
-    .history
-    latest.json
-    <session>.jsonl
+  sessions/<start-dir>/   # the start directory, / and _ as - (~/js -> -home-me-js)
+    <session>.jsonl      # the record, append-only
+    <session>.txt        # its readable transcript
+    <session>/           # its subagent runs
   state/
     <agent_id>/debug.log
     <agent_id>/undo/
+    <agent_id>/latest.json   # the agent's latest session, for --last
+    <agent_id>/history       # REPL input history
     kernel/<run>/        # kernel.log and rich-output images
     tool-results/        # oversized results, spilled whole
     commit-backups/
@@ -308,18 +310,36 @@ marker or not.
 - `~/inbox/agents/js` becomes `~/.js/work`.
 
 Each entry moves by one rename, so a directory lands whole or not at all. A
-symlink moves as the link and is never followed. When the destination already
+symlink moves as the link and is never followed. A relative symlink that the
+move would point somewhere else is rewritten to the absolute path it reached
+before; one that points at something that moved with it is left as it is. When the destination already
 exists, a directory is merged entry by entry, an identical file or link drops
 the old copy, and anything else is refused with the reason and left in place.
 An entry that cannot be read or compared is refused the same way; the rest
 still move. The dry run accounts for its own planned moves, so two old entries
 that land in the same place show the same merges and refusals as `--apply`.
 A refused entry is reported once at startup; the marker is written anyway, so
-`just migrate-home` is how to see it again. Across filesystems an entry is copied beside its destination, renamed into
+`just migrate-home` is how to see it again.
+
+In the same step every agent in `~/.js/agents` is converted to `agent.yaml`
+(see `just migrate-agents` in [tool-system.md](tool-system.md)): a tools entry
+that matches no tool is dropped, and one line per agent names what was
+dropped. A symlinked agent is left for the host it lives on.
+
+Every start creates each directory of the layout above that is missing. Across filesystems an entry is copied beside its destination, renamed into
 place, and only then removed from the old location.
 
-The per-agent `sessions/` and `state/` directories are created lazily when an
-agent runs. The agent id is
+Sessions of the old per-agent folders (`sessions/<agent>/`) are filed in the
+same step: each under the folder of the working directory in its first start
+record, or under `~`'s folder when it has none. An old subagent run carries no
+start record; it goes under the parent session whose `task` call carried its
+first message. File names are kept, so an old name or hash tail still resumes
+with `--session`. A filed session without an agent in its start record gets
+one naming the old folder, and each gets its `.txt`. The folder's `.history`
+and `latest.json` go to `state/<agent>/`. A session a running js holds open is
+left where it is.
+
+The per-agent `state/` directory is created when an agent runs. The agent id is
 validated (`^[A-Za-z0-9_-]+$`) *before* any directory is created, so a bad id
 never leaves stray files.
 
@@ -350,20 +370,38 @@ entries in `noun:modifier` form, and optional `model:`, `reasoning:`,
 
 ## Session Resolution
 
-Prompt and pipe runs save by default. Without `--session`, a saved run reserves
-a new unique JSONL file under the selected agent's `sessions/` directory and
-prints a resume command after the answer. This is the normal choice for an agent
-driver: use the same session for review and correction rounds so the model does
-not have to re-read all prior context.
+Sessions are filed by the directory js started in:
+`~/.js/sessions/<start-dir>/`, where the folder name is the absolute path with
+`/` and `_` replaced by `-`. An agent in `~/js/js/toolkit` greps
+`~/.js/sessions/-home-me-js-js-toolkit/*.txt`; a prefix glob
+(`-home-me-js*`) covers a tree.
 
-`--session NAME` resumes an existing named session or creates that safe relative
-name when absent. Names may use `/` to group work under the selected agent:
+Prompt and pipe runs save by default. Without `--session`, a saved run reserves
+a new session named `YYYY-MM-DDTHHMM-xxxx` (local time, four hex digits) in the
+current directory's folder and prints a resume command after the answer. This
+is the normal choice for an agent driver: use the same session for review and
+correction rounds so the model does not have to re-read all prior context.
+
+`--session NAME` resumes an existing session or creates that safe relative name
+in the current directory's folder when absent. An existing name is looked up in
+the current directory's folder first, then in every folder, so a named session
+resumes from any directory. A name that more than one other folder holds is
+refused with the paths. A generated name also resumes from a unique tail of
+four or more characters. Names may use `/` to group work:
 
 ```bash
 js --session reviews/parser-fix -p "implement the first pass"
 js --session reviews/parser-fix -p "apply the review corrections"
-js --session 20260611T120000Z-abcd -p "resume a generated session"
+js --session 6d65 -p "resume 2026-09-29T0802-6d65"
 ```
+
+`--session` with no name is kept for the session picker, which is not built
+yet; it says so and exits.
+
+A resumed session continues on the model, provider and reasoning level of its
+last stamp (see below) unless the run names them with `--model` or
+`--reasoning`. `--last` resumes the agent's most recently started session,
+wherever it is filed.
 
 Generated session ids can be resumed from the `*** Continue:` hint. Driver
 integrations that have a stable caller key can instead derive an opaque name
@@ -378,24 +416,63 @@ expensive throwaway choice because the next run cannot resume and must re-read
 context.
 
 Absolute session paths are accepted only when they are existing `.jsonl` files
-inside that agent's sessions directory. Relative traversal is rejected after
-resolution.
+under `~/.js/sessions`. Relative traversal is rejected after resolution.
+
+A subagent run is filed in the folder named after its parent session
+(`<session>/task-<epoch>-xxxx.jsonl`), so a plain grep of a directory's folder
+does not hit it. The children of an unsaved run are not saved either.
+
+## The `.txt` Transcript
+
+Every write to a session's `.jsonl` brings the `.txt` beside it up to date:
+
+```text
+agent: defaultagent   dir: /home/me/js   mode: repl
+models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
+started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
+branched-from: -
+tags: -
+
+#0001 08:02 you  APE
+#0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
+#0016 08:32 ape  the file has no real newlines, it's escaped JSON
+```
+
+Five header lines and a blank line (`head -6 *.txt` summarises a folder), then
+one line per message, numbered by its place among the message records of the
+`.jsonl`; a multi-line message continues on indented lines. An assistant
+message that calls tools is not a line of its own: its text labels each call,
+and each tool result is a line with the tool, that label, the first line of the
+call and the result's exit code and size. Tool output is only in the `.jsonl`,
+at the same message number. A message a rollback took back out of the
+conversation is not shown; compaction removes nothing from the `.txt`.
 
 ## JSONL Record Shape
 
 The memory file is append-only JSONL. Records have:
 
 ```json
-{"kind":"session_metadata","version":1,"ts":1781189999.0,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01"}
+{"kind":"session_metadata","version":3,"ts":1781189999.0,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01","agent":"defaultagent","model":"m","mode":"-p","command":["js","-p","..."]}
 {"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
-{"kind":"mark","ts":1781190001.0,"version":1,"marker":"session_reset"}
+{"kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
+{"kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
+{"kind":"title","ts":1781190004.0,"title":"parser fix"}
 ```
 
-Generated/driver-managed sessions may append the `session_metadata` control
-record at start. It carries machine-facing working-directory, caller-key, and
-job-id fields for catalogs and integrations; it is not conversation context and
-the message loader ignores it. Adjacent hidden liveness sidecars track open
-processes without rewriting the append-only conversation file.
+Every start appends a `session_metadata` control record: working directory,
+agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
+`pipe`, `subagent`, `commit`) and the command line. A subagent run's record
+names its `parent` session file; a branch's names `branched_from`, the parent
+session file and the message number it split at. It is not conversation
+context and the message loader ignores it. Adjacent hidden liveness sidecars
+track open processes without rewriting the append-only conversation file.
+
+Every assistant message record carries a `stamp`: the model, provider and
+reasoning level it was written under. Resume uses the last stamp (or the last
+start record's model, whichever came later).
+
+`/name <text>` appends a `title` record; `/name` alone prints the title. The
+newest title is the session's name in `--list --json`.
 
 `load_replay_messages()` (and `load_messages()`, which reads through it) ignores:
 

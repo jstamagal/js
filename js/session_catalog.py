@@ -1,8 +1,12 @@
-"""Session discovery, start metadata, and process-backed liveness.
+"""Session discovery, start metadata, titles, branches, and process-backed liveness.
 
 Conversation files remain append-only JSONL.  Session metadata is an ignored
-control record in that same stream; open-process state lives in adjacent hidden
-sidecars so it can be updated without touching conversation history.
+control record in that same stream, one per start: the directory, agent and
+model, how it was started (`repl`, `-p`, `pipe`, `subagent`, `commit`) and the
+command line; a subagent run names its parent, a branch its parent session and
+the message it split at. `/name` appends a title record. Open-process state
+lives in adjacent hidden sidecars so it can be updated without touching
+conversation history.
 """
 
 from __future__ import annotations
@@ -16,8 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import messages as msgs
+from . import session_store
+from . import session_text
+
 _METADATA_KIND = "session_metadata"
-_METADATA_VERSION = 2
+_METADATA_VERSION = 3
+_TITLE_KIND = "title"
 _LIVENESS_VERSION = 1
 
 
@@ -174,6 +183,17 @@ def session_in_flight(session_file: Path) -> bool:
     return _with_liveness_lock(Path(session_file).resolve(strict=False), inspect)
 
 
+def _append_record(session_file: Path, record: dict[str, Any]) -> None:
+    session_file = Path(session_file)
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    with session_file.open("a", encoding="utf-8") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        stream.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    session_text.refresh(session_file)
+
+
 def record_session_start(
     session_file: Path,
     *,
@@ -182,28 +202,121 @@ def record_session_start(
     job_id: str | int | None = None,
     agent: str | None = None,
     model: str | None = None,
+    mode: str | None = None,
+    command: list[str] | None = None,
+    parent: Path | str | None = None,
+    branched_from: dict[str, Any] | None = None,
+    ts: float | None = None,
 ) -> None:
     """Append non-message session start metadata to a conversation JSONL file.
 
     *agent* and *model* are recorded so a later resume with no flags can come
-    back on what was actually in use rather than the config default."""
-    session_file = Path(session_file)
-    session_file.parent.mkdir(parents=True, exist_ok=True)
+    back on what was actually in use rather than the config default. *parent*
+    is the session file a subagent run belongs to; *branched_from* is
+    `{"session": <parent path>, "message": <message number>}`."""
     record = {
         "kind": _METADATA_KIND,
         "version": _METADATA_VERSION,
-        "ts": time.time(),
+        "ts": time.time() if ts is None else ts,
         "cwd": str(Path(cwd).expanduser().resolve(strict=False)),
         "caller_key": caller_key,
         "job_id": job_id,
         "agent": agent,
         "model": model,
     }
-    with session_file.open("a", encoding="utf-8") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        stream.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    if mode is not None:
+        record["mode"] = mode
+    if command is not None:
+        record["command"] = list(command)
+    if parent is not None:
+        record["parent"] = str(parent)
+    if branched_from is not None:
+        record["branched_from"] = branched_from
+    _append_record(session_file, record)
+
+
+def append_title(session_file: Path, title: str) -> None:
+    """Pin `title` as the session's name."""
+    _append_record(session_file, {"kind": _TITLE_KIND, "ts": time.time(), "title": title})
+
+
+def _records(path: Path):
+    try:
+        with path.open(encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+            lines = stream.readlines()
+    except OSError:
+        return
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            yield line, record
+
+
+def session_title(session_file: Path) -> str | None:
+    """The newest `/name` title of a session, or None."""
+    title = None
+    for _, record in _records(Path(session_file)):
+        if record.get("kind") == _TITLE_KIND and isinstance(record.get("title"), str):
+            title = record["title"]
+    return title
+
+
+def first_metadata(session_file: Path) -> dict[str, Any] | None:
+    """The metadata of the session's first start, or None."""
+    for _, record in _records(Path(session_file)):
+        if record.get("kind") == _METADATA_KIND:
+            return record
+    return None
+
+
+def last_stamp(session_file: Path) -> dict[str, Any] | None:
+    """The newest model record of a session: an assistant message's stamp, or a
+    start's model, whichever was written last. None when neither exists."""
+    last = None
+    for _, record in _records(Path(session_file)):
+        kind = record.get("kind")
+        if kind == "message" and isinstance(record.get("stamp"), dict):
+            stamp = record["stamp"]
+            if isinstance(stamp.get("model"), str) and stamp["model"]:
+                last = stamp
+        elif kind == _METADATA_KIND and isinstance(record.get("model"), str) and record["model"]:
+            last = {"model": record["model"]}
+    return last
+
+
+def branch_session(parent_file: Path, message: int, *, cwd: Path | str, agent: str | None = None,
+                   mode: str | None = None, command: list[str] | None = None) -> Path:
+    """A new session in the parent's folder holding the parent's records up to
+    and including message number `message`, with its branch point recorded."""
+    parent_file = Path(parent_file)
+    kept: list[str] = []
+    seen = 0
+    for line, record in _records(parent_file):
+        kind = record.get("kind")
+        if kind in (_METADATA_KIND, _TITLE_KIND):
+            continue
+        is_message = kind == "message" or (kind is None and "role" in record)
+        if is_message and seen == message:
+            break
+        kept.append(line if line.endswith("\n") else line + "\n")
+        if is_message:
+            seen += 1
+            if seen == message:
+                break
+    if seen < message:
+        raise ValueError(msgs.SESSION_BRANCH_PAST_END.text(path=parent_file, messages=seen, message=message))
+    branch = session_store.reserve(parent_file.parent)
+    with branch.open("a", encoding="utf-8") as stream:
+        stream.writelines(kept)
+    stamp = last_stamp(branch)
+    record_session_start(branch, cwd=cwd, agent=agent, model=stamp.get("model") if stamp else None,
+                         mode=mode, command=command,
+                         branched_from={"session": str(parent_file), "message": message})
+    return branch
 
 
 def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
@@ -235,45 +348,51 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
 
 
 def last_session_model(session_file: Path) -> str | None:
-    """The model most recently recorded for a session, or None when unknown.
+    """The model of the session's last stamp, or None when unknown.
 
     Sessions written before models were recorded, and those whose metadata is
     unreadable, resolve to None so the caller falls back to its own default."""
-    _, metadata = _session_details(Path(session_file))
-    if not metadata:
-        return None
-    model = metadata.get("model")
-    return model if isinstance(model, str) and model else None
+    stamp = last_stamp(Path(session_file))
+    return stamp.get("model") if stamp else None
+
+
+def _session_files(root: Path):
+    for path in sorted(root.rglob(f"*{session_store.SUFFIX}")):
+        if path.is_file() and not path.name.startswith("."):
+            yield path
 
 
 def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
-    """Recursively catalog all agent session JSONL files under *sessions_root*."""
+    """Catalog every session JSONL file under *sessions_root*, subagent runs included."""
     root = Path(sessions_root)
     records: list[dict[str, Any]] = []
     if not root.is_dir():
         return records
-    for agent_dir in sorted(path for path in root.iterdir() if path.is_dir()):
-        for path in sorted(agent_dir.rglob("*.jsonl")):
-            if not path.is_file():
-                continue
-            stat = path.stat()
-            user_turns, metadata = _session_details(path)
-            relative = path.relative_to(agent_dir).with_suffix("").as_posix()
-            records.append(
-                {
-                    "agent": agent_dir.name,
-                    "name": relative,
-                    "path": str(path),
-                    "mtime": stat.st_mtime,
-                    "size": stat.st_size,
-                    "user_turns": user_turns,
-                    "in_flight": session_in_flight(path),
-                    "cwd": metadata.get("cwd") if metadata else None,
-                    "caller_key": metadata.get("caller_key") if metadata else None,
-                    "job_id": metadata.get("job_id") if metadata else None,
-                    "model": metadata.get("model") if metadata else None,
-                }
-            )
+    for path in _session_files(root):
+        stat = path.stat()
+        user_turns, metadata = _session_details(path)
+        folder = path.relative_to(root).parts[0]
+        agent = metadata.get("agent") if metadata else None
+        if agent is None and not session_store.is_folder_name(folder):
+            agent = folder
+        records.append(
+            {
+                "agent": agent,
+                "name": session_store.display_name(path, root),
+                "folder": folder,
+                "path": str(path),
+                "mtime": stat.st_mtime,
+                "size": stat.st_size,
+                "user_turns": user_turns,
+                "in_flight": session_in_flight(path),
+                "cwd": metadata.get("cwd") if metadata else None,
+                "caller_key": metadata.get("caller_key") if metadata else None,
+                "job_id": metadata.get("job_id") if metadata else None,
+                "model": metadata.get("model") if metadata else None,
+                "mode": metadata.get("mode") if metadata else None,
+                "title": session_title(path),
+            }
+        )
     return records
 
 

@@ -87,8 +87,9 @@ typed event hooks (`on <event> <handler>`) and aliases (`alias <name>
 <command>`). `/save` writes settings, handlers and aliases back to `jsrc`.
 
 Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
-saved sessions at `sessions/<agent_id>/<session>.jsonl` (each agent has
-isolated session state), global prompt-directory agents in `agents/`, skills in
+saved sessions at `sessions/<start-dir>/<session>.jsonl`, filed by the
+directory js started in, each with a readable `.txt` transcript beside it,
+global prompt-directory agents in `agents/`, skills in
 `skills/`, and per-agent runtime state in `state/`. On first start js moves its
 old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL
 with control marks; see the compaction section for compaction commands.

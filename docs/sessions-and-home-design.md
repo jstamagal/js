@@ -1,6 +1,7 @@
 # Sessions, the ~/.js home, and the fixes around them
 
-Design agreed with the operator on 2026-09-29. Nothing here is built yet.
+Design agreed with the operator on 2026-09-29. Built: the migration in §1
+(js-1g1.1) and §2 Storage (js-1g1.2). The rest is not built yet.
 Beads: epic js-1g1.
 
 The harness is for the agent. Layouts and formats here are chosen first for

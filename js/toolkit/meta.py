@@ -5,13 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import asyncio
-import json
 import os
-import secrets
-import time
 from typing import Any
 
 from .. import paths
+from .. import session_store
 from .. import settings as _settings
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
@@ -113,16 +111,6 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
     return child
 
 
-def _write_latest(agent_dir: Path, session_file: Path) -> None:
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    tmp = agent_dir / f".latest.{secrets.token_hex(6)}.tmp"
-    tmp.write_text(
-        json.dumps({"session_file": str(session_file), "session_name": session_file.name}, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp, agent_dir / "latest.json")
-
-
 def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -> Path:
     raw = Path(session_id).expanduser()
     if raw.is_absolute():
@@ -137,23 +125,14 @@ def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text("", encoding="utf-8")
-    _write_latest(agent_dir, path)
+    session_store.write_latest(agent_dir, path)
     return path
 
 
 def _reserve_worker_session(agent_dir: Path, sessions_dir: Path) -> Path:
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    for _ in range(16):
-        session_file = sessions_dir / f"task-{int(time.time() * 1000)}-{secrets.token_hex(8)}.jsonl"
-        try:
-            with session_file.open("x", encoding="utf-8"):
-                pass
-        except FileExistsError:
-            continue
-        _write_latest(agent_dir, session_file)
-        return session_file
-    raise RuntimeError(f"could not reserve task session under {sessions_dir}")
-
+    session_file = session_store.reserve(sessions_dir, session_store.task_name)
+    session_store.write_latest(agent_dir, session_file)
+    return session_file
 
 
 def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path:
@@ -170,20 +149,28 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
     from ..mcp_config import resolve as resolve_mcp
 
-    # The per-agent data dir is the sessions dir; it stores that agent's jsonl,
-    # .history, and latest.json. MCP policy is an agent authorization boundary,
-    # so resolve it for the child from the merged settings instead of copying the
-    # parent's already-resolved policy.
+    # The per-agent data dir holds that agent's latest.json and input history.
+    # A subagent run is filed in the folder named after its parent session; a
+    # parent that is not saved has children that are not saved either. MCP
+    # policy is an agent authorization boundary, so resolve it for the child
+    # from the merged settings instead of copying the parent's already-resolved
+    # policy.
     agents_root = parent_cfg.agent_dir.parent
     prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     agent_dir = agents_root / agent
-    sessions_dir = agent_dir
-    session_file = _session_file_for_id(agent_dir, sessions_dir, session_id) if session_id else _reserve_worker_session(agent_dir, sessions_dir)
+    parent_file = Path(parent_cfg.session_file)
+    if parent_file == Path(os.devnull):
+        sessions_dir = parent_cfg.sessions_dir
+        session_file = parent_file
+    else:
+        sessions_dir = session_store.subagent_folder(parent_file)
+        session_file = (_session_file_for_id(agent_dir, sessions_dir, session_id) if session_id
+                        else _reserve_worker_session(agent_dir, sessions_dir))
     return replace(
         parent_cfg,
         agent_id=agent,
         agent_dir=agent_dir,
-        history_file=agent_dir / ".history",
+        history_file=agent_dir / "history",
         sessions_dir=sessions_dir,
         session_file=session_file,
         prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
@@ -279,6 +266,11 @@ async def _run_one_task_async(
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
     child_context.net_label = f"Subagent {idx}"
+    if Path(cfg.session_file) != Path(os.devnull):
+        from ..session_catalog import record_session_start
+
+        record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
+                             mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
     messages.append({"role": "user", "content": prompt})
     try:
@@ -297,7 +289,8 @@ async def _run_one_task_async(
         return f"ERROR {type(exc).__name__}: {exc}"
     finally:
         close_terminal_sessions(child_context)
-        M.persist_messages(cfg.session_file, messages)
+        M.persist_messages(cfg.session_file, messages,
+                           stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
 
     final = ""
     for msg in reversed(messages):

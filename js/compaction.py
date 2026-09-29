@@ -235,6 +235,12 @@ def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger:
         raise
 
 
+def _stamp(cfg: Config) -> dict:
+    """The stamp of the conversation's model, for assistant messages written here."""
+    return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
+                       getattr(cfg, "reasoning_effort", None))
+
+
 def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_recent: int) -> tuple[int, int]:
     before = list(messages)
     cleared, reclaimed = microcompact(messages, keep_recent=keep_recent)
@@ -247,8 +253,9 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
     flight.record("cleared_results", results=changed, cleared=cleared,
                   reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=400)
     if cleared:
-        M.persist_messages(flight.cfg.session_file, before)
-        M.persist_messages(flight.cfg.session_file, messages)
+        stamp = _stamp(flight.cfg)
+        M.persist_messages(flight.cfg.session_file, before, stamp=stamp)
+        M.persist_messages(flight.cfg.session_file, messages, stamp=stamp)
     return cleared, reclaimed
 
 
@@ -749,7 +756,7 @@ async def compact_now(
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
-        M.persist_messages(cfg.session_file, messages)
+        M.persist_messages(cfg.session_file, messages, stamp=_stamp(cfg))
         M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from,
                                  forced=forced, trigger=recorded_trigger, rehydrated=rehydrated)
         messages[:] = after

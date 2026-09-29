@@ -138,14 +138,30 @@ def summarize(path: Path) -> dict:
     }
 
 
+def _session_agent(path: Path) -> str | None:
+    """The agent a session file's last start metadata names."""
+    agent = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if '"session_metadata"' not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("kind") == "session_metadata":
+            agent = record.get("agent", agent)
+    return agent
+
+
 def latest_session(data_dir: Path, agent: str | None) -> Path | None:
+    """The most recently written session under `data_dir/sessions`, of `agent` when given."""
     root = data_dir / "sessions"
-    if agent:
-        root = root / agent
     candidates = list(root.rglob("*.jsonl")) if root.is_dir() else []
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in candidates:
+        if not agent or _session_agent(path) == agent:
+            return path
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
