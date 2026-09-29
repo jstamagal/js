@@ -100,6 +100,10 @@ def _kind(mode: int) -> str:
     return "a file"
 
 
+class _OldCopyLeft(OSError):
+    """The entry is in place at its target; removing the old copy failed."""
+
+
 def _move_across(source: Path, target: Path, mode: int) -> None:
     """Copy beside the target, rename into place, then remove the source."""
     staging = target.with_name(f".{target.name}.migrating-{os.getpid()}")
@@ -118,10 +122,13 @@ def _move_across(source: Path, target: Path, mode: int) -> None:
             else:
                 os.unlink(staging)
         raise
-    if stat.S_ISDIR(mode):
-        shutil.rmtree(source)
-    else:
-        os.unlink(source)
+    try:
+        if stat.S_ISDIR(mode):
+            shutil.rmtree(source)
+        else:
+            os.unlink(source)
+    except OSError as exc:
+        raise _OldCopyLeft(exc.errno, str(exc)) from exc
 
 
 def _rename(source: Path, target: Path, mode: int) -> None:
@@ -144,6 +151,10 @@ def _entry(source: Path, target: Path, *, apply: bool) -> Iterator[Step]:
         if apply:
             try:
                 _rename(source, target, source_stat.st_mode)
+            except _OldCopyLeft as exc:
+                yield Step("move", source, target)
+                yield Step("refuse", source, target, f"copied to {_short(target)}, but the old copy is left: {exc}")
+                return
             except OSError as exc:
                 yield Step("refuse", source, target, f"could not move to {_short(target)}: {exc}")
                 return

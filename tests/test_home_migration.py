@@ -198,6 +198,29 @@ def test_across_filesystems_a_directory_lands_whole_then_leaves_the_source(tmp_p
     assert [p.name for p in target.parent.iterdir() if "migrating" in p.name] == []
 
 
+def test_an_old_copy_that_cannot_be_removed_is_reported_after_the_move(tmp_path, monkeypatch):
+    sessions = _legacy()["data"] / "sessions"
+    _write(sessions / "a" / "one.jsonl", "1\n")
+    real_rename = os.rename
+
+    def cross_device(src, dst):
+        if Path(src) == sessions:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_rename(src, dst)
+
+    def stuck(path, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(home.os, "rename", cross_device)
+    monkeypatch.setattr(home.shutil, "rmtree", stuck)
+
+    steps = home.migrate_once(io.StringIO())
+
+    assert [step.kind for step in steps if step.source == sessions] == ["move", "refuse"]
+    assert (paths.sessions_root() / "a" / "one.jsonl").read_text(encoding="utf-8") == "1\n"
+    assert (sessions / "a" / "one.jsonl").is_file()
+
+
 def test_a_failed_copy_across_filesystems_leaves_the_source_whole(tmp_path, monkeypatch):
     sessions = _legacy()["data"] / "sessions"
     _write(sessions / "a" / "one.jsonl", "1\n")
