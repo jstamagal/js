@@ -151,11 +151,12 @@ def _parse_compaction_marker(marker: str) -> dict | None:
         return None
     return data
 
-def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
+def load_replay_messages(memory_file: Path) -> list[dict]:
     """Return the OpenAI-shape message list from disk, honoring control marks.
 
-    Model replay uses ``preserve_reasoning=True`` to retain every assistant's
-    reasoning. The default projects to tool-call reasoning only.
+    This is the history a turn replays to the model: every assistant keeps its
+    reasoning, and `model_client.history_to_ai_messages` applies the transport's
+    replay policy.
     """
     if not memory_file.exists():
         return []
@@ -217,7 +218,13 @@ def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> lis
             "history may be incomplete",
             file=sys.stderr,
         )
-    messages = _heal_orphaned_tool_calls(messages)
+    return _heal_orphaned_tool_calls(messages)
+
+
+def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
+    """The `load_replay_messages` history. ``preserve_reasoning=True`` returns it
+    unchanged; the default projects it to tool-call reasoning only."""
+    messages = load_replay_messages(memory_file)
     return messages if preserve_reasoning else _strip_orphan_reasoning(messages)
 
 
