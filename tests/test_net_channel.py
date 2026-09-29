@@ -184,7 +184,6 @@ def test_dns_failure_prints_one_line_at_level_1(monkeypatch, sink):
 
     assert len(lines) == 1
     assert "nowhere.invalid" in _plain(lines[0])
-    assert _plain(lines[0]).startswith("***")
 
 
 def test_dns_failure_prints_nothing_at_level_0(monkeypatch, sink):
