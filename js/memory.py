@@ -342,6 +342,28 @@ def record_turn_mode(memory_file: Path, mode: str) -> str | None:
     return previous
 
 
+_WORKSPACE_MARK = "workspace:"
+
+
+def append_workspace_mark(memory_file: Path, *, root: str | None, cwd: str, binds: list[str]) -> None:
+    """Record where the session works after a /cd: the -C root
+    it ran under (None without one), its working directory, and the /add binds."""
+    payload = {"root": root, "cwd": cwd, "binds": binds}
+    append_mark(memory_file, _WORKSPACE_MARK + json.dumps(payload, separators=(",", ":")))
+
+
+def last_workspace(memory_file: Path) -> dict | None:
+    """The newest `workspace:` mark's payload, or None."""
+    raw = _last_mark_payload(memory_file, _WORKSPACE_MARK)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
                            trigger: dict | None = None, rehydrated: dict | None = None) -> None:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}

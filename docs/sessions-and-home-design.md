@@ -312,6 +312,11 @@ home.
   line; there is no unjailed fallback.
 - `-C` is the jail; there is no separate flag. A plain working directory is
   `cd DIR && js`. The operator always read `-C` as a jail.
+- `/cd DIR`, with or without `-C`, moves the session's working directory (js's
+  and the tools'). Under `-C` it goes only to DIR or a bound path; elsewhere it
+  is refused. It puts one `<js-reminder>` on the next user message ("working
+  directory is now DIR") and writes a `workspace:` mark (root, cwd). A resume
+  restores the cwd.
 
 How it is built (`js/jail.py`):
 

@@ -259,6 +259,10 @@ HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with sp
 HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
 SESSION_PATH = Message("{path}", banner=False)
+CWD_IS = Message("{path}", banner=False)
+CD_DONE = Message("Working directory: {path}")
+CD_NOT_A_DIR = Message("/cd: not a directory: {path}")
+CD_OUTSIDE_JAIL = Message("/cd: {path} is outside the jail at {root}.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
@@ -297,6 +301,9 @@ CMD_COMPACT = Message("Append a compaction summary mark.")
 CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
 CMD_REFRESH_MODEL_CATALOG = Message("Force-refresh the local models.dev catalog now.")
 CMD_QUIT = Message("Quit. A note is kept for the next turn.")
+CMD_CD = Message(
+    "Change the session's working directory; with no argument, print it. Under -C, only to DIR "
+    "or a bound path.")
 
 # --- js --help ----------------------------------------------------------------
 

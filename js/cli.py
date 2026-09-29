@@ -1765,6 +1765,74 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+# /cd: where the session works. Each change queues one
+# reminder for the next user message and records a `workspace:` mark, so a
+# resumed session works in the same place.
+
+_CD_NOTICE = "<js-reminder>The working directory is now {path}.</js-reminder>"
+
+
+def _queue_note(state: dict, note: str) -> None:
+    state.setdefault("pending_notes", []).append(note)
+
+
+def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
+    """``bundle`` carrying the reminders queued since the last user message."""
+    for note in state.pop("pending_notes", None) or ():
+        bundle = attach.with_note(bundle, note)
+    return bundle
+
+
+def _set_working_dir(path: Path) -> None:
+    os.chdir(path)
+    runtime.T.STOCK_CONTEXT.cwd = path
+
+
+def _record_workspace(cfg: Config) -> None:
+    if cfg.session_file == Path(os.devnull):
+        return
+    jail = _jail.active()
+    M.append_workspace_mark(
+        cfg.session_file,
+        root=str(jail.root) if jail is not None else None,
+        cwd=str(runtime.T.STOCK_CONTEXT.cwd),
+        binds=[bind.spec() for bind in jail.added] if jail is not None else [],
+    )
+
+
+def _restore_workspace(cfg: Config) -> None:
+    """Put a resumed session back where its last /cd left it, when the jail,
+    if there is one, shows that directory."""
+    mark = M.last_workspace(cfg.session_file)
+    if mark is None:
+        return
+    jail = _jail.active()
+    cwd = Path(str(mark.get("cwd") or ""))
+    setting = settings.knob(getattr(cfg, "settings", None), "jail.bind")
+    if cwd.is_absolute() and cwd.is_dir() and (jail is None or jail.bound(cwd, setting)):
+        _set_working_dir(cwd)
+
+
+def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
+    context = runtime.T.STOCK_CONTEXT
+    raw = arg.strip()
+    if not raw:
+        msgs.say(msgs.CWD_IS, path=context.cwd)
+        return None
+    target = Path(os.path.expanduser(raw))
+    target = (target if target.is_absolute() else context.cwd / target).resolve()
+    if not target.is_dir():
+        return msgs.CD_NOT_A_DIR.said(path=target)
+    jail = _jail.active()
+    if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "jail.bind")):
+        return msgs.CD_OUTSIDE_JAIL.said(path=target, root=jail.root)
+    _set_working_dir(target)
+    _queue_note(state, _CD_NOTICE.format(path=target))
+    _record_workspace(cfg)
+    msgs.say(msgs.CD_DONE, path=target)
+    return None
+
+
 _LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
@@ -1808,6 +1876,7 @@ COMMANDS: dict[str, Command] = {
     "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
                                      msgs.CMD_REFRESH_MODEL_CATALOG),
     "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
+    "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
 }
 
 
@@ -2055,6 +2124,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         else cfg
     )
     messages = M.load_replay_messages(cfg.session_file)
+    _restore_workspace(cfg)
     before_len = len(messages)
     try:
         user_bundle = attach.build_user_message(
@@ -2830,6 +2900,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         msgs.say(msgs.FAILED, error=e)
         return
     user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+    user_bundle = _with_pending_notes(state, user_bundle)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
@@ -3188,6 +3259,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             continue
 
         user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+        user_bundle = _with_pending_notes(state, user_bundle)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)
@@ -3810,6 +3882,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     messages = M.load_replay_messages(cfg.session_file)
+    _restore_workspace(cfg)
     if messages:
         msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
     elif args.session is not None:

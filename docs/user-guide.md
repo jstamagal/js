@@ -118,6 +118,7 @@ REPL commands:
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session
+/cd [dir]                      print or change the session's working directory
 /reset
 /wipe
 exit
@@ -155,6 +156,13 @@ that differ from their defaults, `on` handlers, and aliases. On the next start
 the settings layer applies the `set` lines (and a setting's short name, e.g.
 `model X` is `set model X`) under env and `--extra`; the REPL then runs every
 other jsrc line through the command table.
+
+`/cd DIR` moves the session: js's working directory and the tools' move to
+`DIR`, and the next user message carries one `<js-reminder>` saying the working
+directory is now `DIR`. Under `-C`, `/cd` goes only to `DIR` or a bound path;
+anywhere else is refused. `/cd` writes a `workspace:` mark to the session, and
+resuming the session puts the working directory back. `/cd` waits for a
+running turn to end.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.

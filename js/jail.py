@@ -278,12 +278,10 @@ class Jail:
             raise JailError(f"{path} is read-only in the jail (bound from {best.path})")
         return real
 
-    def visible(self, path: Path, setting: object = ()) -> bool:
-        try:
-            self.confine(path, setting=setting)
-        except JailError:
-            return False
-        return True
+    def bound(self, path: Path, setting: object = ()) -> bool:
+        """Whether ``path`` lies in DIR, a `jail.bind` entry or an /add bind."""
+        real = _real(path)
+        return any(_under(real, _real(b.path)) for b in [Bind(self.root), *self.binds(setting)])
 
     # --- bwrap -------------------------------------------------------------
 
