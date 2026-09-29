@@ -22,7 +22,8 @@ One normal prompt run follows this path:
 3. `js.persona.load_prompt_spec()` loads the selected agent from repo
    `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`.
 4. `ToolRegistry.select()` filters the default registry by prompt selectors.
-5. Existing session messages are loaded through `js.memory.load_messages()`.
+5. Existing session messages are loaded through `js.memory.load_replay_messages()`,
+   which keeps every assistant's reasoning for replay.
 6. The new user message is appended to the in-memory list.
 7. `js.runtime.run_turn()` loops over model calls and tool calls.
 8. The CLI persists new messages after a final assistant response.
