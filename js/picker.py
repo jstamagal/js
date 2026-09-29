@@ -321,12 +321,7 @@ def pick_model(
     model: str | None = None,
 ) -> dict[str, Any] | None:
     """Run the interactive picker and return the selection, or None on cancel.
-
-    Under the non-blocking REPL this is called from an executor thread while
-    the REPL's own prompt_toolkit app runs on the loop; the picker then runs on
-    that loop inside ``in_terminal()``, which detaches the REPL's input and
-    redraws it after, so the two apps never read the terminal at once.
-    """
+    See `run_modal` for how it shares the terminal with the REPL."""
     state = ModelPicker(
         provider_id=provider_id,
         provider_base_url=provider_base_url,
@@ -337,6 +332,17 @@ def pick_model(
         input=create_input(sys.__stdin__),
         output=create_output(sys.__stdout__),
     )
+    return run_modal(app)
+
+
+def run_modal(app: Application[Any]) -> Any:
+    """Run a full-screen picker app to its result, blocking.
+
+    Under the non-blocking REPL this is called from an executor thread while
+    the REPL's own prompt_toolkit app runs on the loop; the picker then runs on
+    that loop inside ``in_terminal()``, which detaches the REPL's input and
+    redraws it after, so the two apps never read the terminal at once.
+    """
     host = get_app_or_none()
     host_loop = getattr(host, "loop", None) if host is not None and host.is_running else None
     if host_loop is None:
@@ -346,9 +352,9 @@ def pick_model(
     except RuntimeError:
         on_host_loop = False
     if on_host_loop:
-        raise RuntimeError("pick_model() blocks; call it off the REPL's event loop thread")
+        raise RuntimeError("run_modal() blocks; call it off the REPL's event loop thread")
 
-    async def nested() -> dict[str, Any] | None:
+    async def nested() -> Any:
         async with in_terminal():
             return await app.run_async()
 

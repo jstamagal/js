@@ -71,9 +71,11 @@ from .config import (
     vision_enabled_for_model,
 )
 from . import session_store
+from . import session_picker
 from .session_catalog import (
     acquire_session,
     append_title,
+    branch_session,
     catalog_sessions,
     last_stamp,
     record_session_start,
@@ -1696,6 +1698,84 @@ def _cmd_name(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class _SessionTarget:
+    """A session the picker chose to continue in: its file, start directory and agent."""
+
+    path: Path
+    cwd: str | None
+    agent: str | None
+
+
+def _session_target(choice: session_picker.Choice) -> _SessionTarget:
+    """The session a picker choice continues in. A branch choice creates the
+    branch first, in the parent's folder."""
+    session = choice.session
+    path = Path(session.path)
+    if choice.action == session_picker.BRANCH and choice.message is not None:
+        branch = branch_session(path, choice.message, cwd=session.cwd or Path.cwd(),
+                                agent=session.agent, mode="repl")
+        msgs.say(msgs.SESSIONS_BRANCHED, parent=session_store.display_name(path),
+                 point=session_store.point_label(choice.message), name=session_store.display_name(branch))
+        path = branch
+    return _SessionTarget(path, session.cwd, session.agent)
+
+
+def _enter_session_dir(target: _SessionTarget) -> None:
+    """Move to the directory the session started in, when it still exists."""
+    if not target.cwd:
+        return
+    if not Path(target.cwd).is_dir():
+        msgs.warn(msgs.SESSIONS_DIR_GONE, dir=target.cwd, cwd=Path.cwd())
+        return
+    os.chdir(target.cwd)
+    runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
+
+
+def _cmd_session(arg: str, state: dict, cfg: Config) -> str | None:
+    """Open the session picker. A chosen session other than this one ends the
+    REPL, and js starts again in that session's directory, agent and model."""
+    try:
+        choice = session_picker.pick_session(Path.cwd(), query=arg)
+    except Exception as exc:  # noqa: BLE001
+        return msgs.FAILED.said(error=f"{type(exc).__name__}: {exc}")
+    if choice is None:
+        return None
+    if (choice.action == session_picker.RESUME and cfg.session_file != Path(os.devnull)
+            and Path(choice.session.path) == cfg.session_file.resolve(strict=False)):
+        msgs.say(msgs.SESSIONS_ALREADY_HERE)
+        return None
+    target = _session_target(choice)
+    state["switch_session"] = target
+    state["running"] = False
+    msgs.say(msgs.SESSIONS_SWITCHING, name=session_store.display_name(target.path), dir=target.cwd or Path.cwd())
+    return None
+
+
+# The session `/session` chose, run once the REPL has closed: {"target", "blocking"}.
+_pending_switch: dict[str, object] = {}
+
+
+def _queue_switch(state: dict, *, blocking: bool) -> None:
+    target = state.get("switch_session")
+    if isinstance(target, _SessionTarget):
+        _pending_switch.update(target=target, blocking=blocking)
+
+
+def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
+    """Replace this process with js resuming `target` in its own directory
+    and agent. Resume puts it back on its last-stamped model."""
+    _enter_session_dir(target)
+    argv = [sys.executable, "-m", "js", "--session", str(target.path)]
+    if target.agent:
+        argv += ["-a", target.agent]
+    if blocking:
+        argv.append("--blocking")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, argv)
+
+
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
     M.append_mark(cfg.session_file, "session_reset")
@@ -1975,8 +2055,7 @@ COMMANDS: dict[str, Command] = {
                      msgs.CMD_SKILL),
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
                      "turns", msgs.CMD_TURNS),
-    "session": Command(lambda arg, state, cfg: msgs.say(msgs.SESSION_PATH, path=cfg.session_file),
-                       "session", msgs.CMD_SESSION),
+    "session": Command(_cmd_session, "session [query]", msgs.CMD_SESSION, turn_state=True),
     "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
     "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
@@ -3628,8 +3707,17 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     return 0
 
 
-@_session_scope
 def main(argv: list[str] | None = None) -> int:
+    code = _main(argv)
+    pending = dict(_pending_switch)
+    _pending_switch.clear()
+    if pending:
+        _exec_session(pending["target"], blocking=pending["blocking"])
+    return code
+
+
+@_session_scope
+def _main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Before anything reads or writes ~/.js: move the old locations in, once,
     # then make sure every directory of the layout is there.
@@ -3702,10 +3790,6 @@ def main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
-    if args.session == "":
-        # A bare --session is the session picker's.
-        msgs.warn(msgs.SESSION_PICKER_NOT_BUILT)
-        return 2
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so
@@ -3729,6 +3813,24 @@ def main(argv: list[str] | None = None) -> int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
+    if args.session == "":
+        # A bare --session opens the picker; the chosen session is resumed in
+        # its own directory and agent.
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            msgs.warn(msgs.SESSIONS_NEEDS_TERMINAL)
+            return 2
+        try:
+            choice = session_picker.pick_session(Path.cwd())
+            target = _session_target(choice) if choice is not None else None
+        except Exception as exc:  # noqa: BLE001
+            msgs.warn(msgs.FAILED, error=f"{type(exc).__name__}: {exc}")
+            return 1
+        if target is None:
+            return 0
+        _enter_session_dir(target)
+        args.session = str(target.path)
+        if target.agent:
+            args.agent = target.agent
     # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
@@ -4085,17 +4187,20 @@ def main(argv: list[str] | None = None) -> int:
     _enter_transcript_stdio(transcript_stack, telemetry)
     if not args.blocking:
         try:
-            return model_client.run_owning_loop(
+            code = model_client.run_owning_loop(
                 _repl_main(cfg, state, telemetry, session, prompt_spec, banner)
             )
         finally:
             transcript_stack.close()
+        _queue_switch(state, blocking=False)
+        return code
     print(banner)
     try:
         _blocking_repl(cfg, state, telemetry, session, prompt_spec)
     finally:
         transcript_stack.close()
     _print_resume_hint(cfg, state)
+    _queue_switch(state, blocking=True)
     return 0
 if __name__ == "__main__":
     sys.exit(main())
