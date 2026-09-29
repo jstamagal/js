@@ -376,6 +376,10 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     # commands in, which is shell.program, not the operator's $SHELL.
     program = str(settings.knob(getattr(cfg, "settings", None), "shell.program"))
     os.environ["JS_SHELL"] = shutil.which(program) or program
+    # JS_ROOT is where js itself is: the directory holding the js package,
+    # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
+    # wherever js is installed.
+    os.environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
     system = expand_prompt(
         spec.system,
         allow_code=allow_code,

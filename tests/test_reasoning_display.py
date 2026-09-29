@@ -140,7 +140,8 @@ def test_scrollback_collapse_restores_reasoning_without_losing_other_output(leve
     assert block.text == THOUGHT
 
 
-def test_ctrl_r_keeps_input_intact_and_restores_reasoning():
+def test_the_reasoning_toggle_key_keeps_input_intact_and_restores_reasoning():
+    # reasoning_toggle is Ctrl-O by default; Ctrl-R is history_search.
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -173,7 +174,7 @@ def test_ctrl_r_keeps_input_intact_and_restores_reasoning():
                 assert THOUGHT not in transcript.strip_ansi(scroll.buffer.text)
                 for visible in (True, False):
                     toggled.clear()
-                    pipe.send_bytes(b"\x12")
+                    pipe.send_bytes(b"\x0f")
                     await asyncio.wait_for(toggled.wait(), 2)
                     assert (THOUGHT in transcript.strip_ansi(scroll.buffer.text)) is visible
                     assert app.current_buffer.text == "unfinished input"
@@ -250,6 +251,28 @@ def test_unlogged_reasoning_bypasses_nested_and_replaced_transcript_sinks():
     display.finish()
     assert "first thoughtsecond thought" in transcript.strip_ansi(visible.getvalue())
     assert first.getvalue() == second.getvalue() == ""
+
+
+@pytest.mark.parametrize("level", [1, 2, 3])
+def test_reasoning_to_stderr_that_is_not_a_terminal_is_plain_text(level):
+    from js.reasoning_display import StderrReasoning
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    plain, terminal = io.StringIO(), Terminal()
+    for stream in (plain, terminal):
+        display = StderrReasoning(level, stream)
+        for fragment in ("weigh", "ing the ", "options\nthen pick"):
+            display.append(fragment)
+        display.answer_started()
+        display.finish(tokens=7)
+
+    assert "\x1b" not in plain.getvalue()
+    assert "weighing the options\nthen pick" in plain.getvalue()
+    assert transcript.strip_ansi(terminal.getvalue()) == plain.getvalue()
+    assert "\x1b[" in terminal.getvalue()
 
 
 def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(monkeypatch, tmp_path):

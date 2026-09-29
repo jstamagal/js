@@ -551,6 +551,12 @@ ATTACHMENT_NOT_FOUND = Message("Attachment not found: {path}")
 ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
 ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
 ATTACHMENT_IMAGE_TOO_LARGE = Message("Image attachment {path} is {size} bytes. The maximum is {limit} bytes.")
+# The paste-image key (js.clipimage): one line, and the input line is unchanged.
+CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. ui.paste_image_command names a command that prints the image.", WARN)
+CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.", WARN)
+CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}", WARN)
+CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.", WARN)
+CLIPBOARD_IMAGE_TOO_LARGE = Message("Clipboard image is {size} bytes. The maximum is {limit} bytes.", WARN)
 SESSION_NAME_UNSAFE = Message("Session name is not a safe relative path: {session}")
 SESSION_NAME_TRAVERSAL = Message("Session name has an empty or traversal component: {session}")
 SESSION_NAME_ABSOLUTE = Message("Session name is not a relative path: {session}")
@@ -757,6 +763,15 @@ BUFFER_WRITTEN = Message("Buffer written to {path}. Not sent.")
 EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}", GRAVE)
 EX_FAILED = Message(":{verb}: {error}", GRAVE)
 
+# --- The keys file -----------------------------------------------------------
+
+KEYS_BAD_KEY = Message("not a key name: {key!r}. Key names are like c-r, escape, enter, pageup, f5, x")
+KEYS_BIND_USAGE = Message("bind needs a key and an action: bind KEY... ACTION")
+KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
+KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
+KEYS_UNKNOWN_VERB = Message("unknown command {verb!r}: expected bind or unbind")
+KEYS_UNREADABLE = Message("{path} not read: {error}")
+
 # --- Agents, tools, skills, settings at load time ----------------------------
 
 TOOLSTATS_NO_SESSION = Message("toolstats: no session found.", GRAVE)
@@ -800,6 +815,7 @@ ON_NEEDS_TWO = Message("on needs an event and a handler.")
 SET_NEEDS_TWO = Message("set needs a key and a value: {line!r}")
 EXPECTED_ONE_OF = Message("expected {choices}")
 EXPECTED_COLOUR = Message("expected a #rrggbb colour, got {value!r}")
+EXPECTED_KEY = Message("expected prompt_toolkit key names such as c-v or escape v, got {value!r}")
 EXPECTED_URL = Message("expected a URL starting with http:// or https://, got {value!r}")
 EXPECTED_INTEGER = Message("expected an integer")
 EXPECTED_LEVEL = Message("expected an integer from 0 to 3")

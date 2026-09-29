@@ -11,3 +11,5 @@ tools:
   - skill:eager
   - task:eager
   - commit:eager
+  - lsp:lazy
+  - notebook_edit:lazy

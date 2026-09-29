@@ -4,6 +4,7 @@ lookup across folders. Every test runs in the tmp HOME the conftest installs."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -12,7 +13,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, runtime, session_store
+from js import cli, runtime, session_store, supervisor
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
@@ -235,13 +236,26 @@ def test_the_async_repl_stamps_each_answer_with_the_model_it_ran_on(monkeypatch,
 
     monkeypatch.chdir(_dir(tmp_path, "work"))
 
+    first_turn_started = asyncio.Event()
+
     async def turn(cfg, system, messages, telemetry, **kwargs):
+        first_turn_started.set()
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
+
+    async def script(on_line):
+        await on_line("first")
+        # A queued line takes the live model when its turn starts, so /model
+        # waits until the first turn has started and ended.
+        await first_turn_started.wait()
+        for job in supervisor.get_current().jobs("turn"):
+            await job.task
+        await on_line("/model model-y")
+        await on_line("second")
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     cfg = from_env()
 
-    run_async(monkeypatch, cfg, ["first", "/model model-y", "second"], model="model-x")
+    run_async(monkeypatch, cfg, script, model="model-x")
 
     records = [json.loads(line) for line in cfg.session_file.read_text(encoding="utf-8").splitlines()]
     stamps = [record["stamp"]["model"] for record in records
@@ -264,6 +278,110 @@ def test_a_prompt_run_resumes_on_the_last_stamp_too(monkeypatch, tmp_path):
     assert cli.main(["--session", "carry", "-p", "two"]) == 0
 
     assert seen == ["model-y", "model-y"]
+
+
+def test_a_prompt_run_records_its_model_flag_in_the_start_record(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+
+    def stream(**_kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+
+    assert cli.main(["--session", "flagged", "--model", "model-y", "-p", "one"]) == 1
+
+    [session] = _all_sessions()
+    # The turn wrote no stamp, so the start is what a resume comes back on.
+    assert first_metadata(session)["model"] == "model-y"
+    assert last_stamp(session)["model"] == "model-y"
+
+
+def _capture_repl_state(monkeypatch) -> list[dict]:
+    states: list[dict] = []
+    build = cli._repl_state
+
+    def capturing(*args, **kwargs):
+        states.append(build(*args, **kwargs))
+        return states[-1]
+
+    monkeypatch.setattr(cli, "_repl_state", capturing)
+    return states
+
+
+def test_the_status_bar_shows_the_running_model_and_follows_model(monkeypatch, tmp_path):
+    from repl_driver import run_async
+
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    states = _capture_repl_state(monkeypatch)
+    bars: list[str] = []
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        messages.append({"role": "assistant", "content": f"on {cfg.model}"})
+
+    async def script(on_line):
+        [state] = states
+        bars.append(cli._status_bar_line(cfg, state, False, 200))
+        await on_line("/model model-y")
+        bars.append(cli._status_bar_line(cfg, state, False, 200))
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    cfg = from_env()
+    configured = cfg.model
+    assert configured not in ("model-x", "model-y")
+
+    run_async(monkeypatch, cfg, script, model="model-x")
+
+    assert "model-x" in bars[0] and configured not in bars[0]
+    assert "model-y" in bars[1] and "model-x" not in bars[1]
+
+
+def test_a_no_save_repl_writes_no_session_and_lists_none(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    models: list[str] = []
+
+    _repl(monkeypatch, ["-n"], ["hello", "/model model-y", "/name nothing"], models)
+
+    assert models  # the turn ran
+    assert _all_sessions() == []
+    capsys.readouterr()
+    assert cli.main(["--list", "--json"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_no_save_repl_on_a_named_session_reads_it_and_writes_nothing(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    _repl(monkeypatch, ["--session", "kept"], ["hello"], [])
+    [session] = _all_sessions()
+    before = session.read_bytes()
+    history = [m["content"] for m in load_messages(session)]
+    seen: list[list[str]] = []
+
+    def turn(cfg, system, messages, *a, **k):
+        seen.append([m["content"] for m in messages])
+        messages.append({"role": "assistant", "content": "again"})
+
+    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["more", "/model model-y"]))
+    monkeypatch.setattr(cli.runtime, "run_turn", turn)
+    assert cli.main(["--blocking", "-n", "--session", "kept"]) == 0
+
+    assert seen == [[*history, "more"]]
+    assert session.read_bytes() == before
+
+
+def test_model_is_remembered_by_resume_before_any_turn_runs_on_it(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    models: list[str] = []
+    _repl(monkeypatch, ["--model", "model-x"], ["hello"], models)
+    [session] = _all_sessions()
+
+    _repl(monkeypatch, ["--session", session.stem], ["/model model-y"], models)
+    _repl(monkeypatch, ["--session", session.stem], ["resumed"], models)
+
+    assert models == ["model-x", "model-y"]
+    [switch] = [record for record in _lines(session) if record.get("kind") == "model_switch"]
+    # The record names the model switched from as well, for a note about the switch.
+    assert switch["previous"]["model"] == "model-x"
+    assert switch["stamp"]["model"] == "model-y"
 
 
 def test_the_stamped_provider_rides_only_where_routing_takes_it():

@@ -15,6 +15,7 @@ from .. import messages as msgs
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
+from . import lsp, notebook
 
 
 @dataclass(frozen=True)
@@ -527,6 +528,8 @@ def build_default_registry(
         ("wiki", wiki.tools()),
         ("kernel", kernel.tools()),
         ("toolbox", toolbox.tools()),
+        ("lsp", lsp.tools()),
+        ("notebook", notebook.tools()),
     )
     base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
     reserved = {tool.name for tool in base_tools}

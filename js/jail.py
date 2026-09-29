@@ -12,7 +12,8 @@ hostile model. Under `-C`:
   `/tmp`, the `jail.bind` entries and the `/add` binds are bound back. The
   network is shared.
 - the file tools resolve every path and refuse one outside DIR and the bound
-  paths (`confine`).
+  paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
+  jail shows them, not the private directory behind them (`shown`).
 
 The jail is process-wide: subagents run in this process and use the same one.
 """
@@ -48,6 +49,11 @@ _IGNORE_SIGINT = ["/bin/sh", "-c", 'trap "" INT; exec "$@"', "sh"]
 
 class JailError(Exception):
     """A path the jail does not let a tool reach. The message is one line."""
+
+
+class Refusal(str):
+    """A tool result that reports a JailError. Retrying the call cannot change
+    it, so the runtime gives it no retry count."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +264,19 @@ class Jail:
             return self.tmp / path.relative_to("/tmp")
         return path
 
+    def shown(self, text: str) -> str:
+        """``text`` with every host path into the jail's /tmp or ~/.js/tmp
+        written as the jail shows it: ``/tmp/…``, and ``~/.js/tmp/…`` with the
+        operator's home spelled out. The inverse of `host_path` for those two
+        trees."""
+        views: dict[str, str] = {}
+        for private in dict.fromkeys([self.private, _real(self.private)]):
+            views[str(private / "tmp")] = "/tmp"
+            views[str(private / "js-tmp")] = str(paths.user_home() / ".js" / "tmp")
+        # A host path ends where a file name character does not follow.
+        pattern = "(" + "|".join(re.escape(p) for p in sorted(views, key=len, reverse=True)) + r")(?![\w.-])"
+        return re.sub(pattern, lambda m: views[m.group(1)], text)
+
     def confine(self, path: Path, *, write: bool = False, follow: bool = True,
                 setting: object = ()) -> Path:
         """The host path a file tool uses for ``path``. Raises JailError when
@@ -271,7 +290,12 @@ class Jail:
         for area in areas:
             if _under(real, area.path) and (best is None or len(area.path.parts) >= len(best.path.parts)):
                 best = area
-        if best is None:
+        # The jail's /tmp and ~/.js/tmp hold only what this process's tools put
+        # there; a missing path in them is a host path the jail does not show.
+        private_miss = (not write and _under(mapped, self.private)
+                        and not _under(Path(os.path.abspath(path)), self.private)
+                        and not os.path.lexists(mapped))
+        if best is None or private_miss:
             raise JailError(
                 f"{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths"
             )
@@ -304,9 +328,8 @@ class Jail:
         """``argv`` wrapped to run in the jail.
 
         ``env_path`` is the PATH the command runs with; its directories under a
-        hidden tree or the host's /tmp are bound back read-only.
-        ``extra_ro``/``extra_rw`` bind more paths for this one command (the
-        kernel's interpreter, its sockets)."""
+        hidden tree are bound back read-only. ``extra_ro``/``extra_rw`` bind
+        more paths for this one command (the kernel's interpreter, its sockets)."""
         hidden = hidden_roots()
         home = paths.user_home()
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
@@ -325,11 +348,12 @@ class Jail:
         implicit = [Bind(p, False) for p in self._path_binds(env_path)]
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
-        # /tmp is the jail's private directory, so a path under the host's
-        # /tmp is hidden as much as one under a hidden root.
-        tmp = Path("/tmp")
+        # The jail's /tmp is private, so an interpreter or PATH directory under
+        # the host's /tmp is bound back like one under a hidden tree. A root
+        # itself on PATH is not bound back; that would undo the replacement.
+        replaced = [*hidden, Path("/tmp")]
         implicit = [b for b in implicit
-                    if (any(_under(b.path, h) for h in hidden) or (_under(b.path, tmp) and b.path != tmp))
+                    if any(_under(b.path, h) and b.path != h for h in replaced)
                     and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
@@ -363,6 +387,11 @@ ACTIVE: Jail | None = None
 
 def active() -> Jail | None:
     return ACTIVE
+
+
+def shown(text: str) -> str:
+    """``text`` as `Jail.shown` writes it under a jail, else itself."""
+    return text if ACTIVE is None else ACTIVE.shown(text)
 
 
 def scratch_dir() -> Path:

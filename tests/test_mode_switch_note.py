@@ -65,16 +65,27 @@ def test_one_shot_then_repl_carries_the_interactive_reminder_once(monkeypatch, t
     _repl(monkeypatch, ["second", "third"])
 
     assert home[0] == "first"
-    assert home[1] == f"second\n\n{cli._MODE_SWITCH_NOTICES['repl']}"
+    assert home[1] == f"second\n\n{cli._mode_switch_notice('-p', '-p', 'repl')}"
     assert home[2] == "third"
-    assert len(_reminders(tmp_path, cli._MODE_SWITCH_NOTICES["repl"])) == 1
+    assert len(_reminders(tmp_path, cli._mode_switch_notice('-p', '-p', 'repl'))) == 1
 
 
 def test_repl_then_one_shot_carries_the_one_shot_reminder(monkeypatch, tmp_path, home):
     _repl(monkeypatch, ["first"])
     _one_shot("second")
 
-    assert home == ["first", f"second\n\n{cli._MODE_SWITCH_NOTICES['-p']}"]
+    assert home == ["first", f"second\n\n{cli._mode_switch_notice('repl', 'repl', '-p')}"]
+
+
+def test_a_one_shot_after_chat_after_a_one_shot_says_the_session_began_as_a_one_shot(monkeypatch, tmp_path, home):
+    _one_shot("first")
+    _repl(monkeypatch, ["second"])
+    _one_shot("third")
+
+    note = cli._mode_switch_notice("-p", "repl", "-p")
+    assert home[2] == f"third\n\n{note}"
+    assert note != cli._mode_switch_notice("repl", "repl", "-p")
+    assert memory.first_turn_mode(_session_file(tmp_path)) == "-p"
 
 
 def test_unchanged_mode_carries_no_reminder(monkeypatch, tmp_path, home):
@@ -85,7 +96,7 @@ def test_unchanged_mode_carries_no_reminder(monkeypatch, tmp_path, home):
 
     assert home[1] == "second"
     assert home[3] == "fourth"
-    assert _reminders(tmp_path, cli._MODE_SWITCH_NOTICES["-p"]) == []
+    assert _reminders(tmp_path, cli._MODE_PRESENCE['-p']) == []
 
 
 def test_a_repl_launch_with_no_turn_does_not_change_the_mode(monkeypatch, tmp_path, home):
@@ -111,7 +122,7 @@ def test_async_repl_after_one_shot_carries_the_reminder(monkeypatch, tmp_path):
 
     run_async(monkeypatch, cfg, ["hello", "again"])
 
-    assert sent == [f"hello\n\n{cli._MODE_SWITCH_NOTICES['repl']}", "again"]
+    assert sent == [f"hello\n\n{cli._mode_switch_notice('-p', '-p', 'repl')}", "again"]
 
 
 def test_record_turn_mode_reports_only_a_change(tmp_path):

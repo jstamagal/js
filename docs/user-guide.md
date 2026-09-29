@@ -180,7 +180,7 @@ on, then clears the in-process messages.
 
 Reasoning streams visibly by default. `/set ui.reasoning 0` hides it, `1`
 auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
-token counts. In the standard async screen, **Ctrl-R** toggles retained reasoning
+token counts. In the standard async screen, **Ctrl-O** toggles retained reasoning
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
@@ -189,7 +189,9 @@ on the left, `agent/session cache N%` on the right, and while a turn runs a
 spinner in the middle with the output-token count, the running tool and its
 elapsed seconds, or `compacting`. On a narrow terminal it drops the cache
 figure first, then shortens the model name, then drops the provider, the
-token count and the agent id; the clock, spinner and session id stay. Its
+token count and the agent id; the clock, spinner and session stay. A session
+started with `--session NAME` shows its whole name, cut short with `…` when
+nothing else is left to drop. Its
 colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
@@ -232,8 +234,9 @@ A line typed while a turn runs is handled by `runtime.steer`:
 - `one`: each line is its own turn, in order.
 
 Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
-one line per exchange, `> read: 4054B 292L`, with the exit status when a shell
-command exits nonzero; `2` shows the call with its command highlighted, the
+one line per exchange, `> read js/display.py: 4054B 292L`, with the exit status
+when a shell command exits nonzero. The line names the call by its key argument,
+shortened to fit: a path, a search pattern, the first line of a command, a URL; `2` shows the call with its command highlighted, the
 first `ui.tools_preview_lines` lines of the result, `...` when there is more,
 and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
 `3` shows the call and the whole result, with the text of a `read` source file
@@ -250,7 +253,42 @@ being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
 Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
-drops them without touching the turn. Already received text
+drops them without touching the turn. `exit` or Ctrl-D during a turn does what
+Ctrl-C does, keeping the partial answer and marking the turn interrupted, and
+the screen closes once the turn has ended.
+
+Resuming a session in the screen shows its last `ui.resume_exchanges` exchanges
+(3 by default, 0 for none) as a turn draws them, below the startup lines and
+the `*** Resumed` and `*** Model` notices.
+
+### Prompt history and keys
+
+Every line sent at a REPL prompt, in either REPL, is appended to one file
+shared by every run: `~/.js/state/history.jsonl` (`history.file`), one JSON
+object per line with `ts`, `cwd`, `session`, `agent` and `text`. Up walks the
+prompts typed in the current directory first, newest first, then the rest
+(`history.cwd_first off` walks them all in time order). **Ctrl-R** opens an
+incremental search over all of them: type to narrow, Ctrl-R again for the next
+older match, Enter or Esc to take it into the input line, Ctrl-G to give up.
+The newest `history.max_entries` prompts are loaded.
+
+`~/.js/keys` (`keys.file`) remaps the async screen's keys, in jsrc's grammar:
+
+```
+bind c-f history_search     # add a key to an action
+bind escape r redraw        # a sequence: Esc, then r
+unbind c-z                  # take a key off every action
+```
+
+A key bound to an action leaves every other action that fires in the same
+place. Key names are prompt_toolkit's (`c-r`, `escape`, `enter`, `tab`,
+`pageup`, `f5`, `space`, one character). The actions and their default keys:
+`submit` Enter, `history_search` Ctrl-R, `ex_open` `:` (vi normal mode),
+`ex_run` Enter and `ex_cancel` Esc (in the ex line), `interrupt` Ctrl-C, `eof`
+Ctrl-D, `suspend` Ctrl-Z, `reasoning_toggle` Ctrl-O, `redraw` Ctrl-L,
+`scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab. A bad line is one
+`path:line: error` line in the startup banner and is skipped. The `--blocking`
+REPL takes `history_search` from the file; its other keys are prompt_toolkit's. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
 recorded progress can be discarded; completed tool work is preserved.
 
@@ -281,7 +319,8 @@ js --migrate-config
 ```
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
-file and keeps stdout clean. They are mutually exclusive.
+file and keeps stdout clean. They are mutually exclusive. With `runtime.trace`
+on, a plain one-shot run shows the trace on stderr and keeps stdout answer-only.
 
 `-q` / `--quiet` suppresses the `*** Continue: ...` resume hint that one-shot mode
 prints after a saved turn. The session is still written; only the hint is
@@ -379,6 +418,16 @@ cat img.png | js -p "describe this" -f -
 
 `-f`/`--file` is repeatable; `-f -` reads bytes from stdin. In the REPL, attach
 with an `@path` token in your line (quote spaces: `@"my file.png"`).
+
+In the REPL, **Ctrl-V** pastes the image on the clipboard: `[image #N]` goes in
+the line at the cursor, and the image is sent with the line like an `@path`
+image. js reads it with `wl-paste --type image/png` under Wayland and
+`xclip -selection clipboard -t image/png -o` under X11; `ui.paste_image_command`
+names another command that prints the image, and `ui.paste_image_key` moves the
+key (`/set ui.paste_image_key escape v` for Alt-V). With no clipboard, such as
+on the Linux console, the key prints one line and the input line stays as it
+was. Placeholders count up for the whole run, so a line recalled from history
+still carries its image.
 
 - Text files inline into the prompt (delimited, up to 64 KiB).
 - Images attach as vision input when the active model supports vision; otherwise
