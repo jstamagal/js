@@ -169,6 +169,28 @@ def test_a_stored_reasoning_item_goes_back_ahead_of_its_tool_call():
     assert body["input"][1] == _ITEM
 
 
+def test_commentary_between_reasoning_items_replays_in_the_order_it_came():
+    second = {**_ITEM, "id": "rs_2", "encrypted_content": "ENC-2"}
+    live = ai.assistant_message(
+        ai.thinking("a", provider_metadata={"openai-codex": {"item": _ITEM}}),
+        ai.types.messages.TextPart(text="checking"),
+        ai.thinking("b", provider_metadata={"openai-codex": {"item": second}}),
+        ai.types.messages.ToolCallPart(tool_call_id="call_1", tool_name="read", tool_args="{}"),
+    )
+    record = {
+        "role": "assistant", "content": "checking",
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        "reasoning_parts": model_client.signed_reasoning_parts(live),
+        "reasoning_from": {"provider": "openai-codex", "model": "gpt-5.5"},
+    }
+    live_body = asyncio.run(codex_provider._build_body_async(
+        SimpleNamespace(id="gpt-5.5"), [ai.user_message("ping"), live], None, None))
+    replayed = _body_for([{"role": "user", "content": "ping"}, record])
+
+    assert [item["type"] for item in replayed["input"][1:5]] == ["reasoning", "message", "reasoning", "function_call"]
+    assert replayed["input"] == live_body["input"]
+
+
 def test_a_reasoning_item_is_not_sent_to_another_model():
     body = _body_for([{"role": "user", "content": "ping"}, _record(model="gpt-5.5")], model="gpt-5.4")
 

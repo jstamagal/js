@@ -526,3 +526,25 @@ def test_a_signed_part_after_a_dropped_call_is_left_out():
              else p.tool_call_id if p.kind == "tool_call" else p.text
              for p in normalized.parts]
     assert shape == ["S1", "capped", "c1", "c2"]
+
+
+def test_text_between_signed_thinking_blocks_replays_in_the_order_it_came(monkeypatch):
+    live = ai.assistant_message(
+        ai.thinking("a", provider_metadata={"anthropic": {"signature": "S1"}}),
+        ai.types.messages.TextPart(text="checking"),
+        ai.thinking("b", provider_metadata={"anthropic": {"signature": "S2"}}),
+        ai.types.messages.ToolCallPart(tool_call_id="call_1", tool_name="read", tool_args="{}"),
+    )
+    record = {**_signed_call(1), "content": "checking", "reasoning_parts": model_client.signed_reasoning_parts(live)}
+    wire = _Wire("claude-opus-5-5")
+    wire.install(monkeypatch)
+    asyncio.run(model_client.stream_model_async(
+        model_id="claude-opus-5-5", provider_id="anthropic", provider_base_url=None,
+        provider_api_key="fixture",
+        messages=model_client.history_to_ai_messages(
+            "SYSTEM", [{"role": "user", "content": "go"}, record, _result(1)],
+            provider_id="anthropic", model_id="claude-opus-5-5"),
+        tools=None, max_output_tokens=4096, reasoning_effort="high", on_text=lambda _c: None,
+    ))
+
+    assert [b["type"] for b in _assistant_blocks(wire.bodies[0])[0]] == ["thinking", "text", "thinking", "tool_use"]

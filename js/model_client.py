@@ -318,16 +318,20 @@ def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
     """The message's reasoning parts as history data, or None when no part
     carries provider metadata (an Anthropic signature, a Codex encrypted item).
 
-    Each entry is ``{"text", "provider_metadata"?, "after_calls"?}``;
+    Each entry is ``{"text", "provider_metadata"?, "after_calls"?, "text_before"?}``;
     ``after_calls`` counts the tool calls that came before the part in the
-    response, so replay puts it back between the same calls.
+    response and ``text_before`` the characters of answer text, so replay puts
+    it back between the same calls and at the same place in the text.
     """
     out: list[dict] = []
     calls = 0
+    text_before = 0
     signed = False
     for part in message.parts:
         if isinstance(part, ai.types.messages.ToolCallPart):
             calls += 1
+        elif isinstance(part, ai.types.messages.TextPart):
+            text_before += len(part.text)
         elif isinstance(part, ai.types.messages.ReasoningPart):
             entry: dict[str, Any] = {"text": part.text}
             if part.provider_metadata:
@@ -335,6 +339,8 @@ def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
                 signed = True
             if calls:
                 entry["after_calls"] = calls
+            if text_before:
+                entry["text_before"] = text_before
             out.append(entry)
     return out if signed else None
 
@@ -352,6 +358,25 @@ def _after_calls(entry: dict, calls: list) -> int:
     """How many of ``calls`` the signed part follows, capped at the calls kept."""
     after = entry.get("after_calls")
     return min(after if isinstance(after, int) and after > 0 else 0, len(calls))
+
+
+def _text_with_leading_signed_parts(content: Any, leading: list[dict]) -> list[Any]:
+    """The answer text with the signed parts that preceded every call placed
+    back at their ``text_before`` offsets."""
+    if not isinstance(content, str):
+        return [_signed_part(entry) for entry in leading] + (_coerce_parts(content) if content else [])
+    parts: list[Any] = []
+    position = 0
+    for entry in leading:
+        offset = entry.get("text_before")
+        offset = min(max(offset if isinstance(offset, int) else 0, position), len(content))
+        if offset > position:
+            parts.append(ai.types.messages.TextPart(text=content[position:offset]))
+            position = offset
+        parts.append(_signed_part(entry))
+    if position < len(content):
+        parts.append(ai.types.messages.TextPart(text=content[position:]))
+    return parts
 
 
 def _signed_part(entry: dict) -> ai.types.messages.ReasoningPart:
@@ -404,15 +429,16 @@ def history_to_ai_messages(
             parts: list[Any] = []
             calls = msg.get("tool_calls", []) or []
             signed = _replayed_signed_parts(msg, provider_id, model_id)
+            content = msg.get("content")
             if signed is not None:
-                parts.extend(_signed_part(entry) for entry in signed if _after_calls(entry, calls) == 0)
+                parts.extend(_text_with_leading_signed_parts(
+                    content, [entry for entry in signed if _after_calls(entry, calls) == 0]))
             else:
                 reasoning_text = msg.get("reasoning_content")
                 if reasoning_text and (preserve_reasoning or msg.get("tool_calls")):
                     parts.append(ai.thinking(str(reasoning_text)))
-            content = msg.get("content")
-            if content:
-                parts.extend(_coerce_parts(content))
+                if content:
+                    parts.extend(_coerce_parts(content))
             for index, tc in enumerate(calls, start=1):
                 fn = tc.get("function", {})
                 parts.append(
