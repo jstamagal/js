@@ -96,3 +96,13 @@ def test_codex_context_window_comes_from_the_model_catalog(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "context_window", lambda *args: 1_050_000)
 
     assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 1_050_000
+
+
+def test_signed_reasoning_payload_counts_toward_the_estimate():
+    plain = {"role": "assistant", "content": "ok", "reasoning_content": "thought"}
+    signed = {**plain, "reasoning_parts": [
+        {"text": "thought", "provider_metadata": {"openai": {"encrypted_content": "x" * 4000}}},
+    ]}
+
+    grown = context_budget.estimate_message_tokens(signed) - context_budget.estimate_message_tokens(plain)
+    assert grown >= 1000

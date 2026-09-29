@@ -85,7 +85,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `runtime.retry_attempts` (default 10), and a wait over `runtime.retry_max_wait_seconds` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
 
-**A direct Anthropic provider gets no thinking.** ✔ `steers_via_effort` covers only Codex, OpenAI-SDK and implicit gateway endpoints (`model_client.py:912`). The comment promises a "budget (below)", but that budget exists only for DeepSeek. A Claude model on the direct API runs with thinking off whatever `reasoning` says.
+**A direct Anthropic provider gets no thinking.** Done in js-1g1.12: every provider on the anthropic SDK now takes `reasoning` as thinking, adaptive with an effort on Claude 4.6 and later and a token budget on the rest (`reasoning.anthropic_thinking`). Before, `steers_via_effort` covered only Codex, OpenAI-SDK and implicit gateway endpoints, and a Claude model on the direct API ran with thinking off whatever `reasoning` said.
 
 **A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `runtime.max_output_escalation` (64k, held to the model's limit), then up to `runtime.max_output_resumes` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
 
@@ -133,7 +133,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `runtime.retry_attempts` |
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `runtime.max_output_escalation`, `runtime.max_output_resumes` |
-| Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
+| Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | done in js-1g1.12: `reasoning_parts` on the assistant record, replayed to the same provider and model |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
@@ -183,7 +183,7 @@ Hot spots over 441 commits in two months:
 1. **Shell head+tail with a raw spill** (done in js-1g1.26).
 2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget** (done in js-1g1.13).
-4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
+4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures (done in js-1g1.12).
 5. **Record ids plus the model stamp** (done in js-1g1.2), then the picker.
 6. **stream-json output for `-p`** (done in js-1g1.18).
 7. **Architecture #1 (settings projection) and #4 (delete the shims, done in js-1g1.25).**

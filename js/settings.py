@@ -111,6 +111,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. "
                 "Any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
+    SettingSpec("model.thinking_budget", "int",
+                "Thinking budget in tokens on the Anthropic wire, for the models that take a "
+                "budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset = derived from "
+                "model.reasoning_effort. Adaptive models and effort off ignore it.",
+                empty=EMPTY_NONE),
     SettingSpec("model.vision", "bool",
                 "Send image bytes to the active model: on/off; unset = detect from "
                 "models.dev input modalities, then curated name hints. Clear with "

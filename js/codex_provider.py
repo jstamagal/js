@@ -303,6 +303,30 @@ def _repair_tool_pairs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return repaired
 
 
+def reasoning_item_metadata(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Reasoning-part metadata for a finished reasoning output item: the item as
+    it replays on a later request, or None when it has no encrypted content."""
+    encrypted = item.get("encrypted_content")
+    if not isinstance(encrypted, str) or not encrypted:
+        return None
+    replay: dict[str, Any] = {"type": "reasoning"}
+    if isinstance(item.get("id"), str) and item["id"]:
+        replay["id"] = item["id"]
+    summary = item.get("summary")
+    replay["summary"] = list(summary) if isinstance(summary, list) else []
+    replay["encrypted_content"] = encrypted
+    return {_PROVIDER: {"item": replay}}
+
+
+def replayed_reasoning_item(provider_metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The reasoning input item stored by :func:`reasoning_item_metadata`, if any."""
+    meta = (provider_metadata or {}).get(_PROVIDER)
+    item = meta.get("item") if isinstance(meta, Mapping) else None
+    if not isinstance(item, Mapping) or not item.get("encrypted_content"):
+        return None
+    return dict(item)
+
+
 async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str | None, list[dict[str, Any]]]:
     instructions: str | None = None
     items: list[dict[str, Any]] = []
@@ -323,11 +347,19 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
             continue
         if msg.role == "assistant":
             text = _text_from_parts(msg.parts)
-            if text.strip():
-                items.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
+            produced: list[dict[str, Any]] = []
+            text_sent = False
             for part in msg.parts:
-                if isinstance(part, ai.types.messages.ToolCallPart):
-                    items.append(
+                if isinstance(part, ai.types.messages.ReasoningPart):
+                    reasoning_item = replayed_reasoning_item(part.provider_metadata)
+                    if reasoning_item is not None:
+                        produced.append(reasoning_item)
+                elif isinstance(part, ai.types.messages.TextPart):
+                    if not text_sent and text.strip():
+                        produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
+                        text_sent = True
+                elif isinstance(part, ai.types.messages.ToolCallPart):
+                    produced.append(
                         {
                             "type": "function_call",
                             "call_id": _normalize_tool_call_id(part.tool_call_id),
@@ -335,6 +367,10 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
                             "arguments": part.tool_args or "{}",
                         }
                     )
+            # The API takes a reasoning item only ahead of the item it produced.
+            while produced and produced[-1]["type"] == "reasoning":
+                produced.pop()
+            items.extend(produced)
             continue
         if msg.role == "tool":
             for part in msg.parts:
@@ -600,7 +636,11 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         headers = _codex_headers(access, account_id, stream=True)
         url = responses_url(self.base_url)
         text_open = False
-        reasoning_open = False
+        # The open reasoning block, keyed by its reasoning item id, and the ids
+        # already closed: an item's encrypted content arrives on its
+        # output_item.done, which can land after text closed the block.
+        reasoning_block: str | None = None
+        closed_reasoning: set[str] = set()
         active_tool_id: str | None = None
         active_tool_name = ""
         active_tool_chunks: list[str] = []
@@ -615,6 +655,37 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             active_tool_name = name
             active_tool_chunks = []
             return ai.events.ToolStart(tool_call_id=tool_id, tool_name=name)
+
+        def open_reasoning(block_id: str) -> list[ai.events.Event]:
+            nonlocal reasoning_block
+            if reasoning_block == block_id:
+                return []
+            out = close_reasoning()
+            reasoning_block = block_id
+            out.append(ai.events.ReasoningStart(block_id=block_id))
+            return out
+
+        def close_reasoning(metadata: dict[str, Any] | None = None) -> list[ai.events.Event]:
+            nonlocal reasoning_block
+            if reasoning_block is None:
+                return []
+            block_id, reasoning_block = reasoning_block, None
+            closed_reasoning.add(block_id)
+            return [ai.events.ReasoningEnd(block_id=block_id, provider_metadata=metadata)]
+
+        def finish_reasoning_item(item: Mapping[str, Any]) -> list[ai.events.Event]:
+            block_id = str(item.get("id") or reasoning_block or "reasoning")
+            metadata = reasoning_item_metadata(item)
+            if reasoning_block == block_id:
+                return close_reasoning(metadata)
+            out = close_reasoning()
+            if metadata is None:
+                return out
+            if block_id not in closed_reasoning:
+                out.append(ai.events.ReasoningStart(block_id=block_id))
+                closed_reasoning.add(block_id)
+            out.append(ai.events.ReasoningEnd(block_id=block_id, provider_metadata=metadata))
+            return out
 
         def close_tool(tool_id: str | None = None, name: str | None = None, args: str | None = None) -> list[ai.events.Event]:
             nonlocal active_tool_id, active_tool_name, active_tool_chunks
@@ -655,10 +726,10 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                     if event_type == "response.reasoning_summary_text.delta":
                         delta = raw.get("delta")
                         if isinstance(delta, str) and delta:
-                            if not reasoning_open:
-                                reasoning_open = True
-                                yield ai.events.ReasoningStart(block_id="reasoning")
-                            yield ai.events.ReasoningDelta(block_id="reasoning", chunk=delta)
+                            block_id = str(raw.get("item_id") or reasoning_block or "reasoning")
+                            for ev in open_reasoning(block_id):
+                                yield ev
+                            yield ai.events.ReasoningDelta(block_id=block_id, chunk=delta)
                         continue
                     if event_type in {"response.reasoning_summary_part.done", "response.output_item.done"}:
                         item = raw.get("item")
@@ -669,16 +740,15 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             for ev in close_tool(call_id, name, args if isinstance(args, str) else None):
                                 yield ev
                             continue
-                        if reasoning_open and isinstance(item, dict) and item.get("type") == "reasoning":
-                            reasoning_open = False
-                            yield ai.events.ReasoningEnd(block_id="reasoning")
+                        if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") == "reasoning":
+                            for ev in finish_reasoning_item(item):
+                                yield ev
                         continue
                     if event_type in {"response.output_text.delta", "response.refusal.delta"}:
                         delta = raw.get("delta")
                         if isinstance(delta, str) and delta:
-                            if reasoning_open:
-                                reasoning_open = False
-                                yield ai.events.ReasoningEnd(block_id="reasoning")
+                            for ev in close_reasoning():
+                                yield ev
                             if not text_open:
                                 text_open = True
                                 yield ai.events.TextStart(block_id="text")
@@ -708,9 +778,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             details = response_map.get("incomplete_details") if response_map else None
                             reason = details.get("reason") if isinstance(details, Mapping) else None
                             provider_metadata = {"incomplete": True, "incomplete_reason": reason}
-                        if reasoning_open:
-                            reasoning_open = False
-                            yield ai.events.ReasoningEnd(block_id="reasoning")
+                        for ev in close_reasoning():
+                            yield ev
                         if text_open:
                             text_open = False
                             yield ai.events.TextEnd(block_id="text")
@@ -728,8 +797,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             error_type=error_type,
                             is_retryable=code in {"model_error", "server_error", "internal_error"},
                         )
-                if reasoning_open:
-                    yield ai.events.ReasoningEnd(block_id="reasoning")
+                for ev in close_reasoning():
+                    yield ev
                 if text_open:
                     yield ai.events.TextEnd(block_id="text")
                 for ev in close_tool():

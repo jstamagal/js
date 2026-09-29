@@ -12,7 +12,7 @@ import base64
 import contextvars
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Literal
@@ -130,6 +130,34 @@ def _friendly_provider_error(
     # SDK type, retryability and structured overflow fields. The SDK diagnostic
     # is also more useful here than suggesting login for an oversized request.
     return None
+
+
+# Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
+# `signature` in `thinking` block. The block is bound to a different
+# conversation. ..." (the preserved-thinking prefix check) or the same leading
+# clause alone (an undecryptable signature).
+_SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+# The Responses API's 400 for a replayed reasoning item it cannot decrypt (an
+# item from another account or organization): code ``invalid_encrypted_content``,
+# message "The encrypted content for item rs_... could not be verified" or
+# "... could not be decrypted or parsed".
+_ENCRYPTED_REASONING_CODE = "invalid_encrypted_content"
+_ENCRYPTED_REASONING_REJECTIONS = ("could not be verified", "could not be decrypted")
+
+
+def is_signed_reasoning_rejection(exc: BaseException) -> bool:
+    """Whether ``exc`` is the provider refusing a replayed signed reasoning
+    block (an Anthropic thinking signature, a Codex encrypted reasoning item)."""
+    if not isinstance(exc, ai.ProviderBadRequestError):
+        return False
+    if getattr(exc, "code", None) == _ENCRYPTED_REASONING_CODE:
+        return True
+    haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
+    if _ENCRYPTED_REASONING_CODE in haystack:
+        return True
+    if "encrypted content" in haystack and any(n in haystack for n in _ENCRYPTED_REASONING_REJECTIONS):
+        return True
+    return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
 
 
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
@@ -324,8 +352,79 @@ def _coerce_parts(content: Any) -> list[Any]:
     raise ValueError(f"unsupported message content: {content!r}")
 
 
+def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
+    """The message's reasoning parts as history data, or None when no part
+    carries provider metadata (an Anthropic signature, a Codex encrypted item).
+
+    Each entry is ``{"text", "provider_metadata"?, "after_calls"?, "text_before"?}``;
+    ``after_calls`` counts the tool calls that came before the part in the
+    response and ``text_before`` the characters of answer text, so replay puts
+    it back between the same calls and at the same place in the text.
+    """
+    out: list[dict] = []
+    calls = 0
+    text_before = 0
+    signed = False
+    for part in message.parts:
+        if isinstance(part, ai.types.messages.ToolCallPart):
+            calls += 1
+        elif isinstance(part, ai.types.messages.TextPart):
+            text_before += len(part.text)
+        elif isinstance(part, ai.types.messages.ReasoningPart):
+            entry: dict[str, Any] = {"text": part.text}
+            if part.provider_metadata:
+                entry["provider_metadata"] = json.loads(json.dumps(part.provider_metadata, default=str))
+                signed = True
+            if calls:
+                entry["after_calls"] = calls
+            if text_before:
+                entry["text_before"] = text_before
+            out.append(entry)
+    return out if signed else None
+
+
+def _replayed_signed_parts(msg: dict, provider_id: str | None, model_id: str | None) -> list[dict] | None:
+    parts = msg.get("reasoning_parts")
+    if not isinstance(parts, list) or not parts:
+        return None
+    if not reasoning.replays_signed_reasoning(msg.get("reasoning_from"), provider_id, model_id):
+        return None
+    return [part for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
+
+
+def _after_calls(entry: dict, calls: list) -> int:
+    """How many of ``calls`` the signed part follows, capped at the calls kept."""
+    after = entry.get("after_calls")
+    return min(after if isinstance(after, int) and after > 0 else 0, len(calls))
+
+
+def _text_with_leading_signed_parts(content: Any, leading: list[dict]) -> list[Any]:
+    """The answer text with the signed parts that preceded every call placed
+    back at their ``text_before`` offsets."""
+    if not isinstance(content, str):
+        return [_signed_part(entry) for entry in leading] + (_coerce_parts(content) if content else [])
+    parts: list[Any] = []
+    position = 0
+    for entry in leading:
+        offset = entry.get("text_before")
+        offset = min(max(offset if isinstance(offset, int) else 0, position), len(content))
+        if offset > position:
+            parts.append(ai.types.messages.TextPart(text=content[position:offset]))
+            position = offset
+        parts.append(_signed_part(entry))
+    if position < len(content):
+        parts.append(ai.types.messages.TextPart(text=content[position:]))
+    return parts
+
+
+def _signed_part(entry: dict) -> ai.types.messages.ReasoningPart:
+    metadata = entry.get("provider_metadata")
+    return ai.thinking(entry["text"], provider_metadata=metadata if isinstance(metadata, dict) else None)
+
+
 def history_to_ai_messages(
-    system: str, messages: list[dict], *, provider_id: str | None = None
+    system: str, messages: list[dict], *, provider_id: str | None = None,
+    model_id: str | None = None,
 ) -> list[ai.messages.Message]:
     """Convert the harness JSONL history into ``ai.messages.Message`` objects.
 
@@ -337,7 +436,9 @@ def history_to_ai_messages(
     * ``role == "system"`` -> ``ai.system_message(system)``
     * ``role == "user"`` -> ``ai.user_message(content)``
     * ``role == "assistant"`` -> ``ai.assistant_message`` with text,
-      reasoning, and tool call parts.
+      reasoning, and tool call parts. Signed reasoning (``reasoning_parts``)
+      replays whole, signatures included, when the record's
+      ``reasoning_from`` is this ``provider_id`` and ``model_id``.
     * ``role == "tool"`` -> ``ai.tool_message`` with a ``ToolResultPart``.
     """
     provider = providers.get_provider(provider_id)
@@ -364,13 +465,19 @@ def history_to_ai_messages(
             continue
         if role == "assistant":
             parts: list[Any] = []
-            reasoning = msg.get("reasoning_content")
-            if reasoning and (preserve_reasoning or msg.get("tool_calls")):
-                parts.append(ai.thinking(str(reasoning)))
+            calls = msg.get("tool_calls", []) or []
+            signed = _replayed_signed_parts(msg, provider_id, model_id)
             content = msg.get("content")
-            if content:
-                parts.extend(_coerce_parts(content))
-            for tc in msg.get("tool_calls", []):
+            if signed is not None:
+                parts.extend(_text_with_leading_signed_parts(
+                    content, [entry for entry in signed if _after_calls(entry, calls) == 0]))
+            else:
+                reasoning_text = msg.get("reasoning_content")
+                if reasoning_text and (preserve_reasoning or msg.get("tool_calls")):
+                    parts.append(ai.thinking(str(reasoning_text)))
+                if content:
+                    parts.extend(_coerce_parts(content))
+            for index, tc in enumerate(calls, start=1):
                 fn = tc.get("function", {})
                 parts.append(
                     ai.types.messages.ToolCallPart(
@@ -379,6 +486,11 @@ def history_to_ai_messages(
                         tool_args=tool_args.sdk_safe_tool_args(fn.get("arguments", "")),
                     )
                 )
+                if signed is not None:
+                    parts.extend(
+                        _signed_part(entry) for entry in signed
+                        if _after_calls(entry, calls) == index
+                    )
             assistant = ai.assistant_message(*parts)
             provider_metadata = msg.get("provider_metadata")
             if isinstance(provider_metadata, dict):
@@ -891,6 +1003,7 @@ async def stream_model_async(
     reasoning_effort: str | None,
     on_text: Callable[[str], None],
     on_reasoning: Callable[[str], None] | None = None,
+    thinking_budget: int | None = None,
     provider_headers: dict[str, str] | None = None,
     provider_extra: dict[str, Any] | None = None,
     sampling: Sampling | None = None,
@@ -963,18 +1076,39 @@ async def stream_model_async(
     )
     is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
 
-    output_params = (
-        ai_params.OutputParams(max_tokens=max_output_tokens)
-        if max_output_tokens is not None and sends_max_output(provider_id)
-        else None
-    )
+    is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
+    output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
     reasoning_params: ai_params.ReasoningParams | None = None
-    if reasoning_effort is not None and not is_minimax:
-        # Direct DeepSeek/Anthropic-style providers steer reasoning via their own
-        # budget (below) / thinking flag, not the OpenAI effort knob. Codex and
-        # any openai-SDK endpoint take the effort knob — snapped to the stops the
-        # target actually serves (js/reasoning.py), so the one dial fits each.
+    if is_anthropic_wire:
+        # Every provider on the Anthropic Messages wire takes the reasoning
+        # setting as thinking: adaptive plus an effort on the models that take
+        # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
+        # provider.extra wins.
+        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
+        own_thinking = "thinking" not in extra_body
+        if plan is not None:
+            if plan.thinking is not None:
+                extra_body.setdefault("thinking", plan.thinking)
+            if plan.effort is not None:
+                reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
+            if plan.max_tokens is not None and own_thinking:
+                output_max_tokens = plan.max_tokens
+        thinking = extra_body.get("thinking")
+        extra_budget = thinking.get("budget_tokens") if isinstance(thinking, dict) and not own_thinking else None
+        if isinstance(extra_budget, int) and max_output_tokens is None:
+            # A budget from provider.extra on a model with no known output cap:
+            # max_tokens has to sit above it.
+            output_max_tokens = extra_budget + reasoning.ANTHROPIC_UNKNOWN_CAP_ANSWER
+        if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            # Budget thinking takes no temperature or top_k: Anthropic answers
+            # either with a 400.
+            sampling = replace(sampling, temperature=None, top_k=None)
+    elif reasoning_effort is not None and not is_minimax:
+        # Direct DeepSeek steers reasoning via its own budget (below), not the
+        # OpenAI effort knob. Codex and any openai-SDK endpoint take the effort
+        # knob — snapped to the stops the target actually serves
+        # (js/reasoning.py), so the one dial fits each.
         steers_via_effort = is_codex or sdk_provider_name == "openai" or not explicit_provider
         if steers_via_effort:
             if is_codex:
@@ -993,6 +1127,12 @@ async def stream_model_async(
                     reasoning_params = ai_params.ReasoningParams(effort=None)
             elif effort is not None:
                 reasoning_params = ai_params.ReasoningParams(effort=effort)
+
+    output_params = (
+        ai_params.OutputParams(max_tokens=output_max_tokens)
+        if output_max_tokens is not None
+        else None
+    )
 
     # DeepSeek gets the maximum reasoning budget by default as an extra_body
     # field. Gated on the WIRE, not the model id: this is DeepSeek's own
@@ -1025,7 +1165,6 @@ async def stream_model_async(
     # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
     # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
     # entire request.
-    is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
     accepts_cache_key = is_codex or accepts_prompt_cache_key(
         provider_name=provider_name,
         sdk_provider_name=sdk_provider_name,

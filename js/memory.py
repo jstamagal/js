@@ -129,21 +129,54 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
     return _heal_orphaned_tool_calls(messages)
 
 
-def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
-    """Project history to the tool-call-only reasoning view.
+# An assistant message's reasoning: the text, and the signed parts with the
+# provider and model they came from (`model_client.signed_reasoning_parts`).
+_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from"})
+SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from")
 
-    Persistence compares this view so callers using either the full or reduced
-    history can append without replacing archived reasoning records.
+
+def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
+    """Remove the signed reasoning of every message from ``start`` on, in place.
+
+    A signature (an Anthropic thinking signature, a Codex encrypted item) is
+    bound to the history before it, so once js edits an earlier message the
+    signed reasoning after that edit cannot be replayed. Each changed message
+    is replaced by a copy that keeps ``reasoning_content``. Returns how many
+    messages changed.
     """
+    changed = 0
+    for index in range(max(0, start), len(messages)):
+        msg = messages[index]
+        if isinstance(msg, dict) and any(key in msg for key in SIGNED_REASONING_KEYS):
+            messages[index] = {k: v for k, v in msg.items() if k not in SIGNED_REASONING_KEYS}
+            changed += 1
+    return changed
+
+
+def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
+    """Project history to the tool-call-only reasoning view (`load_messages`)."""
     out: list[dict] = []
     for msg in messages:
-        if msg.get("role") == "assistant" and "reasoning_content" in msg and not msg.get("tool_calls"):
-            cleaned = {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if msg.get("role") == "assistant" and not msg.get("tool_calls") and _REASONING_KEYS & msg.keys():
+            cleaned = {k: v for k, v in msg.items() if k not in _REASONING_KEYS}
             out.append(cleaned)
         else:
             out.append(msg)
     return out
 
+
+
+def _without_answer_reasoning_text(messages: list[dict]) -> list[dict]:
+    """The history as persistence compares it: final answers without
+    ``reasoning_content``, so a history whose answers lack the reasoning text
+    appends without replacing the journal's. Signed reasoning is compared, so
+    a drop of it is written as a rollback."""
+    return [
+        {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if msg.get("role") == "assistant" and not msg.get("tool_calls") and "reasoning_content" in msg
+        else msg
+        for msg in messages
+    ]
 
 
 def _compaction_summary_message(summary: str) -> dict:
@@ -251,8 +284,10 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
                         keep_from = int(data.get("keep_from", len(messages)))
                         keep_from = max(0, min(keep_from, len(messages)))
                         rehydrated = data.get("rehydrated")
+                        tail = messages[keep_from:]
+                        drop_signed_reasoning(tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
-                                       *([rehydrated] if rehydrated else []), *messages[keep_from:]]
+                                       *([rehydrated] if rehydrated else []), *tail]
                 continue
             if rec.kind != "message" or rec.message is None:
                 continue
@@ -324,8 +359,8 @@ def append_message(memory_file: Path, message: dict, stamp: dict | None = None) 
 def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
     """Append the live suffix, retaining replaced records in the journal.
     Each appended assistant message carries `stamp`."""
-    persisted = load_messages(memory_file)
-    comparable = _strip_orphan_reasoning(messages)
+    persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
+    comparable = _without_answer_reasoning_text(messages)
     common = 0
     for old, new in zip(persisted, comparable):
         if old != new:

@@ -377,9 +377,12 @@ How it is built (`js/jail.py`):
   them back in every text result (`Jail.shown`), so the model never sees the
   private directory. An image marker keeps the host path in its path field,
   where the model client reads the image from.
-- PATH directories under a hidden tree or the host `/tmp` are bound back with every symlinked
-  directory on the way (`jail.reach`), so a venv interpreter that links into
-  `~/.local/share/uv/python` still starts.
+- PATH directories and the kernel's interpreter under a hidden tree or under
+  the host `/tmp` (not `/tmp` itself, which stays the private one) are bound
+  back with every symlinked directory on the way (`jail.reach`), so a venv
+  interpreter that links into `~/.local/share/uv/python`, or a venv in a
+  checkout under `/tmp`, still starts. The file tools read a PATH directory under the host `/tmp` at its
+  host path, as the shell sees it, and refuse to write there.
 - No pid namespace: a command's background server outlives the command, as
   outside the jail. `--unshare-ipc --unshare-uts --unshare-cgroup-try`, network
   shared, `--die-with-parent`.

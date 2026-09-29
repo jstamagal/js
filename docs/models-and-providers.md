@@ -163,8 +163,29 @@ nearest effort that the selected endpoint actually serves.
 DeepSeek gets `max_reasoning_tokens=32000` when reasoning is enabled so it can
 use its full reasoning budget without capping total output earlier than necessary.
 For direct OpenAI-compatible transports this is sent through `extra_body`, not as
-an invalid top-level SDK kwarg. MiniMax (token-plan and API variants) strips the
-OpenAI-shaped reasoning object because its adapter rejects it.
+an invalid top-level SDK kwarg. A MiniMax model on an OpenAI-shaped endpoint gets
+no reasoning object, because that adapter rejects it.
+
+Every provider on the Anthropic Messages wire (`anthropic`, `anthropic-custom`,
+`opencode-go-anthropic`, `minimax`, and any saved login with sdk `anthropic`)
+takes the effort as thinking (`js/reasoning.py`):
+
+- Claude 4.6 and later, Fable and Mythos get
+  `thinking: {"type": "adaptive", "display": "summarized"}` and
+  `output_config.effort`, snapped to the stops the model serves (no `xhigh` on
+  4.6). `off` sends `thinking: {"type": "disabled"}`; on the models that always
+  think (Fable, Mythos, Claude 5.5 and later) it sends effort `low` instead.
+- Every other model gets `thinking: {"type": "enabled", "budget_tokens": N}`:
+  minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000.
+  `model.thinking_budget` replaces that number for every effort. The
+  budget leaves 1024 tokens of `max_tokens` for the answer; with no known output
+  cap, `max_tokens` is the budget plus 8192. `off` sends no thinking. With a
+  budget, js sends no `sampling.temperature` or `sampling.top_k`: Anthropic
+  rejects either alongside budget thinking.
+
+A `thinking` object in `provider.extra` replaces the one js builds. When it
+carries a `budget_tokens` and the model's output cap is unknown, `max_tokens`
+is that budget plus 8192.
 
 Session replay retains archived reasoning. OpenAI chat-completions transports
 (including llama.cpp) replay reasoning on every assistant message, including
@@ -174,6 +195,23 @@ template; named vendor endpoints retain their SDK wire format. Models known to
 reject replayed reasoning (GLM) still have it stripped at the provider boundary.
 Other transports retain the tool-call-only replay policy; some providers require
 reasoning on those messages.
+
+Signed reasoning replays whole. An Anthropic thinking block's signature and a
+Codex reasoning item's encrypted content are stored on the assistant record as
+`reasoning_parts`, with the provider and model they came from in
+`reasoning_from`. They are sent back, on every later turn and after resume, only
+to that same provider and model; after a model switch the record falls back to
+its plain `reasoning_content` and the rules above.
+
+A signature is bound to the history before it (Anthropic's preserved-thinking
+check), so js drops the signed parts that follow any edit it makes to earlier
+history: after the first tool result that clearing blanks, on the tail a
+keep-tail compaction keeps (in memory and on resume), and after a user message
+whose attached files are left out of the history. Parts before the edit keep
+replaying. If the provider still refuses a replayed signature ("Invalid
+`signature` in `thinking` block", or Codex's `invalid_encrypted_content` for an
+item another account produced), the request is retried once with no signed
+reasoning in the history, and the history keeps none from then on, on disk too.
 
 ### Reasoning display
 

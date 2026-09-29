@@ -238,13 +238,22 @@ def _replace_runtime_user_message(
     history_message: dict,
     fallback_index: int,
 ) -> None:
+    """Swap the provider-facing user message for its history form. When the two
+    differ (attached files), the signed reasoning after it is dropped: it was
+    produced with the provider-facing form in front of it."""
+    index = None
     if 0 <= fallback_index < len(messages) and messages[fallback_index] == runtime_message:
-        messages[fallback_index] = history_message
+        index = fallback_index
+    else:
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx] == runtime_message:
+                index = idx
+                break
+    if index is None:
         return
-    for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx] == runtime_message:
-            messages[idx] = history_message
-            return
+    messages[index] = history_message
+    if history_message != runtime_message:
+        M.drop_signed_reasoning(messages, index + 1)
 
 
 def _session_stamp(cfg: Config, reasoning: str | None = None) -> dict:
@@ -569,6 +578,7 @@ _LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
 _LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("max_output_tokens", ("model", "max_output_tokens")),
     ("model_context_window", ("model", "context_window")),
+    ("thinking_budget", ("model", "thinking_budget")),
 )
 
 

@@ -230,14 +230,15 @@ class Jail:
         return areas
 
     def _path_dirs(self, path_value: str) -> list[Path]:
-        """PATH directories that sit in a hidden tree, resolved."""
+        """PATH directories that sit in a hidden tree or under the host /tmp
+        (the ones `argv` binds back), resolved."""
         hidden = hidden_roots()
         out: list[Path] = []
         for entry in path_value.split(os.pathsep):
             if not entry or not os.path.isabs(entry):
                 continue
             real = _real(Path(entry))
-            if real.is_dir() and any(_under(real, h) for h in hidden):
+            if real.is_dir() and (any(_under(real, h) for h in hidden) or Path("/tmp") in real.parents):
                 out.append(real)
         return list(dict.fromkeys(out))
 
@@ -263,6 +264,9 @@ class Jail:
         if any(_under(path, root) for root in hidden_roots()):
             return path
         if _under(path, Path("/tmp")):
+            # A PATH directory under the host /tmp is bound over the private one.
+            if any(_under(_real(path), d) for d in self._path_dirs(os.environ.get("PATH", ""))):
+                return path
             return self.tmp / path.relative_to("/tmp")
         return path
 

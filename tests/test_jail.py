@@ -168,6 +168,32 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
             assert code == 0, result
 
 
+def test_the_host_tmp_on_path_does_not_replace_the_private_tmp(jailed):
+    argv = jail.active().argv(["true"], env_path=f"/tmp{os.pathsep}/usr/bin")
+
+    binds = [argv[i + 1:i + 3] for i, arg in enumerate(argv) if arg.endswith("bind") or arg.endswith("bind-try")]
+    assert [src for src, dst in binds if dst == "/tmp"] == [str(jail.active().tmp)]
+
+
+def test_a_path_directory_under_the_host_tmp_is_bound_back_read_only(jailed, tmp_path_factory, monkeypatch):
+    # tmp_path is the test HOME, a hidden tree; the venv sits outside it.
+    venv = tmp_path_factory.mktemp("venv").resolve()
+    if Path("/tmp") not in venv.parents or any(jail._under(venv, h) for h in jail.hidden_roots()):
+        pytest.skip("pytest's temporary tree is not plainly under /tmp")
+    bin_dir = venv / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "tool").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin")
+    active = jail.active()
+
+    argv = active.argv(["true"], env_path=os.environ["PATH"])
+    ro = [argv[i + 1:i + 3] for i, arg in enumerate(argv) if arg in {"--ro-bind", "--ro-bind-try"}]
+    assert [str(bin_dir), str(bin_dir)] in ro
+    assert active.confine(bin_dir / "tool") == bin_dir / "tool"
+    with pytest.raises(jail.JailError):
+        active.confine(bin_dir / "tool", write=True)
+
+
 @needs_bwrap
 def test_path_directories_under_host_tmp_run(jailed, monkeypatch):
     bin_dir = Path(tempfile.mkdtemp(prefix="js-jail-bin-", dir="/tmp"))

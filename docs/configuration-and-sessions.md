@@ -582,6 +582,15 @@ left, in the same shape. Resume uses whichever came last: an assistant stamp, a
 `model_switch` stamp, or a start record's model (the `-m` of that start, else
 the configured model).
 
+An assistant message whose reasoning came signed (an Anthropic thinking
+signature, a Codex encrypted reasoning item) also carries `reasoning_parts`,
+each part's text and provider metadata, and `reasoning_from`, the provider and
+model that signed them. Replay sends the signed parts back only to that
+provider and model. A record after an edit to earlier history (tool-result
+clearing, the kept tail of a compaction, a user message whose attachments are
+left out) loses `reasoning_parts` and `reasoning_from`; a compaction mark drops
+them from its kept tail on load.
+
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
 newest title is the session's name in `--list --json`.
 
