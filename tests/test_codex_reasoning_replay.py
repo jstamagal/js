@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import ai
+import httpx
 import pytest
 
 from js import codex_provider, memory, model_client, runtime
@@ -79,6 +80,8 @@ class _Client:
     def stream(self, method, url, *, headers=None, json=None):
         self.bodies.append(json)
         events = self.scripts.pop(0) if self.scripts else _reasoning_events()
+        if isinstance(events, httpx.Response):
+            return _Context(events)
         return _Context(_Response(events))
 
     async def aclose(self):
@@ -245,3 +248,21 @@ def test_a_resumed_codex_session_sends_the_reasoning_item_back(codex):
     second = client.bodies[1]["input"]
     assert second[1] == _ITEM
     assert second[2]["type"] == "message" and second[2]["role"] == "assistant"
+
+
+def test_a_reasoning_item_the_endpoint_cannot_decrypt_is_dropped_and_retried(codex):
+    cfg, client, context = codex
+    messages = [{"role": "user", "content": "ping"}]
+    runtime.run_turn(cfg, "SYSTEM", messages, runtime.Telemetry(None),
+                     tool_context=context, trace_override=False, suppress_output=True)
+    refusal = httpx.Response(400, request=httpx.Request("POST", "https://chatgpt.com/backend-api/codex/responses"),
+                             json={"error": {"message": "The encrypted content for item rs_1 could not be verified.",
+                                             "type": "invalid_request_error", "code": "invalid_encrypted_content"}})
+    client.scripts = [refusal]
+    messages.append({"role": "user", "content": "next"})
+    runtime.run_turn(cfg, "SYSTEM", messages, runtime.Telemetry(None),
+                     tool_context=context, trace_override=False, suppress_output=True)
+
+    assert client.bodies[1]["input"][1] == _ITEM
+    assert all(item["type"] != "reasoning" for item in client.bodies[2]["input"])
+    assert messages[-1]["role"] == "assistant" and messages[-1]["content"] == "hello"

@@ -206,8 +206,9 @@ history: after the first tool result that clearing blanks, on the tail a
 keep-tail compaction keeps (in memory and on resume), and after a user message
 whose attached files are left out of the history. Parts before the edit keep
 replaying. If the provider still refuses a replayed signature ("Invalid
-`signature` in `thinking` block"), the request is retried once with no signed
-reasoning in the history, and the history keeps none from then on.
+`signature` in `thinking` block", or Codex's `invalid_encrypted_content` for an
+item another account produced), the request is retried once with no signed
+reasoning in the history, and the history keeps none from then on, on disk too.
 
 ### Reasoning display
 

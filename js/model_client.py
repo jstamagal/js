@@ -112,13 +112,26 @@ def _friendly_provider_error(
 # conversation. ..." (the preserved-thinking prefix check) or the same leading
 # clause alone (an undecryptable signature).
 _SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+# The Responses API's 400 for a replayed reasoning item it cannot decrypt (an
+# item from another account or organization): code ``invalid_encrypted_content``,
+# message "The encrypted content for item rs_... could not be verified" or
+# "... could not be decrypted or parsed".
+_ENCRYPTED_REASONING_CODE = "invalid_encrypted_content"
+_ENCRYPTED_REASONING_REJECTIONS = ("could not be verified", "could not be decrypted")
 
 
 def is_signed_reasoning_rejection(exc: BaseException) -> bool:
-    """Whether ``exc`` is the provider refusing a replayed signed reasoning block."""
+    """Whether ``exc`` is the provider refusing a replayed signed reasoning
+    block (an Anthropic thinking signature, a Codex encrypted reasoning item)."""
     if not isinstance(exc, ai.ProviderBadRequestError):
         return False
+    if getattr(exc, "code", None) == _ENCRYPTED_REASONING_CODE:
+        return True
     haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
+    if _ENCRYPTED_REASONING_CODE in haystack:
+        return True
+    if "encrypted content" in haystack and any(n in haystack for n in _ENCRYPTED_REASONING_REJECTIONS):
+        return True
     return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
 
 
