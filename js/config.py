@@ -13,6 +13,7 @@ from . import paths as _paths
 from . import session_store as _session_store
 from . import providers as _providers
 from . import settings as _settings
+from . import turn_settings as _turn_settings
 from . import routing as _routing
 
 from .sampling import Sampling
@@ -74,11 +75,6 @@ def _int_knob(root: dict, key: str) -> int | None:
     return _numeric_setting(root, tuple(key.split(".")), _settings.default_value(key))
 
 
-def _jsrc_field(key: str):
-    """A dataclass field whose default is knob ``key``'s js/jsrc value."""
-    return field(default_factory=lambda: _settings.default_value(key))
-
-
 def _sampling_from_extras(extras: list[str] | None) -> Sampling:
     values: dict[str, object] = {}
     for arg in extras or []:
@@ -136,7 +132,10 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
 
 
 @dataclass(frozen=True)
-class Config:
+class Config(_turn_settings.ConfigSettings):
+    """One run's configuration. The per-turn settings are fields of the
+    ``ConfigSettings`` base, one per row of ``js.turn_settings.TURN_SETTINGS``."""
+
     agent_id: str
     agent_dir: Path
     model: str
@@ -144,22 +143,11 @@ class Config:
     provider_base_url: str | None # explicit provider base URL
     provider_api_key: str | None   # explicit provider API key
     reasoning_effort: str | None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
-    max_output_tokens: int | None  # per-call max_tokens; None = models.dev metadata or provider default
-    max_tool_iterations: int
-    max_bash_output_bytes: int
-    max_tool_result_bytes: int
-    fetch_timeout_s: int
     debug_log: Path | None
-    trace: bool            # print the pretty tool-call trace line
     history_file: Path
     sessions_dir: Path
     session_file: Path
     prompts_dir: Path
-    max_tool_calls_per_message: int = _jsrc_field("limits.max_tool_calls_per_message")
-    inline_code_timeout_s: int = _jsrc_field("limits.inline_code_timeout_s")
-    browse_timeout_s: int = _jsrc_field("limits.browse_timeout_s")
-    download_timeout_s: int = _jsrc_field("limits.download_timeout_s")
-    max_download_bytes: int = _jsrc_field("limits.max_download_bytes")
     provider_headers: dict[str, str] = field(default_factory=dict)
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
@@ -167,35 +155,10 @@ class Config:
     explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
     vision_enabled: bool = False
-    model_context_window: int | None = None  # explicit window for this model; None = server/metadata resolved
-    thinking_budget: int | None = None  # Anthropic-wire budget_tokens; None = derived from reasoning_effort
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     project_dir: Path = field(default_factory=Path.cwd, compare=False)
-    max_read_lines: int = _jsrc_field("limits.max_read_lines")
-    max_file_bytes: int = _jsrc_field("limits.max_file_bytes")
-    max_read_bytes: int = _jsrc_field("limits.max_read_bytes")
-    max_bash_output_ceiling: int = _jsrc_field("limits.max_bash_output_ceiling")
-    max_tool_result_inline_bytes: int = _jsrc_field("limits.max_tool_result_inline_bytes")
-    shell_env_allow: tuple[str, ...] = field(
-        default_factory=lambda: tuple(_settings.default_value("limits.shell_env_allow"))
-    )
-    max_tool_results_per_turn_bytes: int = _jsrc_field("limits.max_tool_results_per_turn_bytes")
-    task_max_depth: int = _jsrc_field("limits.task_max_depth")
-    subagent_max_workers: int = _jsrc_field("limits.subagent_max_workers")
-    kernel_verbosity: str = _jsrc_field("kernel.verbosity")
-    kernel_render_max_lines: int = _jsrc_field("kernel.render_max_lines")
-    kernel_wait_seconds: int = _jsrc_field("kernel.wait_seconds")
-    shell_wait_seconds: int = _jsrc_field("shell.wait_seconds")
-    max_parallel_tools: int = _jsrc_field("runtime.max_parallel_tools")
-    allow_inline_code: bool = _jsrc_field("runtime.allow_inline_code")  # !{sh|python|c ...} inline-code execution; opt out via --im-a-pussy
-    prefer_inherit: bool = _jsrc_field("subagents.prefer_inherit")  # subagents inherit the parent's model when true; when false they use the agent's own primary (frontmatter `model:`)
-    lock_subagent_model: bool = _jsrc_field("subagents.lock_model")  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
-    debug_autolog: bool = _jsrc_field("runtime.debug_autolog")  # append the full request trace to logs/<agent>/<session>.log
-    debug_autolog_dir: str | None = None  # override dir for the autolog; None = ~/.js/logs/<agent>
-    transcript_log: bool = _jsrc_field("runtime.transcript_log")  # append the visible transcript to transcript/<agent>/<session>.log
-    transcript_log_dir: str | None = None  # override dir for transcript logs; None = ~/.js/logs/transcript/<agent>
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
 
 

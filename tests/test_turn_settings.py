@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import settings
+from js import settings, turn_settings
 from js.turn_settings import INVALID, TURN_SETTINGS, inherit, install, project
 
 
@@ -119,3 +119,18 @@ def test_inherit_returns_the_context_rows_of_the_parent():
     assert inherited["jail_bind"] == ("/opt/x",)
     assert set(inherited) == {row.attr for row in TURN_SETTINGS if row.on_context}
 
+
+
+def test_config_and_context_declare_the_rows_as_fields():
+    import dataclasses
+
+    from js.config import Config
+    from js.toolkit import ToolContext
+
+    config_fields = {f.name for f in dataclasses.fields(Config)}
+    context_fields = {f.name for f in dataclasses.fields(ToolContext)}
+
+    assert {row.attr for row in TURN_SETTINGS} <= config_fields
+    assert {row.attr for row in TURN_SETTINGS if row.on_context} <= context_fields
+    assert issubclass(Config, turn_settings.ConfigSettings)
+    assert issubclass(ToolContext, turn_settings.ContextSettings)

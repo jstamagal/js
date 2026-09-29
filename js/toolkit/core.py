@@ -27,6 +27,7 @@ from collections.abc import Callable
 
 from .. import jail as _jail
 from .. import settings as _settings
+from .. import turn_settings as _turn_settings
 from ..paths import state_root
 
 
@@ -400,47 +401,15 @@ class _ReadWindow:
     reads: dict[str, tuple[list[tuple[int, int]], bool]] = field(default_factory=dict)
 
 
-def _knob(key: str) -> Any:
-    """A ToolContext field whose default is knob ``key``'s js/jsrc value."""
-    return field(default_factory=lambda: _settings.default_value(key))
-
-
 @dataclass
-class ToolContext:
-    """Mutable state shared across tool calls in a js process."""
+class ToolContext(_turn_settings.ContextSettings):
+    """Mutable state shared across tool calls in a js process. The per-turn
+    settings are fields of the ``ContextSettings`` base, one per ``on_context``
+    row of ``js.turn_settings.TURN_SETTINGS``."""
 
     cwd: Path = field(default_factory=Path.cwd)
-    max_read_lines: int = _knob("limits.max_read_lines")
-    max_file_bytes: int = _knob("limits.max_file_bytes")
-    max_read_bytes: int = _knob("limits.max_read_bytes")
-    max_tool_result_bytes: int = _knob("limits.max_tool_result_bytes")
-    max_bash_output_bytes: int = _knob("limits.max_bash_output_bytes")
-    max_bash_output_ceiling: int = _knob("limits.max_bash_output_ceiling")
-    max_tool_result_inline_bytes: int = _knob("limits.max_tool_result_inline_bytes")
-    fetch_timeout_s: int = _knob("limits.fetch_timeout_s")
-    browse_timeout_s: int = _knob("limits.browse_timeout_s")
-    download_timeout_s: int = _knob("limits.download_timeout_s")
-    max_download_bytes: int = _knob("limits.max_download_bytes")  # 0 = unlimited; save= streams to disk
-    task_max_depth: int = _knob("limits.task_max_depth")
-    subagent_max_workers: int = _knob("limits.subagent_max_workers")
-    shell_env_allow: tuple[str, ...] = field(
-        default_factory=lambda: tuple(_settings.default_value("limits.shell_env_allow"))
-    )
-    user_agent: str = _knob("tools.user_agent")
-    terminal_cols: int = _knob("tools.terminal_cols")
-    terminal_rows: int = _knob("tools.terminal_rows")
     vision_enabled: bool = False
     model: str = ""                       # model id, for toolbox revision provenance
-    kernel_verbosity: str = _knob("kernel.verbosity")  # quiet | normal | verbose terminal render
-    kernel_render_max_lines: int = _knob("kernel.render_max_lines")  # per-section line cap on that render
-    kernel_wait_seconds: int = _knob("kernel.wait_seconds")  # seconds a kernel call waits for a submitted cell
-    shell_wait_seconds: int = _knob("shell.wait_seconds")  # seconds a shell call waits before returning a handle
-    shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
-    max_parallel_tools: int = _knob("runtime.max_parallel_tools")  # read-only calls of one batch run at once
-    jail_bind: tuple[str, ...] = field(default_factory=lambda: tuple(_settings.default_value("jail.bind")))
-    lsp_servers: list = _knob("lsp.servers")  # language servers the lsp tool may start
-    lsp_timeout_s: int = _knob("lsp.timeout_s")  # seconds an lsp call waits on its server
-    notebook_output_lines: int = _knob("notebook.output_lines")  # lines per cell output in a notebook read
     kernel_session: Any = None            # the live IPython kernel, one per process
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
