@@ -195,7 +195,9 @@ def _spread(root: Path, renames: dict, *, apply: bool) -> Iterator[Step]:
         yield Step("refuse", root, None, f"is {_kind(root_stat.st_mode)}, not a directory; move it by hand")
         return
     try:
-        names = sorted(os.listdir(root))
+        # Entries that keep their name go first, so a directory another entry
+        # is renamed into (state/, logs/) arrives whole before it is added to.
+        names = sorted(os.listdir(root), key=lambda name: (name in renames, name))
     except OSError as exc:
         yield Step("refuse", root, None, f"could not list it: {exc}")
         return

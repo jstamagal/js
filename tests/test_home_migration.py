@@ -72,6 +72,18 @@ def test_first_run_moves_every_old_location_into_the_layout(tmp_path):
     assert len(out.getvalue().splitlines()) == len(steps)
 
 
+def test_a_directory_others_are_renamed_into_still_moves_whole(tmp_path):
+    data = _legacy()["data"]
+    _write(data / "state" / "defaultagent" / "debug.log", "d\n")
+    _write(data / "commit-backups" / "b.patch", "p\n")
+
+    steps = home.migrate_once(io.StringIO())
+
+    assert home.Step("move", data / "state", paths.state_root()) in steps
+    assert (paths.state_root() / "defaultagent" / "debug.log").is_file()
+    assert (paths.commit_backups_dir() / "b.patch").is_file()
+
+
 def test_it_never_moves_twice(tmp_path):
     _old_layout(tmp_path)
     home.migrate_once(io.StringIO())
