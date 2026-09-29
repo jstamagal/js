@@ -261,8 +261,8 @@ TURNS_COUNT = Message("{messages} in context.")
 COST_NONE = Message("No model calls in this session yet.")
 COST_TOTAL = Message("Session: {calls}, {cost}.")
 COST_TOKENS = Message(
-    "  input {input} (cache read {cache_read}, cache write {cache_write}), "
-    "output {output} (reasoning {reasoning})", banner=False)
+    "  input {input}: cache read {cache_read}, cache write {cache_write}. "
+    "Output {output}: reasoning {reasoning}.", banner=False)
 COST_MODEL = Message("  {model}: {calls}, {tokens} tokens, {cost}", banner=False)
 COST_UNPRICED = Message("no price")
 COST_PARTLY_PRICED = Message("{cost} + {calls} with no price")

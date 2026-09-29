@@ -1301,9 +1301,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     the model reads it before choosing its next tool call.
 
     ``event_sink`` sees every event this turn emits, as ``(event, payload)``:
-    the `events.CANONICAL_EVENT_NAMES` the turn raises, and ``usage`` after
-    each model call charged to the session (`js.usage`). Subagent turns do not
-    reach it.
+    the `events.CANONICAL_EVENT_NAMES` the turn raises, with the turn's usage
+    totals added to ``turn_end``, and ``usage`` after each model call charged
+    to the session (`js.usage`). Subagent turns do not reach it.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -1410,10 +1410,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.context_budget_state = token_state
     active_context.vision_enabled = active_context.config.vision_enabled
 
-    def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
+    def _emit_event(event: str, *, sink_extra: dict | None = None, **payload: Any) -> list[event_mod.EventHook]:
+        """Raise `event` to the ON hooks and the event sink. `sink_extra`
+        fields reach the sink only."""
         if event_sink is not None:
             try:
-                event_sink(event, dict(payload))
+                event_sink(event, {**payload, **(sink_extra or {})})
             except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
                 telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
         if event_hooks is None:
@@ -1442,7 +1444,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     def _end_turn(reason: str, **extra: Any) -> None:
         _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id,
-                    usage=turn_usage.as_dict(), **extra)
+                    sink_extra={"usage": turn_usage.as_dict()}, **extra)
 
     _emit_event(
         "turn_start",
