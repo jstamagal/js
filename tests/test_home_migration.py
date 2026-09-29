@@ -16,6 +16,7 @@ from pathlib import Path
 
 from js import cli, config, home, paths, session_store
 from js import messages as msgs
+from js.memory import append_message, load_replay_messages
 
 
 def _is(entry: msgs.Message, line: str) -> bool:
@@ -481,7 +482,7 @@ def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path
     assert (paths.state_root() / "defaultagent" / "history").read_text(encoding="utf-8") == "+hello\n"
     from js.session_catalog import first_metadata
     assert first_metadata(moved_child)["agent"] == "reviewer"
-    assert first_metadata(moved_child)["parent"] == str(filed)
+    assert first_metadata(moved_child)["parent_session"] == str(filed)
 
     # The old name and a hash tail still resolve, from anywhere.
     monkeypatch.chdir(tmp_path)
@@ -490,6 +491,37 @@ def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path
     assert config.resolve_session_file(session_store.folder_for(tmp_path), "merrygoround") == folder / "merrygoround.jsonl"
     # --last finds the session latest.json named.
     assert cli._latest_session_name("defaultagent") == str(filed)
+
+
+def test_a_migrated_session_has_an_id_and_a_parent_on_every_record(tmp_path):
+    project = tmp_path / "proj"
+    old = _record(_legacy()["data"] / "sessions" / "defaultagent" / "s.jsonl",
+                  {"role": "user", "content": "from before the envelope"},
+                  _meta(project), _msg("user", "one"), _msg("assistant", "two", 102.0),
+                  {"kind": "mark", "version": 1, "ts": 103.0, "marker": "rollback_to:1"},
+                  _msg("assistant", "three", 104.0))
+    with old.open("a", encoding="utf-8") as stream:
+        stream.write("not json\n")
+    os.utime(old, (1_000_000, 1_000_000))
+    replay = load_replay_messages(old)
+
+    home.migrate_once(io.StringIO())
+
+    filed = session_store.folder_for(project) / "s.jsonl"
+    lines = filed.read_text(encoding="utf-8").splitlines()
+    assert lines[-1] == "not json"
+    records = [json.loads(line) for line in lines[:-1]]
+    ids = [record["id"] for record in records]
+    assert all(re.fullmatch(r"[0-9a-f]{8}", record_id) for record_id in ids) and len(set(ids)) == len(ids)
+    path = [record for record in records if session_store.on_path(record)]
+    assert len(path) == 5 and path[0]["parent"] is None
+    assert [record["parent"] for record in path[1:]] == [record["id"] for record in path[:-1]]
+    assert load_replay_messages(filed) == replay
+    assert filed.stat().st_mtime == 1_000_000
+    # New records chain on after the migrated ones.
+    append_message(filed, {"role": "user", "content": "four"})
+    assert json.loads(filed.read_text(encoding="utf-8").splitlines()[-1])["parent"] == path[-1]["id"]
+    assert session_store.link_file(filed) == 0
 
 
 def test_the_dry_run_names_the_filing_and_moves_no_session(tmp_path, capsys):

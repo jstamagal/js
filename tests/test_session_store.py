@@ -18,6 +18,7 @@ from js.config import from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.session_catalog import (
+    append_title,
     branch_session,
     first_metadata,
     last_stamp,
@@ -194,7 +195,7 @@ def test_a_subagent_run_is_filed_under_its_parent_session(monkeypatch, tmp_path)
     assert children[0].with_suffix(".txt").is_file()
     metadata = first_metadata(children[0])
     assert metadata["mode"] == "subagent"
-    assert metadata["parent"] == str(parent.session_file)
+    assert metadata["parent_session"] == str(parent.session_file)
     assert sorted(p.name for p in parent.sessions_dir.glob("*.jsonl")) == [parent.session_file.name]
 
 
@@ -299,20 +300,123 @@ def test_each_start_records_its_mode_and_command_line(monkeypatch, tmp_path):
     assert first_metadata(folder / "chat.jsonl")["mode"] == "repl"
 
 
-def test_a_branch_records_its_parent_and_the_message_it_split_at(tmp_path):
+def _lines(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_branch_records_its_parent_and_the_id_of_the_message_it_split_at(tmp_path):
     parent = session_store.reserve(session_store.folder_for(tmp_path))
     record_session_start(parent, cwd=tmp_path, agent="defaultagent", mode="repl")
     for index, role in enumerate(("user", "assistant", "user", "assistant"), 1):
         M.append_message(parent, {"role": role, "content": f"m{index}"}, stamp=M.stamp_for("m", "p", None))
+    messages = [record for record in _lines(parent) if record["kind"] == "message"]
+    split = messages[1]["id"]
 
-    branch = branch_session(parent, 2, cwd=tmp_path, agent="defaultagent", mode="repl")
+    branch = branch_session(parent, split, cwd=tmp_path, agent="defaultagent", mode="repl")
 
     assert branch.parent == parent.parent and branch != parent
     assert [m["content"] for m in load_messages(branch)] == ["m1", "m2"]
     metadata = first_metadata(branch)
-    assert metadata["branched_from"] == {"session": str(parent), "message": 2}
+    assert metadata["branched_from"] == {"session": str(parent), "message": split}
+    copied = [record for record in _lines(branch) if record["kind"] == "message"]
+    assert [(r["id"], r["parent"]) for r in copied] == [(r["id"], r["parent"]) for r in messages[:2]]
+    assert metadata["parent"] == split
     header = branch.with_suffix(".txt").read_text(encoding="utf-8").splitlines()[3]
     assert parent.stem in header and "#0002" in header
+    assert split not in branch.with_suffix(".txt").read_text(encoding="utf-8")
+
+
+def test_a_branch_at_an_id_the_parent_lacks_is_refused(tmp_path):
+    parent = session_store.reserve(session_store.folder_for(tmp_path))
+    M.append_message(parent, {"role": "user", "content": "m1"})
+
+    with pytest.raises(ValueError):
+        branch_session(parent, "00000000", cwd=tmp_path)
+    assert list(parent.parent.glob("*.jsonl")) == [parent]
+
+
+# --- record ids ------------------------------------------------------------------
+
+
+def test_every_record_gets_a_unique_id_and_the_parent_on_its_path(tmp_path):
+    session = session_store.reserve(session_store.folder_for(tmp_path))
+    record_session_start(session, cwd=tmp_path, agent="defaultagent")
+    M.append_system_prompt(session, "sys")
+    M.append_message(session, {"role": "user", "content": "one"})
+    M.persist_messages(session, [{"role": "user", "content": "one"}, {"role": "assistant", "content": "two"}],
+                       stamp=M.stamp_for("m", "p", None))
+    append_title(session, "a title")
+    M.persist_messages(session, [{"role": "user", "content": "one"}, {"role": "assistant", "content": "other"}])
+
+    records = _lines(session)
+    ids = [record["id"] for record in records]
+    assert all(re.fullmatch(r"[0-9a-f]{8}", record_id) for record_id in ids)
+    assert len(set(ids)) == len(ids)
+    path = [record for record in records if record["kind"] in ("message", "mark")]
+    assert path[0]["parent"] is None
+    assert [record["parent"] for record in path[1:]] == [record["id"] for record in path[:-1]]
+    assert any(record.get("marker", "").startswith("rollback_to:") for record in path)
+    # A start or title record hangs off the path record before it.
+    for index, record in enumerate(records):
+        if record["kind"] in ("session_metadata", "title"):
+            before = [r["id"] for r in records[:index] if r["kind"] in ("message", "mark")]
+            assert record["parent"] == (before[-1] if before else None)
+
+
+def test_an_id_the_file_already_holds_is_drawn_again(tmp_path, monkeypatch):
+    session = session_store.reserve(session_store.folder_for(tmp_path))
+    M.append_message(session, {"role": "user", "content": "one"})
+    taken = _lines(session)[0]["id"]
+    draws = iter([taken, taken, "bbbbbbbb"])
+    monkeypatch.setattr(session_store, "secrets", type("S", (), {"token_hex": staticmethod(lambda _n: next(draws))}))
+
+    session_store.append(session, {"kind": "mark", "version": 1, "ts": 1.0, "marker": "x"})
+
+    assert [(r["id"], r["parent"]) for r in _lines(session)][1] == ("bbbbbbbb", taken)
+
+
+def test_ids_chain_across_writers_to_the_same_file(tmp_path):
+    session = session_store.reserve(session_store.folder_for(tmp_path))
+    M.append_message(session, {"role": "user", "content": "one"})
+    # Another process appends behind this one's back.
+    with session.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"id": "0123abcd", "parent": _lines(session)[-1]["id"], "kind": "message",
+                                 "version": 1, "ts": 1.0, "message": {"role": "assistant", "content": "two"}}) + "\n")
+
+    M.append_message(session, {"role": "user", "content": "three"})
+
+    assert _lines(session)[-1]["parent"] == "0123abcd"
+
+
+def test_a_torn_last_line_does_not_swallow_the_next_record(tmp_path):
+    session = session_store.reserve(session_store.folder_for(tmp_path))
+    M.append_message(session, {"role": "user", "content": "one"})
+    with session.open("a", encoding="utf-8") as stream:
+        stream.write('{"id":"deadbeef","kind":"mess')
+
+    M.append_message(session, {"role": "user", "content": "two"})
+
+    assert [m["content"] for m in load_messages(session)] == ["one", "two"]
+
+
+def test_replay_ignores_ids_and_parents(tmp_path):
+    session = session_store.reserve(session_store.folder_for(tmp_path))
+    live = [{"role": "user", "content": "one"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "shell", "arguments": "{}"}}]},
+            {"role": "user", "content": "interrupted"}]
+    M.persist_messages(session, live)
+    M.persist_messages(session, [*live[:2], {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+                                 {"role": "assistant", "content": "done"}])
+    M.append_compaction_mark(session, summary="so far", keep_from=2)
+    M.append_message(session, {"role": "user", "content": "after"})
+    bare = session.with_name("bare.jsonl")
+    bare.write_text("".join(json.dumps({k: v for k, v in record.items() if k not in ("id", "parent")}) + "\n"
+                            for record in _lines(session)), encoding="utf-8")
+
+    assert "id" not in _lines(bare)[0]
+    assert M.load_replay_messages(session) == M.load_replay_messages(bare)
+    assert M.load_replay_messages(session)[0]["content"].startswith("<compaction-summary>")
 
 
 def test_name_pins_a_title_on_the_session(monkeypatch, tmp_path, capsys):

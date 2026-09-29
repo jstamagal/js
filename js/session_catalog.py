@@ -3,9 +3,10 @@
 Conversation files remain append-only JSONL.  Session metadata is an ignored
 control record in that same stream, one per start: the directory, agent and
 model, how it was started (`repl`, `-p`, `pipe`, `subagent`, `commit`) and the
-command line; a subagent run names its parent, a branch its parent session and
-the message it split at. `/name` appends a title record. Open-process state
-lives in adjacent hidden sidecars so it can be updated without touching
+command line; a subagent run names its parent session, a branch its parent
+session and the id of the message it split at. `/name` appends a title record.
+Every record carries an `id` and a `parent` (`js.session_store`). Open-process
+state lives in adjacent hidden sidecars so it can be updated without touching
 conversation history.
 """
 
@@ -184,13 +185,7 @@ def session_in_flight(session_file: Path) -> bool:
 
 
 def _append_record(session_file: Path, record: dict[str, Any]) -> None:
-    session_file = Path(session_file)
-    session_file.parent.mkdir(parents=True, exist_ok=True)
-    with session_file.open("a", encoding="utf-8") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        stream.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    session_store.append(session_file, record)
     session_text.refresh(session_file)
 
 
@@ -212,8 +207,8 @@ def record_session_start(
 
     *agent* and *model* are recorded so a later resume with no flags can come
     back on what was actually in use rather than the config default. *parent*
-    is the session file a subagent run belongs to; *branched_from* is
-    `{"session": <parent path>, "message": <message number>}`."""
+    is the session file a subagent run belongs to, recorded as `parent_session`;
+    *branched_from* is `{"session": <parent path>, "message": <message id>}`."""
     record = {
         "kind": _METADATA_KIND,
         "version": _METADATA_VERSION,
@@ -229,7 +224,7 @@ def record_session_start(
     if command is not None:
         record["command"] = list(command)
     if parent is not None:
-        record["parent"] = str(parent)
+        record["parent_session"] = str(parent)
     if branched_from is not None:
         record["branched_from"] = branched_from
     _append_record(session_file, record)
@@ -288,27 +283,23 @@ def last_stamp(session_file: Path) -> dict[str, Any] | None:
     return last
 
 
-def branch_session(parent_file: Path, message: int, *, cwd: Path | str, agent: str | None = None,
+def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: str | None = None,
                    mode: str | None = None, command: list[str] | None = None) -> Path:
     """A new session in the parent's folder holding the parent's records up to
-    and including message number `message`, with its branch point recorded."""
+    and including the message record whose id is `message`, with its branch
+    point recorded. The copied records keep their ids."""
     parent_file = Path(parent_file)
     kept: list[str] = []
-    seen = 0
+    found = False
     for line, record in _records(parent_file):
-        kind = record.get("kind")
-        if kind in (_METADATA_KIND, _TITLE_KIND):
+        if record.get("kind") in (_METADATA_KIND, _TITLE_KIND):
             continue
-        is_message = kind == "message" or (kind is None and "role" in record)
-        if is_message and seen == message:
-            break
         kept.append(line if line.endswith("\n") else line + "\n")
-        if is_message:
-            seen += 1
-            if seen == message:
-                break
-    if seen < message:
-        raise ValueError(msgs.SESSION_BRANCH_PAST_END.text(path=parent_file, messages=seen, message=message))
+        if record.get("id") == message and session_store.on_path(record) and record.get("kind") != "mark":
+            found = True
+            break
+    if not found:
+        raise ValueError(msgs.SESSION_BRANCH_NO_MESSAGE.text(path=parent_file, message=message))
     branch = session_store.reserve(parent_file.parent)
     with branch.open("a", encoding="utf-8") as stream:
         stream.writelines(kept)

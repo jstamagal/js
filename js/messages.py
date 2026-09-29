@@ -723,7 +723,7 @@ AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives"
 
 SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
 SESSION_NOT_RESERVED = Message("No free session name in {folder}")
-SESSION_BRANCH_PAST_END = Message("{path} has {messages} messages, not {message}")
+SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
     "History may be incomplete.", WARN)

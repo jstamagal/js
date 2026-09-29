@@ -13,8 +13,10 @@ After the moves, every agent in ~/.js/agents is converted to agent.yaml
 start metadata, or of ~ when it has none; an old subagent run, which has no
 metadata, goes under the parent session whose task call carried its first
 message. Names are kept, so `--session <old name or hash tail>` still
-resolves. A session without an agent in its metadata gets a start record
-naming the old folder's agent, and each filed session gets its `.txt`. The
+resolves. Each filed session is rewritten once to give every record an id
+and a parent, the format js writes today (`js.session_store`). A session
+without an agent in its metadata then gets a start record naming the old
+folder's agent, and each filed session gets its `.txt`. The
 old folder's `.history` and `latest.json` go to ~/.js/state/<agent>/.
 
 Every move is a rename of one entry, so a directory lands whole or not at
@@ -554,6 +556,7 @@ def refile_sessions(*, apply: bool) -> Iterator[Step]:
             for sidecar in _liveness_files(session.path):
                 with contextlib.suppress(OSError):
                     sidecar.unlink()
+            session_store.link_file(target)
             if not session.has_agent:
                 parent = parents.get(session.path)
                 cwd = session.metadata.get("cwd") if session.metadata else None

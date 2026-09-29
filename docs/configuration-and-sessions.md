@@ -334,8 +334,10 @@ same step: each under the folder of the working directory in its first start
 record, or under `~`'s folder when it has none. An old subagent run carries no
 start record; it goes under the parent session whose `task` call carried its
 first message. File names are kept, so an old name or hash tail still resumes
-with `--session`. A filed session without an agent in its start record gets
-one naming the old folder, and each gets its `.txt`. The folder's `.history`
+with `--session`. Each filed session is rewritten once so every record has an
+`id` and a `parent` (see JSONL Record Shape); its modification time is kept.
+A filed session without an agent in its start record then gets one naming the
+old folder, and each gets its `.txt`. The folder's `.history`
 and `latest.json` go to `state/<agent>/`. A session a running js holds open is
 left where it is.
 
@@ -452,20 +454,30 @@ conversation is not shown; compaction removes nothing from the `.txt`.
 The memory file is append-only JSONL. Records have:
 
 ```json
-{"kind":"session_metadata","version":3,"ts":1781189999.0,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01","agent":"defaultagent","model":"m","mode":"-p","command":["js","-p","..."]}
-{"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
-{"kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
-{"kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
-{"kind":"title","ts":1781190004.0,"title":"parser fix"}
+{"id":"3f9a0c12","parent":null,"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
+{"id":"b07e44d1","parent":"3f9a0c12","kind":"session_metadata","version":3,"ts":1781190000.5,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01","agent":"defaultagent","model":"m","mode":"-p","command":["js","-p","..."]}
+{"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
+{"id":"5e6f7a80","parent":"c2d81e5a","kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
+{"id":"91aa02bc","parent":"5e6f7a80","kind":"title","ts":1781190004.0,"title":"parser fix"}
 ```
+
+Every record starts with an `id`, eight hex digits unique within the file, and
+a `parent`. Message and mark records form the conversation path: each one's
+`parent` is the id of the message or mark before it in the file, `null` for the
+first. A start or title record's `parent` is the message or mark it follows,
+and no record names it as its parent. Replay reads the file in order and does
+not use ids.
 
 Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record
-names its `parent` session file; a branch's names `branched_from`, the parent
-session file and the message number it split at. It is not conversation
-context and the message loader ignores it. Adjacent hidden liveness sidecars
-track open processes without rewriting the append-only conversation file.
+names its `parent_session` file. A branch is a new file holding the parent's
+records up to the message it split at, ids kept; its start record's
+`branched_from` names the parent session file and the `id` of that message,
+and the `.txt` shows the message's number. The start record is not
+conversation context and the message loader ignores it. Adjacent hidden
+liveness sidecars track open processes without rewriting the append-only
+conversation file.
 
 Every assistant message record carries a `stamp`: the model, provider and
 reasoning level it was written under. Resume uses the last stamp (or the last
