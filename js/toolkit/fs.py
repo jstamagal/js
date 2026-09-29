@@ -101,7 +101,7 @@ def _trash_target(target: Path, context: ToolContext) -> str | None:
         return "ERROR: trash command not found; pass permanent=true to delete without trash."
     rc, _out, err = run([command, str(target)], context=context, timeout=120)
     if rc != 0:
-        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}"
+        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}; pass permanent=true to delete without trash."
     return None
 
 
@@ -1556,7 +1556,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("pattern",),
         ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after the operator confirms permanent deletion."}}, required=("path",)),
+        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly without the trash; the path is still snapshotted for undo."}}, required=("path",)),
         Tool(
             "patch",
             load_description("patch"),

@@ -77,8 +77,10 @@ Parameters:
 - `permanent`: delete directly instead of trashing (default `false`)
 
 Default sends targets to `trash`/`trash-put`; targets over 512 MiB are refused
-unless `permanent=true`. Symlinks are removed as symlinks (not followed).
-Snapshots the prior file bytes or directory tree for `undo`.
+unless `permanent=true`. `permanent=true` never touches the trash, so it works
+on a box with no trash command or trash directory. Symlinks are removed as
+symlinks (not followed). Both paths snapshot the prior file bytes or directory
+tree for `undo`.
 
 ### `undo`
 
