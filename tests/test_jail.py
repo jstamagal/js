@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -159,7 +160,9 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
     assert code == 0
     assert "hello-ran" in result
     for name in ("rg", "uv", "cargo"):
-        if shutil.which(name):
+        # A command that fails outside the jail too (a rustup cargo with no
+        # toolchain in this HOME) says nothing about the jail.
+        if shutil.which(name) and subprocess.run([name, "--version"], capture_output=True).returncode == 0:
             code, result = run_shell(f"{name} --version", jailed)
             assert code == 0, result
 
@@ -394,3 +397,21 @@ def test_envctx_reports_the_tool_shell_and_the_jail(tmp_path):
     # envctx writes a path under $HOME with ~.
     assert " confined=~/foo" in user_line
     assert any(line.startswith("rule:") and "~/foo" in line for line in out.splitlines())
+
+
+@needs_bwrap
+def test_command_paths_under_the_host_tmp_are_bound_back(jailed):
+    # The jail's /tmp is private; an interpreter or venv under the host's /tmp
+    # (a checkout copied there) must still reach the command that needs it.
+    outside = Path(tempfile.mkdtemp(prefix="js-jail-extra-", dir="/tmp"))
+    try:
+        tool_bin = outside / "bin"
+        tool_bin.mkdir()
+        (tool_bin / "marker").write_text("seen\n")
+        argv = jail.wrap(["cat", str(tool_bin / "marker")], jailed, cwd=jailed.cwd, extra_ro=(tool_bin,))
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "seen\n"
