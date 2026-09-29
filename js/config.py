@@ -60,21 +60,6 @@ def _env_int(*names: str, default: int | None = None) -> int | None:
     return default
 
 
-def _numeric_setting(root: dict, path: tuple[str, ...], default: int | None) -> int | None:
-    raw = _settings.get_dotted(root, path, default)
-    if raw is None or isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _int_knob(root: dict, key: str) -> int | None:
-    """Integer knob ``key`` from ``root``; its js/jsrc value when absent or bad."""
-    return _numeric_setting(root, tuple(key.split(".")), _settings.default_value(key))
-
-
 def _sampling_from_extras(extras: list[str] | None) -> Sampling:
     values: dict[str, object] = {}
     for arg in extras or []:
@@ -460,54 +445,7 @@ def from_env(
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
         reasoning_effort = provider_def.reasoning_effort
 
-    max_output_tokens = _numeric_setting(js_root_settings, ("model", "max_output_tokens"), None)
-    model_context_window = _numeric_setting(js_root_settings, ("model", "context_window"), None)
-    thinking_budget = _numeric_setting(js_root_settings, ("model", "thinking_budget"), None)
-    max_tool_iterations = _int_knob(js_root_settings, "limits.max_tool_iterations")
-    max_tool_calls_per_message = _int_knob(js_root_settings, "limits.max_tool_calls_per_message")
-    max_bash_output_bytes = _int_knob(js_root_settings, "limits.max_bash_output_bytes")
-    max_tool_result_bytes = _int_knob(js_root_settings, "limits.max_tool_result_bytes")
-    fetch_timeout_s = _int_knob(js_root_settings, "limits.fetch_timeout_s")
-    default_env_allow = tuple(_settings.default_value("limits.shell_env_allow"))
-    raw_shell_env_allow = _settings.get_dotted(
-        js_root_settings,
-        ("limits", "shell_env_allow"),
-        default_env_allow,
-    )
-    shell_env_allow = (
-        tuple(raw_shell_env_allow)
-        if isinstance(raw_shell_env_allow, (list, tuple))
-        and all(isinstance(name, str) and name.strip() for name in raw_shell_env_allow)
-        else default_env_allow
-    )
-    browse_timeout_s = _int_knob(js_root_settings, "limits.browse_timeout_s")
-    download_timeout_s = _int_knob(js_root_settings, "limits.download_timeout_s")
-    max_download_bytes = _int_knob(js_root_settings, "limits.max_download_bytes")
-    inline_code_timeout_s = _int_knob(js_root_settings, "limits.inline_code_timeout_s")
-    max_read_lines = _int_knob(js_root_settings, "limits.max_read_lines")
-    max_file_bytes = _int_knob(js_root_settings, "limits.max_file_bytes")
-    max_read_bytes = _int_knob(js_root_settings, "limits.max_read_bytes")
-    max_bash_output_ceiling = _int_knob(js_root_settings, "limits.max_bash_output_ceiling")
-    max_tool_result_inline_bytes = _int_knob(js_root_settings, "limits.max_tool_result_inline_bytes")
-    max_tool_results_per_turn_bytes = _int_knob(js_root_settings, "limits.max_tool_results_per_turn_bytes")
-    task_max_depth = _int_knob(js_root_settings, "limits.task_max_depth")
-    subagent_max_workers = _int_knob(js_root_settings, "limits.subagent_max_workers")
-    kernel_render_max_lines = _int_knob(js_root_settings, "kernel.render_max_lines")
-    kernel_wait_seconds = _int_knob(js_root_settings, "kernel.wait_seconds")
-    shell_wait_seconds = _int_knob(js_root_settings, "shell.wait_seconds")
-    max_parallel_tools = max(1, _int_knob(js_root_settings, "runtime.max_parallel_tools") or 1)
-    default_verbosity = _settings.default_value("kernel.verbosity")
-    kernel_verbosity = str(_settings.get_dotted(js_root_settings, ("kernel", "verbosity"), default_verbosity) or default_verbosity).strip().lower()
-    if kernel_verbosity not in ("quiet", "normal", "verbose"):
-        kernel_verbosity = default_verbosity
     runtime_debug = bool(_settings.knob(js_root_settings, "runtime.debug"))
-    trace = bool(_settings.knob(js_root_settings, "runtime.trace"))
-    debug_autolog = bool(_settings.knob(js_root_settings, "runtime.debug_autolog"))
-    debug_autolog_dir = _settings.get_dotted(js_root_settings, ("runtime", "debug_autolog_dir"))
-    transcript_log = bool(_settings.knob(js_root_settings, "runtime.transcript_log"))
-    transcript_log_dir = _settings.get_dotted(js_root_settings, ("runtime", "transcript_log_dir"))
-    prefer_inherit = bool(_settings.knob(js_root_settings, "subagents.prefer_inherit"))
-    lock_subagent_model = bool(_settings.knob(js_root_settings, "subagents.lock_model"))
 
     from . import mcp_config
 
@@ -547,21 +485,7 @@ def from_env(
         sampling_env=sampling_env,
         sampling_cli=sampling_cli,
         reasoning_effort=_norm_effort(reasoning_effort),
-        max_output_tokens=max_output_tokens,
-        model_context_window=model_context_window,
-        thinking_budget=thinking_budget,
-        max_tool_iterations=max_tool_iterations,
-        max_tool_calls_per_message=max_tool_calls_per_message,
-        max_bash_output_bytes=max_bash_output_bytes,
-        max_tool_result_bytes=max_tool_result_bytes,
-        fetch_timeout_s=fetch_timeout_s,
-        shell_env_allow=shell_env_allow,
-        browse_timeout_s=browse_timeout_s,
-        download_timeout_s=download_timeout_s,
-        max_download_bytes=max_download_bytes,
-        inline_code_timeout_s=inline_code_timeout_s,
         debug_log=debug,
-        trace=trace,
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
@@ -571,27 +495,8 @@ def from_env(
         prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
         agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),
         project_dir=project_dir,
-        max_read_lines=max_read_lines,
-        max_file_bytes=max_file_bytes,
-        max_read_bytes=max_read_bytes,
-        max_bash_output_ceiling=max_bash_output_ceiling,
-        max_tool_result_inline_bytes=max_tool_result_inline_bytes,
-        max_tool_results_per_turn_bytes=max_tool_results_per_turn_bytes,
-        task_max_depth=task_max_depth,
-        subagent_max_workers=subagent_max_workers,
-        kernel_verbosity=kernel_verbosity,
-        kernel_render_max_lines=kernel_render_max_lines,
-        kernel_wait_seconds=kernel_wait_seconds,
-        shell_wait_seconds=shell_wait_seconds,
-        max_parallel_tools=max_parallel_tools,
-        allow_inline_code=bool(_settings.knob(js_root_settings, "runtime.allow_inline_code")),
-        prefer_inherit=prefer_inherit,
-        lock_subagent_model=lock_subagent_model,
-        debug_autolog=debug_autolog,
-        debug_autolog_dir=debug_autolog_dir,
-        transcript_log=transcript_log,
-        transcript_log_dir=transcript_log_dir,
         mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
+        **_turn_settings.project(js_root_settings),
     )
