@@ -18,7 +18,6 @@ from the source.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import errno
 import fcntl
@@ -33,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+from . import messages as msgs
 from . import paths
 
 # Entries of the old data directory that do not keep their name under ~/.js.
@@ -66,16 +66,14 @@ def _short(path: Path) -> str:
     return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text
 
 
-def describe(step: Step, *, apply: bool) -> str:
+def describe(step: Step, *, apply: bool) -> msgs.Said:
     source, target = _short(step.source), _short(step.target) if step.target else ""
-    if step.kind == "move":
-        return f"{'moved' if apply else 'would move'} {source} -> {target}"
-    if step.kind == "duplicate":
-        verb = "removed" if apply else "would remove"
-        return f"{verb} {source}: identical to {target}"
-    if step.kind == "rmdir":
-        return f"{'removed' if apply else 'would remove'} empty {source}"
-    return f"{'refused' if apply else 'would refuse'} {source}: {step.reason}"
+    entry = {
+        ("move", True): msgs.HOME_MOVED, ("move", False): msgs.HOME_WOULD_MOVE,
+        ("duplicate", True): msgs.HOME_REMOVED_DUPLICATE, ("duplicate", False): msgs.HOME_WOULD_REMOVE_DUPLICATE,
+        ("rmdir", True): msgs.HOME_REMOVED_EMPTY, ("rmdir", False): msgs.HOME_WOULD_REMOVE_EMPTY,
+    }.get((step.kind, apply)) or (msgs.HOME_REFUSED if apply else msgs.HOME_WOULD_REFUSE)
+    return entry.said(source=source, target=target, reason=step.reason)
 
 
 def _lstat(path: Path) -> os.stat_result | None:
@@ -95,10 +93,10 @@ def _same(source: Path, target: Path, source_mode: int, target_mode: int) -> boo
 
 def _kind(mode: int) -> str:
     if stat.S_ISLNK(mode):
-        return "a symlink"
+        return msgs.HOME_KIND_LINK.text()
     if stat.S_ISDIR(mode):
-        return "a directory"
-    return "a file"
+        return msgs.HOME_KIND_DIR.text()
+    return msgs.HOME_KIND_FILE.text()
 
 
 class _OldCopyLeft(OSError):
@@ -169,7 +167,7 @@ class _Walk:
             source_stat = _lstat(source)
             target_stat = _lstat(self.where(target))
         except OSError as exc:
-            yield Step("refuse", source, target, f"could not look at it or {_short(target)}: {exc}")
+            yield Step("refuse", source, target, msgs.HOME_NOT_EXAMINED_WITH.text(target=_short(target), error=exc))
             return
         if source_stat is None:
             return
@@ -181,7 +179,7 @@ class _Walk:
             try:
                 children = sorted(os.listdir(source))
             except OSError as exc:
-                yield Step("refuse", source, target, f"could not list it: {exc}")
+                yield Step("refuse", source, target, msgs.HOME_NOT_LISTED.text(error=exc))
                 return
             for child in children:
                 yield from self.entry(source / child, target / child)
@@ -190,21 +188,22 @@ class _Walk:
         try:
             same = _same(source, self.where(target), source_mode, target_mode)
         except OSError as exc:
-            yield Step("refuse", source, target, f"could not compare it with {_short(target)}: {exc}")
+            yield Step("refuse", source, target, msgs.HOME_NOT_COMPARED.text(target=_short(target), error=exc))
             return
         if same:
             if self.apply:
                 try:
                     os.unlink(source)
                 except OSError as exc:
-                    yield Step("refuse", source, target, f"identical to {_short(target)} but could not remove it: {exc}")
+                    yield Step("refuse", source, target, msgs.HOME_DUPLICATE_NOT_REMOVED.text(target=_short(target), error=exc))
                     return
             yield Step("duplicate", source, target)
             return
         if stat.S_ISREG(source_mode) and stat.S_ISREG(target_mode):
-            reason = f"{_short(target)} already exists with different content"
+            reason = msgs.HOME_TARGET_DIFFERS.text(target=_short(target))
         else:
-            reason = f"{_short(target)} already exists as {_kind(target_mode)}; this is {_kind(source_mode)}"
+            reason = msgs.HOME_TARGET_OTHER_KIND.text(target=_short(target), kind=_kind(target_mode),
+                                                       source_kind=_kind(source_mode))
         yield Step("refuse", source, target, reason)
 
     def _move(self, source: Path, target: Path, mode: int) -> Iterator[Step]:
@@ -216,10 +215,10 @@ class _Walk:
             _rename(source, target, mode)
         except _OldCopyLeft as exc:
             yield Step("move", source, target)
-            yield Step("refuse", source, target, f"copied to {_short(target)}, but the old copy is left: {exc}")
+            yield Step("refuse", source, target, msgs.HOME_OLD_COPY_LEFT.text(target=_short(target), error=exc))
             return
         except OSError as exc:
-            yield Step("refuse", source, target, f"could not move to {_short(target)}: {exc}")
+            yield Step("refuse", source, target, msgs.HOME_NOT_MOVED.text(target=_short(target), error=exc))
             return
         yield Step("move", source, target)
 
@@ -237,19 +236,19 @@ class _Walk:
         try:
             root_stat = _lstat(root)
         except OSError as exc:
-            yield Step("refuse", root, None, f"could not look at it: {exc}")
+            yield Step("refuse", root, None, msgs.HOME_NOT_EXAMINED.text(error=exc))
             return
         if root_stat is None:
             return
         if not stat.S_ISDIR(root_stat.st_mode):
-            yield Step("refuse", root, None, f"is {_kind(root_stat.st_mode)}, not a directory; move it by hand")
+            yield Step("refuse", root, None, msgs.HOME_NOT_A_DIR.text(kind=_kind(root_stat.st_mode)))
             return
         try:
             # Entries that keep their name go first, so a directory another entry
             # is renamed into (state/, logs/) arrives whole before it is added to.
             names = sorted(os.listdir(root), key=lambda name: (name in renames, name))
         except OSError as exc:
-            yield Step("refuse", root, None, f"could not list it: {exc}")
+            yield Step("refuse", root, None, msgs.HOME_NOT_LISTED.text(error=exc))
             return
         for name in names:
             target = renames[name]() if name in renames else paths.home() / name
@@ -293,11 +292,11 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
                 return []
             for step in steps(apply=True):
                 done.append(step)
-                print(f"js: {describe(step, apply=True)}", file=stream)
+                msgs.say_said(describe(step, apply=True), file=stream)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
-        print(f"js: could not migrate to {_short(paths.home())}: {exc}", file=stream)
+        msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
     return done
 
 
@@ -326,16 +325,16 @@ def sweep_tmp(now: float | None = None) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="js.home", description=__doc__.splitlines()[0])
-    parser.add_argument("--apply", action="store_true", help="move; default is a dry run")
+    parser = msgs.ArgumentParser(prog="js.home", description=msgs.HOME_DESCRIPTION.text())
+    parser.add_argument("--apply", action="store_true", help=msgs.OPT_HOME_APPLY.text())
     args = parser.parse_args(argv)
     found: list[Step] = []
     with _locked_home() if args.apply else contextlib.nullcontext():
         for step in steps(apply=args.apply):
             found.append(step)
-            print(describe(step, apply=args.apply), flush=True)
+            msgs.say_said(describe(step, apply=args.apply), flush=True)
     if not found:
-        print(f"nothing to move into {_short(paths.home())}")
+        msgs.say(msgs.HOME_NOTHING_TO_MOVE, home=_short(paths.home()))
     return 1 if any(step.kind == "refuse" for step in found) else 0
 
 

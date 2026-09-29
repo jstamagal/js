@@ -138,7 +138,7 @@ export JS_REASONING=high
 ```
 
 CLI:
-For OpenAI Codex / ChatGPT OAuth models, reasoning is a separate knob. Use
+For OpenAI Codex / ChatGPT OAuth models, reasoning is a separate setting. Use
 `JS_REASONING=xhigh` or `--reasoning xhigh`; do **not** suffix the model id as
 `gpt-5.5:xhigh`.
 
@@ -391,7 +391,7 @@ image bytes for image files.
 
 Order:
 
-1. the resolved `model.vision` knob: config < `JS_VISION` < `--extra`, followed
+1. the resolved `model.vision` setting: config < `JS_VISION` < `--extra`, followed
    by live `/set model.vision on|off` changes. `/set -model.vision` restores detection.
 2. models.dev input modalities for the model id, keyed on the model rather than
    the provider

@@ -16,7 +16,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from . import providers
+from . import messages as msgs, providers
 
 
 @dataclass(frozen=True)
@@ -37,16 +37,13 @@ class ProviderNotLoggedInError(ValueError):
     """A model id names a known provider the operator has not logged into.
 
     Subclasses ``ValueError`` so the friendly one-line error handling that already
-    wraps route/config resolution (``error: {e}``, never a traceback) catches it
+    wraps route/config resolution (one line, never a traceback) catches it
     everywhere those failures already surface.
     """
 
 
 def not_logged_in_message(provider_id: str) -> str:
-    return (
-        f"provider {provider_id!r} is not logged in; run `js --login {provider_id}` "
-        "(js --list-models shows what's runnable)"
-    )
+    return msgs.PROVIDER_NOT_LOGGED_IN.text(provider=provider_id)
 
 
 def unconfigured_model_message(model: str) -> str:
@@ -55,11 +52,7 @@ def unconfigured_model_message(model: str) -> str:
     prefix_provider, _ = providers.parse_model_prefix(str(model))
     if prefix_provider is not None:
         return not_logged_in_message(prefix_provider)
-    return (
-        f"model {model!r} has no provider configured and no login; set provider.id "
-        "(or JS_PROVIDER), run `js --login`, or prefix a logged-in provider "
-        "(js --list-models shows what's runnable)"
-    )
+    return msgs.MODEL_UNCONFIGURED.text(model=model)
 
 
 def _saved_login(provider_id: str | None):

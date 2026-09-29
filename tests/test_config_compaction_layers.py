@@ -168,7 +168,7 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
 
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
-    assert result.startswith("compacted:")
+    assert compaction.compacted(result)
     assert messages[0]["content"] == "<compaction-summary>\nSummary\n</compaction-summary>"
 
 
@@ -189,7 +189,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
 
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
-    assert result.startswith("compacted:")
+    assert compaction.compacted(result)
     assert captured == [4096]
 
 
@@ -277,7 +277,7 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, model="flag-summarizer")
 
     assert seen_models == ["flag-summarizer"]
-    assert result.endswith("using flag-summarizer")
+    assert compaction.compacted(result) and result.fields["model"] == "flag-summarizer"
 
 
 def test_configured_window_tracks_live_setting_and_catalog(tmp_path):

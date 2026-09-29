@@ -13,6 +13,7 @@ import copy
 from js import cli, setcmd, settings
 from js.config import Config
 from js.sampling import Sampling
+from js import messages as msgs
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ def test_show_lines_effective_annotates_and_masks():
 
 def test_show_lines_effective_unknown_key_errors():
     result = setcmd.show_lines_effective(settings.seed_defaults(), {}, "nope.nope")
-    assert result.error == "unknown knob: nope.nope"
+    assert result.error == msgs.UNKNOWN_SETTING.text(key="nope.nope")
 
 
 # ---------------------------------------------------------------------------

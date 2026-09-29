@@ -17,9 +17,11 @@ process cwd when ``-C``/``--repo`` is supplied:
         ``all`` — via ``git apply --cached --recount``. For an untracked file,
         only ``stage <file> all`` is valid and does ``git add <file>``.
 
-Built on git plumbing (diff/apply), stable for ~20 years; ~90%+ of real cases.
-Known gaps it deliberately punts (it tells you, never guesses): binary diffs,
-pure renames, mode-only changes — for those, stage the whole file.
+Built on git plumbing, diff and apply, which has been stable for about 20
+years. Binary diffs, pure renames and mode-only changes have no text hunks; the
+helper says so and the whole file is staged instead.
+
+Every line it prints is an entry in `js/messages.py`, printed with `.text()`.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
+
+from . import messages as msgs
 
 
 @dataclass(slots=True)
@@ -42,8 +46,7 @@ class GitCommandError(RuntimeError):
     kind: str
 
     def __str__(self) -> str:
-        detail = (self.stderr or self.stdout).strip() or f"exit {self.returncode}"
-        return f"{self.kind}: git {' '.join(self.argv)} failed in {self.repo}: {detail}"
+        return _git_failure_message(self)
 
 
 def _repo_path(repo: str | Path | None = None) -> Path:
@@ -94,10 +97,18 @@ def _git(
 
 
 def _git_failure_message(exc: GitCommandError) -> str:
-    detail = (exc.stderr or exc.stdout).strip() or f"exit {exc.returncode}"
+    detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_EXIT.text(code=exc.returncode)
     if exc.kind == "not-a-repo":
-        return f"error: not a git repository: {exc.repo}"
-    return f"error: git failed in {exc.repo}: git {' '.join(exc.argv)}: {detail}"
+        return msgs.GIT_NOT_A_REPO.text(repo=exc.repo)
+    return msgs.GIT_FAILED.text(repo=exc.repo, argv=" ".join(exc.argv), detail=detail)
+
+
+def _out(message: msgs.Message, **fields) -> None:
+    print(message.text(**fields))
+
+
+def _err(message: msgs.Message, **fields) -> None:
+    print(message.text(**fields), file=sys.stderr)
 
 
 def _porcelain(repo: str | Path | None = None) -> list[tuple[str, str]]:
@@ -135,9 +146,9 @@ def _branch_name(repo: str | Path | None = None) -> str:
         return current
     short = _git("rev-parse", "--short", "HEAD", check=False, repo=repo)
     if short.returncode == 0 and short.stdout.strip():
-        return f"(detached HEAD at {short.stdout.strip()})"
+        return msgs.SURVEY_DETACHED.text(sha=short.stdout.strip())
     symbolic = _git("symbolic-ref", "--short", "HEAD", check=False, repo=repo)
-    return symbolic.stdout.strip() or "(no commits yet)"
+    return symbolic.stdout.strip() or msgs.SURVEY_NO_COMMITS.text()
 
 
 def _tracked_paths(rows: list[tuple[str, str]]) -> list[str]:
@@ -151,11 +162,8 @@ def _tracked_paths(rows: list[tuple[str, str]]) -> list[str]:
     return paths
 
 
-def _print_diff_section(repo: Path, title: str, paths: list[str], *, cached: bool, stageable: bool) -> None:
-    if stageable:
-        print(f"\n-- {title} (hunks numbered per file; reference as `stage <file> <n[,n]|all>`) --")
-    else:
-        print(f"\n-- {title} (already staged; review before commit — hunk numbers here do NOT address `stage`) --")
+def _print_diff_section(repo: Path, paths: list[str], *, cached: bool) -> None:
+    _out(msgs.SURVEY_STAGED if cached else msgs.SURVEY_UNSTAGED)
     any_diff = False
     for path in paths:
         args = ("diff", "--cached", "--", path) if cached else ("diff", "--", path)
@@ -164,15 +172,14 @@ def _print_diff_section(repo: Path, title: str, paths: list[str], *, cached: boo
             continue
         any_diff = True
         _, hunks = _split_hunks(diff)
-        print(f"\n### {path}  ({len(hunks)} hunk{'s' if len(hunks) != 1 else ''})")
+        _out(msgs.SURVEY_FILE, path=path, hunks=msgs.plural(len(hunks), "hunk"))
         if not hunks:
-            print("(no text hunks — binary/rename/mode? stage the whole file)")
+            _out(msgs.SURVEY_NO_TEXT_HUNKS)
         for i, h in enumerate(hunks, 1):
-            first = h.splitlines()[0]
-            print(f"  --- hunk {i}: {first}")
+            _out(msgs.SURVEY_HUNK, index=i, header=h.splitlines()[0])
             print(h.rstrip("\n"))
     if not any_diff:
-        print("(none)")
+        _out(msgs.SURVEY_NONE)
 
 
 def cmd_survey(repo: str | Path | None = None) -> int:
@@ -184,38 +191,38 @@ def cmd_survey(repo: str | Path | None = None) -> int:
         print(_git_failure_message(exc), file=sys.stderr)
         return 2 if exc.kind == "not-a-repo" else 1
 
-    print(f"=== SURVEY ({repo_path}) ===\nbranch: {branch}")
+    _out(msgs.SURVEY_HEADING, repo=repo_path)
+    _out(msgs.SURVEY_BRANCH, branch=branch)
 
-    print("-- status --")
+    _out(msgs.SURVEY_STATUS)
     if rows:
         for xy, path in rows:
-            print(f"{xy} {path}")
+            _out(msgs.SURVEY_STATUS_ROW, xy=xy, path=path)
     else:
-        print("(clean tree, nothing to commit)")
+        _out(msgs.SURVEY_CLEAN)
 
     tracked = _tracked_paths(rows)
     untracked = [p for xy, p in rows if xy == "??"]
 
     try:
-        _print_diff_section(repo_path, "staged diff", tracked, cached=True, stageable=False)
-        _print_diff_section(repo_path, "unstaged diff", tracked, cached=False, stageable=True)
+        _print_diff_section(repo_path, tracked, cached=True)
+        _print_diff_section(repo_path, tracked, cached=False)
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 1
 
-    if untracked:
-        print("\n-- untracked --")
-        for p in untracked:
-            print(f"?? {p}  (new file — `stage {p} all` to add whole)")
-    else:
-        print("\n-- untracked --\n(none)")
+    _out(msgs.SURVEY_UNTRACKED)
+    for p in untracked:
+        _out(msgs.SURVEY_UNTRACKED_ROW, path=p)
+    if not untracked:
+        _out(msgs.SURVEY_NONE)
 
-    print("\n-- recent log --")
+    _out(msgs.SURVEY_LOG)
     log = _git("log", "--oneline", "-8", check=False, repo=repo_path)
     if log.returncode == 0 and log.stdout.strip():
         print(log.stdout.rstrip("\n"))
     else:
-        print("(no history)")
+        _out(msgs.SURVEY_NO_HISTORY)
     return 0
 
 
@@ -225,7 +232,7 @@ def _stage_whole(path: str, repo: Path) -> int:
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 1
-    print(f"staged whole file: {path}")
+    _out(msgs.STAGED_WHOLE, path=path)
     return 0
 
 
@@ -247,15 +254,12 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
 
     xy = rows.get(path)
     if xy is None:
-        print(f"error: '{path}' has no pending changes", file=sys.stderr)
+        _err(msgs.STAGE_NO_CHANGES, path=path)
         return 2
 
     if xy == "??":
         if spec != "all":
-            print(
-                f"error: '{path}' is untracked; use `stage {path} all` (hunk specs only work for tracked text diffs)",
-                file=sys.stderr,
-            )
+            _err(msgs.STAGE_UNTRACKED, path=path)
             return 2
         return _stage_whole(path, repo_path)
 
@@ -264,7 +268,7 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
 
     want = _wanted_hunks(spec)
     if want is None:
-        print(f"error: hunks must be comma-separated numbers or 'all', got '{spec}'", file=sys.stderr)
+        _err(msgs.STAGE_BAD_SPEC, spec=spec)
         return 2
 
     try:
@@ -274,21 +278,21 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
         return 1
     header, hunks = _split_hunks(diff)
     if not hunks:
-        print(f"error: no unstaged text hunks in '{path}' (binary/rename/mode/already staged?) — use `stage {path} all`", file=sys.stderr)
+        _err(msgs.STAGE_NO_HUNKS, path=path)
         return 2
     bad = [n for n in want if n < 1 or n > len(hunks)]
     if bad:
-        print(f"error: hunk(s) {bad} out of range; '{path}' has {len(hunks)}", file=sys.stderr)
+        _err(msgs.STAGE_OUT_OF_RANGE, bad=", ".join(map(str, bad)), path=path, count=len(hunks))
         return 2
 
     patch = header + "".join(hunks[n - 1] for n in want)
     try:
         _git("apply", "--cached", "--recount", stdin=patch, repo=repo_path)
     except GitCommandError as exc:
-        detail = (exc.stderr or exc.stdout).strip() or "git apply failed"
-        print(f"{detail}\n(fallback: `stage {path} all`)", file=sys.stderr)
+        detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_APPLY_FAILED.text()
+        _err(msgs.STAGE_APPLY_FAILED, detail=detail, path=path)
         return 1
-    print(f"staged {path} hunk(s) {','.join(map(str, want))} of {len(hunks)}")
+    _out(msgs.STAGED_HUNKS, path=path, hunks=",".join(map(str, want)), total=len(hunks))
     return 0
 
 
@@ -307,10 +311,10 @@ def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool
     try:
         message = msg_path.read_text(encoding="utf-8")
     except OSError as exc:
-        print(f"cannot read message file: {exc}", file=sys.stderr)
+        _err(msgs.MESSAGE_FILE_UNREADABLE, error=exc)
         return 2
     if not message.strip():
-        print(f"commit message file is empty: {msg_path}", file=sys.stderr)
+        _err(msgs.MESSAGE_FILE_EMPTY, path=msg_path)
         return 2
     # cleanup=whitespace keeps `#`-prefixed lines (markdown headers in bodies).
     args = ["commit", "--file", str(msg_path), "--cleanup=whitespace"]
@@ -321,7 +325,10 @@ def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 1
-    print(proc.stdout.strip() or "committed")
+    if proc.stdout.strip():
+        print(proc.stdout.strip())
+    else:
+        _out(msgs.COMMITTED)
     return 0
 
 
@@ -332,7 +339,7 @@ def _extract_repo(argv: list[str]) -> tuple[Path | None, list[str], str | None]:
         arg = rest[0]
         if arg in ("-C", "--repo"):
             if len(rest) < 2:
-                return repo, rest, f"usage: python3 -m js.commit_helper {arg} <dir> <survey|stage ...>"
+                return repo, rest, msgs.COMMIT_HELPER_USAGE.text(usage=f"{arg} <dir> <survey|stage|commit ...>")
             repo = _repo_path(rest[1])
             rest = rest[2:]
             continue
@@ -351,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         print(error, file=sys.stderr)
         return 2
     if not argv or argv[0] not in ("survey", "stage", "commit"):
-        print(__doc__)
+        _out(msgs.COMMIT_HELPER_HELP)
         return 0 if argv else 2
     if argv[0] == "survey":
         return cmd_survey(repo)
@@ -359,11 +366,11 @@ def main(argv: list[str] | None = None) -> int:
         rest = [a for a in argv[1:] if a != "--amend"]
         amend = "--amend" in argv[1:]
         if len(rest) != 1:
-            print("usage: python3 -m js.commit_helper [-C DIR|--repo DIR] commit <message-file> [--amend]", file=sys.stderr)
+            _err(msgs.COMMIT_HELPER_USAGE, usage="[-C DIR|--repo DIR] commit <message-file> [--amend]")
             return 2
         return cmd_commit(rest[0], repo, amend=amend)
     if len(argv) != 3:
-        print("usage: python3 -m js.commit_helper [-C DIR|--repo DIR] stage <file> <hunks|all>", file=sys.stderr)
+        _err(msgs.COMMIT_HELPER_USAGE, usage="[-C DIR|--repo DIR] stage <file> <hunks|all>")
         return 2
     return cmd_stage(argv[1], argv[2], repo)
 

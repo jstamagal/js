@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from pathlib import Path
 
+from . import messages as msgs
 from . import paths as _paths
 from . import providers as _providers
 from . import settings as _settings
@@ -228,16 +229,16 @@ def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
 
 def _relative_session_path(session: str) -> Path:
     if not session or "\\" in session:
-        raise ValueError(f"session name must be a safe relative path: {session}")
+        raise ValueError(msgs.SESSION_NAME_UNSAFE.text(session=session))
     components = session.split("/")
     if any(not component or component in {".", ".."} for component in components):
-        raise ValueError(f"session name must not contain empty or traversal components: {session}")
+        raise ValueError(msgs.SESSION_NAME_TRAVERSAL.text(session=session))
 
     raw_path = Path(session)
     if raw_path.is_absolute():
-        raise ValueError(f"session name must be a relative path: {session}")
+        raise ValueError(msgs.SESSION_NAME_ABSOLUTE.text(session=session))
     if raw_path.suffix and raw_path.suffix != ".jsonl":
-        raise ValueError(f"session name must have no suffix or end in .jsonl: {session}")
+        raise ValueError(msgs.SESSION_NAME_SUFFIX.text(session=session))
     return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
 
 

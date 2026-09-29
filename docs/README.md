@@ -29,7 +29,7 @@ a general SaaS product, and it does not optimize for beginner UX or backward
 compatibility. The harness optimizes for:
 
 - Low-friction terminal workflows.
-- Explicit knobs instead of hidden policy.
+- Explicit settings instead of hidden policy.
 - Zsh-friendly shell execution through `$SHELL`.
 - Rich model-facing tool descriptions.
 - Prompt-directory agents.

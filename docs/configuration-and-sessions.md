@@ -19,17 +19,17 @@ In one line: `js/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. `set -<key>` drops what the layers in between set, so the knob takes its
+`#`. `set -<key>` drops what the layers in between set, so the setting takes its
 `js/jsrc` value again.
 
-`js/jsrc` holds one line per registered knob and is where every default value
-lives: change a number there and js starts with it. A knob it leaves unset is
-written `set -<key>`. If `js/jsrc` is missing, leaves out a registered knob,
+`js/jsrc` holds one line per registered setting and is where every default value
+lives: change a number there and js starts with it. A setting it leaves unset is
+written `set -<key>`. If `js/jsrc` is missing, leaves out a registered setting,
 or holds a line that does not apply, js stops at startup with one line naming
 the file.
 
 No other `jsrc` exists until you write one: js does not create
-`~/.js/jsrc`. `/save` writes it, holding only the knobs whose live
+`~/.js/jsrc`. `/save` writes it, holding only the settings whose live
 value differs from `js/jsrc`.
 
 `provider.id`, `provider.base_url`, and `provider.api_key` are unset in
@@ -37,13 +37,13 @@ value differs from `js/jsrc`.
 the given base URL and API key; otherwise `ai-python` routes the model id
 natively through AI Gateway or via `provider:model` syntax for direct providers.
 
-## Knob Reference
+## Setting Reference
 
 Every settable key is registered in `js/settings.py` `REGISTRY` with its type
 and help text; its default is its line in `js/jsrc`. `/set` with no argument
-lists every knob and its current value; `/show <key>` shows one knob with its
+lists every setting and its current value; `/show <key>` shows one setting with its
 help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
-knobs, and `<unset>` for knobs that explicitly defer to provider defaults. A set
+settings, and `<unset>` for settings that explicitly defer to provider defaults. A set
 `provider.api_key` is masked as `<set>`.
 
 Tool alias profiles let a model see alternate tool names without changing the
@@ -105,8 +105,8 @@ secrets in prompts or server-controlled content.
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
-coercion as `set`. Every knob reads its canonical `JS_<DOTTED_UPPER>` name
-(`sampling.top_p` <-> `JS_SAMPLING_TOP_P`); the knobs below also take a shorter
+coercion as `set`. Every setting reads its canonical `JS_<DOTTED_UPPER>` name
+(`sampling.top_p` <-> `JS_SAMPLING_TOP_P`); the settings below also take a shorter
 name, which wins when both are set. Default values are the lines in `js/jsrc`.
 
 | Variable | Key | Meaning |
@@ -166,7 +166,7 @@ lines are skipped rather than raising.
 
 Provider credentials are a separate matter: `js` deliberately does **not**
 ride ambient provider keys in place of a login (`js/model_client.py`). A
-`.env` sets env vars, so it feeds the same knobs env vars do — including
+`.env` sets env vars, so it feeds the same settings env vars do — including
 `JS_API_KEY` — but it does not bypass the login gate.
 
 ## CLI Overrides
@@ -191,11 +191,11 @@ js --migrate-config
 all `jsrc` files. It may be repeated. Exact registered keys use the same
 registry coercion as `set` and env vars, including JSON validation for structured
 settings; values store verbatim, with no magic clear/default token (clearing a
-knob back to its default is `set -key`). Loose keys and map subkeys use
+setting back to its default is `set -key`). Loose keys and map subkeys use
 generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
 on the first `=` only, so values may contain `=`.
 
-In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
+In the REPL, `set [key [val]]` uses the same registry: `set` lists settings,
 `set key` shows one value, `set key value` changes the live setting, and
 `set -key` puts it back to the value the session started with.
 `show [key]` lists every current value or only the requested key. Secret values
@@ -359,14 +359,14 @@ js --session reviews/parser-fix -p "apply the review corrections"
 js --session 20260611T120000Z-abcd -p "resume a generated session"
 ```
 
-Generated session ids can be resumed from the `Continue:` hint. Driver
+Generated session ids can be resumed from the `*** Continue:` hint. Driver
 integrations that have a stable caller key can instead derive an opaque name
 from agent + resolved working directory + caller key; repeated runs get the same
 `derived/<sha256>` session while different agents, directories, or keys remain
 isolated.
 
-`--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints exactly
-`session not saved; resume unavailable` once on stderr after the run while
+`--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints
+`*** Session not saved. Resume unavailable.` once on stderr after the run while
 keeping stdout answer-only. It does not warn in the interactive REPL. This is an
 expensive throwaway choice because the next run cannot resume and must re-read
 context.

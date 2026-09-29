@@ -16,14 +16,13 @@ runner joins it onto RepoRacer's pass/fail record.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import re
-import sys
 from collections import Counter
 from pathlib import Path
 
 from . import paths as _paths
+from . import messages as msgs
 
 _SEGMENT_SPLIT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
 _READ_CMDS = {"cat", "head", "tail", "less", "more", "bat"}
@@ -150,24 +149,24 @@ def latest_session(data_dir: Path, agent: str | None) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="js.toolstats", description=__doc__.split("\n\n")[1])
-    parser.add_argument("path", nargs="?", help="session JSONL to summarize")
-    parser.add_argument("--latest", action="store_true", help="summarize the newest session instead of a path")
-    parser.add_argument("--data-dir", type=Path, default=None, help="directory holding sessions/ (default: the js home)")
-    parser.add_argument("--agent", default=None, help="restrict --latest to this agent's sessions")
-    parser.add_argument("--tag", default="", help="prefix the JSON line with this word, e.g. TOOLSTATS")
-    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help="extra key=value to include (repeatable)")
+    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.text())
+    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.text())
+    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.text())
+    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.text())
+    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.text())
+    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.text())
+    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.text())
     args = parser.parse_args(argv)
 
     if args.latest:
         path = latest_session(args.data_dir or _paths.sessions_root().parent, args.agent)
         if path is None:
-            print("js: toolstats: no session found", file=sys.stderr)
+            msgs.warn(msgs.TOOLSTATS_NO_SESSION)
             return 1
     elif args.path:
         path = Path(args.path)
     else:
-        parser.error("give a session path or --latest")
+        parser.error(msgs.TOOLSTATS_NEEDS_PATH.text())
     summary = summarize(path)
     for item in args.extra:
         key, _, value = item.partition("=")

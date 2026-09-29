@@ -6,10 +6,10 @@ from dataclasses import dataclass, field, replace
 from functools import cache
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-import sys
 from typing import Any
 
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
+from .. import messages as msgs
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
@@ -422,18 +422,14 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
             except OSError as exc:
                 # A symlinked agent on a sleeping NFS/automount host stats as
                 # ENODEV or ETIMEDOUT. One unreachable agent must not kill every run.
-                print(f"js: agent dir {agent_dir} unreadable ({exc.strerror}); skipped", file=sys.stderr)
+                msgs.warn(msgs.AGENT_DIR_UNREADABLE, path=agent_dir, error=exc.strerror)
                 continue
             if agent_id in reserved:
                 # A builtin tool owns this name, so the agent can never be selected.
                 # Silently skipping looked identical to "the directory isn't there",
                 # which is a long afternoon of debugging for whoever named an agent
                 # `read` or `task`.
-                print(
-                    f"js: agent {agent_id!r} in {root} shadows a builtin tool name; "
-                    "not exposed as a tool (rename the directory)",
-                    file=sys.stderr,
-                )
+                msgs.warn(msgs.AGENT_NAME_IS_TOOL, agent=agent_id, root=root)
                 continue
             # Later roots are more specific and shadow earlier prompt dirs.
             by_id[agent_id] = agent_dir

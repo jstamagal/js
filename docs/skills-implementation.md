@@ -100,7 +100,7 @@ snapshot above is older than the shipped product. Current documented behaviour
 (`docs/en/skills#skill-descriptions-are-cut-short`,
 `docs/en/settings-reference#skilllistingbudgetfraction`):
 
-| Knob | Default | Notes |
+| Setting | Default | Notes |
 |---|---|---|
 | `skillListingBudgetFraction` | `0.01` (1% of context window) | settings.json, any scope. `0 < x <= 1`. |
 | `SLASH_COMMAND_TOOL_CHAR_BUDGET` | unset | env var, fixed character count; overrides the fraction |

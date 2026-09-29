@@ -8,12 +8,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sys
 import time
 import traceback
 from uuid import uuid4
 
 from . import paths
+from . import messages as msgs
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
 
@@ -77,7 +77,7 @@ class CompactionFlight:
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
                 except OSError as exc:
-                    print(f"[FLIGHT AUTOLOG ERROR] {exc} flight={self.path}", file=sys.stderr, flush=True)
+                    msgs.warn(msgs.FLIGHT_AUTOLOG_FAILED, error=exc, path=self.path)
 
     def snapshot(self, phase, system, messages):
         encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False, default=_json)
@@ -85,7 +85,8 @@ class CompactionFlight:
                     utf8_bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest())
 
     def notice(self, event, detail=""):
-        print(f"[COMPACT {event.upper()} {self.id[:12]}] operation={self.operation} {detail} flight={self.path}", file=sys.stderr, flush=True)
+        msgs.warn(msgs.FLIGHT_NOTICE, event=event, id=self.id[:12], operation=self.operation, detail=detail,
+                  path=self.path)
 
     def write(self, text):
         if text:

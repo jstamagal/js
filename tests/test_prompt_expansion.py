@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from js import messages as msgs, promptexpand
 from js.promptexpand import expand_prompt, PromptExpansionError
 
 
@@ -55,7 +56,8 @@ def test_file_missing_skips():
 def test_unknown_subsystem_errors():
     with pytest.raises(PromptExpansionError) as e:
         expand_prompt("!{wat hi}", env={}, on_error="raise")
-    assert "unknown inline subsystem" in str(e.value)
+    known = ", ".join(sorted(promptexpand._SUBSYSTEMS))
+    assert str(e.value) == msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.text(name="wat", known=known)
 
 
 # ---- backtick-quoted directives stay literal (documentation, not a request) ----

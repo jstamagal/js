@@ -7,11 +7,12 @@ import fcntl
 import hashlib
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from . import messages as msgs
 
 SCHEMA_VERSION = 1
 
@@ -212,12 +213,8 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
             if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
                 messages.append(rec.message)
     if skipped_versions:
-        print(
-            f"warning: {memory_file}: skipped {skipped_versions} record(s) from an "
-            f"incompatible schema version (no migration to {SCHEMA_VERSION} yet) — "
-            "history may be incomplete",
-            file=sys.stderr,
-        )
+        msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
+                  records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
     return _heal_orphaned_tool_calls(messages)
 
 

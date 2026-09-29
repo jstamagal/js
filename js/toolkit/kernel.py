@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import messages as msgs
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
@@ -217,11 +218,12 @@ def render_execution(
     limit = render_max_lines(context)
 
     if level == "quiet":
-        head = "INTERRUPTED" if interrupted else "ERROR"
-        body, hidden = _clip(error or "cell interrupted", limit)
-        console.print(Text(f"kernel[{cell}] {head}: ", style="bold red") + Text(body))
+        # Severity is the colour: yellow for an interrupt, red for a failure.
+        style = "bold yellow" if interrupted and not error else "bold red"
+        body, hidden = _clip(error or msgs.KERNEL_CELL_INTERRUPTED.text(), limit)
+        console.print(Text(msgs.KERNEL_CELL.text(cell=cell), style=style) + Text(body))
         if hidden:
-            console.print(Text(f"  ... {hidden} more lines (full text went to the model)",
+            console.print(Text("  " + msgs.KERNEL_MORE_LINES.text(count=hidden),
                                style="dim"))
         return
 
@@ -233,7 +235,7 @@ def render_execution(
     grid.add_row("code", Syntax(shown_code, "python", theme="ansi_dark",
                                 word_wrap=True, background_color="default"))
     if code_hidden:
-        grid.add_row("", Text(f"... {code_hidden} more lines of code", style="dim"))
+        grid.add_row("", Text(msgs.KERNEL_MORE_CODE_LINES.text(count=code_hidden), style="dim"))
 
     if level == "verbose":
         sections = (("stdout", stdout, ""), ("stderr", stderr, "yellow"),
@@ -248,26 +250,26 @@ def render_execution(
         shown, hidden = _clip(body.rstrip("\n"), limit)
         grid.add_row(label, Text(shown, style=style or None))
         if hidden:
-            grid.add_row("", Text(f"... {hidden} more lines (full text went to the model)",
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
                                   style="dim"))
 
     if error:
         shown, hidden = _clip(error.rstrip("\n"), limit)
         grid.add_row("error", Text(shown, style="red"))
         if hidden:
-            grid.add_row("", Text(f"... {hidden} more lines (full text went to the model)",
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
                                   style="dim"))
     if interrupted:
-        grid.add_row("stopped", Text("SIGINT sent; namespace intact", style="bold yellow"))
+        grid.add_row("stopped", Text(msgs.KERNEL_STOPPED.text(), style="bold yellow"))
     if added:
         grid.add_row("defined", Text(", ".join(added), style="green"))
     if removed:
         grid.add_row("gone", Text(", ".join(removed), style="red"))
-    grid.add_row("namespace", Text(", ".join(namespace) if namespace else "(none)"))
+    grid.add_row("namespace", Text(", ".join(namespace) if namespace else msgs.NONE_VALUE.text()))
     for image in images:
         grid.add_row("image", Text(str(image), style="blue"))
 
-    console.print(Panel(grid, title=f"kernel cell {cell}",
+    console.print(Panel(grid, title=msgs.KERNEL_PANEL_TITLE.text(cell=cell),
                         subtitle=f"{elapsed:.2f}s", title_align="left",
                         subtitle_align="right", border_style="cyan"))
 
@@ -293,7 +295,7 @@ def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
     for line in shown.splitlines():
         console.print(Text("· ", style="dim") + Text(line, style=style))
     if hidden:
-        console.print(Text(f"  ... {hidden} more lines", style="dim"))
+        console.print(Text("  " + msgs.KERNEL_EVENT_MORE_LINES.text(count=hidden), style="dim"))
 
 
 # --------------------------------------------------------------------------
@@ -941,7 +943,7 @@ def kernel(
         return problem
     notes: list[str] = []
     if started_now:
-        render_event(context, level, f"kernel started in {session.cwd}", verbose_only=True)
+        render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd), verbose_only=True)
         notes.append(f"kernel started (cwd {session.cwd})")
 
     if restart:
@@ -951,7 +953,7 @@ def kernel(
             message = f"ERROR: kernel restart failed: {type(exc).__name__}: {exc}"
             render_event(context, level, message, style="bold red")
             return message
-        render_event(context, level, "kernel restarted — namespace cleared", style="yellow")
+        render_event(context, level, msgs.KERNEL_RESTARTED.text(), style="yellow")
         notes.append("kernel restarted; the namespace is empty")
         if mode == "run" and not code.strip():
             return "\n".join([*notes, "NAMESPACE (none)"])

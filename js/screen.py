@@ -29,6 +29,7 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 
+from . import messages as msgs
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
 from .settings import default_value, is_hex_colour
@@ -86,7 +87,7 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
         elapsed = int(max(0.0, now - status.tool_started))
         return f"{status.tool}{extra} {elapsed}s", None
     if status.compacting:
-        return "compacting", None
+        return msgs.STATUS_COMPACTING.text(), None
     if show_bytes and status.net_bytes:
         return f"{status.net_bytes // 100 * 100:,}B", None
     return "", status.output_tokens or None
@@ -128,7 +129,7 @@ def status_line(
             count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
             centre = " ".join(filter(None, (throbber, phase, count)))
         who = "/".join(filter(None, (agent_id if show["agent"] else "", session_short or "")))
-        right = " ".join(filter(None, (who, f"cache {cache_pct}%" if show["cache"] else "")))
+        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "")))
         return left, centre, right
 
     def fits(left: str, centre: str, right: str) -> bool:

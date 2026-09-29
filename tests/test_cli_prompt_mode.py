@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from js import cli, runtime, settings
+from js import messages as msgs
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -178,7 +179,7 @@ def test_compact_command_summarizes_with_the_active_model(monkeypatch, tmp_path)
 
     def compact_stub(cfg, system, messages, *, focus="", forced=False, **kwargs):
         seen.append(cfg.model)
-        return "compacted: fixture"
+        return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     cfg = from_env()
@@ -538,7 +539,8 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
 
 # Agent drivers read this stderr line after a headless run as the signal that
 # the next round cannot resume (docs/configuration-and-sessions.md).
-NO_SAVE_WARNING = "session not saved; resume unavailable"
+# stderr is not a terminal here, so the line is plain: what a driver parses.
+NO_SAVE_WARNING = msgs.NOT_SAVED_NO_RESUME.line(colour=False)
 
 
 def test_js_pipe_modes_no_save_pass_save_false(monkeypatch, capsys):
@@ -634,7 +636,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
 
     def compact_stub(cfg, system, messages, *, forced=False, **kwargs):
         seen.append(cfg.model)
-        return "compacted: fixture"
+        return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
@@ -754,7 +756,7 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path):
 
     def compact_stub(cfg, system, messages, *, focus="", forced=False, **kwargs):
         seen.append(cfg.model)
-        return "compacted: fixture"
+        return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
 
@@ -780,7 +782,7 @@ def test_commit_mode_defaults_to_cwd_and_uses_prompt_as_operator_context(monkeyp
     prompt = calls[0]["prompt"]
     assert prompt.startswith(f"Commit all work in this target directory: {tmp_path}")
     assert "js.commit_helper" in prompt and "stage" in prompt
-    assert "SURVEY" in prompt
+    assert msgs.SURVEY_HEADING.text(repo=tmp_path.resolve()) in prompt
     assert "Operator context:\nalmost all housekeeping tasks" in prompt
     assert calls[0]["agent"] == "commit"
     assert calls[0]["save"] is False
@@ -938,7 +940,7 @@ def _auto_state() -> dict:
 def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     disabled = _auto_compact_cfg(tmp_path, compact={"auto": False})
     cli._maybe_auto_compact(disabled, _auto_state())
@@ -952,7 +954,7 @@ def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsy
 
 def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
@@ -965,7 +967,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     first = capsys.readouterr().out
     cli._maybe_auto_compact(cfg, state)
     second = capsys.readouterr().out
-    assert "50% full" in first
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in first
     assert second == ""
     assert calls == []
 
@@ -974,7 +976,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     assert state["auto_compact"].notified is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert "50% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in capsys.readouterr().out
 
 
 def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
@@ -982,7 +984,7 @@ def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
 
     def compact_stub(cfg, system, messages, *, forced=False, **kwargs):
         seen.append(cfg.model)
-        return "compacted: fixture"
+        return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
@@ -1000,7 +1002,7 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
 
     def compact_stub(cfg, system, messages, *, forced=False, **kwargs):
         calls.append({"forced": forced, "system": system, "messages": messages})
-        return "compacted: fixture"
+        return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     cfg = _auto_compact_cfg(tmp_path)
@@ -1015,7 +1017,7 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
 
 def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 10, raising=False)
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_incomplete_reason", "max_output_tokens", raising=False)
     cfg = _auto_compact_cfg(tmp_path)
@@ -1031,7 +1033,7 @@ def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp
 
 def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigger(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
@@ -1057,7 +1059,7 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
 
 def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     for compact in (
         {
@@ -1080,12 +1082,12 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
 
     assert len(calls) == 2
     assert [call["forced"] for call in calls] == [False, False]
-    assert capsys.readouterr().out.count("80% full") == 2
+    assert capsys.readouterr().out.count(msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.80)) == 2
 
 
 def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
@@ -1100,13 +1102,13 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
-    assert "80% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.80) in capsys.readouterr().out
 
 
 def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     for raw in ("false", "0", "off", "no"):
         cli._maybe_auto_compact(_auto_compact_cfg(tmp_path, compact={"auto": raw}), _auto_state())
@@ -1155,7 +1157,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     # this, the between-turn trigger measured against the raw window and
     # disagreed with the in-turn budget check.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 100_000, "buffer_tokens": 4_000},
@@ -1167,7 +1169,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
-    assert "90% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.90) in capsys.readouterr().out
 
 
 def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, tmp_path, capsys):
@@ -1175,7 +1177,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     # negative budget; the floor keeps half the window addressable instead of
     # compacting on every single turn.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 32_000, "buffer_tokens": 4_000},
@@ -1186,7 +1188,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
-    assert "50% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in capsys.readouterr().out
 
 
 def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(monkeypatch, tmp_path, capsys):
@@ -1195,7 +1197,7 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
     # reserve is capped at compact.summary_reserve_tokens (20k default), so
     # 345,904 is addressable and 260k reads as 75%, under the trigger.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"context_window": 370_000, "buffer_tokens": 4_096},
@@ -1206,12 +1208,12 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
-    assert "75% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.75) in capsys.readouterr().out
 
 
 def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
@@ -1232,7 +1234,7 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
 def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypatch, tmp_path, capsys):
     # Known model: metadata wins, the fallback is ignored entirely.
     calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
+    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: 1_050_000)
     cfg = _auto_compact_cfg(
         tmp_path,

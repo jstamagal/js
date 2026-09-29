@@ -14,8 +14,8 @@ each description carries before conditional sections resolve.
 """
 from __future__ import annotations
 
-import argparse
-import sys
+
+from . import messages as msgs
 
 from .toolkit.core import compact_json
 from .toolkit.descriptions import render_tool_name_sections
@@ -67,19 +67,16 @@ def _registry(names: list[str]) -> ToolRegistry | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="js.tooldiag",
-        description="Per-tool byte cost of model-facing descriptions and parameter schemas.",
-    )
+    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.text())
     parser.add_argument(
         "--surface",
         default="",
-        help="comma-separated tool names; default is the full default registry",
+        help=msgs.OPT_TOOLDIAG_SURFACE.text(),
     )
     args = parser.parse_args(argv)
     registry = _registry(parse_surface(args.surface))
     if registry is None:
-        print("js: tooldiag: surface matched no tools", file=sys.stderr)
+        msgs.warn(msgs.TOOLDIAG_NO_TOOLS)
         return 1
     print(render_table(registry, [tool.name for tool in registry.tools]))
     return 0

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from . import messages as msgs
 from . import oauth_loopback
 
 if TYPE_CHECKING:
@@ -228,8 +229,7 @@ def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
     url = build_authorize_url(endpoints.authorize, state, nonce, challenge, referrer=referrer)
-    print("Opening browser for xAI login...")
-    print(f"If it does not open, visit:\n{url}")
+    msgs.say(msgs.OAUTH_OPENING, service="xAI", url=url)
     webbrowser.open(url)
     code = oauth_loopback.wait_for_code(
         port=CALLBACK_PORT,

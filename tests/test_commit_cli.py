@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 
 
-from js import cli, paths
+from js import cli, messages as msgs, paths
 
 
 def _git(repo, *args):
@@ -117,12 +117,12 @@ def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monke
 
     assert actual == 0
     prompt = calls[0]["prompt"]
-    assert "-- staged diff" in prompt
-    assert "-- unstaged diff" in prompt
+    assert msgs.SURVEY_STAGED.text() in prompt
+    assert msgs.SURVEY_UNSTAGED.text() in prompt
     assert "line2_STAGED" in prompt
     assert "line28_UNSTAGED" in prompt
     assert "?? new.txt" in prompt
-    assert "(clean tree, nothing to commit)" not in prompt
+    assert msgs.SURVEY_CLEAN.text() not in prompt
 
 
 def _init_repo(repo):

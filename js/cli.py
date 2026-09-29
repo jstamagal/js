@@ -38,6 +38,7 @@ from . import events
 from . import exline
 from . import logins
 from . import memory as M
+from . import messages as msgs
 from . import model_client
 from . import model_metadata
 from . import persona as P
@@ -74,43 +75,9 @@ from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
 
-_SHORT_HELP = """js — one agent, one terminal.
-
-RUN
-  js                          interactive REPL in this directory
-  js -p "task"                one prompt, print the answer
-  echo task | js -p           same, from stdin
-  js -C DIR ...               run as if launched from DIR
-
-PICK
-  -a NAME     agent profile (~/.js/agents/NAME)
-  -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
-  -r EFFORT   off|minimal|low|medium|high|xhigh|max
-
-STATE (sessions are saved by default — this is what a driven agent normally wants)
-  -s NAME     create or resume a named session
-  --session-key KEY   derive a stable session from agent + cwd + key
-  --list [--json]     list every saved session
-  -n, --no-save
-              expensive throwaway choice: resume is unavailable, so the next
-              run must re-read context. Use only for throwaway one-liners.
-  --debug-file PATH   full request trace, for debugging js
-
-SCRIPTING
-  -q          no resume hint after the answer (the session is still saved)
-  -f PATH     attach a file or image (repeatable)
-  --max-out N max output tokens
-  --extra K=V one-off config, e.g. --extra limits.task_max_depth=3
-
-MORE
-  js --login [PROVIDER]   sign in      js --list-models
-  js --commit             commit agent js --help-full
-"""
-
-
 class _ShortHelpAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        parser._print_message(_SHORT_HELP, sys.stdout)
+        parser._print_message(msgs.SHORT_HELP.text(), sys.stdout)
         parser.exit()
 
 
@@ -341,7 +308,7 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     if isinstance(model, str) and model:
         resume += f" --model {shlex.quote(model)}"
     resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
-    print(f"{C.GREY}Resume: {C.RESET}{resume}")
+    msgs.say(msgs.RESUME_HINT, command=resume)
 
 
 def _print_session_list(*, json_lines: bool) -> int:
@@ -351,7 +318,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
         return 0
 
-    headings = ("AGENT", "NAME", "MTIME", "SIZE", "TURNS", "IN-FLIGHT", "CWD", "JOB")
+    headings = tuple(msgs.LIST_HEADINGS.text().split())
     rows = []
     for record in records:
         identity = record["caller_key"]
@@ -364,7 +331,7 @@ def _print_session_list(*, json_lines: bool) -> int:
                 datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
                 str(record["size"]),
                 str(record["user_turns"]),
-                "yes" if record["in_flight"] else "no",
+                (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).text(),
                 record["cwd"] or "-",
                 identity or "-",
             )
@@ -800,7 +767,7 @@ def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
     try:
         state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
     except tool_policy.ToolPolicyError as exc:
-        print(f"{C.ORANGE}{exc}; keeping the current tool surface{C.RESET}")
+        msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
 
 
 def _state_value(state: dict, key: str, default):
@@ -1108,9 +1075,9 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     finally:
         turn_status.compacting = False
     for notice in outcome.notices:
-        print(f"{C.ORANGE}{notice}{C.RESET}")
+        msgs.say_said(notice)
     if outcome.result is not None:
-        print(f"{C.GREY}({outcome.result}){C.RESET}")
+        msgs.say(msgs.COMPACTION_DONE, result=outcome.result)
 
 
 def _maybe_auto_compact(cfg: Config, state: dict) -> None:
@@ -1120,17 +1087,14 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if not canonical_id:
-        raise ValueError("no provider set")
+        raise ValueError(msgs.NO_PROVIDER_SET.text())
     saved = logins.load_logins().get(canonical_id)
     if saved is not None:
         return saved
     provider_def = providers.provider_for_login(canonical_id)
     resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
     if provider_def.requires_api_key and not resolved_api_key:
-        raise ValueError(
-            f"provider {canonical_id!r} needs an API key; run `js --login {canonical_id}` "
-            "or `set provider.api_key <value>`"
-        )
+        raise ValueError(msgs.PROVIDER_NEEDS_KEY.text(provider=canonical_id))
     return logins.Login(
         provider_id=canonical_id,
         sdk_provider_id=provider_def.effective_sdk_provider_id,
@@ -1217,10 +1181,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["model_source"] = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
         state["model"] = model_value
-        if configured_provider_id:
-            print(f"{C.GREEN}model set to {configured_provider_id}:{model_value}{C.RESET}")
-        else:
-            print(f"{C.GREEN}model set to {model_value}{C.RESET}")
+        msgs.say(msgs.MODEL_SET, model=_provider_qualified(configured_provider_id, model_value))
         return
 
     route = routing.resolve_model_route(
@@ -1239,25 +1200,12 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["provider_base_url"] = route.base_url
     state["provider_api_key"] = route.api_key
     state["provider_headers"] = dict(route.headers)
-    if route.provider_id:
-        print(f"{C.GREEN}model set to {route.provider_id}:{route.model}{C.RESET}")
-    else:
-        print(f"{C.GREEN}model set to {route.model}{C.RESET}")
+    msgs.say(msgs.MODEL_SET, model=_provider_qualified(route.provider_id, route.model))
 
 
-# --------------------------------------------------------------------------
-# Banner / help
-# --------------------------------------------------------------------------
-
-BANNER = f"""\
-{C.CYAN}me — js agent{C.RESET}
-{C.MAGENTA}agent:{C.RESET}  {{agent}}
-{C.MAGENTA}model:{C.RESET}  {{model}}
-{C.MAGENTA}prompt:{C.RESET} {{prompt}}
-{C.MAGENTA}memory:{C.RESET} {{memory}}
-
-{C.GREEN}type 'exit' or Ctrl-D to quit. /help for commands.{C.RESET}
-"""
+def _provider_qualified(provider_id: str | None, model: str) -> str:
+    """`provider:model` as the model lines print it; the bare model without a provider."""
+    return f"{provider_id}:{model}" if provider_id else model
 
 
 def _pick_model_into_state(state: dict, cfg: Config) -> None:
@@ -1280,10 +1228,11 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["model_source"] = None  # the pick was persisted into the store
 
     _saved_path, save_error = _persist_default_model_id(default_model_id)
+    chosen = f"{selected['provider_id']}:{selected['model']}"
     if save_error:
-        print(f"{C.ORANGE}selected {selected['provider_id']}:{selected['model']} but default save failed: {save_error}{C.RESET}")
+        msgs.say(msgs.DEFAULT_MODEL_NOT_SAVED, model=chosen, error=save_error)
     else:
-        print(f"{C.GREEN}selected {selected['provider_id']}:{selected['model']} and saved as default{C.RESET}")
+        msgs.say(msgs.DEFAULT_MODEL_SAVED, model=chosen)
 
 
 def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
@@ -1292,63 +1241,65 @@ def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
         try:
             max_models = int(arg.split()[0])
         except ValueError:
-            return f"/models expects an integer limit, got: {arg.split()[0]!r}"
+            return msgs.MODELS_LIMIT_NOT_A_NUMBER.said(value=arg.split()[0])
     provider_id = _state_value(state, "provider_id", cfg.provider_id)
     provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
     provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
     if not provider_id:
-        return "no provider set; use /provider <id> first"
+        return msgs.NO_PROVIDER.said()
     try:
         model_ids = _models_for_provider(provider_id, provider_base_url, provider_api_key)
     except Exception as e:  # noqa: BLE001
-        return f"could not list models: {type(e).__name__}: {e}"
+        return msgs.MODELS_NOT_LISTED.said(error=f"{type(e).__name__}: {e}")
     for mid in model_ids[:max_models]:
-        print(f"  {C.CYAN}{mid}{C.RESET}")
+        msgs.say(msgs.MODEL_ROW, model=mid)
     if len(model_ids) > max_models:
-        print(f"{C.GREY}...and {len(model_ids) - max_models} more{C.RESET}")
+        msgs.say(msgs.MORE_ROWS, count=len(model_ids) - max_models)
     return None
 
 
 def _cmd_provider(arg: str, state: dict, cfg: Config) -> str | None:
     if not arg:
         cur = _state_value(state, "provider_id", cfg.provider_id)
-        print(f"{C.MAGENTA}current provider:{C.RESET} {cur or '(unset — uses AI Gateway / model prefix)'}")
+        if cur:
+            msgs.say(msgs.PROVIDER_IS, provider=cur)
+        else:
+            msgs.say(msgs.PROVIDER_UNSET)
         return None
     name = arg.split()[0]
     _set_provider_state(state, name)
-    print(f"{C.GREEN}provider set to {providers.normalize_provider_id(name) or name}{C.RESET}")
+    msgs.say(msgs.PROVIDER_SET, provider=providers.normalize_provider_id(name) or name)
     return None
 
 
 def _cmd_baseurl(arg: str, state: dict, cfg: Config) -> str | None:
     state["provider_base_url"] = arg.split()[0] if arg else None
-    print(f"{C.GREEN}base URL {'set' if arg else 'cleared'}{C.RESET}")
+    msgs.say(msgs.BASE_URL_SET if arg else msgs.BASE_URL_CLEARED)
     return None
 
 
 def _cmd_apikey(arg: str, state: dict, cfg: Config) -> str | None:
     state["provider_api_key"] = arg.split()[0] if arg else None
-    print(f"{C.GREEN}API key {'set' if arg else 'cleared'}{C.RESET}")
+    msgs.say(msgs.API_KEY_SET if arg else msgs.API_KEY_CLEARED)
     return None
 
 
 def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split()
     if not parts:
-        return "usage: /login <name> [apikey] [baseurl] [provider]"
+        return msgs.USAGE.said(usage="/login <name> [apikey] [baseurl] [provider]")
     name = parts[0]
     key, url, ptype = (parts[1:] + [None, None, None])[:3]
     if key is None and url is None and ptype is None:
         # bare `/login <name>`: load a saved login (or fall back to provider defaults)
         _set_provider_state(state, name)
-        print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(name) or name}{C.RESET}")
+        msgs.say(msgs.PROVIDER_SET, provider=providers.normalize_provider_id(name) or name)
         return None
     # explicit creds: build + persist a login under <name>, then activate it.
     # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
     prov = providers.get_provider(ptype or name)
     if ptype is None and prov is None:
-        return (f"/login: '{name}' is not a known provider — name the provider type: "
-                f"/login {name} <apikey> <baseurl> <provider>")
+        return msgs.LOGIN_UNKNOWN_PROVIDER.said(name=name)
     sdk = prov.effective_sdk_provider_id if prov is not None else ptype
     canonical = providers.normalize_provider_id(name) or name
     logins.save_login(logins.Login(
@@ -1358,7 +1309,7 @@ def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
         provider_api_key=key,
     ))
     _apply_saved_login_to_state(state, canonical)
-    print(f"{C.GREEN}login saved + active: {canonical}{C.RESET}")
+    msgs.say(msgs.LOGIN_SAVED, provider=canonical)
     return None
 
 
@@ -1367,7 +1318,7 @@ def _cmd_logout(arg: str, state: dict, cfg: Config) -> str | None:
     state["provider_base_url"] = None
     state["provider_api_key"] = None
     state["provider_headers"] = {}
-    print(f"{C.GREY}provider credentials cleared for this session{C.RESET}")
+    msgs.say(msgs.PROVIDER_CLEARED)
     return None
 
 
@@ -1375,14 +1326,13 @@ def _force_refresh_model_catalog() -> bool:
     try:
         status = model_metadata.ensure_fresh_catalog(force=True)
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}model catalog refresh failed: {type(e).__name__}: {e}{C.RESET}")
+        msgs.say(msgs.CATALOG_REFRESH_FAILED, error=f"{type(e).__name__}: {e}")
         return False
     checked_at = status.refreshed_at or status.generated_at
     stamp = checked_at.isoformat(timespec="seconds") if checked_at else "unknown"
     models = "?" if status.model_count is None else str(status.model_count)
     providers_count = "?" if status.provider_count is None else str(status.provider_count)
-    print(f"{C.GREEN}models.dev catalog refreshed{C.RESET} at {stamp} ({providers_count} providers, {models} models)")
-    print(f"{C.GREY}{status.db_path}{C.RESET}")
+    msgs.say(msgs.CATALOG_REFRESHED, stamp=stamp, providers=providers_count, models=models, path=status.db_path)
     return True
 
 
@@ -1410,10 +1360,10 @@ def _run_migrate_config() -> int:
     legacy = _paths.legacy_global_config_file()
     target = _paths.global_config_file()
     if not legacy.exists():
-        print(f"{C.ORANGE}no legacy config at {legacy}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.MIGRATE_NO_LEGACY, path=legacy)
         return 1
     if target.exists():
-        print(f"{C.ORANGE}{target} already exists; remove it first to re-migrate{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.MIGRATE_TARGET_EXISTS, path=target)
         return 1
     with legacy.open("rb") as fp:
         data = tomllib.load(fp)
@@ -1421,8 +1371,7 @@ def _run_migrate_config() -> int:
     lines.extend(f"set {key} {value}" for key, value in _flatten_toml(data))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"{C.GREEN}wrote {target}{C.RESET} from {legacy}")
-    print(f"{C.GREY}review it, then delete {legacy} when satisfied (this flag is removed after 2 releases){C.RESET}")
+    msgs.say(msgs.MIGRATE_WROTE, path=target, legacy=legacy)
     return 0
 
 
@@ -1475,7 +1424,7 @@ def _print_tool_chain(state: dict, cfg: Config) -> None:
         config = tool_policy.load_tools_config()
         rules = tool_policy.expand(state.get("tool_selectors", ()), config, f"agent {cfg.agent_id!r}")
     except tool_policy.ToolPolicyError as exc:
-        print(f"{C.ORANGE}{exc}{C.RESET}")
+        msgs.say(msgs.FAILED, error=exc)
         return
     for row in tool_policy.render_table(tool_policy.resolve(full.tools, rules), config.bans):
         print(row)
@@ -1492,7 +1441,7 @@ class Command:
 
     run: Callable[[str, dict, Config], str | None]
     usage: str
-    doc: str
+    doc: msgs.Message
     complete: str | None = None  # argument completion source (see replcomplete)
     turn_state: bool = False     # clears/rotates/compacts the live message list
 
@@ -1527,7 +1476,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
         window = compaction.configured_context_window(
             active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
         )
-        print(f"ctx={window} model={active.model} (effective for next request)")
+        msgs.say(msgs.CONTEXT_WINDOW_SET, window=window, model=active.model)
     return None
 
 
@@ -1569,24 +1518,24 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if not parts:
         for name, body in aliases.items():
-            print(f"alias {name} {body}")
+            msgs.say(msgs.ALIAS_ROW, name=name, body=body)
         if not aliases:
-            print("(no aliases)")
+            msgs.say(msgs.NO_ALIASES)
         return None
     name = parts[0].lower().lstrip("/")
     if name.startswith("-") and len(name) > 1:
         if aliases.pop(name[1:], None) is None:
-            return f"no alias {name[1:]}"
+            return msgs.NO_ALIAS.said(name=name[1:])
         return None
     if len(parts) == 1:
         if name not in aliases:
-            return f"no alias {name}"
-        print(f"alias {name} {aliases[name]}")
+            return msgs.NO_ALIAS.said(name=name)
+        msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
         return None
     if name in COMMANDS:
-        return f"alias {name}: {name} is a command"
+        return msgs.ALIAS_IS_COMMAND.said(name=name)
     aliases[name] = parts[1].strip()
-    print(f"alias {name} {aliases[name]}")
+    msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
     return None
 
 
@@ -1599,15 +1548,15 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     if error:
         return error
     if len(stack) >= setcmd.MAX_LOAD_DEPTH:
-        return "load nesting too deep"
+        return msgs.LOAD_TOO_DEEP.said()
     if path in stack:
-        return f"load cycle: {path}"
+        return msgs.LOAD_CYCLE.said(path=path)
     if not path.is_file():
-        return f"script not found: {path}"
+        return msgs.LOAD_NOT_FOUND.said(path=path)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as e:
-        return f"failed to read script: {path}: {type(e).__name__}: {e}"
+        return msgs.LOAD_UNREADABLE.said(path=path, error=f"{type(e).__name__}: {e}")
     stack.append(path)
     try:
         for lineno, raw in enumerate(lines, 1):
@@ -1615,10 +1564,10 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
                 continue
             error = _run_script_line(raw, state, cfg)
             if error:
-                return f"{path}:{lineno}: {error}"
+                return msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error)
     finally:
         stack.pop()
-    print(f"loaded {path}")
+    msgs.say(msgs.LOADED, path=path)
     return None
 
 
@@ -1633,9 +1582,11 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     try:
         count, backup = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
     except OSError as exc:
-        return f"save failed: {type(exc).__name__}: {exc}"
-    note = f"  (backed up prior file to {backup.name})" if backup is not None else ""
-    print(f"{C.GREEN}saved {count} line{'' if count == 1 else 's'} to {path}{C.RESET}{C.GREY}{note}{C.RESET}")
+        return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
+    if backup is not None:
+        msgs.say(msgs.SAVED_WITH_BACKUP, lines=msgs.plural(count, "line"), path=path, backup=backup.name)
+    else:
+        msgs.say(msgs.SAVED, lines=msgs.plural(count, "line"), path=path)
     return None
 
 
@@ -1650,7 +1601,7 @@ def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
     M.append_mark(cfg.session_file, "session_reset")
-    print(f"{C.GREY}(conversation cleared in-process; jsonl preserved){C.RESET}")
+    msgs.say(msgs.RESET_DONE)
     return None
 
 
@@ -1658,9 +1609,9 @@ def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     state["messages"].clear()
     if bak:
-        print(f"{C.ORANGE}(memory rotated to {bak.name}){C.RESET}")
+        msgs.say(msgs.WIPE_ROTATED, path=bak.name)
     else:
-        print(f"{C.GREY}(no memory file to rotate){C.RESET}")
+        msgs.say(msgs.WIPE_NOTHING)
     return None
 
 
@@ -1668,57 +1619,56 @@ def _cmd_persona(arg: str, state: dict, cfg: Config) -> str | None:
     text = state["system"]
     print(text[:2048])
     if len(text) > 2048:
-        print(f"{C.GREY}...[truncated, {len(text)} bytes total]{C.RESET}")
+        msgs.say(msgs.PERSONA_TRUNCATED, size=len(text))
     return None
 
 
 def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
-        print(f"{C.GREY}(jobs are unavailable under --blocking){C.RESET}")
+        msgs.say(msgs.BLOCKING_NO_JOBS, command="/jobs")
         return None
     jobs = sup.jobs()
     if not jobs:
-        print(f"{C.GREY}(no running jobs){C.RESET}")
+        msgs.say(msgs.NO_JOBS)
     for j in jobs:
-        label = f"  {j.label}" if j.label else ""
-        print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
+        msgs.say(msgs.JOB_ROW, id=j.id, kind=j.kind, label=f"  {j.label}" if j.label else "")
     return None
 
 
 def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
-        print(f"{C.GREY}(cancel is unavailable under --blocking){C.RESET}")
+        msgs.say(msgs.BLOCKING_NO_JOBS, command="/cancel")
         return None
     if arg:
         if not arg.isdigit():
-            return "usage: /cancel [id]  (bare = active turn)"
+            return msgs.USAGE.said(usage="/cancel [id]. Bare cancels the active turn.")
         targets = [j for j in sup.jobs() if j.id == int(arg)]
     else:
         targets = sup.jobs("turn")
     if not targets:
-        print(f"{C.GREY}(no matching job to cancel){C.RESET}")
+        msgs.say(msgs.NO_JOB_TO_CANCEL)
         return None
     # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
     for j in targets:
         sup.loop.call_soon_threadsafe(sup.cancel, j.id)
     ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
-    print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
+    msgs.say(msgs.CANCELLING, jobs=ids)
     return None
 
 
 def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
     value = arg.strip().lower()
     if value not in ("on", "off"):
-        return "usage: /compact-auto on|off"
+        return msgs.USAGE.said(usage="/compact-auto on|off")
     return _apply_settings_result(setcmd.apply_set(state["settings"], "compact.auto", value), state, cfg)
 
 
 def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
     model, focus, ok = _split_compact_model(arg)
     if not ok:
-        return "usage: /compact [-m model] [focus]"
+        return msgs.USAGE.said(usage="/compact [-m model] [focus]")
     forced = focus == "up to here"
     if forced:
         focus = ""
@@ -1727,8 +1677,8 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         with stream_transport.net_role("Compacting"):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
     except Exception as e:  # noqa: BLE001
-        return f"compact failed: {type(e).__name__}: {e}"
-    print(f"{C.GREY}({result}){C.RESET}")
+        return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
+    msgs.say(msgs.COMPACTION_DONE, result=result)
     return None
 
 
@@ -1758,65 +1708,65 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
     """Bare `/skill` lists the skills. `/skill <name> [request]` typed at the
     input line never reaches the table: it is a turn (see _handle_command)."""
     if arg:
-        return "skill <name> [request] is a turn; type it at the input line"
+        return msgs.SKILL_IS_A_TURN.said()
     _print_skill_catalog()
     return None
 
 
 def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
-    rows = [(f"/{c.usage}", c.doc) for c in dict.fromkeys(COMMANDS.values())]
-    rows += [(f"/{name}", f"alias: {body}") for name, body in (state.get("aliases") or {}).items()]
-    rows += [("@path/to/file", "attach a file/image to that turn (quote paths with spaces)"), ("exit", "quit")]
+    rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
+    rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
+    rows += [("@path/to/file", msgs.HELP_ATTACH.text()), ("exit", msgs.HELP_EXIT.text())]
     width = max(len(usage) for usage, _doc in rows)
-    print(f"{C.MAGENTA}commands:{C.RESET}")
+    msgs.say(msgs.HELP_HEADING)
     for usage, doc in rows:
-        print(f"  {C.YELLOW}{usage.ljust(width)}{C.RESET} {doc}")
+        msgs.say(msgs.HELP_ROW, usage=usage.ljust(width), doc=doc)
     return None
 
 
-_LOAD = Command(_cmd_load, "load <file>", "run each line of a file as a command (also: source)", complete="path")
+_LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
-    "help": Command(_cmd_help, "help", "show this message"),
-    "set": Command(_cmd_set, "set [key [value]]", "list settings, show one, or change one; set -key clears one",
+    "help": Command(_cmd_help, "help", msgs.CMD_HELP),
+    "set": Command(_cmd_set, "set [key [value]]", msgs.CMD_SET,
                    complete="set"),
-    "show": Command(_cmd_show, "show [key]", "list every setting and its effective value", complete="keys"),
-    "save": Command(_cmd_save, "save", "rewrite the global jsrc from the live settings, handlers and aliases"),
+    "show": Command(_cmd_show, "show [key]", msgs.CMD_SHOW, complete="keys"),
+    "save": Command(_cmd_save, "save", msgs.CMD_SAVE),
     **{verb: _LOAD for verb in setcmd.LOAD_VERBS},
-    "on": Command(_cmd_on, "on [[^]event command]", "list or register an event handler", complete="events"),
-    "alias": Command(_cmd_alias, "alias [name [command]]", "list, show or define a command alias; alias -name removes"),
-    "model": Command(_cmd_model, "model [name]", "switch model for this session; bare opens the picker"),
-    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", "open the interactive provider/model picker"),
-    "provider": Command(_cmd_provider, "provider [id]", "show or switch the provider for this session",
+    "on": Command(_cmd_on, "on [[^]event command]", msgs.CMD_ON, complete="events"),
+    "alias": Command(_cmd_alias, "alias [name [command]]", msgs.CMD_ALIAS),
+    "model": Command(_cmd_model, "model [name]", msgs.CMD_MODEL),
+    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", msgs.CMD_PICK_MODEL),
+    "provider": Command(_cmd_provider, "provider [id]", msgs.CMD_PROVIDER,
                         complete="names"),
-    "baseurl": Command(_cmd_baseurl, "baseurl [url]", "set the provider base URL for this session (bare clears)"),
-    "apikey": Command(_cmd_apikey, "apikey [key]", "set the provider API key for this session (bare clears)"),
-    "login": Command(_cmd_login, "login <name> [apikey] [baseurl] [provider]", "load or save a provider login",
+    "baseurl": Command(_cmd_baseurl, "baseurl [url]", msgs.CMD_BASEURL),
+    "apikey": Command(_cmd_apikey, "apikey [key]", msgs.CMD_APIKEY),
+    "login": Command(_cmd_login, "login <name> [apikey] [baseurl] [provider]", msgs.CMD_LOGIN,
                      complete="names"),
-    "logout": Command(_cmd_logout, "logout", "clear provider credentials for this session"),
-    "models": Command(_cmd_models, "models [limit]", "list the provider's models"),
-    "reset": Command(_cmd_reset, "reset", "clear the conversation in-process; the jsonl keeps it", turn_state=True),
-    "wipe": Command(_cmd_wipe, "wipe", "rotate the session file away and clear the conversation", turn_state=True),
-    "persona": Command(_cmd_persona, "persona", "print the system prompt"),
-    "tools": Command(_cmd_tools, "tools", "show each tool's state (eager/lazy/ban) and the entry that decided it"),
+    "logout": Command(_cmd_logout, "logout", msgs.CMD_LOGOUT),
+    "models": Command(_cmd_models, "models [limit]", msgs.CMD_MODELS),
+    "reset": Command(_cmd_reset, "reset", msgs.CMD_RESET, turn_state=True),
+    "wipe": Command(_cmd_wipe, "wipe", msgs.CMD_WIPE, turn_state=True),
+    "persona": Command(_cmd_persona, "persona", msgs.CMD_PERSONA),
+    "tools": Command(_cmd_tools, "tools", msgs.CMD_TOOLS),
     "skill": Command(_cmd_skill, "skill [name [request]]",
-                     "list skills; with a name, send that skill's instructions (user-only ones too) with the request"),
-    "turns": Command(lambda arg, state, cfg: print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}"),
-                     "turns", "count the messages in context"),
-    "session": Command(lambda arg, state, cfg: print(f"{C.CYAN}{cfg.session_file}{C.RESET}"),
-                       "session", "print the session file path"),
-    "jobs": Command(_cmd_jobs, "jobs", "list running turns/subagents"),
-    "cancel": Command(_cmd_cancel, "cancel [id]", "cancel a job by id, or the active turn"),
+                     msgs.CMD_SKILL),
+    "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
+                     "turns", msgs.CMD_TURNS),
+    "session": Command(lambda arg, state, cfg: msgs.say(msgs.SESSION_PATH, path=cfg.session_file),
+                       "session", msgs.CMD_SESSION),
+    "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
+    "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
     # The async REPL drains its loop-owned queue before a line reaches the
     # table; this entry runs everywhere else, where nothing queues.
-    "flush": Command(lambda arg, state, cfg: print(f"{C.GREY}(no queued prompts){C.RESET}"),
-                     "flush", "drop all prompts queued behind the active turn"),
-    "compact": Command(_cmd_compact, "compact [-m model] [focus]", "append a compaction summary mark",
+    "flush": Command(lambda arg, state, cfg: msgs.say(msgs.NO_QUEUED_PROMPTS),
+                     "flush", msgs.CMD_FLUSH),
+    "compact": Command(_cmd_compact, "compact [-m model] [focus]", msgs.CMD_COMPACT,
                        turn_state=True),
-    "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", "toggle auto-compaction"),
+    "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", msgs.CMD_COMPACT_AUTO),
     "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
-                                     "force-refresh the local models.dev catalog now"),
-    "quit": Command(_cmd_quit, "quit [note]", "quit; a note is kept for the next turn"),
+                                     msgs.CMD_REFRESH_MODEL_CATALOG),
+    "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
 }
 
 
@@ -1834,12 +1784,12 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
         if body is None:
             return False, None
         if depth >= _MAX_ALIAS_DEPTH:
-            return True, f"alias {verb}: nesting too deep"
+            return True, msgs.ALIAS_TOO_DEEP.said(name=verb)
         expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
         handled, error = _run_command(expanded, state, cfg, depth + 1)
-        return True, error if handled else f"alias {verb}: unknown command: {expanded.split()[0]}"
+        return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
     if command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
-        return True, f"(a turn is running — /{verb} would clobber its context; ^C to cancel it, or wait)"
+        return True, msgs.TURN_RUNNING.said(command=f"/{verb}")
     return True, command.run(arg, state, cfg)
 
 
@@ -1847,7 +1797,7 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
     """One line from a file of commands: an unknown verb is an error."""
     handled, error = _run_command(line, state, cfg)
     if not handled:
-        return f"unknown command: {setcmd.split_command(line)[0]}"
+        return msgs.UNKNOWN_COMMAND.said(verb=setcmd.split_command(line)[0])
     return error
 
 
@@ -1862,8 +1812,10 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if not line.startswith("/") or _is_skill_invocation(line):
         return False
     handled, error = _run_command(line, state, cfg)
-    if error:
-        print(f"{C.ORANGE}{error}{C.RESET}")
+    if isinstance(error, msgs.Said):
+        msgs.say_said(error)
+    elif error:
+        msgs.say(msgs.COMMAND_REFUSED, error=error)
     return handled
 
 
@@ -1910,7 +1862,7 @@ def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
                     with contextlib.redirect_stdout(io.StringIO()):
                         error = _run_script_line(raw, state, cfg)
                     if error:
-                        errors.append(f"{path}:{lineno}: {error}")
+                        errors.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=error))
             finally:
                 stack.pop()
     finally:
@@ -1968,12 +1920,7 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
         if resolved is None or not Path(resolved).is_dir():
             agents_dir = _paths.global_agents_dir()
             agent_id = getattr(cfg, "agent_id", "?")
-            return (
-                f"no such agent: {agent_id}; looked in project .js/agents, "
-                f"{agents_dir}, and repo prompts. "
-                f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
-                f"and an optional agent.yaml manifest."
-            )
+            return msgs.NO_SUCH_AGENT.text(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
     return str(exc)
 
 
@@ -2002,13 +1949,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 caller_key: str | None = None, announce_generated: bool | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
-        print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.PROMPT_EMPTY)
         return 2
     reasoning_override = None
     if reasoning is not None:
         reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
         if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
         cfg = _cfg_from_env_compat(
@@ -2021,7 +1968,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             presets=presets,
         )
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
     if announce_generated is None:
         announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
@@ -2042,7 +1989,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             prompt_spec = P.load_configured_prompt_spec(cfg)
         except (FileNotFoundError, ValueError) as e:
             with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
             return 2
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -2050,7 +1997,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             cfg = _apply_agent_model(cfg, prompt_spec, model)
         except ValueError as e:
             with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.FAILED, error=e)
             return 2
         cfg = _apply_agent_max_tokens(cfg, prompt_spec)
 
@@ -2058,7 +2005,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         cfg = _resolve_cli_model_override(cfg, model)
     except ValueError as e:
         with _transcript_stdio(telemetry):
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
         return 2
 
     attachment_cfg = (
@@ -2077,7 +2024,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         )
     except attach.AttachmentError as e:
         with _transcript_stdio(telemetry):
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
         return 2
     messages.append(user_bundle.runtime_message)
     if save:
@@ -2135,11 +2082,11 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     telemetry.transcript_log = visible_transcript
         except (KeyboardInterrupt, asyncio.CancelledError):
             with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}(turn interrupted){C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.TURN_INTERRUPTED)
             return 130
         except Exception as e:  # noqa: BLE001
             with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.FAILED, error=_error_text(e))
             return 1
     finally:
         try:
@@ -2195,11 +2142,11 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         if model:
                             cont += f" --model {shlex.quote(model)}"
                         cont += f" --session {hint}"
-                        print(f"Continue: {cont}")
+                        msgs.say(msgs.CONTINUE_HINT, command=cont)
             return 0
 
     with _transcript_stdio(telemetry):
-        print(f"{C.ORANGE}error: no assistant response{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.NO_ASSISTANT_RESPONSE)
     return 1
 
 
@@ -2232,13 +2179,12 @@ def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
     return _run_prompt(*args, **kwargs)
 
 
-def _bench_row_line(row: dict) -> str:
+def _bench_row_line(row: dict) -> msgs.Said:
     if not row.get("ok"):
-        return f"  {C.ORANGE}{row['name']}: {row.get('error') or 'failed'}{C.RESET}"
+        return msgs.BENCH_FAILED.said(name=row["name"], error=row.get("error") or "failed")
     ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
-    return (f"  {C.GREY}{row['name']}: {row.get('output_tokens', 0)} tok  "
-            f"{row.get('tok_per_s', 0.0):.1f} tok/s  ttft {ttft}  "
-            f"wall {row.get('wall_s') or 0.0:.2f}s{C.RESET}")
+    return msgs.BENCH_ROW.said(name=row["name"], tokens=row.get("output_tokens", 0),
+                               tps=row.get("tok_per_s", 0.0), ttft=ttft, wall=row.get("wall_s") or 0.0)
 
 
 def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
@@ -2254,13 +2200,13 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         agent_id = validate_agent_id(bench_agent)
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
     reasoning_override = None
     if reasoning is not None:
         reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
         if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
         cfg = _cfg_from_env_compat(
@@ -2269,17 +2215,17 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             ignore_global_config=ignore_global_config, presets=presets,
         )
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2
 
     benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
     if not benchmarks:
-        print(f"{C.ORANGE}error: agent {agent_id!r} has no NN-benchmark.md files{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.NO_BENCHMARKS, agent=agent_id)
         return 2
 
     system = prompt_spec.system
@@ -2288,7 +2234,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         cfg = _apply_agent_model(cfg, prompt_spec, model)
         cfg = _resolve_cli_model_override(cfg, model)
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
     agent_default_max = prompt_spec.max_output_tokens
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
@@ -2325,7 +2271,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         if reasoning is not None:
             turn_kwargs["reasoning_effort_override"] = reasoning_override
         if not quiet:
-            print(f"{C.CYAN}bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BENCH_START, name=bench.name, prompt=prompt_text.splitlines()[0][:80])
         ok, err = True, None
         t_wall = time.time()
         try:
@@ -2346,17 +2292,17 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
         }
         rows.append(row)
-        print(_bench_row_line(row), file=sys.stderr)
+        msgs.say_said(_bench_row_line(row), file=sys.stderr)
         if interrupted:
             break
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
     if stats_json:
         stats.write_json(stats_json, payload)
-        print(f"{C.GREY}stats → {stats_json}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.STATS_WRITTEN, path=stats_json)
     if stats_csv:
         stats.write_csv(stats_csv, rows)
-        print(f"{C.GREY}stats → {stats_csv}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.STATS_WRITTEN, path=stats_csv)
     if not stats_json and not stats_csv:
         print(json.dumps(payload, indent=2, default=str))
     return 130 if interrupted else 0
@@ -2429,10 +2375,10 @@ def _run_commit(target: str | None,
         target_dir = Path.cwd() / target_dir
     target_dir = target_dir.resolve(strict=False)
     if not target_dir.exists():
-        print(f"{C.ORANGE}error: commit target does not exist: {target_dir}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.COMMIT_TARGET_MISSING, path=target_dir)
         return 2
     if not target_dir.is_dir():
-        print(f"{C.ORANGE}error: commit target is not a directory: {target_dir}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.COMMIT_TARGET_NOT_DIR, path=target_dir)
         return 2
 
     from . import commit_helper
@@ -2444,16 +2390,16 @@ def _run_commit(target: str | None,
             init = commit_helper._git("init", "-q", check=False, repo=target_dir)
         if init.returncode != 0:
             detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
-            print(f"{C.ORANGE}error: git init failed in {target_dir}: {detail}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.GIT_INIT_FAILED, path=target_dir, error=detail)
             return 1
 
     try:
         backup_dir = _snapshot_worktree(target_dir)
     except Exception as e:  # noqa: BLE001 — a snapshot failure must never block the commit run
-        print(f"{C.ORANGE}warning: could not snapshot worktree before commit: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.SNAPSHOT_FAILED, error=f"{type(e).__name__}: {e}")
     else:
         if backup_dir is not None:
-            print(f"{C.GREY}(worktree snapshot saved: {backup_dir}){C.RESET}")
+            msgs.say(msgs.SNAPSHOT_SAVED, path=backup_dir)
 
     survey_out = io.StringIO()
     survey_err = io.StringIO()
@@ -2461,8 +2407,8 @@ def _run_commit(target: str | None,
         survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
     survey = survey_out.getvalue().rstrip()
     if survey_rc != 0:
-        detail = survey_err.getvalue().strip() or survey or f"commit_helper survey exited {survey_rc}"
-        print(f"{C.ORANGE}error: commit survey failed for {target_dir}: {detail}{C.RESET}", file=sys.stderr)
+        detail = survey_err.getvalue().strip() or survey or msgs.SURVEY_EXITED.text(code=survey_rc)
+        msgs.warn(msgs.SURVEY_FAILED, path=target_dir, error=detail)
         return 1
 
     helper_stage = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>"
@@ -2514,9 +2460,9 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
         result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1
-    print(result)
+    msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
 def _providers_json() -> list[dict]:
@@ -2615,13 +2561,13 @@ def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
     listed gets a `#` line on stderr and the rest still print."""
     provider_ids = _list_models_provider_ids(provider_arg, cfg)
     if not provider_ids:
-        print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.NO_LOGINS)
         return 0
     for pid in provider_ids:
         try:
             model_ids = _models_cached_or_live(pid, cfg)
         except Exception as e:  # noqa: BLE001
-            print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
+            msgs.warn(msgs.MODEL_LIST_FAILED, provider=pid, error=f"{type(e).__name__}: {e}")
             continue
         for model_id in model_ids:
             print(f"{pid}/{model_id}" if pid else model_id)
@@ -2644,8 +2590,10 @@ def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_gl
             ignore_global_config=ignore_global,
         )
         if not any(path.exists() for path in candidates):
-            looked = " or ".join(str(p) for p in candidates) or "(no config dirs enabled)"
-            print(f"{C.ORANGE}warning: --preset {name}: no jsrc.{name} found ({looked}){C.RESET}", file=sys.stderr)
+            if candidates:
+                msgs.warn(msgs.PRESET_NOT_FOUND, name=name, looked=" or ".join(str(p) for p in candidates))
+            else:
+                msgs.warn(msgs.PRESET_NO_CONFIG_DIRS, name=name)
 
 
 def _print_json(value: object) -> int:
@@ -2654,13 +2602,13 @@ def _print_json(value: object) -> int:
 
 
 # External binaries js leans on. Assume NO box has them (owner runs many); warn
-# once per missing one at startup so a degraded run has an obvious cause, but
+# once per missing one at startup so a run without one has an obvious cause, but
 # NEVER crash or block — `just install` provisions them.
 _EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
-    ("rg", "ripgrep — fs_search degrades"),
-    ("fd", "fd-find — file finding degrades"),
-    ("bat", "bat — syntax-highlighted preview degrades"),
-    ("fzf", "fzf — interactive pickers degrade"),
+    ("rg", "fs_search"),
+    ("fd", "file finding"),
+    ("bat", "highlighted previews"),
+    ("fzf", "the interactive pickers"),
 )
 _warned_binaries: set[str] = set()
 
@@ -2672,12 +2620,7 @@ def _warn_missing_binaries() -> None:
         binary = resolve_binary(name)
         if binary is None:
             _warned_binaries.add(name)
-            expected_location = "in tools/bin or PATH"
-            print(
-                f"{C.ORANGE}warning: {name} not found {expected_location}; {why} — "
-                f"run `just install` to provision it{C.RESET}",
-                file=sys.stderr,
-            )
+            msgs.warn(msgs.BINARY_MISSING, name=name, user=why)
 
 
 def _session_mcp_host(cfg, telemetry):
@@ -2759,18 +2702,20 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-            print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+            print()
+            msgs.say(msgs.TURN_INTERRUPTED_KEPT)
             _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
-            print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+            print()
+            msgs.say(msgs.TURN_ABORTED)
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
+        msgs.say(msgs.FAILED, error=_error_text(e))
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(cfg, state["messages"])
@@ -2839,7 +2784,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
         # routing error from re-resolving the live model: degrade to one friendly
         # line, keep the REPL.
-        print(f"{C.ORANGE}error: {e}{C.RESET}")
+        msgs.say(msgs.FAILED, error=e)
         return
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
@@ -2866,7 +2811,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
                 ),
             )
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}")
+            msgs.say(msgs.FAILED, error=e)
             return None
         bundle = attach.UserMessageBundle(
             {**built.runtime_message, "steered": True},
@@ -2891,12 +2836,12 @@ def _print_skill_catalog() -> None:
     """`/skill` alone lists every discovered skill; user-only ones are marked."""
     catalog = skills.discover_skills(Path.cwd())
     if not catalog.skills:
-        print(f"{C.GREY}(no skills found){C.RESET}")
+        msgs.say(msgs.NO_SKILLS)
         return
     for skill in catalog.skills:
-        mark = " [user-only]" if not skill.model_invocable else ""
-        print(f"{C.YELLOW}{skill.name}{C.RESET}{mark} {C.GREY}({skill.source}){C.RESET} {skill.description}")
-    print(f"{C.GREY}/skill <name> [request] sends one with your request{C.RESET}")
+        entry = msgs.SKILL_ROW_USER_ONLY if not skill.model_invocable else msgs.SKILL_ROW
+        msgs.say(entry, name=skill.name, source=skill.source, description=skill.description)
+    msgs.say(msgs.SKILL_HINT)
 
 
 def _is_skill_invocation(line: str) -> bool:
@@ -3007,10 +2952,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             # here (not in _handle_command) because the queue is loop-owned
             # and _handle_command runs on an executor thread.
             flushed = drop_pending()
-            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+            msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
             return
         if _is_turn_state_command(line) and sup.turn_active():
-            print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
+            msgs.say(msgs.TURN_RUNNING, command=line.split()[0])
             return
         handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
         if handled:
@@ -3026,7 +2971,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             sink.write_user(line)
         queue.put_nowait(line)
         if sup.turn_active() or queue.qsize() > 1:
-            print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
+            msgs.say(msgs.QUEUED, ahead=queue.qsize())
 
     def on_interrupt() -> None:
         # ^C cancels the active turn AND drops anything queued behind it —
@@ -3034,10 +2979,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         # abort. The drain-on-quit path (EOF) stays intact.
         if sup.turn_active():
             n = sup.cancel_kind("turn")
-            print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
+            msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
         flushed = drop_pending()
         if flushed:
-            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
+            msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
 
     def on_eof() -> None:
         state["running"] = False
@@ -3051,7 +2996,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         )
 
     app, scrollback = screen.build_app(
-        prompt=f"{C.YELLOW}LO> {C.RESET}",
+        prompt=f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}",
         history=session.history,
         completer=session.completer,
         on_line=on_line,
@@ -3155,14 +3100,15 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     interrupt_armed = False
     while state["running"]:
         try:
-            line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
+            line = session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}")).strip()
             interrupt_armed = False
         except KeyboardInterrupt:
             # One stray ^C at the prompt should not end a session that took real
             # work to build; the second one within the same idle stretch does.
             if not interrupt_armed:
                 interrupt_armed = True
-                print(f"\n{C.GREY}(press ^C again to exit){C.RESET}")
+                print()
+                msgs.say(msgs.PRESS_CTRL_C_AGAIN)
                 continue
             print()
             break
@@ -3194,7 +3140,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
             # routing error from re-resolving the live model: degrade to one friendly
             # line, keep the REPL.
-            print(f"{C.ORANGE}error: {e}{C.RESET}")
+            msgs.say(msgs.FAILED, error=e)
             continue
 
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
@@ -3259,7 +3205,8 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 # then heal any orphaned tool_calls in memory so the next turn is
                 # valid. The mark is informational ONLY — a `rollback_to:` mark
                 # would silently re-truncate this turn on the next session load.
-                print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+                print()
+                msgs.say(msgs.TURN_INTERRUPTED_KEPT)
                 _replace_runtime_user_message(
                     state["messages"],
                     user_bundle.runtime_message,
@@ -3272,11 +3219,12 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             else:
                 # Stopped before the model produced anything worth keeping — drop
                 # the bare user prompt (rollback removes it on reload too).
-                print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+                print()
+                msgs.say(msgs.TURN_ABORTED)
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
+            msgs.say(msgs.FAILED, error=_error_text(e))
             if _turn_has_progress(state["messages"], user_bundle.runtime_message):
                 _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
                                               user_bundle.history_message, before_len)
@@ -3315,7 +3263,7 @@ def _printonly_slots(spec: str) -> tuple[str, int | None, str | None]:
             n = int(parts[1].strip())
             count = n if n >= 0 else None
         except ValueError:
-            print(f"js: --printonly ignoring non-numeric count {parts[1]!r}", file=sys.stderr)
+            msgs.warn(msgs.PRINTONLY_BAD_COUNT, count=parts[1])
     path = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
     return letters, count, path
 
@@ -3331,9 +3279,9 @@ def _printonly_letters(letters: str) -> list[str]:
             if ch not in chosen:
                 chosen.append(ch)
         elif ch == "o":
-            print("js: --printonly letter 'o' is parked (unimplemented); skipping", file=sys.stderr)
+            msgs.warn(msgs.PRINTONLY_LETTER_NOT_IMPLEMENTED, letter=ch)
         else:
-            print(f"js: --printonly unknown letter {ch!r}; skipping", file=sys.stderr)
+            msgs.warn(msgs.PRINTONLY_UNKNOWN_LETTER, letter=ch)
     return chosen or list(_PRINTONLY_KNOWN)
 
 
@@ -3362,13 +3310,13 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             presets=presets,
         )
     except Exception as e:  # noqa: BLE001 — printonly never errors
-        print(f"js: --printonly could not build config: {type(e).__name__}: {e}", file=sys.stderr)
+        msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
         return 0
 
     try:
         raw_spec = _raw_configured_spec(cfg)
     except Exception as e:  # noqa: BLE001
-        print(f"js: --printonly could not load prompt: {type(e).__name__}: {e}", file=sys.stderr)
+        msgs.warn(msgs.PRINTONLY_NO_PROMPT, error=f"{type(e).__name__}: {e}")
         raw_spec = None
 
     allow_code = bool(getattr(cfg, "allow_inline_code", True))
@@ -3383,7 +3331,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     def _bench() -> str:
         benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
         if not benches:
-            return "(no NN-benchmark.md files)"
+            return msgs.PRINTONLY_NO_BENCHMARKS.text()
         blocks = []
         for bm in benches:
             body = expand_prompt(
@@ -3419,9 +3367,10 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     for ch in sections:
         try:
             body = builders[ch]()
-        except Exception as e:  # noqa: BLE001 — a bad section degrades, never kills the run
-            print(f"js: --printonly section {ch!r} degraded: {type(e).__name__}: {e}", file=sys.stderr)
-            body = f"(section {_PRINTONLY_TITLES[ch]} unavailable: {type(e).__name__}: {e})"
+        except Exception as e:  # noqa: BLE001 — a failed section is reported, never kills the run
+            error = f"{type(e).__name__}: {e}"
+            msgs.warn(msgs.PRINTONLY_SECTION_FAILED, section=_PRINTONLY_TITLES[ch], error=error)
+            body = msgs.PRINTONLY_SECTION_FAILED.text(section=_PRINTONLY_TITLES[ch], error=error)
         chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
 
     text = "\n\n".join(chunks)
@@ -3433,7 +3382,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             Path(path).expanduser().write_text(text + "\n", encoding="utf-8")
             return 0
         except OSError as e:
-            print(f"js: --printonly could not write {path}: {e}; printing to stdout instead", file=sys.stderr)
+            msgs.warn(msgs.PRINTONLY_NOT_WRITTEN, path=path, error=e)
     print(text)
     return 0
 
@@ -3461,70 +3410,53 @@ def main(argv: list[str] | None = None) -> int:
         from . import login_cli
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help="show the short usage guide and exit")
-    parser.add_argument("--help-full", action="help", help="show the complete option reference and exit")
-    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
-    parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
-    parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
-    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
-    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>")
-    parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
+    parser = msgs.ArgumentParser(add_help=False)
+    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help=msgs.OPT_HELP.text())
+    parser.add_argument("--help-full", action="help", help=msgs.OPT_HELP_FULL.text())
+    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.text())
+    parser.add_argument("--logout", metavar="PROVIDER", help=msgs.OPT_LOGOUT.text())
+    parser.add_argument("-p", "--prompt", nargs="?", const="-", help=msgs.OPT_PROMPT.text())
+    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help=msgs.OPT_FILE.text())
+    parser.add_argument("-a", "--agent", help=msgs.OPT_AGENT.text())
+    parser.add_argument("-m", "--model", help=msgs.OPT_MODEL.text())
     parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
-                        help="reach an endpoint with no saved login in one string: "
-                             "model[:api-key][[shape]][[effort]]@url. Shape is openai "
-                             "(default), responses, or anthropic; effort is the usual "
-                             "off..max ladder; the key defaults to a dummy. "
-                             "e.g. qwen27b@http://foo/v1  |  "
-                             "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
-                             "Desugars to --extra model.id/provider.id/provider.base_url/"
-                             "provider.api_key, so an explicit --extra still wins.")
-    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
-    parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
+                        help=msgs.OPT_URL.text())
+    parser.add_argument("-C", dest="cd", metavar="DIR", help=msgs.OPT_CD.text())
+    parser.add_argument("-d", "--debug", action="store_true", help=msgs.OPT_DEBUG.text())
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help=msgs.OPT_DEBUG_FILE.text())
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help="create or resume a named session under ~/.js/sessions/<agent>")
-    session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
-    parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
-    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
-    parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
-    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
-    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
-    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
-    parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
+    session_group.add_argument("-s", "--session", help=msgs.OPT_SESSION.text())
+    session_group.add_argument("--session-key", metavar="KEY", help=msgs.OPT_SESSION_KEY.text())
+    parser.add_argument("-n", "--no-save", action="store_true", help=msgs.OPT_NO_SAVE.text())
+    parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.text())
+    parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.text())
+    parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.text())
+    parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.text())
+    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.text())
+    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.text())
+    parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.text())
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
-                        help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
-                             "May be repeated. Wins over env and all config files.")
+                        help=msgs.OPT_EXTRA.text())
     parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
-                        help="layer jsrc.<name> preset files on top of the base config, in order "
-                             "(last wins). Comma-list and/or repeatable: --preset fast,debug. Looks for "
-                             "jsrc.<name> beside the global jsrc and in project .js/. Still below env/--extra.")
-    parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
-    parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
-    parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
-    parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
-    parser.add_argument("--last", action="store_true", help="resume the most recently used session for this agent")
-    parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
-    parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
-    parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
-    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
-    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
-    parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
-    parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
-    parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
+                        help=msgs.OPT_PRESET.text())
+    parser.add_argument("--ignore-local", action="store_true", help=msgs.OPT_IGNORE_LOCAL.text())
+    parser.add_argument("--ignore-global", action="store_true", help=msgs.OPT_IGNORE_GLOBAL.text())
+    parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.text())
+    parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.text())
+    parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.text())
+    parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.text())
+    parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.text())
+    parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.text())
+    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.text())
+    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.text())
+    parser.add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.text())
+    parser.add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.text())
+    parser.add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.text())
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
-                        help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
-                             "and ```!lang fences are left literal instead of running. Inline code runs by "
-                             "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
-                             "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
+                        help=msgs.OPT_IM_A_PUSSY.text())
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
-                        help="dry run: assemble what would be sent and print it instead of calling the model, "
-                             "then exit. LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded "
-                             "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
-                             ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
-                             "Never errors — unknown letters/unwritable paths degrade with a warning.")
-    parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
+                        help=msgs.OPT_PRINTONLY.text())
+    parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so
@@ -3533,13 +3465,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             args.extras = endpoint_uri.parse(args.url).as_settings() + list(args.extras)
         except endpoint_uri.EndpointSpecError as exc:
-            print(f"{C.ORANGE}error: -u {exc}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
         cd_target = Path(args.cd).expanduser()
         if not cd_target.is_dir():
-            print(f"{C.ORANGE}error: -C target is not a directory: {cd_target}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.CD_NOT_A_DIR, path=cd_target)
             return 2
         os.chdir(cd_target)
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
@@ -3550,7 +3482,7 @@ def main(argv: list[str] | None = None) -> int:
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
     dotenv.load()
     if args.json and not args.list:
-        print(f"{C.ORANGE}error: --json only works with --list{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.JSON_NEEDS_LIST)
         return 2
     if args.list:
         ambiguous = any(
@@ -3566,23 +3498,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         if ambiguous:
-            print(f"{C.ORANGE}error: --list cannot be combined with run or session options{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.LIST_EXCLUSIVE)
             return 2
         return _print_session_list(json_lines=args.json)
     if args.last:
         if args.session is not None:
-            print(f"{C.ORANGE}error: --last cannot be combined with --session{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.LAST_WITH_SESSION)
             return 2
         try:
             last_agent = validate_agent_id(
                 args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
         resolved_last = _latest_session_name(last_agent)
         if resolved_last is None:
-            print(f"{C.ORANGE}error: no previous session for agent {last_agent}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.NO_PREVIOUS_SESSION, agent=last_agent)
             return 2
         args.session = resolved_last
     if args.session_key is not None:
@@ -3592,7 +3524,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.agent or mode_agent or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
         args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
     _session_leases.caller_key = args.session_key
@@ -3642,7 +3574,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
             return 1
     if args.refresh_model_catalog:
         if not _force_refresh_model_catalog():
@@ -3657,7 +3589,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             return 0
     if args.debug and args.debug_file:
-        print(f"{C.ORANGE}error: choose either --debug or --debug-file, not both{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.DEBUG_FLAGS_EXCLUSIVE)
         return 2
     if args.im_a_pussy:
         # Inline code runs by default now; the opt-out flag turns it off for this
@@ -3671,7 +3603,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             cli_agent = validate_agent_id(args.agent)
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
 
     if args.printonly is not None:
@@ -3683,15 +3615,15 @@ def main(argv: list[str] | None = None) -> int:
 
     selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
-        print(f"{C.ORANGE}error: choose only one built-in mode: --commit or --compact{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.MODES_EXCLUSIVE)
         return 2
     if args.files and selected_modes:
-        print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FILE_NEEDS_PROMPT_MODE)
         return 2
 
     if args.bench:
         if selected_modes or args.agent:
-            print(f"{C.ORANGE}error: --bench is its own mode; name the agent as --bench AGENT, not with --agent or a built-in mode{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BENCH_EXCLUSIVE)
             return 2
         return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
                           maxout=args.max_out, quiet=args.quiet, extras=args.extras,
@@ -3708,7 +3640,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.commit:
         if args.agent:
-            print(f"{C.ORANGE}error: --commit always uses the built-in commit agent; omit --agent{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.COMMIT_WITH_AGENT)
             return 2
         extra_context = None
         if args.prompt is not None:
@@ -3725,7 +3657,7 @@ def main(argv: list[str] | None = None) -> int:
                            ignore_global_config=args.ignore_global, presets=presets)
 
     if args.files and args.prompt is None and sys.stdin.isatty():
-        print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FILE_NEEDS_PROMPT)
         return 2
 
     if args.prompt is not None or not sys.stdin.isatty():
@@ -3733,10 +3665,10 @@ def main(argv: list[str] | None = None) -> int:
         stdin_attachment = None
         if "-" in args.files:
             if args.prompt in {None, "-"}:
-                print(f"{C.ORANGE}error: stdin cannot be both the prompt and an attachment{C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.STDIN_TWICE)
                 return 2
             if sys.stdin.isatty():
-                print(f"{C.ORANGE}error: -f - requires piped stdin bytes{C.RESET}", file=sys.stderr)
+                msgs.warn(msgs.STDIN_ATTACHMENT_NOT_PIPED)
                 return 2
             stdin_attachment = _read_stdin_attachment_if_piped()
             prompt = args.prompt or ""
@@ -3765,7 +3697,7 @@ def main(argv: list[str] | None = None) -> int:
                              presets=presets,
                              stats_json=args.stats_json, stats_csv=args.stats_csv)
         if args.no_save:
-            print("session not saved; resume unavailable", file=sys.stderr)
+            msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result
 
     os.environ["JS_MODE"] = "repl"
@@ -3780,7 +3712,7 @@ def main(argv: list[str] | None = None) -> int:
             presets=presets,
         )
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
 
     # Resuming with no --model comes back on the model the session was using,
@@ -3792,12 +3724,12 @@ def main(argv: list[str] | None = None) -> int:
         remembered_model = last_session_model(cfg.session_file)
         if remembered_model and remembered_model != cfg.model:
             args.model = remembered_model
-            print(f"{C.GREY}(model: {remembered_model}){C.RESET}")
+            msgs.say(msgs.RESUMED_MODEL, model=remembered_model)
 
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg)
     except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2
     system = prompt_spec.system
     # A session sends the system prompt it was born with, byte for byte, for its
@@ -3815,7 +3747,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = _apply_agent_max_tokens(cfg, prompt_spec)
         cfg = _resolve_cli_model_override(cfg, args.model)
     except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=e)
         return 2
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -3836,11 +3768,11 @@ def main(argv: list[str] | None = None) -> int:
 
     messages = M.load_replay_messages(cfg.session_file)
     if messages:
-        print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
+        msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
     elif args.session is not None:
         # Asked for a specific session and got nothing. Silence here reads as a
         # successful resume, so an empty one has to say so.
-        print(f"{C.ORANGE}(empty session — nothing to resume: {cfg.session_file}){C.RESET}")
+        msgs.say(msgs.EMPTY_SESSION, path=cfg.session_file)
     _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
     prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
@@ -3853,13 +3785,13 @@ def main(argv: list[str] | None = None) -> int:
         notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
         messages.append(notice)
         _append_turn(cfg, notice)
-        print("*** Agent prompt changed on disk. Session keeps the one it started with.")
+        msgs.say(msgs.PROMPT_CHANGED)
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
         reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
         if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {args.reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BAD_REASONING, value=args.reasoning, error=effort_error)
             return 2
         settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
     if args.max_out is not None:
@@ -3890,8 +3822,8 @@ def main(argv: list[str] | None = None) -> int:
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
     banner = "\n".join([
-        BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
-        *(f"{C.ORANGE}{error}{C.RESET}" for error in rc_errors),
+        msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
+        *(msgs.FAILED.line(error=error) for error in rc_errors),
     ])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)

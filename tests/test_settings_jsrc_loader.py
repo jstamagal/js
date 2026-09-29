@@ -8,6 +8,7 @@ import pytest
 
 from js import runtime, settings
 from js.config import Config, from_env
+from js import messages as msgs
 
 
 def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -84,7 +85,8 @@ def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
 
     warnings = settings.load_jsrc_files([cfg], live_settings)
 
-    assert warnings == [f"{cfg}:1: unknown knob: tools.alias_profiles.foo"]
+    assert warnings == [msgs.SCRIPT_LINE_FAILED.text(
+        path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="tools.alias_profiles.foo"))]
     assert live_settings["model"]["id"] == "file-model"
     assert "alias_profiles" not in live_settings.get("tools", {})
 

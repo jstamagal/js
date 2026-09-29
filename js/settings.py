@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from . import reasoning as _reasoning
+from . import messages as msgs
 
 # What a line typed while a turn runs does: now = join the running turn at its
 # next tool boundary, batch = one message after the turn, one = one turn per line.
@@ -102,8 +103,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "multi-model setup use compact.context_window_overrides instead.",
                 env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
     SettingSpec("model.reasoning_effort", "str",
-                "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
-                "any other value is rejected. Clear with `set -model.reasoning_effort`.",
+                "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. "
+                "Any other value is rejected. Clear with `set -model.reasoning_effort`.",
                 env="JS_REASONING", empty=EMPTY_NONE),
     SettingSpec("model.vision", "bool",
                 "Send image bytes to the active model: on/off; unset = detect from "
@@ -135,11 +136,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
     SettingSpec("ui.editing_mode", "str",
-                "Input line key bindings in the async screen: emacs (Enter sends) or vi "
-                "(multi-line buffer; Esc then `:` opens the ex line, `:x` sends)."),
+                "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
+                "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),
     # --- provider ---
     SettingSpec("provider.id", "str",
-                "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
+                "Explicit js provider id, e.g. deepseek, openai-codex, ollama.",
                 env="JS_PROVIDER", empty=EMPTY_NONE, aliases=("provider",)),
     SettingSpec("provider.base_url", "str",
                 "Explicit provider base URL; unset = provider default.",
@@ -214,10 +215,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum concurrent subagent workers per task call; minimum 1."),
     # --- kernel ---
     SettingSpec("kernel.verbosity", "str",
-                "How much of each kernel/toolbox call is rendered to your terminal: "
-                "quiet (errors and interrupts only), normal (code, output, timing, "
-                "namespace), verbose (stdout/stderr/display split out, plus kernel "
-                "lifecycle and toolbox activity). Affects only what you see; the model "
+                "How much of each kernel/toolbox call is rendered to your terminal. "
+                "quiet: errors and interrupts only. normal: code, output, timing, "
+                "namespace. verbose: stdout, stderr and display split out, plus kernel "
+                "lifecycle and toolbox activity. Affects only what you see; the model "
                 "always receives the full result.",
                 env="JS_KERNEL_VERBOSITY"),
     SettingSpec("kernel.render_max_lines", "int",
@@ -241,13 +242,13 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 env="JS_TRACE", empty=EMPTY_OFF),
     SettingSpec("runtime.steer", "str",
                 "What a line typed while a turn runs does. now: it reaches the model "
-                "at the turn's next tool boundary, as a user message (a turn with no "
-                "boundary left gets it after it ends, as with batch). batch: every "
+                "at the turn's next tool boundary, as a user message. A turn with no "
+                "boundary left gets it after it ends, as with batch. batch: every "
                 "line typed during the turn goes in as ONE message after it ends. "
                 "one: each line is its own turn, in order."),
     SettingSpec("runtime.debug_autolog", "bool",
-                "Append the full request trace (unclipped system prompt, tool-schema "
-                "JSON, and the messages sent each call) to ~/.js/logs/<agent>/<session>.log. "
+                "Append the full request trace to ~/.js/logs/<agent>/<session>.log: the "
+                "unclipped system prompt, tool-schema JSON, and the messages sent each call. "
                 "This trace never prints to the terminal, only to the file.",
                 env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
     SettingSpec("runtime.debug_autolog_dir", "str",
@@ -275,8 +276,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Context window tokens for fullness math; unset = models.dev metadata.",
                 empty=EMPTY_NONE),
     SettingSpec("compact.context_window_overrides", "map",
-                "Per-model context windows, keyed 'provider/model' (most specific) or "
-                "'model'. For surfaces models.dev has no row for — a subscription "
+                "Per-model context windows, keyed 'provider/model' or 'model'. "
+                "'provider/model' is the more specific. For surfaces models.dev has no row for — a subscription "
                 "endpoint serving the same model id as the public API with a different "
                 "usable window.", empty=EMPTY_NONE),
     SettingSpec("compact.context_window_fallback", "int",
@@ -316,7 +317,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("compact.model", "str",
                 "Model used to write the compaction summary; 'same' = active model."),
     SettingSpec("compact.summary_max_tokens", "int",
-                "Max tokens for the compaction summary (hard-capped at 8192)."),
+                "Max tokens for the compaction summary. Capped at 8192."),
     SettingSpec("compact.pre_hook", "str",
                 "Optional shell command whose stdout guides compaction.",
                 empty=EMPTY_NONE),
@@ -346,8 +347,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
                 empty=EMPTY_NONE),
     SettingSpec("mcp.request_timeout_s", "float",
-                "Seconds an MCP request (initialize, list, call, read) waits for its "
-                "server's reply."),
+                "Seconds an MCP request waits for its server's reply: initialize, "
+                "list, call or read."),
     # --- sampling ---
     SettingSpec("sampling.temperature", "float",
                 "Provider-default sampling temperature; unset = do not send.",
@@ -428,53 +429,50 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     if spec.key == "runtime.steer":
         v = text.lower()
         if v not in STEER_MODES:
-            return None, "expected " + "|".join(STEER_MODES)
+            return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(STEER_MODES))
         return v, None
     if spec.key == "provider.id" and text:
         from . import providers as _providers
 
         if _providers.get_provider(text) is None:
-            return None, (
-                f"unknown provider id: {text!r} — pick a known id or add a "
-                f"custom one with `js --login`"
-            )
+            return None, msgs.UNKNOWN_PROVIDER_ID.text(provider=text)
         return text, None
     if spec.key in {"ui.status_bg", "ui.status_fg"} and not is_hex_colour(text):
-        return None, f"expected a #rrggbb colour (got {text!r})"
+        return None, msgs.EXPECTED_COLOUR.text(value=text)
     if spec.key == "ui.editing_mode":
         if text not in ("emacs", "vi"):
-            return None, "expected emacs or vi"
+            return None, msgs.EXPECTED_ONE_OF.text(choices="emacs|vi")
         return text, None
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
-            return None, f"expected a URL starting with http:// or https:// (got {text!r})"
+            return None, msgs.EXPECTED_URL.text(value=text)
         return text, None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
         if parsed is None:
-            return None, "expected on/off"
+            return None, msgs.EXPECTED_ONE_OF.text(choices="on|off")
         return parsed, None
     if kind == "int":
         try:
             value = int(text)
         except ValueError:
-            return None, "expected an integer"
+            return None, msgs.EXPECTED_INTEGER.text()
         if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
-            return None, "expected an integer from 0 to 3"
+            return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
             "tools.terminal_cols", "tools.terminal_rows",
         } and value < 1:
-            return None, "expected an integer >= 1"
+            return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None
     if kind == "float":
         try:
             number = float(text)
         except ValueError:
-            return None, "expected a number"
+            return None, msgs.EXPECTED_NUMBER.text()
         if spec.key == "mcp.request_timeout_s" and number <= 0:
-            return None, "expected a number > 0"
+            return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"mcp.servers", "mcp.agents"}:
@@ -492,9 +490,9 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             try:
                 value = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
-                return None, "expected a JSON value"
+                return None, msgs.EXPECTED_JSON.text()
         if kind == "map" and not isinstance(value, dict):
-            return None, "expected a JSON object"
+            return None, msgs.EXPECTED_JSON_OBJECT.text()
         if spec.key == "tools.alias_profiles":
             error = _validate_alias_profiles(value)
             if error is not None:
@@ -503,7 +501,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value
             ):
-                return None, "expected a JSON list of non-empty environment-variable names"
+                return None, msgs.EXPECTED_ENV_NAMES.text()
         if spec.key in {"mcp.servers", "mcp.agents"}:
             from . import mcp_config
 
@@ -520,28 +518,28 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
 
 def _validate_alias_profiles(value: Any) -> str | None:
     if not isinstance(value, list):
-        return "expected a JSON list"
+        return msgs.EXPECTED_JSON_LIST.text()
     for profile in value:
         if not isinstance(profile, dict):
-            return "expected profiles with match and aliases"
+            return msgs.EXPECTED_ALIAS_PROFILES.text()
         match = profile.get("match")
         aliases = profile.get("aliases")
         if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
-            return "expected profiles with match and aliases"
+            return msgs.EXPECTED_ALIAS_PROFILES.text()
         if not aliases:
-            return "expected non-empty aliases"
+            return msgs.EXPECTED_NONEMPTY_ALIASES.text()
         matches = [match] if isinstance(match, str) else match
         if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
-            return "expected non-empty match values"
+            return msgs.EXPECTED_NONEMPTY_MATCH.text()
         seen_aliases: set[str] = set()
         for canonical, alias in aliases.items():
             if not isinstance(canonical, str) or _TOOL_ALIAS_NAME_RE.fullmatch(canonical) is None:
-                return "expected canonical tool names matching [A-Za-z0-9_-]+"
+                return msgs.EXPECTED_CANONICAL_TOOL_NAMES.text()
             if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
-                return "expected alias names matching [A-Za-z0-9_-]+"
+                return msgs.EXPECTED_ALIAS_NAMES.text()
             key = alias.lower()
             if key in seen_aliases:
-                return "expected unique alias names"
+                return msgs.EXPECTED_UNIQUE_ALIASES.text()
             seen_aliases.add(key)
     return None
 
@@ -616,22 +614,22 @@ def coerce_extra_value(raw: str) -> Any:
 def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
     """Parse one ``--extra KEY=VALUE`` argument into (path, value)."""
     if "=" not in arg:
-        raise ValueError(f"--extra expects KEY=VALUE, got: {arg!r}")
+        raise ValueError(msgs.EXTRA_NOT_KEY_VALUE.text(arg=arg))
     raw_key, raw_value = arg.split("=", 1)
     key = raw_key.strip()
     if not key:
-        raise ValueError(f"--extra key is empty: {arg!r}")
+        raise ValueError(msgs.EXTRA_EMPTY_KEY.text(arg=arg))
     if raw_value == "":
-        raise ValueError(f"--extra value is empty: {arg!r}")
+        raise ValueError(msgs.EXTRA_EMPTY_VALUE.text(arg=arg))
     spec = SPEC_BY_KEY.get(key)
     if spec is not None:
         value, error = coerce_value(spec, raw_value)
         if error is not None:
-            raise ValueError(f"--extra {key}: {error}")
+            raise ValueError(msgs.EXTRA_BAD_VALUE.text(key=key, error=error))
         return spec.path, value
     prefix_spec = parent_spec(key)
     if prefix_spec is not None and prefix_spec.type != "map":
-        raise ValueError(f"--extra unknown knob: {key}")
+        raise ValueError(msgs.EXTRA_UNKNOWN_SETTING.text(key=key))
     return _parse_dotted_key(key), coerce_extra_value(raw_value)
 
 
@@ -677,7 +675,7 @@ def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> di
             if error is not None:
                 # garbage in the env: skip rather than clobber a working value,
                 # but say so — a silently dropped JS_BASE_URL costs an evening
-                print(f"js: ignoring {name}: {error}", file=sys.stderr)
+                msgs.warn(msgs.ENV_SETTING_IGNORED, name=name, error=error)
                 continue
             set_dotted(settings, spec.path, value)
             break
@@ -703,7 +701,7 @@ def _package_settings() -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise DefaultsError(f"js: defaults file missing: {path}") from None
+        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_MISSING, file=sys.stderr, path=path)) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -711,8 +709,9 @@ def _package_settings() -> dict:
     for lineno, raw in enumerate(text.splitlines(), 1):
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
-            problem = result.error or "not a set line"
-            raise DefaultsError(f"js: {path}:{lineno}: {problem}")
+            problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.text()
+            raise DefaultsError(msgs.line_for(msgs.DEFAULTS_BAD_LINE, file=sys.stderr, location=f"{path}:{lineno}",
+                                              error=problem))
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = parsed[1].split(maxsplit=1)[0] if parsed[0] == "set" else parsed[0]
@@ -721,7 +720,7 @@ def _package_settings() -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise DefaultsError(f"js: {path}: no line for {', '.join(unlisted)}")
+        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_UNLISTED, file=sys.stderr, path=path, keys=", ".join(unlisted)))
     _package_cache = (path, settings)
     return settings
 
@@ -787,7 +786,7 @@ def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
                 continue
             result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
             if result.error:
-                warnings.append(f"{path}:{lineno}: {result.error}")
+                warnings.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=result.error))
         stack.pop()
 
     for path in paths:

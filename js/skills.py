@@ -6,12 +6,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 import re
-import sys
 from typing import Any
 
 import yaml
 
 from . import paths
+from . import messages as msgs
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
@@ -193,10 +193,10 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
         return None
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
-        raise SkillInvocationError("usage: /skill <name> [request]")
+        raise SkillInvocationError(msgs.USAGE.text(usage="/skill <name> [request]"))
     loaded = load_skill(catalog, name, user=True)
     if loaded is None:
-        raise SkillInvocationError(f"no skill named {name!r}")
+        raise SkillInvocationError(msgs.NO_SUCH_SKILL.text(name=name))
     metadata = loaded.metadata
     header = [f"Base directory for this skill: {metadata.path.parent}"]
     if metadata.tools:
@@ -247,24 +247,20 @@ def discover_skills(
                 try:
                     record = _index_skill(path, source)
                 except ValueError as exc:
-                    _warn_once(f"WARNING: skipping malformed skill {path}: {exc}")
+                    _warn_once(msgs.SKILL_SKIPPED.text(path=path, error=exc))
                     continue
                 key = record.metadata.name.casefold()
                 prior = root_records.get(key)
                 if prior is not None:
-                    _warn_once(
-                        f"WARNING: skipping malformed skill {path}: duplicate skill name "
-                        f"{record.metadata.name!r} in {root}: {prior.metadata.path} and {path}"
-                    )
+                    _warn_once(msgs.SKILL_DUPLICATE.text(
+                        path=path, name=record.metadata.name, root=root, prior=prior.metadata.path))
                     continue
                 root_records[key] = record
             for key, record in root_records.items():
                 prior = layer_records.get(key)
                 if prior is not None:
-                    _warn_once(
-                        f"WARNING: skill {record.metadata.name!r} at {record.metadata.path} "
-                        f"shadows {prior.metadata.path}"
-                    )
+                    _warn_once(msgs.SKILL_OVERRIDES.text(
+                        name=record.metadata.name, path=record.metadata.path, prior=prior.metadata.path))
             layer_records.update(root_records)
         selected.update(layer_records)
     return SkillCatalog(selected.values())
@@ -334,7 +330,7 @@ def _warn_once(message: str) -> None:
     if line in _WARNED:
         return
     _WARNED.add(line)
-    print(line, file=sys.stderr)
+    msgs.warn(msgs.FAILED_WARN, error=line)
 
 
 def _string_field(manifest: dict[str, Any], field: str) -> str:
