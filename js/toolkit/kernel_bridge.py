@@ -18,6 +18,9 @@ The cell gets the handler's whole result. The per-result and per-turn caps
 exist to protect the model's context, and a cell's result reaches the model
 only through what the cell prints, which the kernel tool caps.
 
+The observer the kernel call was dispatched with (runtime._cell_call_observer)
+traces each call and logs it to the flight log, as a direct call is.
+
 One request is served at a time, in the order they arrive.
 """
 
@@ -29,6 +32,8 @@ import json
 import secrets
 import socket
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +45,10 @@ from .core import ToolContext, ToolResult, call_scope, call_tool, registry_scope
 REQUEST_TIMEOUT = 30.0
 # How often the accept loop wakes to see whether the bridge was closed.
 ACCEPT_SLICE = 0.25
+
+# Told about every call a cell makes: (tool name, arguments, result, seconds,
+# failure text or None). The runtime passes one that traces and logs the call.
+Observer = Callable[[str, dict, Any, float, "str | None"], None]
 
 # Tools a cell cannot call, with the reason the refusal gives.
 _OWN_KERNEL = "it runs cells in this same kernel, which is busy running the calling cell"
@@ -85,6 +94,16 @@ def _parameter_names(tool: Any) -> list[str]:
     return list(properties) if isinstance(properties, dict) else []
 
 
+def _encode(reply: dict[str, Any]) -> bytes:
+    """``reply`` as the bytes of one JSON document. ASCII escapes carry any
+    str, including the lone surrogates a non-UTF-8 file name decodes to."""
+    try:
+        return json.dumps(reply, default=str).encode("ascii")
+    except (TypeError, ValueError, RecursionError) as exc:
+        return json.dumps({"error": f"ERROR: the js tool bridge could not send the result: "
+                                    f"{type(exc).__name__}: {exc}"}).encode("ascii")
+
+
 def _plain(value: Any) -> Any:
     """``value`` as something JSON carries: text for a mixed result, the
     string form of anything JSON has no type for."""
@@ -103,6 +122,11 @@ class ToolBridge:
     `attach` names the registry and ToolContext calls run with; the kernel
     tool attaches on every call, so a cell uses the surface of the agent whose
     call is running it. Until something attaches, every call is refused.
+
+    Every connection gets a reply, whatever the request held or the tool
+    returned, and nothing a request does stops the serving thread. `revive`
+    serves again on the same path with the same token if the thread stopped
+    anyway, so the `tools` object already in the kernel keeps working.
     """
 
     def __init__(self, socket_path: Path) -> None:
@@ -110,38 +134,68 @@ class ToolBridge:
         self.token = secrets.token_hex(16)
         self.registry: Any = None
         self.context: ToolContext | None = None
+        self.observer: Observer | None = None
         self._calls = itertools.count(1)
         self._closed = threading.Event()
-        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._server.bind(str(socket_path))
-        self._server.listen(8)
-        self._server.settimeout(ACCEPT_SLICE)
-        self._thread = threading.Thread(target=self._serve, name="js-kernel-tools", daemon=True)
+        self._server: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+        self._listen()
+
+    def _listen(self) -> None:
+        self.socket_path.unlink(missing_ok=True)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(self.socket_path))
+        server.listen(8)
+        server.settimeout(ACCEPT_SLICE)
+        self._server = server
+        self._thread = threading.Thread(target=self._serve, args=(server,),
+                                        name="js-kernel-tools", daemon=True)
         self._thread.start()
 
-    def attach(self, registry: Any, context: ToolContext) -> None:
+    def serving(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def revive(self) -> None:
+        """Serve again if the serving thread has stopped and the bridge is open."""
+        if self._closed.is_set() or self.serving():
+            return
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+        self._listen()
+
+    def attach(self, registry: Any, context: ToolContext,
+               observer: Observer | None = None) -> None:
         self.registry = registry
         self.context = context
+        self.observer = observer
 
     def close(self) -> None:
         self._closed.set()
-        try:
-            self._server.close()
-        except OSError:
-            pass
-        if self._thread is not threading.current_thread():
-            self._thread.join(timeout=5)
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
 
-    def _serve(self) -> None:
+    def _serve(self, server: socket.socket) -> None:
         while not self._closed.is_set():
             try:
-                conn, _ = self._server.accept()
+                conn, _ = server.accept()
             except TimeoutError:
                 continue
             except OSError:
                 return
-            with conn:
-                self._answer(conn)
+            try:
+                with conn:
+                    self._answer(conn)
+            except Exception:  # noqa: BLE001 - one bad connection must not stop the bridge
+                continue
 
     def _answer(self, conn: socket.socket) -> None:
         conn.settimeout(REQUEST_TIMEOUT)
@@ -156,20 +210,24 @@ class ToolBridge:
             return
         try:
             request = json.loads(b"".join(chunks).decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError, RecursionError):
             request = None
-        reply = self.handle(request)
+        try:
+            reply = self.handle(request)
+        except Exception as exc:  # noqa: BLE001 - the cell gets the failure as ToolError
+            reply = {"error": f"ERROR: the js tool bridge failed: {type(exc).__name__}: {exc}"}
         try:
             conn.settimeout(None)
-            conn.sendall(json.dumps(reply, ensure_ascii=False, default=str).encode("utf-8"))
+            conn.sendall(_encode(reply))
         except OSError:
             # The cell was interrupted while the tool ran; nobody is listening.
             pass
 
     def handle(self, request: Any) -> dict[str, Any]:
         """The reply to one decoded request: {"value": ...} or {"error": text}."""
-        if not isinstance(request, dict) or not secrets.compare_digest(
-                str(request.get("token", "")), self.token):
+        token = request.get("token") if isinstance(request, dict) else None
+        if not (isinstance(token, str) and token.isascii()
+                and secrets.compare_digest(token, self.token)):
             return {"error": "ERROR: the js tool bridge refused a request it could not authenticate"}
         registry, context = self.registry, self.context
         if registry is None or context is None:
@@ -212,11 +270,19 @@ class ToolBridge:
         banned = registry.argument_refusal(tool.name, arguments)
         if banned is not None:
             return {"error": banned}
+        observer = self.observer
+        started = time.monotonic()
         try:
-            with call_scope(f"kernel-tools-{next(self._calls)}"), registry_scope(registry):
+            with call_scope(f"kernel-tools-{next(self._calls)}"), registry_scope(registry, observer):
                 result = call_tool(tool, arguments, context)
         except Exception as exc:  # noqa: BLE001 - a failing handler is the cell's exception
-            return {"error": f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"}
+            failure = f"{type(exc).__name__}: {exc}"
+            result = f"ERROR running {tool.name}: {failure}"
+            if observer is not None:
+                observer(tool.name, arguments, result, time.monotonic() - started, failure)
+            return {"error": result}
+        if observer is not None:
+            observer(tool.name, arguments, result, time.monotonic() - started, None)
         if isinstance(result, ToolResult) and result.is_error:
             return {"error": result.dehydrated()}
         value = _plain(result)

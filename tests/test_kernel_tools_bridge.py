@@ -197,3 +197,117 @@ def test_a_kernel_called_outside_dispatch_refuses_tool_calls(ctx):
 
     assert "REFUSED" in result
     assert "undispatched-7310" not in result
+
+
+@needs_kernel
+def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving(ctx):
+    import os
+
+    os.mkdir(os.fsencode(ctx.cwd / "names"))
+    open(os.fsencode(ctx.cwd / "names") + b"/bad\xffname.txt", "wb").close()
+
+    first = cell(
+        "import os\n"
+        "for n in os.listdir('names'):\n"
+        "    print('WROTE', tools.write(file_path='names/' + n + '.bak', content='copy\\n')[:5])\n",
+        ctx,
+    )
+    (ctx.cwd / "later.txt").write_text("still-serving-8812\n")
+    second = cell("print(tools.read('later.txt', show_line_numbers=False))", ctx)
+
+    assert "WROTE" in first and "ToolError" not in first, first
+    assert (os.fsencode(ctx.cwd / "names") + b"/bad\xffname.txt.bak") in [
+        os.fsencode(ctx.cwd / "names") + b"/" + n for n in os.listdir(os.fsencode(ctx.cwd / "names"))
+    ]
+    assert "still-serving-8812" in second
+
+
+@needs_kernel
+def test_a_cell_tool_call_is_logged_like_a_direct_call(ctx):
+    (ctx.cwd / "notes.txt").write_text("logged\n")
+    events: list[tuple[str, dict]] = []
+    telemetry = runtime.Telemetry(None)
+    telemetry.event = lambda kind, **fields: events.append((kind, fields))
+
+    runtime._dispatch(
+        "kernel", json.dumps({"code": "tools.read('notes.txt')"}), telemetry,
+        cap_bytes=256 * 1024, registry=build_default_registry(), tool_context=ctx,
+    )
+
+    assert ("tool_ok", "read", "kernel") in [
+        (kind, fields.get("tool"), fields.get("via")) for kind, fields in events
+    ]
+
+
+@needs_kernel
+def test_a_dead_kernel_is_shut_down_before_its_replacement_starts(ctx):
+    cell("x = 1", ctx)
+    old = ctx.kernel_session
+    old_bridge = old.bridge
+    old.manager.shutdown_kernel(now=True)
+
+    result = cell("print('NEW', 1 + 1)", ctx)
+
+    assert "NEW 2" in result
+    assert ctx.kernel_session is not old
+    assert old.bridge is None and not old_bridge.serving()
+
+
+# The bridge on its own, without a kernel: a raw client on its socket.
+
+@pytest.fixture
+def bridge():
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from js.toolkit.kernel_bridge import ToolBridge
+
+    folder = Path(tempfile.mkdtemp(prefix="jsb-"))
+    served = ToolBridge(folder / "tools.sock")
+    yield served
+    served.close()
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def raw_request(bridge, payload: bytes) -> dict:
+    import socket
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(10)
+        conn.connect(str(bridge.socket_path))
+        conn.sendall(payload)
+        conn.shutdown(socket.SHUT_WR)
+        data = b""
+        while chunk := conn.recv(1 << 16):
+            data += chunk
+    return json.loads(data)
+
+
+def names_request(bridge, token=None) -> bytes:
+    return json.dumps({"op": "names", "token": token or bridge.token}).encode()
+
+
+def test_a_request_the_bridge_cannot_parse_gets_an_error_and_serving_goes_on(bridge, tmp_path):
+    bridge.attach(build_default_registry(), ToolContext(cwd=tmp_path))
+
+    nested = raw_request(bridge, b"[" * 100_000 + b"]" * 100_000)
+    foreign = raw_request(bridge, json.dumps({"op": "names", "token": "é" * 32}).encode())
+    good = raw_request(bridge, names_request(bridge))
+
+    assert "error" in nested and "error" in foreign
+    assert "read" in good["value"]
+    assert bridge.serving()
+
+
+def test_a_stopped_bridge_serves_again_on_the_same_socket_and_token(bridge, tmp_path):
+    bridge.attach(build_default_registry(), ToolContext(cwd=tmp_path))
+    token = bridge.token
+    bridge._server.close()
+    bridge._thread.join(timeout=5)
+    assert not bridge.serving()
+
+    bridge.revive()
+
+    assert bridge.serving() and bridge.token == token
+    assert "read" in raw_request(bridge, names_request(bridge))["value"]

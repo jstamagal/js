@@ -806,6 +806,24 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     return capped
 
 
+def _cell_call_observer(telemetry: Telemetry, trace: bool,
+                        context: ToolContext | None) -> Callable[..., None]:
+    """Trace and log a tool call a kernel cell makes while this call runs,
+    the way a direct call is traced and logged."""
+
+    def observe(name: str, args: dict, result: Any, seconds: float, failure: str | None) -> None:
+        latency_ms = int(seconds * 1000)
+        if failure is None:
+            telemetry.event("tool_ok", tool=name, via="kernel", latency_ms=latency_ms)
+        else:
+            telemetry.event("tool_exception", tool=name, via="kernel", error=failure,
+                            latency_ms=latency_ms)
+        if trace:
+            _trace_result(telemetry, context, name, result, args=args, with_call=True)
+
+    return observe
+
+
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
               error_tracker: ToolErrorTracker | None = None,
@@ -848,7 +866,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
     started = time.time()
     try:
-        with call_scope(call_id), registry_scope(active_registry):
+        with call_scope(call_id), registry_scope(
+                active_registry, _cell_call_observer(telemetry, trace, context)):
             result = call_tool(tool, args, context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
@@ -1112,7 +1131,8 @@ async def _dispatch_async_tool(
         _trace_call(telemetry, tool_context, tool.name, args)
     started = time.time()
     try:
-        with call_scope(pc.id), registry_scope(registry):
+        with call_scope(pc.id), registry_scope(
+                registry, _cell_call_observer(telemetry, trace, tool_context)):
             result = await call_tool_async(tool, args, tool_context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:

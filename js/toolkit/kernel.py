@@ -53,7 +53,7 @@ from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
 from . import kernel_bridge
-from .core import Tool, ToolContext, current_registry
+from .core import Tool, ToolContext, current_observer, current_registry
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
@@ -478,6 +478,8 @@ class KernelSession:
         # IPython's own `In[n]` counter restarts too. Letting ours run on would
         # print "kernel cell 9" beside a traceback that says "Cell In[1]".
         self.executions = 0
+        if self.bridge is not None:
+            self.bridge.revive()
         self.install_tools()
 
     def submit(self, code: str, *, store_history: bool = True, label: str = "") -> CellHandle:
@@ -559,6 +561,10 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     if session is not None and session.alive():
         _attach_tools(session, context)
         return session, "", False
+    if session is not None:
+        # The kernel died: release its bridge thread, socket dir and log.
+        session.shutdown()
+        context.kernel_session = None
     artifacts = paths.kernel_state_root() / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts,
                             jail_bind=tuple(getattr(context, "jail_bind", ()) or ()),
@@ -578,7 +584,8 @@ def _attach_tools(session: KernelSession, context: Any) -> None:
     running call, so cells call tools as the agent running them."""
     bridge = getattr(session, "bridge", None)
     if bridge is not None:
-        bridge.attach(current_registry(), context)
+        bridge.revive()
+        bridge.attach(current_registry(), context, current_observer())
 
 
 # --------------------------------------------------------------------------

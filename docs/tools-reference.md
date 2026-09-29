@@ -605,7 +605,20 @@ therefore the same: a file a cell read counts as read for a later `patch`.
 `kernel` and `toolbox` (they run cells in the busy kernel), fan-out tools
 (`task` and agent tools) and async handlers (MCP tools, `tool_discovery`) are
 refused from a cell. A kernel driven without a dispatch registry — a direct
-`kernel()` call from Python — refuses every tool call.
+`kernel()` call from Python — refuses every tool call. A relative path in a
+cell's tool call resolves against the ToolContext's cwd, as a direct call's
+does, not against the kernel's `os.getcwd()`; after an `os.chdir` in a cell, or
+after `/cd` moves js while the kernel keeps its start directory, the two differ.
+
+Each cell call is traced and logged like a direct call: the trace shows the
+exchange whole, and the flight log gets `tool_ok`/`tool_exception` with
+`"via": "kernel"`. The `tool_call`/`tool_result` hooks do not fire for them.
+Every connection gets a reply; a request or result the bridge cannot handle
+comes back as `tools.ToolError`, and results carry any `str`, including the
+lone surrogates a non-UTF-8 file name decodes to. If the serving thread stops
+anyway, the next `kernel` call or restart serves again on the same socket with
+the same token. A kernel that died is shut down, bridge included, before its
+replacement starts.
 
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.

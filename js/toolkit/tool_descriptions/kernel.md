@@ -84,21 +84,30 @@ everything is gone and `restart=true` plus a rebuild is the answer.
 Calling js tools from a cell: the namespace holds `tools`, and
 `tools.<name>(...)` calls the js tool `<name>` and returns its result as a
 Python value, so a loop over files or a filter over search hits runs in the
-cell and only what you print comes back:
+cell and only what you print comes back.
 
+{{#if read}}
     src = tools.read("setup.py", show_line_numbers=False)
+    print(len(src.splitlines()))
+{{/if}}
+{{#if fs_search}}
     hits = tools.fs_search(pattern="TODO", output_mode="files_with_matches")
-    print(len(src.splitlines()), hits.splitlines()[:5])
+    print(hits.splitlines()[:5])
+{{/if}}
 
 - Keyword arguments are the tool's parameters, as in a direct call. Positional
-  arguments fill them in order: `tools.read("setup.py")` is
-  `tools.read(file_path="setup.py")`.
+  arguments fill them in the order the tool's schema lists them.
 - The value is the text a direct call returns, whole: the result caps apply to
   what the cell prints, not to what a tool returns into it.
 - A refusal or failure raises `tools.ToolError` with the `ERROR` text.
 - Each call runs as a direct call would: only tools you can call yourself, with
-  the same argument checks, path limits, and read-before-write rule. A file a
-  cell reads counts as read for a later `patch`.
+  the same argument checks, path limits, and read-before-write rule.
+{{#if patch}}
+  A file a cell reads counts as read for a later `patch`.
+{{/if}}
+- A relative path in a tool argument resolves against js's working
+  directory, as in a direct call, not against the cell's `os.getcwd()`. After
+  an `os.chdir` in a cell, pass absolute paths.
 - `tools.names()` lists what a cell can call. `kernel`, `toolbox`, subagent
   tools, and MCP tools are not callable from a cell; call them directly.
 

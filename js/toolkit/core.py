@@ -61,21 +61,32 @@ def call_scope(call_id: str):
 # bridge dispatches a cell's `tools.<name>(...)` calls through it, so a cell
 # reaches exactly the tools, and the argument bans, of the agent that ran it.
 _REGISTRY: contextvars.ContextVar[Any] = contextvars.ContextVar("js_tool_registry", default=None)
+# What the dispatcher of the running call wants told about calls made on its
+# behalf (the bridge's cell calls): the runtime traces and logs them with it.
+_OBSERVER: contextvars.ContextVar[Any] = contextvars.ContextVar("js_tool_observer", default=None)
 
 
 @contextmanager
-def registry_scope(registry: Any):
-    """Run the body as a call dispatched through ``registry``."""
+def registry_scope(registry: Any, observer: Any = None):
+    """Run the body as a call dispatched through ``registry``; ``observer``
+    is told about the tool calls made on the body's behalf."""
     token = _REGISTRY.set(registry)
+    observer_token = _OBSERVER.set(observer)
     try:
         yield
     finally:
+        _OBSERVER.reset(observer_token)
         _REGISTRY.reset(token)
 
 
 def current_registry() -> Any:
     """The registry the running tool call was dispatched through, or None."""
     return _REGISTRY.get()
+
+
+def current_observer() -> Any:
+    """The observer the running tool call was dispatched with, or None."""
+    return _OBSERVER.get()
 
 
 def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
