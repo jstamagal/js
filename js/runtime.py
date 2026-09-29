@@ -733,7 +733,8 @@ def spill_oversized_result(
     except OSError:
         return result  # cannot spill -> the byte cap downstream still applies
     total_bytes = byte_size(result)
-    multiline = len(result.splitlines()) > 1
+    line_count = len(result.splitlines())
+    multiline = line_count > 1
 
     def spill_notice(next_byte: int, next_line: int) -> str:
         by_byte = json.dumps({"start_byte": next_byte})
@@ -750,7 +751,7 @@ def spill_oversized_result(
     # Inline is a spill threshold, not the hard backstop. Keep a usable pointer
     # even when the notice alone exceeds it; the downstream hard cap still wins.
     # The budget is sized with the widest offsets the notice can name.
-    widest = spill_notice(total_bytes, len(result.splitlines()) + 1)
+    widest = spill_notice(total_bytes, line_count + 1)
     head = byte_prefix(result, min(inline_cap // 2, max(0, inline_cap - byte_size(widest) - 2)))
     head_lines = head.splitlines(keepends=True)
     # The line the preview stops inside, or the next one when it ends on a break.
