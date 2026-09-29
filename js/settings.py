@@ -113,7 +113,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 env="JS_REASONING", empty=EMPTY_NONE),
     SettingSpec("model.thinking_budget", "int",
                 "Thinking budget in tokens on the Anthropic wire, for the models that take a "
-                "budget (Claude 4.5 and earlier, MiniMax, opencode-go). Unset = derived from "
+                "budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset = derived from "
                 "model.reasoning_effort. Adaptive models and effort off ignore it.",
                 empty=EMPTY_NONE),
     SettingSpec("model.vision", "bool",
