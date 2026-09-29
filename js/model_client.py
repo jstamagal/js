@@ -12,6 +12,7 @@ import base64
 import contextvars
 import json
 import time
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -972,6 +973,15 @@ _CACHE_KEY_HOSTS = frozenset({"api.openai.com", "api.deepseek.com"})
 _CACHE_KEY_VENDORS = frozenset({"openai", "openai-completions", "openai-responses", "deepseek"})
 
 
+# opencode-go routes and caches by conversation, keyed on this header. Its
+# Anthropic endpoint refuses a request without it: 400 MissingSessionID,
+# "Request is missing x-opencode-session and cannot be routed efficiently".
+# A request with no session key (a session-less run, a compaction summary)
+# gets a one-off id.
+_OPENCODE_GO_PROVIDERS = frozenset({"opencode-go", "opencode-go-anthropic"})
+_OPENCODE_SESSION_HEADER = "x-opencode-session"
+
+
 def accepts_prompt_cache_key(
     *, provider_name: str, sdk_provider_name: str, base_url: str | None
 ) -> bool:
@@ -1024,6 +1034,11 @@ async def stream_model_async(
     ``stream_idle_seconds`` (None or 0: no limit) aborts the request with
     :class:`StreamIdleError` once that long passes without a response byte.
     """
+    if (providers.normalize_provider_id(provider_id) or "") in _OPENCODE_GO_PROVIDERS:
+        provider_headers = {
+            _OPENCODE_SESSION_HEADER: cache_key or f"js-{uuid.uuid4().hex}",
+            **(provider_headers or {}),
+        }
     try:
         model = resolve_model(
             model_id,

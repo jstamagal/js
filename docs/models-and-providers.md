@@ -386,6 +386,11 @@ API key (`OPENCODE_GO_API_KEY`) but route over different transports:
 - `opencode-go-anthropic` uses the Anthropic-compatible adapter
   (`sdk=anthropic`) at `https://opencode.ai/zen/go`.
 
+Every request to either one carries an `x-opencode-session` header: the
+session's cache key (`js-<agent>-<session>`), or a one-off id for a request
+with no session. opencode routes and caches by that header, and the Anthropic
+endpoint answers a request without it with 400 `MissingSessionID`.
+
 Both endpoints advertise their live catalog through the API. js does not apply a
 client-side allow-list — the endpoint is the source of truth, so the JSON bridge
 and the login picker surface exactly what the upstream `list_models` returns
