@@ -1,7 +1,7 @@
 """Web search, library docs, and rendered-page tools.
 
-Four search backends and one reader, kept as separate tools so prompt
-frontmatter can hand each agent exactly the surface it needs. Every backend
+Four search backends and one reader, kept as separate tools so each agent's
+agent.yaml can name exactly the surface it needs. Every backend
 reads its API key from the environment at call time and fails with a plain
 ERROR string when the key is missing, so a surface can carry a tool the
 current shell cannot use without breaking registry assembly.
@@ -591,6 +591,7 @@ def tools() -> tuple[Tool, ...]:
                 "num": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
             },
             required=("query",),
+            read_only=True,
         ),
         Tool(
             "tavily_search",
@@ -601,6 +602,7 @@ def tools() -> tuple[Tool, ...]:
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
             },
             required=("query",),
+            read_only=True,
         ),
         Tool(
             "exa_search",
@@ -612,6 +614,7 @@ def tools() -> tuple[Tool, ...]:
                 "text_chars": {"type": "integer", "minimum": 100, "default": 1500},
             },
             required=("query",),
+            read_only=True,
         ),
         Tool(
             "docs_search",
@@ -623,6 +626,7 @@ def tools() -> tuple[Tool, ...]:
                 "tokens": {"type": "integer", "minimum": 500, "default": 4000},
             },
             required=("library",),
+            read_only=True,
         ),
         Tool(
             "browse",

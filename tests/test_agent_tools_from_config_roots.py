@@ -40,14 +40,14 @@ def test_agent_in_a_config_root_becomes_a_selectable_tool(tmp_path):
     registry = cli._registry_for(_cfg((root,)))
 
     assert registry.resolve("reviewer") is not None
-    assert "reviewer" in registry.select(["reviewer"]).by_name
+    assert "reviewer" in registry.select(["reviewer:lazy"]).by_name
 
 
 def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):
     root = tmp_path / "agents"
     _agent_dir(root, "triage")
 
-    cli._registry_for(_cfg((root,))).select(["triage"])
+    cli._registry_for(_cfg((root,))).select(["triage:lazy"])
 
     assert "matched no tool" not in capsys.readouterr().err
 
@@ -118,12 +118,16 @@ def test_agent_shadowing_a_builtin_tool_name_warns(tmp_path, capsys):
     assert "shadows a builtin tool name" in capsys.readouterr().err
 
 
-def test_directory_without_markdown_is_not_an_agent(tmp_path):
+def test_directory_without_markdown_or_agent_yaml_is_not_an_agent(tmp_path):
     root = tmp_path / "agents"
     (root / "notanagent").mkdir(parents=True)
-    (root / "notanagent" / "00-tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    (root / "notanagent" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
+    (root / "manifestonly").mkdir(parents=True)
+    (root / "manifestonly" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
 
-    assert registry_for_roots((root,)).resolve("notanagent") is None
+    registry = registry_for_roots((root,))
+    assert registry.resolve("notanagent") is None
+    assert registry.resolve("manifestonly") is not None
 
 
 def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):

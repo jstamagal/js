@@ -60,7 +60,7 @@ def render_table(registry: ToolRegistry, surface: list[str]) -> str:
 def _registry(names: list[str]) -> ToolRegistry | None:
     registry = build_default_registry()
     if names:
-        registry = registry.select(names)
+        registry = registry.select([f"{name}:eager" for name in names])
         if not registry.tools:
             return None
     return registry

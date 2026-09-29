@@ -5,8 +5,10 @@ prompt-directory tools. They are parallel worker turns, not long-running managed
 processes with handles.
 
 Agents are created using prompt directories under `prompts/` (for bundled agents)
-or `.js/agents/` (for project/global agents), with a `00-tools.yaml` manifest
-declaring `tools:` (tool selectors) and optional `max_tokens:` overrides.
+or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
+declaring `tools:` (`noun:modifier` entries, see
+[tool-system.md](tool-system.md)) and optional `model:`, `reasoning:` and
+`max_tokens:` overrides.
 
 ## Generic `task`
 
@@ -87,9 +89,9 @@ The child loads:
 <root>/<agent_id>/*.md  # root is repo prompts/, platform config agents/, or project .js/agents/
 ```
 
-Then selects tools from the full registry using that prompt's `tools:`
-frontmatter. If the prompt directory is missing, the worker runs with an empty
-system prompt and no tools.
+Then selects tools from the full registry using that agent's `agent.yaml`
+`tools:` entries. If the prompt directory is missing, the worker runs with an
+empty system prompt and no tools.
 
 Child contexts copy:
 
@@ -107,7 +109,6 @@ Child contexts do not inherit:
 - file hashes
 - undo snapshots
 - search cache
-- todos
 
 ## Wiki Agents And Built-In Artifact Mode
 
@@ -158,23 +159,23 @@ Subagents choose a model in this order:
 1. the `task` tool's `model` argument, if the operator has not set
    `subagents.lock_model`;
 2. the parent turn's current model, when `subagents.prefer_inherit` is true;
-3. the child agent manifest's frontmatter `model:`;
+3. the child agent's `agent.yaml` `model:`;
 4. the parent model as the fallback.
 
-Put agent defaults in the prompt directory's `00-tools.yaml`:
+Put agent defaults in the prompt directory's `agent.yaml`:
 
 ```yaml
 # Optional: pin this agent's default model and reasoning effort.
 # A provider-prefixed id re-routes the child provider/base/key/headers through
 # the model-route resolver; a bare id keeps the parent's provider route.
 model: anthropic/claude-sonnet-4
-reasoning_effort: high  # off|minimal|low|medium|high|xhigh|max
+reasoning: high  # off|minimal|low|medium|high|xhigh|max
 tools:
-  - read
-  - fs_search
+  - read:eager
+  - fs_search:eager
 ```
 
-`reasoning_effort:` sets the child default independently of the model. `off`
+`reasoning:` sets the child default independently of the model. `off`
 explicitly disables reasoning; omitting it inherits the parent/provider setting.
 Invalid values fail agent loading rather than being silently ignored.
 

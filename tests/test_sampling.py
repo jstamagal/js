@@ -147,7 +147,7 @@ def test_loading_prompt_spec_sampling_does_not_mutate_os_environ(monkeypatch, tm
 
     prompts = tmp_path / "agent"
     prompts.mkdir()
-    (prompts / "00-tools.yaml").write_text(
+    (prompts / "agent.yaml").write_text(
         "sampling:\n"
         "  temperature: 0.2\n"
         "  top_p: 0.75\n",

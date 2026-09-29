@@ -64,6 +64,7 @@ from .config import (
 )
 from .session_catalog import acquire_session, catalog_sessions, last_session_model, record_session_start
 from .tool_binaries import resolve_binary
+from .toolkit import policy as tool_policy
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
@@ -779,8 +780,14 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
 
 
 def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
+    """Rebuild the live registry. The agent load already printed the
+    unmatched-entry notices; a tools.yaml that no longer resolves keeps the
+    current registry and prints one line."""
     selectors = state.get("tool_selectors", ())
-    state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors)
+    try:
+        state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
+    except tool_policy.ToolPolicyError as exc:
+        print(f"{C.ORANGE}{exc}; keeping the current tool surface{C.RESET}")
 
 
 def _state_value(state: dict, key: str, default):
@@ -1311,6 +1318,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
   {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
+  {C.YELLOW}/tools{C.RESET}           show each tool's state (eager/lazy/ban) and the entry that decided it
   {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
   {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
   {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
@@ -1549,6 +1557,19 @@ def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
     return None, arg.strip(), True
 
 
+def _print_tool_chain(state: dict, cfg: Config) -> None:
+    """Every tool with its resolved state and the chain entry that decided it."""
+    full = _registry_for(_cfg_for_live_state(cfg, state))
+    try:
+        config = tool_policy.load_tools_config()
+        rules = tool_policy.expand(state.get("tool_selectors", ()), config, f"agent {cfg.agent_id!r}")
+    except tool_policy.ToolPolicyError as exc:
+        print(f"{C.ORANGE}{exc}{C.RESET}")
+        return
+    for row in tool_policy.render_table(tool_policy.resolve(full.tools, rules), config.bans):
+        print(row)
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in {"exit", "quit", ":q"}:
@@ -1646,6 +1667,9 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line == "/turns":
         print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}")
         return True
+    if line == "/tools":
+        _print_tool_chain(state, cfg)
+        return True
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
         return True
@@ -1730,7 +1754,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
 
 
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
-    """Apply the active agent's frontmatter `model:` through the resolver, unless
+    """Apply the active agent's agent.yaml `model:` through the resolver, unless
     the operator pinned a model with -m / JS_MODEL / config."""
     agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
     if not agent_model or model is not None or getattr(cfg, "explicit_model", False):
@@ -1776,7 +1800,7 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
                 f"no such agent: {agent_id}; looked in project .js/agents, "
                 f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
                 f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
-                f"and an optional 00-tools.yaml manifest."
+                f"and an optional agent.yaml manifest."
             )
     return str(exc)
 
@@ -2050,7 +2074,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                debug: bool = False) -> int:
     """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
     context, no session), measuring TTFT / tok-s / turn time. The persona
-    (NN-prompt.md + 00-tools.yaml) is rebuilt into each benchmark's head;
+    (NN-prompt.md + agent.yaml) is rebuilt into each benchmark's head;
     benchmarks never see each other."""
     try:
         agent_id = validate_agent_id(bench_agent)
@@ -2098,7 +2122,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     interrupted = False
     for bench in benchmarks:
         # max_tokens: --max-out wins; else per-benchmark frontmatter (already
-        # -1 -> None=uncapped); else the agent default from 00-tools.yaml.
+        # -1 -> None=uncapped); else the agent default from agent.yaml.
         if maxout is not None:
             eff_max = maxout
         elif bench.max_tokens_set:
@@ -3430,7 +3454,7 @@ def main(argv: list[str] | None = None) -> int:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     elif (prompt_spec.max_output_tokens is not None
           and settings.get_dotted(live_settings, ("model", "max_output_tokens"), None) is None):
-        # Agent default from 00-tools.yaml — seed the per-turn source of truth so
+        # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
     event_hooks = events.EventHooks()

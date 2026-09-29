@@ -147,7 +147,7 @@ def test_unlocked_subagent_model_keeps_override_flag(monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_exact_selector_miss_warns_on_stderr(capsys):
-    result = select(["reed"])
+    result = select(["reed:lazy"])
     assert [tool.name for tool in result.tools] == []
     err = capsys.readouterr().err
     assert "reed" in err and "matched no tool" in err
@@ -155,14 +155,14 @@ def test_exact_selector_miss_warns_on_stderr(capsys):
 
 def test_exact_selector_miss_names_the_agent(capsys):
     full = build_default_registry()
-    full.select(["fs_read"], agent_id="myagent")
+    full.select(["fs_read:lazy"], agent_id="myagent")
     err = capsys.readouterr().err
-    assert "'fs_read'" in err
+    assert "fs_read" in err
     assert "myagent" in err
 
 
 def test_glob_selector_miss_stays_silent(capsys):
-    result = select(["zzz_*"])
+    result = select(["zzz_*:lazy"])
     assert [tool.name for tool in result.tools] == []
     assert capsys.readouterr().err == ""
 
@@ -170,13 +170,13 @@ def test_glob_selector_miss_stays_silent(capsys):
 def test_metachar_selector_is_treated_as_glob(capsys):
     # `?` / `[` with no `*` must route through the (silent) glob branch, not the
     # exact-lookup warn branch.
-    result = select(["read?"])
+    result = select(["read?:lazy"])
     assert [tool.name for tool in result.tools] == []
     assert capsys.readouterr().err == ""
 
 
 def test_good_exact_and_glob_selectors_still_resolve(capsys):
-    names = [tool.name for tool in select(["read", "todo_*"]).tools]
+    names = [tool.name for tool in select(["read:lazy", "wiki_*:lazy"]).tools]
     assert "read" in names
-    assert "todo_write" in names and "todo_read" in names
+    assert "wiki_write" in names and "wiki_convert" in names
     assert capsys.readouterr().err == ""

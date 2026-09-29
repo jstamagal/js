@@ -1,4 +1,4 @@
-"""Meta tools: todos, plans, skills, and isolated task delegation."""
+"""Meta tools: plans, skills, and isolated task delegation."""
 
 from __future__ import annotations
 
@@ -13,12 +13,11 @@ from typing import Any
 
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
-from .core import Todo, Tool, ToolContext
+from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default
 
 
-_ALLOWED_STATUS = {"pending", "in_progress", "completed", "cancelled"}
 _DEFAULT_TASK_DEPTH = 2
 # Concurrency ceiling for a single fan-out. The parent tool-dispatch pool is 32
 # threads (cli.py); a sub-fan-out sits well below that so one wide `task(...)`
@@ -27,59 +26,6 @@ _DEFAULT_TASK_DEPTH = 2
 # the meta/registry surface; `context.subagent_max_workers` overrides it when a
 # future knob threads one through.
 _DEFAULT_SUBAGENT_MAX_WORKERS = 8
-
-
-def todo_write(todos: list[dict], context: ToolContext | None = None) -> str:
-    assert context is not None
-    # Issue #43: an empty batch used to fall through and report "todos updated"
-    # with identical before/after — nothing told the caller the list was
-    # untouched. Say so explicitly instead.
-    if not todos:
-        return "todos unchanged (empty batch): no changes applied"
-    before = [(todo.content, todo.status) for todo in context.todos.values()]
-    # Validate the whole batch BEFORE touching the list. Rejecting item 3 after
-    # items 1-2 were already applied left the model with an ERROR and a silently
-    # half-updated list.
-    validated: list[tuple[str, str]] = []
-    # Cancelling a key that is not on the list (and is not added earlier in this
-    # same batch) is a no-op masquerading as success; reject it up front so the
-    # caller learns the key was not found instead of the list silently staying
-    # the same. `known` tracks keys that will exist by the time each item is
-    # applied, so add-then-cancel within one batch still works.
-    known = set(context.todos)
-    for item in todos:
-        content = str(item.get("content", "")).strip()
-        status = str(item.get("status", "pending")).strip().lower()
-        if not content:
-            return "ERROR: Todo content cannot be empty"
-        if status not in _ALLOWED_STATUS:
-            return f"ERROR: invalid todo status {status!r}; use pending, in_progress, completed, or cancelled"
-        if status == "cancelled" and content not in known:
-            return f"ERROR: todo {content!r} not found; nothing was changed"
-        if status != "cancelled":
-            known.add(content)
-        validated.append((content, status))
-    for content, status in validated:
-        if status == "cancelled":
-            context.todos.pop(content, None)
-        else:
-            context.todos[content] = Todo(content=content, status=status)
-    after = [(todo.content, todo.status) for todo in context.todos.values()]
-    return f"todos updated\nbefore={before}\nafter={after}"
-
-
-def todo_read(context: ToolContext | None = None) -> str:
-    assert context is not None
-    if not context.todos:
-        return "No todos."
-    return "\n".join(
-        f"- [{todo.status}] {_one_line(todo.content)}" for todo in context.todos.values()
-    )
-
-
-def _one_line(content: str) -> str:
-    """Escape line breaks so one todo always renders as exactly one list entry."""
-    return content.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
 
 
 def _filename_limit(directory: Path) -> int:
@@ -278,7 +224,7 @@ async def _run_one_task_async(
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >
-    #   inherit parent (if prefer_inherit) > frontmatter primary (`model:`) >
+    #   inherit parent (if prefer_inherit) > agent.yaml primary (`model:`) >
     #   parent model as fallback.
     locked = bool(getattr(parent_cfg, "lock_subagent_model", False))
     if model and not locked:
@@ -646,26 +592,8 @@ def _task_params(flags: tuple[str, ...]) -> dict:
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool(
-            "todo_write",
-            load_description("todo_write"),
-            todo_write,
-            {"todos": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    # No regex pattern here: llama.cpp's schema-to-grammar path
-                    # chokes on them, and todo_write strips/validates in code.
-                    "content": {"type": "string", "minLength": 1},
-                    "status": {"type": "string", "enum": sorted(_ALLOWED_STATUS), "default": "pending"},
-                },
-                "required": ["content"],
-                "additionalProperties": False,
-            }}},
-            required=("todos",),
-        ),
-        Tool("todo_read", load_description("todo_read"), todo_read, {}),
         Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}, "overwrite": {"type": "boolean", "default": False, "description": "Replace an existing plan with the same name and version."}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",)),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",), read_only=True),
         Tool(
             "task",
             load_description("task", flags=flags),

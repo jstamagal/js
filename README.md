@@ -38,7 +38,7 @@ Start here:
 - [docs/technical-guide.md](docs/technical-guide.md): architecture and runtime internals.
 - [docs/tool-system.md](docs/tool-system.md): registry, schemas, dispatch, and descriptions.
 - [docs/tools-reference.md](docs/tools-reference.md): all public tools.
-- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `tools:` frontmatter, isolation, and limits.
+- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `agent.yaml`, isolation, and limits.
 - [docs/inline-directives.md](docs/inline-directives.md): `{{VAR}}` / `!{sub}` / `` ```!lang `` expansion and the inline-code flag.
 - [docs/configuration-and-sessions.md](docs/configuration-and-sessions.md): config precedence, full key reference, env vars, sessions, memory, and compaction.
 - [docs/models-and-providers.md](docs/models-and-providers.md): ai-python routing, proxies, Claude naming, reasoning, vision.
@@ -52,7 +52,7 @@ js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs.py                  read/write/search/patch/remove/undo
 js/toolkit/process_net.py         shell and fetch
-js/toolkit/meta.py                todo/plan/skill/task/subagents
+js/toolkit/meta.py                plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
 js/toolkit/tool_descriptions/     model-facing tool contracts
 prompts/                          repo prompt-directory agents; layered with platform config agents/ and project .js/agents/

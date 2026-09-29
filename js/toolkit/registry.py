@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from fnmatch import fnmatchcase
+from dataclasses import dataclass, field, replace
 from functools import cache
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 import sys
+from typing import Any
 
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import browser, discovery, fs, kernel, meta, process_net, search, terminal, toolbox, wiki
+from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,11 @@ class ToolRegistry:
     aliases: dict[str, str]
     known_names: frozenset[str] | None = None
     unavailable_errors: dict[str, str] = field(default_factory=dict)
+    # Tools the chain made loadable through tool_discovery; every other tool
+    # in `tools` is eager.
+    lazy: frozenset[str] = frozenset()
+    # tools.yaml `ban:` argument patterns, by lowercased tool name.
+    arg_bans: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -62,11 +67,29 @@ class ToolRegistry:
     def names(self) -> str:
         return "/".join(tool.name for tool in self.tools)
 
-    def select(self, selectors: Iterable[str] | None, agent_id: str | None = None) -> ToolRegistry:
-        wanted = _selected_names(self, selectors or (), agent_id)
-        selected = tuple(tool for tool in self.tools if tool.name in wanted)
+    def select(
+        self,
+        entries: Iterable[str] | None,
+        agent_id: str | None = None,
+        config: policy.ToolsConfig | None = None,
+        *,
+        warn: bool = True,
+    ) -> ToolRegistry:
+        """The agent's surface: the tools its `noun:modifier` chain makes
+        eager or lazy, with tools.yaml's tags and argument bans applied.
+        `warn` prints the one-line notice for entries that match no tool."""
+        config = config if config is not None else policy.load_tools_config()
+        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn)
+        selected = tuple(tool for tool in self.tools if tool.name in chosen.eager | chosen.lazy)
         known_names = self.known_names or frozenset(self.by_name)
-        return _registry_from_tools(selected, known_names=known_names)
+        return replace(
+            _registry_from_tools(selected, known_names=known_names),
+            lazy=chosen.lazy,
+            arg_bans=dict(config.bans),
+        )
+
+    def argument_refusal(self, name: str, args: Any) -> str | None:
+        return policy.argument_refusal(name, args, self.arg_bans)
 
     def aliased(self, profile: dict[str, str] | None) -> ToolRegistry:
         """Return a registry that also resolves model-facing aliases back to
@@ -87,28 +110,11 @@ class ToolRegistry:
             existing = merged.get(key)
             if canonical in names and key and existing in (None, canonical):
                 merged[key] = canonical
-        return ToolRegistry(tools=self.tools, aliases=merged, known_names=self.known_names,
-                            unavailable_errors=self.unavailable_errors)
+        return replace(self, aliases=merged)
 
     def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
         """Create a fresh view; the runtime restores session visibility within selection."""
         return TurnToolSurface(self, cwd, mcp_host=mcp_host)
-
-
-# EXPERIMENT (lazy-everything): every native tool is deferred, so the boot surface
-# is tool_discovery alone and the model must find and load what it needs.
-# Revert with: git checkout -- js/toolkit/registry.py
-_LAZY_SUITES = {
-    **{tool.name: "fs" for tool in fs.tools()},
-    **{tool.name: "shell" for tool in process_net.tools()},
-    **{tool.name: "search" for tool in search.tools()},
-    **{tool.name: "meta" for tool in meta.tools()},
-    **{tool.name: "kernel" for tool in kernel.tools()},
-    **{tool.name: "toolbox" for tool in toolbox.tools()},
-    **{tool.name: "browser" for tool in browser.tools()},
-    **{tool.name: "terminal" for tool in terminal.tools()},
-    **{tool.name: "wiki" for tool in wiki.tools()},
-}
 
 
 def _catalog_summary(description: str, present: set[str], tool: str) -> str:
@@ -149,19 +155,11 @@ class TurnToolSurface:
         self._skills = {
             f"skill:{skill.name}": skill for skill in self._skill_catalog.skills
         }
-        self._lazy: dict[str, Tool] = {}
-        self._sources: dict[str, str] = {}
-        for tool in allowed.tools:
-            source = _LAZY_SUITES.get(tool.name)
-            if source is None and getattr(tool.handler, "_js_agent_id", None) is not None:
-                source = "agent"
-            if source is not None:
-                self._lazy[f"native:{tool.name}"] = tool
-                self._sources[tool.name] = source
-        # Tools outside the lazy catalog remain eager.
-        self._eager = tuple(
-            tool for tool in allowed.tools if tool.name not in self._sources
-        )
+        # The catalog's native entries are exactly the chain's lazy set.
+        self._lazy: dict[str, Tool] = {
+            f"native:{tool.name}": tool for tool in allowed.tools if tool.name in allowed.lazy
+        }
+        self._eager = tuple(tool for tool in allowed.tools if tool.name not in allowed.lazy)
         self._loaded: set[str] = set()
         self._mcp_loaded: set[str] = set()
         self._loaded_ids: set[str] = set()
@@ -185,6 +183,7 @@ class TurnToolSurface:
             aliases=self.aliases,
             known_names=self.allowed.known_names,
             unavailable_errors=self._unavailable_errors(),
+            arg_bans=self.allowed.arg_bans,
         )
 
     @property
@@ -286,7 +285,7 @@ class TurnToolSurface:
             if tool.name not in seen:
                 activated.append(tool.name)
                 seen.add(tool.name)
-                if tool.name in self._sources:
+                if tool.name in self.allowed.lazy:
                     self._loaded.add(tool.name)
                     self._loaded_ids.add(f"native:{tool.name}")
         self._state_changed()
@@ -300,7 +299,7 @@ class TurnToolSurface:
                 tool.name,
                 _catalog_summary(tool.description, present, tool.name),
                 "native",
-                self._sources[tool.name],
+                tool.source,
             )
             for item_id, tool in self._lazy.items()
         )
@@ -393,36 +392,6 @@ def _registry_from_tools(
     return ToolRegistry(tools=tools, aliases=aliases, known_names=known_names)
 
 
-def _selected_names(registry: ToolRegistry, selectors: Iterable[str], agent_id: str | None = None) -> set[str]:
-    selected: set[str] = set()
-    full_aliases = registry.aliases
-    full_names = registry.by_name
-    for raw in selectors:
-        selector = str(raw).strip()
-        if not selector:
-            continue
-        folded = selector.lower()
-        if folded == "*":
-            selected.update(full_names)
-            continue
-        if any(ch in folded for ch in "*?["):
-            for public_name, canonical in full_aliases.items():
-                if fnmatchcase(public_name, folded):
-                    selected.add(canonical)
-            continue
-        canonical = full_aliases.get(folded)
-        if canonical is not None:
-            selected.add(canonical)
-        else:
-            # An exact (non-glob) selector that matches nothing is almost always
-            # a typo or a removed tool name — a silent drop shrinks the agent's
-            # surface with no signal until a mid-run dispatch error. Warn at load;
-            # glob misses stay silent (leniency is correct for patterns).
-            where = f" for agent {agent_id!r}" if agent_id else ""
-            print(f"js: tool selector {selector!r}{where} matched no tool; ignoring", file=sys.stderr)
-    return selected
-
-
 def _default_prompts_root() -> Path:
     return Path(__file__).resolve().parents[2] / "prompts"
 
@@ -445,7 +414,10 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
                 # A symlinked agent is trusted by name and checked when called:
                 # following it at startup wakes (or waits on) whatever host it
                 # points at, for an agent this run may never touch.
-                if not agent_dir.is_symlink() and (not agent_dir.is_dir() or not any(agent_dir.glob("*.md"))):
+                if not agent_dir.is_symlink() and (
+                    not agent_dir.is_dir()
+                    or not (any(agent_dir.glob("*.md")) or (agent_dir / "agent.yaml").is_file())
+                ):
                     continue
             except OSError as exc:
                 # A symlinked agent on a sleeping NFS/automount host stats as
@@ -465,7 +437,7 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
                 continue
             # Later roots are more specific and shadow earlier prompt dirs.
             by_id[agent_id] = agent_dir
-    return tuple(meta.named_agent_tool(agent_id) for agent_id in sorted(by_id))
+    return tuple(replace(meta.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
 
 
 @cache
@@ -497,24 +469,23 @@ def build_default_registry(
     flags: tuple[str, ...] = ("model_override",),
 ) -> ToolRegistry:
     """Assemble every builtin tool plus the agent tools under ``prompts_root``."""
-    base_tools = (
-        # Local search primitives (fs_search and ast_search) stay eager: they
-        # have no startup work and are useful on the first repository probe.
-        fs.tools()
-        + process_net.tools()
-        + search.tools()
-        + terminal.tools()
-        + browser.tools()
-        + meta.tools(flags)
-        + wiki.tools()
-        + kernel.tools()
-        + toolbox.tools()
+    suites = (
+        ("fs", fs.tools()),
+        ("shell", process_net.tools()),
+        ("search", search.tools()),
+        ("terminal", terminal.tools()),
+        ("browser", browser.tools()),
+        ("meta", meta.tools(flags)),
+        ("wiki", wiki.tools()),
+        ("kernel", kernel.tools()),
+        ("toolbox", toolbox.tools()),
     )
+    base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
     reserved = {tool.name for tool in base_tools}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)
     all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
     return _registry_from_tools(all_tools)
 
 
-def select(selectors: Iterable[str] | None, prompts_root: Path | Sequence[Path] | None = None) -> ToolRegistry:
-    return build_default_registry(prompts_root=prompts_root).select(selectors)
+def select(entries: Iterable[str] | None, prompts_root: Path | Sequence[Path] | None = None) -> ToolRegistry:
+    return build_default_registry(prompts_root=prompts_root).select(entries)

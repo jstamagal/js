@@ -68,7 +68,7 @@ def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path
 
     personal_default = tmp_path / ".config" / "js" / "agents" / "defaultagent"
     personal_default.mkdir(parents=True)
-    (personal_default / "00-tools.md").write_text("---\ntools: []\n---\n", encoding="utf-8")
+    (personal_default / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
     (personal_default / "01-prompt.md").write_text("personal defaultagent\n", encoding="utf-8")
 
     from js.config import from_env

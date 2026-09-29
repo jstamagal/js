@@ -18,7 +18,7 @@ def _write_agent(root: Path) -> Path:
     directive and a code directive so p/e/i visibly differ."""
     d = root / ".js" / "agents" / "potest"
     d.mkdir(parents=True)
-    (d / "00-tools.yaml").write_text("tools:\n  - read\n  - shell\n", encoding="utf-8")
+    (d / "agent.yaml").write_text("tools:\n  - read:lazy\n  - shell:lazy\n", encoding="utf-8")
     (d / "01-prompt.md").write_text(
         "Role line.\nenv=<{{WHO}}>\ncode=<!{sh printf ran}>\n", encoding="utf-8"
     )

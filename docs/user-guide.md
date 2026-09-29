@@ -113,6 +113,7 @@ REPL commands:
 /on turn_start set compact.auto off
 /turns
 /persona
+/tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session
 /reset
 /wipe
@@ -332,24 +333,24 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 Agents are discovered from repo `prompts/`, global `agents/` in the platform config dir, and
 project `.js/agents/`; project scope wins over global, which wins over repo.
-Each agent lives at `<root>/<agent_id>/*.md`. Files are concatenated in sorted
-filename order. The first `00*.md` file can include YAML frontmatter:
+Each agent lives at `<root>/<agent_id>/`: `*.md` prompt files, concatenated in
+sorted filename order, and an `agent.yaml` manifest:
 
-```markdown
----
+```yaml
 tools:
-  - read
-  - write
-  - fs_search
-  - patch
-  - task
----
-
-System prompt body.
+  - read:eager
+  - write:eager
+  - fs_search:eager
+  - patch:eager
+  - task:lazy
 ```
 
-Selectors can be exact tool names, glob patterns such as `todo_*`, or `*` for
-the whole registry. No selected tools means the model gets no tools.
+Each entry is `noun:modifier`: `eager` publishes the tool from the first call,
+`lazy` puts it in the `tool_discovery` catalog, `ban` removes it. Nouns can be
+globs (`"*:ban"`, `wiki_*:lazy`) and `tag:NAME` pulls in a tag from
+`~/.config/js/tools.yaml`. A tool no entry matches is not available; no
+entries means the model gets no tools. `/tools` shows the resolved table.
+Details: [tool-system.md](tool-system.md).
 
 Current prompt dirs:
 

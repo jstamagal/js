@@ -8,7 +8,7 @@ could never get a thread for their own leaf dispatch -> hard deadlock.
 
 This test wires that exact topology on a deliberately tiny (2-worker) pool: a
 parent fans out to N children, each child fans out to one grandchild, and each
-grandchild runs a real leaf tool (todo_write) that needs a pool thread. With the
+grandchild runs a real leaf tool (plan) that needs a pool thread. With the
 fix, fan-out waits run ON the loop (no thread held) so the grandchildren always
 get a worker and the whole tree settles well inside the timeout. Without it, the
 `asyncio.wait_for` trips and the test fails (rather than hanging CI forever).
@@ -91,11 +91,11 @@ def _pending_user_text(messages: list) -> str:
 
 def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
     # A worker agent that can itself fan out (task) AND run a real leaf tool
-    # (todo_write) — so a child can spawn a grandchild whose leaf dispatch needs
+    # (plan) — so a child can spawn a grandchild whose leaf dispatch needs
     # a pool thread while the parent/child fan-out waits are outstanding.
     worker = tmp_path / "prompts" / "worker"
     worker.mkdir(parents=True)
-    (worker / "00-tools.yaml").write_text("tools:\n  - task\n  - todo_write\n", encoding="utf-8")
+    (worker / "agent.yaml").write_text("tools:\n  - task:lazy\n  - plan:lazy\n", encoding="utf-8")
     (worker / "01-body.md").write_text("WORKER\n", encoding="utf-8")
     prompt_root = worker.parent
 
@@ -128,12 +128,12 @@ def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
             return _tool("task", json.dumps({"tasks": [f"leaf-{text}"], "agent_id": "worker"}), "c" + text)
         if text.startswith("leaf-"):
             # Grandchild: a real leaf tool that needs a pool thread, then stop.
-            return _tool("todo_write", json.dumps({"todos": [{"content": text, "status": "pending"}]}), "g" + text)
+            return _tool("plan", json.dumps({"plan_name": text, "version": "v1", "content": text}), "g" + text)
         # Follow-up after a tool result: stop, echoing this turn's own prompt so
         # completion is observable up the tree.
         return _stop(f"DONE:{_first_user_text(msgs)}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stub, "task", "todo_write"))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stub, "task", "plan"))
 
     registry = build_default_registry(prompts_root=prompt_root)
     parent_cfg = _make_cfg(tmp_path, "parent", prompt_root / "defaultagent")
@@ -176,7 +176,7 @@ def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
     assert messages[-1].get("role") == "assistant"
     assert messages[-1].get("content") == "DONE:root"
     # Every child reported DONE. A child cannot finish until task_async has
-    # gathered its grandchild (whose leaf todo_write needed a pool thread), so
+    # gathered its grandchild (whose leaf plan needed a pool thread), so
     # all children present == the whole two-level tree cleared the bounded pool.
     for i in range(n_children):
         assert f"DONE:child-{i}" in tool_blob

@@ -3,7 +3,7 @@
 The runtime depends on this module, not on individual tool implementations.
 Tools are small Python objects with an OpenAI-compatible schema and a handler
 that receives a shared ToolContext. The context carries per-session state used
-for read-before-write checks, undo snapshots, todos, and search deduplication.
+for read-before-write checks, undo snapshots, and search deduplication.
 """
 
 from __future__ import annotations
@@ -224,6 +224,11 @@ class Tool:
     required: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     input_schema: dict[str, Any] | None = None
+    # True when the tool writes nothing: no files, no processes, no remote
+    # state. It defines the intrinsic `tag:read_only` of tools.yaml.
+    read_only: bool = False
+    # Catalog label shown by tool_discovery (fs, shell, search, agent, ...).
+    source: str = "native"
 
     def openai_spec(self) -> dict:
         parameters = self.input_schema if self.input_schema is not None else {
@@ -240,12 +245,6 @@ class Tool:
                 "parameters": parameters,
             },
         }
-
-
-@dataclass
-class Todo:
-    content: str
-    status: str
 
 
 @dataclass
@@ -342,7 +341,6 @@ class ToolContext:
     snapshot_files: dict[Path, list[Path | None]] = field(default_factory=dict, repr=False)
     snapshot_store: Path | None = field(default=None, repr=False)
     search_cache: dict[str, str] = field(default_factory=dict)
-    todos: dict[str, Todo] = field(default_factory=dict)
     terminal_sessions: dict[str, Any] = field(default_factory=dict)
     last_prompt_tokens: int = 0
     last_cached_tokens: int = 0

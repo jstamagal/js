@@ -888,6 +888,7 @@ def test_turn_surface_withholds_mcp_name_claimed_by_generated_native_tool(tmp_pa
         allowed = ToolRegistry(
             tools=(native,),
             aliases={native.name.casefold(): native.name},
+            lazy=frozenset({native.name}),
         )
         surface = allowed.lazy_surface(tmp_path, mcp_host=host)
 

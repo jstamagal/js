@@ -378,21 +378,6 @@ Use `browse` instead when rendered text or links are sufficient.
 
 ## Meta Tools
 
-### `todo_write`
-
-Updates the in-process todo map.
-
-Parameters:
-
-- `todos`: list of `{content, status}`
-
-Statuses: `pending`, `in_progress`, `completed`, `cancelled`. Cancelled removes
-the item.
-
-### `todo_read`
-
-Reads the in-process todo map.
-
 ### `plan`
 
 Writes a markdown plan under `plans/`.
@@ -661,5 +646,5 @@ Direct agent tools take:
 {"tasks":["one or more task strings"]}
 ```
 
-Whether a model can see a generated tool depends on the active prompt
-frontmatter selection.
+Whether a model can see a generated tool depends on the active agent's
+`agent.yaml` `tools:` entries.

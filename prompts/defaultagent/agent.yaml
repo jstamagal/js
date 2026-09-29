@@ -1,0 +1,13 @@
+tools:
+  - read:eager
+  - write:eager
+  - fs_search:eager
+  - remove:eager
+  - patch:eager
+  - undo:eager
+  - shell:eager
+  - fetch:eager
+  - plan:eager
+  - skill:eager
+  - task:eager
+  - commit:eager

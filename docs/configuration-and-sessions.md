@@ -122,9 +122,8 @@ set mcp.agents {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"
 
 An absent `allow` permits everything not denied; an empty `allow` permits
 nothing. The resolved policy is also applied defensively during discovery, so a
-denied server is never connected. Agent and skill tool manifests select the
-canonical `tool_discovery` tool; remote names are not static frontmatter
-selectors.
+denied server is never connected. MCP tools reach an agent through the
+canonical `tool_discovery` tool; remote names are not `agent.yaml` entries.
 
 MCP connections are lazy. Merely configuring servers starts no subprocess and
 opens no HTTP connection. An MCP-scoped `tool_discovery` call initializes the
@@ -330,8 +329,10 @@ blank-line separated:
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
-Agent manifests use a `00-tools.yaml` zero file listing tool selectors and an
-optional `max_tokens:` override.
+Agent manifests are an `agent.yaml` beside the prompt files: `tools:`
+entries in `noun:modifier` form, and optional `model:`, `reasoning:`,
+`sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
+`tools.yaml` in the platform config dir. See [tool-system.md](tool-system.md).
 
 ## Session Resolution
 

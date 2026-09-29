@@ -22,8 +22,6 @@ CORE_TOOL_NAMES = {
     "fetch",
     "plan",
     "skill",
-    "todo_write",
-    "todo_read",
     "task",
 }
 
@@ -172,7 +170,7 @@ def test_named_agent_tools_are_generated_from_prompt_dirs():
         assert tool.required == ("tasks",), name
         assert set(tool.params) == {"tasks"}, name
 
-    assert [tool.name for tool in registry.select(prompt_agents).tools] == prompt_agents
+    assert [tool.name for tool in registry.select([f"{name}:eager" for name in prompt_agents]).tools] == prompt_agents
 
 
 def test_wiki_tool_params_have_descriptions():
@@ -276,7 +274,7 @@ def test_registry_renders_conditionals_for_selected_surface():
         ),
         aliases={"subject": "subject", "helper": "helper"},
     )
-    for selectors, expected in [(["subject"], "absent"), (["subject", "helper"], "present")]:
+    for selectors, expected in [(["subject:eager"], "absent"), (["subject:eager", "helper:eager"], "present")]:
         specs = registry.select(selectors).openai_specs()
         assert next(spec["function"]["description"] for spec in specs
                     if spec["function"]["name"] == "subject") == expected
@@ -289,7 +287,7 @@ def test_openai_specs_never_leak_raw_markers_on_any_surface():
         ["read", "fs_search", "patch", "write", "task"], None,
     ]
     for sel in surfaces:
-        registry = full if sel is None else full.select(sel)
+        registry = full if sel is None else full.select([f"{name}:eager" for name in sel])
         for spec in registry.openai_specs():
             desc = spec["function"]["description"]
             assert "{{#" not in desc and "{{/" not in desc, (sel, spec["function"]["name"])

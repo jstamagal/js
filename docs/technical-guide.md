@@ -39,37 +39,37 @@ persists each completed turn.
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
-| `js/persona.py` | prompt-directory concatenation and `tools:` frontmatter |
+| `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
 | `js/tools.py` | compatibility import of the default registry/context |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
-| `js/toolkit/registry.py` | default registry assembly and selector matching |
+| `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
+| `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/process_net.py` | shell and fetch tools |
-| `js/toolkit/meta.py` | todo/plan/skill/task and generated agent tools |
+| `js/toolkit/meta.py` | plan/skill/task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
 ## Prompt Loading
 
-Prompt files are sorted by filename and concatenated with blank lines. Only the
-first zero file (`00.md`, `00-*.md`, or `00_*.md`) is parsed for YAML
-frontmatter.
+Prompt files (`*.md`, minus `NN-benchmark.md`) are sorted by filename and
+concatenated with blank lines. The manifest is `agent.yaml` in the same
+directory:
 
-Example:
-
-```markdown
----
+```yaml
+model: cpa/claude-fable-5-1
+reasoning: high
 tools:
-  - read
-  - fs_search
-  - todo_*
-  - task
----
-
-System prompt.
+  - read:eager
+  - fs_search:eager
+  - "wiki_*:lazy"
+  - task:eager
 ```
 
-`tools` must be a list of strings. Selectors can be exact names, glob patterns,
-or `*`. No tools selected means no tools exposed to the model.
+`tools` entries are `noun:modifier` (`eager`, `lazy`, `ban`) or `tag:NAME`;
+resolution and `tools.yaml` are described in [tool-system.md](tool-system.md).
+No entries means no tools exposed to the model. A `00-tools.yaml` or a
+frontmatter `00*.md` fails the load with a line naming `agent.yaml`; `just
+migrate-agents` converts them.
 
 ## Default Registry
 
@@ -101,13 +101,12 @@ prompt directory whose name collides with an existing tool is skipped.
 - file hashes
 - undo snapshots
 - search cache
-- todos
 
 `run_turn()` hydrates the active context from `Config` each turn for output caps,
 fetch timeout, agent id, selected registry, and vision mode.
 
 Child task contexts copy limits and cwd from the parent but start with fresh
-read sets, snapshots, todos, and search cache.
+read sets, snapshots, and search cache.
 
 ## Runtime Loop
 
@@ -265,8 +264,7 @@ surface is the contract:
 ```text
 browse browser_probe commit defaultagent docs_search exa_search fetch
 fs_search patch plan read remove serper_search shell skill task
-tavily_search terminal_session terminal_snapshot todo_read todo_write
-undo wiki_convert wiki_finish_ingest wiki_write write
+tavily_search terminal_session terminal_snapshot undo wiki_convert wiki_finish_ingest wiki_write write
 ```
 
 `multi_patch`, `sem_search`, `followup` and the `artifact` suite were removed

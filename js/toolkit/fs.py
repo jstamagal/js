@@ -1755,6 +1755,7 @@ def tools() -> tuple[Tool, ...]:
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its anchored line number."},
             },
             required=("file_path",),
+            read_only=True,
         ),
         Tool(
             "write",
@@ -1790,6 +1791,7 @@ def tools() -> tuple[Tool, ...]:
                 "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
             },
             required=("pattern",),
+            read_only=True,
         ),
         Tool(
             "ast_search",

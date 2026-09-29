@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-import threading
 import asyncio
 import time
 
@@ -12,7 +11,7 @@ from js.memory import load_messages
 from js.mcp_config import resolve as resolve_mcp
 from js.toolkit import ToolContext, call_tool
 from js.toolkit import fs
-from js.toolkit.meta import task, todo_read, todo_write
+from js.toolkit.meta import task
 from js.toolkit.registry import build_default_registry, select
 from js.model_client import ModelStreamResult, ModelToolCall
 import ai
@@ -77,7 +76,7 @@ def make_cfg(tmp_path: Path, agent: str, prompts: Path) -> Config:
 def prompt_dir(tmp_path: Path, agent: str, manifest: str = "tools: []\n", body: str = "WORKER\n") -> Path:
     prompts = tmp_path / "prompts" / agent
     prompts.mkdir(parents=True)
-    (prompts / "00-tools.yaml").write_text(manifest, encoding="utf-8")
+    (prompts / "agent.yaml").write_text(manifest, encoding="utf-8")
     (prompts / "01-body.md").write_text(body, encoding="utf-8")
     return prompts
 
@@ -108,12 +107,12 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     proj = tmp_path / "project" / ".js" / "agents"
     for root, body, tool in (
         (repo, "REPO SYSTEM\n", "shell"),
-        (glob, "GLOBAL SYSTEM\n", "todo_write"),
-        (proj, "PROJECT SYSTEM\n", "todo_read"),
+        (glob, "GLOBAL SYSTEM\n", "skill"),
+        (proj, "PROJECT SYSTEM\n", "plan"),
     ):
         worker = root / "worker"
         worker.mkdir(parents=True)
-        (worker / "00-tools.yaml").write_text(f"tools:\n  - {tool}\n", encoding="utf-8")
+        (worker / "agent.yaml").write_text(f"tools:\n  - {tool}:lazy\n", encoding="utf-8")
         (worker / "01-body.md").write_text(body, encoding="utf-8")
 
     def from_env_stub(*, save_session: bool = True):
@@ -135,7 +134,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SHADOW_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
 
     actual = task(["use the most specific prompt"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
@@ -143,7 +142,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     assert "PROJECT SYSTEM" in str(seen["system"])
     assert "GLOBAL SYSTEM" not in str(seen["system"])
     assert "REPO SYSTEM" not in str(seen["system"])
-    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
+    assert set(seen["tools"]) == {"plan", "tool_discovery"}
 
 
 def test_task_requires_named_agent_id(tmp_path):
@@ -284,7 +283,7 @@ def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_
 def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeypatch, tmp_path, stale_context):
     import js.config as config
 
-    prompts = prompt_dir(tmp_path, "worker", "tools: [todo_read]\n", "WORKER RULES\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools: [plan:lazy]\n", "WORKER RULES\n")
     rules = tmp_path / "AGENTS.md"
     rules.write_text("SHARED RULES\n")
     cfg = replace(
@@ -322,7 +321,7 @@ def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeyp
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "task"))
     asyncio.run(real_run(
         cfg, "PARENT", [{"role": "user", "content": "delegate"}], runtime.Telemetry(debug_log=None),
-        tool_context=context, tool_registry=build_default_registry().select(["task"]),
+        tool_context=context, tool_registry=build_default_registry().select(["task:lazy"]),
         model_override="effective-model", provider_id_override="openai",
         provider_base_url_override="https://offline.invalid/v1", provider_api_key_override="test-key",
         reasoning_effort_override="low", max_output_override=321, suppress_output=True,
@@ -340,7 +339,7 @@ def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeyp
     assert child.reasoning_effort == "low"
     assert child.max_output_tokens == 321
     assert "SHARED RULES" in system and "WORKER RULES" in system
-    assert registry.resolve("todo_read") is not None
+    assert registry.resolve("plan") is not None
     assert child.agent_id == "worker"
     assert child.session_file != cfg.session_file
     assert cfg.model == "offline-test-model"
@@ -366,7 +365,7 @@ def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_
     assert "BOOL_DEPTH_DONE" in actual
 
 def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "owned.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -394,7 +393,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
 
 
 def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - write\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - write:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "guard.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -420,12 +419,11 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
     assert target.read_text(encoding="utf-8") == "old\n"
 
 
-def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_write\n  - fs_search\n")
+def test_subagent_search_cache_is_fresh(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - fs_search:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    todo_write([{"content": "parent", "status": "pending"}], context=parent)
     fs.fs_search("needle", path=".", context=parent)
     tool_results: list[str] = []
     calls = 0
@@ -434,8 +432,6 @@ def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
         nonlocal calls
         calls += 1
         if calls == 1:
-            return _fake_tool_result("todo_write", '{"todos":[{"content":"child","status":"pending"}]}')
-        if calls == 2:
             return _fake_tool_result("fs_search", '{"pattern":"needle","path":"."}')
         tool_results.append(kwargs["messages"][-1].parts[0].get_model_input())
         return _fake_stream_result("STATE_TEST_DONE")
@@ -445,7 +441,6 @@ def test_subagent_todos_and_search_cache_are_fresh(monkeypatch, tmp_path):
     actual = task(["mutate child state"], agent_id="worker", context=parent)
 
     assert "STATE_TEST_DONE" in actual
-    assert todo_read(context=parent) == "- [pending] parent"
     assert "deduplicated repeated search" not in tool_results[0]
 
 
@@ -466,7 +461,7 @@ def test_task_return_clears_the_parent_search_cache(monkeypatch, tmp_path):
 
 
 def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - todo_read\n", "WORKERX SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - plan:lazy\n", "WORKERX SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen: dict[str, object] = {}
 
@@ -475,13 +470,13 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("AGENTX_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
 
     actual = task(["hello"], agent_id="workerx", session_id="child-session", context=ToolContext(cwd=tmp_path))
 
     session_file = tmp_path / ".js" / "sessions" / "workerx" / "child-session.jsonl"
     assert "AGENTX_DONE" in actual
-    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
+    assert set(seen["tools"]) == {"plan", "tool_discovery"}
     assert "WORKERX SYSTEM" in str(seen["system"])
     assert "---" not in str(seen["system"])
     assert session_file.exists()
@@ -492,7 +487,7 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
 
 
 def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n", "WORKER SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n", "WORKER SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     registry = build_default_registry(prompts_root=prompts.parent)
     tool = registry.resolve("worker")
@@ -504,7 +499,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("NAMED_AGENT_DONE")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
 
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
@@ -512,11 +507,11 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
     assert set(tool.params) == {"tasks"}
     assert actual == "NAMED_AGENT_DONE"
     assert "WORKER SYSTEM" in str(seen["system"])
-    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
+    assert set(seen["tools"]) == {"plan", "tool_discovery"}
 
 
 def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen_tools: list[list[str]] = []
     seen_message_counts: list[int] = []
@@ -526,7 +521,7 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
         seen_message_counts.append(len(kwargs["messages"]))
         return _fake_stream_result(f"TURN_{len(seen_tools)}")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read"))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan"))
 
     first = task(["first"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
     second = task(["second"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
@@ -535,7 +530,7 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     assert "TURN_1" in first
     assert "TURN_2" in second
     assert len(seen_tools) == 2
-    assert all(set(names) == {"todo_read", "tool_discovery"} for names in seen_tools)
+    assert all(set(names) == {"plan", "tool_discovery"} for names in seen_tools)
     assert seen_message_counts[1] > seen_message_counts[0]
     history = load_messages(session_file)
     assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
@@ -562,32 +557,6 @@ def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
 
     assert "1. A" in actual and "2. B" in actual and "3. C" in actual
     assert elapsed < 0.65
-
-
-def test_two_concurrent_workers_have_no_todo_state_bleed(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_write\n")
-    patch_from_env(monkeypatch, tmp_path, prompts.parent)
-    tool_results: list[str] = []
-    lock = threading.Lock()
-
-    def completion_stub(**kwargs):
-        last = kwargs["messages"][-1]
-        if not any(m.role == "tool" and any(getattr(p, "tool_name", None) == "todo_write" for p in m.parts) for m in kwargs["messages"]):
-            content = next(m.parts[0].text for m in kwargs["messages"] if m.role == "user")
-            return _fake_tool_result("todo_write", f'{{"todos":[{{"content":"{content}","status":"pending"}}]}}')
-        with lock:
-            tool_results.append(last.parts[0].get_model_input())
-        return _fake_stream_result("TODO_DONE")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_write"))
-
-    actual = task(["left", "right"], agent_id="worker", context=ToolContext(cwd=tmp_path))
-
-    assert "1. TODO_DONE" in actual and "2. TODO_DONE" in actual
-    assert len(tool_results) == 2
-    assert all("before=[]" in result for result in tool_results)
-    assert any("after=[('left', 'pending')]" in result for result in tool_results)
-    assert any("after=[('right', 'pending')]" in result for result in tool_results)
 
 
 def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_path):
@@ -654,27 +623,27 @@ def test_subagent_reresolves_mcp_policy_and_cannot_see_parent_server(monkeypatch
 
 
 def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path)
-    parent.tool_registry = select(["shell", "write"])
+    parent.tool_registry = select(["shell:lazy", "write:lazy"])
     seen: dict[str, list[str]] = {}
 
     def completion_stub(**kwargs):
         seen["tools"] = [spec.name for spec in kwargs.get("tools", [])]
         return _fake_stream_result("SURFACE_OK")
 
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "todo_read", expected_native={"todo_read"}))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
 
     actual = task(["check tools"], agent_id="worker", context=parent)
 
     assert "SURFACE_OK" in actual
-    assert set(seen["tools"]) == {"todo_read", "tool_discovery"}
+    assert set(seen["tools"]) == {"plan", "tool_discovery"}
 
 
 @pytest.mark.parametrize("body", ["X", "é", "😀"])
 def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path, body):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
 
@@ -696,7 +665,7 @@ def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
     # The adversary's repro: with a single per-child budget equal to the whole
     # aggregate budget, one fat child fills it and the aggregate re-clip slices
     # the short siblings away. Fair-share (budget//N) must keep them all visible.
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - todo_read\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=400)
 
