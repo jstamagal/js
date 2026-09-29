@@ -443,7 +443,8 @@ def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, 
     monkeypatch.setattr(compaction, "summarize", summarize)
     messages = _three_tool_rounds()
     messages[0] = {"role": "user", "content": "go " * 2000}
-    asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, preserve_from=3))
+    asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, preserve_from=3,
+                                        context=ToolContext(cwd=tmp_path)))
 
     assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant", "tool"]
     assert _wire_signatures(monkeypatch, messages) == [[], []]
