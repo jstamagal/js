@@ -331,10 +331,11 @@ def test_steered_line_is_in_the_transcript_where_the_model_receives_it(monkeypat
     h.run(script)
 
     # The line was typed before the tool returned; the transcript has it after
-    # the tool result, where it entered the conversation.
+    # the tool result, where it entered the conversation. At the default
+    # ui.tools 1 the exchange's `>` line is printed once the result is in.
     log = h.transcript()
     assert log.count("actually check the logs") == 1
-    assert log.index("first") < log.index("held") < log.index("actually check the logs")
+    assert log.index("first") < log.index("> hold") < log.index("actually check the logs")
 
 
 def test_steered_line_goes_through_the_input_event(monkeypatch, tmp_path):
