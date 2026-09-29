@@ -182,7 +182,7 @@ def test_user_only_skill_is_absent_from_catalog_and_not_loadable(tmp_path):
     _skill_file(skills, "secret").write_text(
         "---\ndescription: private\ndisable-model-invocation: true\n---\nuser-only body\n"
     )
-    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+    surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
 
     found = json.loads(surface.discover(kind="skill"))["results"]
     assert "skill:secret" not in [item["id"] for item in found]

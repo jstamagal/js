@@ -1377,7 +1377,8 @@ def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp
 def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (cfg.prompts_dir / "00-system.md").write_text("SYSTEM\n", encoding="utf-8")
     skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")

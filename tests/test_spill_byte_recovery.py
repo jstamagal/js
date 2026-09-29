@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from js import runtime, tools as runtime_tools
+from js import runtime, toolkit
 from js.toolkit import fs
 from js.toolkit.core import ToolContext
 
@@ -19,7 +19,7 @@ _CONTINUE = re.compile(r"continue with (\{.*\})\]$")
 @pytest.fixture
 def context(tmp_path, monkeypatch):
     ctx = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=4_000)
-    monkeypatch.setattr(runtime_tools, "DEFAULT_CONTEXT", ctx)
+    monkeypatch.setattr(toolkit, "DEFAULT_CONTEXT", ctx)
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,
