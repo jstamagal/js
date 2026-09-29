@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 import asyncio
 import contextlib
+import functools
 import inspect
 import json
 import hashlib
@@ -16,7 +17,7 @@ import sys
 import threading
 from pathlib import Path
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import events as event_mod
@@ -50,7 +51,7 @@ from . import reasoning as reasoning_rules
 from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
                            call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
-from .turn_budget import TurnConvo
+from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_surface import SurfaceJournal
 from .turn_stream import StreamSink, TurnEvents
 
@@ -1361,16 +1362,6 @@ async def _dispatch_batch(
 # Turn loop
 # --------------------------------------------------------------------------
 
-def _last_user_message_index(messages: list[dict]) -> int | None:
-    """Index of the message that opened the current turn. A steered message or
-    a resume nudge joined a turn already running, so it does not open one."""
-    for idx in range(len(messages) - 1, -1, -1):
-        message = messages[idx]
-        if message.get("role") == "user" and not message.get("steered") and not message.get("resume_nudge"):
-            return idx
-    return None
-
-
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
              trace_override: bool | None = None,
@@ -1525,212 +1516,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # from the concise `trace` flag that drives the run/stats/tool lines on the terminal.
     _trace_sink = getattr(telemetry, "trace_sink", None)
 
-    active_compact_cfg = replace(
-        cfg,
-        model=model,
-        provider_id=provider_id,
-        provider_base_url=provider_base_url,
-        provider_api_key=provider_api_key,
+    budget = TurnBudget(
+        replace(cfg, model=model, provider_id=provider_id,
+                provider_base_url=provider_base_url, provider_api_key=provider_api_key),
+        convo, token_state, active_context, telemetry=telemetry, turn_status=turn_status,
+        emit=events.emit, resolve_window=functools.partial(_resolve_context_window, model, provider_id, provider_base_url),
+        max_out=max_out,
     )
-
-    def _budget_context_window() -> int:
-        return compaction.configured_context_window(
-            active_compact_cfg,
-            lambda: _resolve_context_window(model, provider_id, provider_base_url),
-        )
-
-    def _budget_buffer_tokens() -> int:
-        return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens")
-
-    def _active_preserve_from() -> int | None:
-        return _last_user_message_index(messages)
-
-    async def _maybe_compact_request_for_budget(
-        *,
-        phase: str,
-        specs: list[dict],
-        force: bool = False,
-    ) -> bool:
-        """Bring the next request under budget. Escalates in three steps, each
-        costlier than the last and each stopping as soon as the budget is met:
-        clear old tool-result bodies, summarize the history before the current
-        user message, then summarize the current turn itself keeping only its
-        tail. Returns True when the history changed."""
-        if not force and not compaction.get_bool(active_compact_cfg, "auto"):
-            return False
-        context_window = _budget_context_window()
-        if context_window <= 0 and not force:
-            return False
-        ai_tools_for_budget = model_client.tool_specs_to_ai_tools(specs) if specs else None
-        reserved = context_window - compaction.effective_context_window(active_compact_cfg, context_window)
-        buffer_tokens = min(_budget_buffer_tokens(), max(0, reserved))
-        status = token_state.budget_status(
-            system=system,
-            messages=messages,
-            tools=ai_tools_for_budget,
-            context_window=context_window if context_window > 0 else None,
-            output_reserve_tokens=max(0, reserved - buffer_tokens),
-            buffer_tokens=buffer_tokens,
-        )
-        active_context.context_tokens = status.current_context_tokens
-        active_context.tokens_until_compaction = status.tokens_until_compaction
-        telemetry.event(
-            "context_budget",
-            phase=phase,
-            context_tokens=status.current_context_tokens,
-            context_window=status.context_window,
-            effective_input_limit=status.effective_input_limit,
-            tokens_until_compaction=status.tokens_until_compaction,
-            used_provider_usage=status.used_provider_usage,
-        )
-        if not (force or status.should_compact):
-            return False
-        trigger = {"phase": phase, "context_tokens": status.current_context_tokens,
-                   "context_window": context_window,
-                   "effective_input_limit": status.effective_input_limit,
-                   "forced_recovery": force}
-        flight_data = {"budget": asdict(status), "tools": specs,
-                       "usage_anchor": vars(token_state).get("_anchor"),
-                       "ai_messages": convo.ai}
-        chars_per_token = token_state.calibrated_chars_per_token(
-            system=system, messages=messages, tools=ai_tools_for_budget,
-        )
-        reclaimed = 0
-        changed = False
-
-        def _over_budget(reclaimed_chars: int) -> bool:
-            # The provider-anchored count minus what was removed, in the
-            # currency the anchor was calibrated in.
-            if status.effective_input_limit is None:
-                return False
-            remaining = status.current_context_tokens - int(reclaimed_chars / chars_per_token)
-            return remaining > status.effective_input_limit
-
-        def _history_changed() -> None:
-            nonlocal changed
-            changed = True
-            token_state.reset()
-            convo.rebuild()
-            active_context.compacted_during_turn = True
-            compaction.history_rewritten(active_context)
-
-        def _clear() -> bool:
-            """Clear old tool-result bodies; True when that brought the
-            request under budget."""
-            nonlocal reclaimed
-            cleared, chars = compaction.clear_for_budget(
-                messages, cfg=active_compact_cfg, system=system, trigger=trigger,
-                flight_data=flight_data, over_budget=lambda more: _over_budget(reclaimed + more),
-            )
-            if not cleared:
-                return False
-            reclaimed += chars
-            _history_changed()
-            telemetry.event("context_results_cleared", phase=phase, cleared=cleared)
-            return not (force or _over_budget(reclaimed))
-
-        # 1. Old tool-result bodies are the bulk of a long turn and cost no
-        #    model call to drop. Rewriting them mid-history busts the prompt
-        #    cache, so while the cache is warm a summary of the earlier turns
-        #    goes first and clearing waits for step 3. A cold cache, or a
-        #    provider that already refused the request (force), clears first.
-        clearing_deferred = not (force or compaction.cache_expired(active_compact_cfg, active_context))
-        if clearing_deferred:
-            telemetry.event("context_clearing_deferred", phase=phase,
-                            cache_age_s=time.time() - active_context.last_request_at)
-        elif _clear():
-            return True
-
-        summary_failed = False
-
-        async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
-            nonlocal reclaimed, summary_failed
-            if compaction.auto_paused(active_compact_cfg, active_context):
-                telemetry.event("context_compaction_skipped", phase=phase, reason="paused_after_failures")
-                return False
-            before_chars = compaction.history_chars(messages)
-            turn_status.compacting = True
-            try:
-                with stream_transport.net_role("Compacting"):
-                    result = await compaction.compact_now(
-                        active_compact_cfg, system, messages, focus=focus, forced=True,
-                        preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                        tail_tokens=tail_tokens, context=active_context, emit=events.emit,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
-                telemetry.event("context_compaction_failed", phase=phase,
-                                error=f"{type(exc).__name__}: {exc}")
-                if (paused := compaction.record_auto_failure(active_compact_cfg, active_context)) is not None:
-                    msgs.say_said(paused, file=sys.stderr, flush=True)
-                summary_failed = True
-                return False
-            finally:
-                turn_status.compacting = False
-            if not compaction.compacted(result):
-                telemetry.event("context_compaction_skipped", phase=phase, reason=result)
-                return False
-            reclaimed += before_chars - compaction.history_chars(messages)
-            _history_changed()
-            telemetry.event("context_compacted", phase=phase, result=result)
-            return True
-
-        # 2. Summarize everything before the current user message, which stays
-        #    verbatim along with the turn's work so far.
-        preserve_from = _active_preserve_from()
-        if (preserve_from is not None and preserve_from > 0
-                and compaction.prefix_worth_summarizing(messages, preserve_from)
-                and await _summarize(preserve_from, f"{phase} context budget")
-                and (force or not _over_budget(reclaimed))):
-            return True
-        # 3. Clearing deferred in step 1 runs now whatever the cache: a summary
-        #    of the current turn rewrites the whole history too, and when
-        #    summaries are paused or failing it is the only step left.
-        if clearing_deferred and _clear():
-            return True
-        # 4. The current turn alone is over budget: summarize it too, keeping
-        #    its most recent tail so the model can carry on from the summary.
-        #    A provider rejection (force) says the request did not fit no matter
-        #    what the budget believed, so keep half as much tail each round.
-        #    A summary that already failed in this check is not retried here.
-        if summary_failed:
-            return changed
-        tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens")
-        if force:
-            history_tokens = int(compaction.history_chars(messages) / chars_per_token)
-            tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_recovered
-        keep_from = compaction.tail_start(messages, tail_tokens, chars_per_token)
-        if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
-            await _summarize(None, f"{phase} context budget: current turn over budget",
-                             tail_tokens=tail_tokens)
-        elif not changed:
-            telemetry.event("context_compaction_skipped", phase=phase, reason="tail_fills_budget")
-        return changed
-
-    async def _recover_overflow(error: BaseException) -> bool:
-        """Shed history after the provider said, or showed, that the request
-        overflowed: clear old tool results, else summarize. True when the
-        history changed and the request is worth sending again."""
-        action, _cleared, _reclaimed = compaction.recover_overflow(
-            messages, overflow_recovered, cfg=active_compact_cfg,
-            system=system, error=error,
-            flight_data={"context_window": _budget_context_window(),
-                         "max_output_tokens": max_out,
-                         "usage_anchor": vars(token_state).get("_anchor"),
-                         "tools": active_registry.openai_specs(),
-                         "ai_messages": convo.ai},
-        )
-        if action == "cleared":
-            token_state.reset()
-            convo.rebuild()
-            active_context.compacted_during_turn = True
-            compaction.history_rewritten(active_context)
-            return True
-        return await _maybe_compact_request_for_budget(
-            phase="overflow_recovery",
-            specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
-            force=True,
-        )
 
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
@@ -1785,7 +1577,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         await mcp_host.before_model_call()
                     specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
                     if not budget_checked:
-                        await _maybe_compact_request_for_budget(
+                        await budget.fit(
                             phase="midturn" if durable_side_effects_started else "preflight",
                             specs=specs,
                         )
@@ -1904,10 +1696,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     shown = sink.shown
                     # A compact.context_window above the catalog's says the
                     # real window is larger than the catalog knows.
-                    window = max(
-                        _resolve_context_window(model, provider_id, provider_base_url) or 0,
-                        compaction.get_int(active_compact_cfg, "context_window", 0),
-                    ) or None
+                    window = budget.provider_window()
                     silent = _silent_overflow(usage, window, cut_by_cap=cut_by_cap)
                     if silent is not None and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS:
                         # The provider took more input than the window holds, so
@@ -1919,7 +1708,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         overflow = compaction.SilentOverflowError(silent, window)
                         telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
                                         attempt=attempt, round=overflow_recovered, kept_reply=shown)
-                        if await _recover_overflow(overflow):
+                        if await budget.recover_overflow(
+                                overflow, overflow_round=overflow_recovered,
+                                tools=active_registry.openai_specs(),
+                                specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map)):
                             if not shown:
                                 continue
                             usage_stale = True
@@ -1972,7 +1764,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             attempt=attempt,
                             round=overflow_recovered,
                         )
-                        if await _recover_overflow(e):
+                        if await budget.recover_overflow(
+                                e, overflow_round=overflow_recovered,
+                                tools=active_registry.openai_specs(),
+                                specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map)):
                             continue
                     if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
                         # The provider refused a replayed signature (an edit js
