@@ -5,7 +5,11 @@ Lines are returned whole, however long they are. The prefix is not file
 content; strip it when you quote text back into an edit.
 
 A long file stops at a line limit and says how to continue; use `range` for the
-rest.
+rest. `range` also takes a byte range, `start_byte` (0-based offset) and
+optional `end_byte` (one past the last byte), for text with few or no line
+breaks: it returns raw text without line prefixes, one page at a time, and
+names the offset to continue from. A tool result too large to show inline is
+saved to a file; its notice names the path and the `range` that continues it.
 {{#if fs_search}}
 Find files and search contents with `fs_search`. This reads a known path.
 {{/if}}

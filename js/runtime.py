@@ -715,8 +715,11 @@ def spill_oversized_result(
     """Write an oversized result to disk and return a preview plus the path.
 
     Clipping throws the tail away — the model cannot get it back and often
-    does not know it existed. Spilling keeps every byte addressable: the model
-    reads the file with an offset if it needs the rest. 0 or less disables.
+    does not know it existed. Spilling keeps every byte addressable: the notice
+    names the `read` call that continues at the byte where the preview stops,
+    and, when the text has more than one line, the line-range call too. A
+    single-line payload (JSON, say) is reachable only by byte range. 0 or
+    less disables.
     """
     if inline_cap <= 0 or (not force and byte_size(result) <= inline_cap):
         return result
@@ -729,14 +732,30 @@ def spill_oversized_result(
             path.write_bytes(result.encode("utf-8"))
     except OSError:
         return result  # cannot spill -> the byte cap downstream still applies
-    notice = (
-        f"[result was {byte_size(result)} bytes, over "
-        f"{limit_name} ({inline_cap}); the full text is at "
-        f"{path} — read it with start_line/end_line for the rest]"
-    )
+    total_bytes = byte_size(result)
+    multiline = len(result.splitlines()) > 1
+
+    def spill_notice(next_byte: int, next_line: int) -> str:
+        by_byte = json.dumps({"start_byte": next_byte})
+        if multiline:
+            by_line = json.dumps({"start_line": next_line})
+            how = f"read it on with range {by_byte}, or by line with range {by_line}"
+        else:
+            how = f"read it on with range {by_byte}; it is one line, so only a byte range splits it"
+        return (
+            f"[result was {total_bytes} bytes, over {limit_name} ({inline_cap}); "
+            f"the full text is at {path} — {how}]"
+        )
+
     # Inline is a spill threshold, not the hard backstop. Keep a usable pointer
     # even when the notice alone exceeds it; the downstream hard cap still wins.
-    head = byte_prefix(result, min(inline_cap // 2, max(0, inline_cap - byte_size(notice) - 2)))
+    # The budget is sized with the widest offsets the notice can name.
+    widest = spill_notice(total_bytes, len(result.splitlines()) + 1)
+    head = byte_prefix(result, min(inline_cap // 2, max(0, inline_cap - byte_size(widest) - 2)))
+    head_lines = head.splitlines(keepends=True)
+    # The line the preview stops inside, or the next one when it ends on a break.
+    next_line = len(head_lines) + (1 if head_lines and head_lines[-1] != head_lines[-1].rstrip("\r\n") else 0)
+    notice = spill_notice(byte_size(head), max(1, next_line))
     return f"{head}\n\n{notice}" if head else notice
 
 
@@ -756,7 +775,11 @@ def _reconcile_read_delivery(
     raw_path = args.get("file_path") or args.get("path")
     if not isinstance(raw_path, str):
         return
-    context.record_delivered_read(context.resolve_path(raw_path), raw, delivered)
+    # A byte-range read has no line-number prefixes to recover what was
+    # delivered, so a clipped one keeps none of its own coverage.
+    bounds = args.get("range") if isinstance(args.get("range"), dict) else args
+    byte_read = bounds.get("start_byte") is not None or bounds.get("end_byte") is not None
+    context.record_delivered_read(context.resolve_path(raw_path), raw, "" if byte_read else delivered)
 
 
 

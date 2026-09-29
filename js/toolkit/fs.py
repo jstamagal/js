@@ -326,6 +326,106 @@ def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes
     return data
 
 
+def _utf8_char_start(buf: bytes, index: int) -> int:
+    """Move *index* back to the first byte of the UTF-8 character it lands in."""
+    back = 0
+    while 0 < index < len(buf) and back < 3 and (buf[index] & 0xC0) == 0x80:
+        index -= 1
+        back += 1
+    return index
+
+
+def _read_byte_call(target: Path, start_byte: int) -> str:
+    """JSON arguments for a follow-up byte-range `read` call."""
+    return json.dumps({"file_path": str(target), "range": {"start_byte": start_byte}})
+
+
+def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_byte: int | None) -> str:
+    """Return the text between two byte offsets of *target*, one page at most.
+
+    A page is what one tool result carries whole (_result_page_bytes), so a
+    page of a spilled result is never spilled again. Both ends move back to a
+    UTF-8 character start and the footer names the offsets actually returned.
+    The lines the page shows whole count as read, for files of at most
+    limits.max_file_bytes; a larger file is read by seeking and records no
+    coverage."""
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    if size == 0:
+        return f"{target} is empty"
+    if end_byte is not None and end_byte < start_byte:
+        start_byte, end_byte = end_byte, start_byte
+    if start_byte >= size:
+        return f"{target} has {size} bytes; requested start_byte={start_byte} is past EOF"
+    page = _result_page_bytes(context) or size
+    stop = min(size, start_byte + page, end_byte if end_byte is not None else size)
+    if stop <= start_byte:
+        return f"ERROR: empty byte range {start_byte}-{end_byte}"
+    whole: bytes | None = None
+    try:
+        if size <= context.max_file_bytes:
+            whole = _read_regular_bytes(target)
+            size = len(whole)
+            base, buf = 0, whole
+        else:
+            base = max(0, start_byte - 3)
+            with target.open("rb") as handle:
+                handle.seek(base)
+                buf = handle.read(min(size, stop + 1) - base)
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    start = base + _utf8_char_start(buf, start_byte - base)
+    end = size if stop >= size else base + _utf8_char_start(buf, stop - base)
+    if end <= start:
+        end = min(size, stop)
+    text = buf[start - base:end - base].decode("utf-8", errors="replace")
+    if whole is not None:
+        _remember_byte_read(target, context, whole, start, end)
+    if end < size:
+        footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
+    else:
+        footer = f"[bytes {start}-{end} of {size}; end of file]"
+    return f"{text}\n{footer}"
+
+
+def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: int, end: int) -> None:
+    """Record the lines that bytes start..end of *data* show whole, numbered
+    the way the line reader numbers them."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return
+    content_hash = _hash_bytes(data)
+    lines = text.splitlines(keepends=True)
+    shown: list[tuple[int, int]] = []
+    offset = 0
+    for number, line in enumerate(lines, start=1):
+        line_end = offset + len(line.encode("utf-8"))
+        if offset >= start and line_end <= end:
+            if shown and shown[-1][1] == number - 1:
+                shown[-1] = (shown[-1][0], number)
+            else:
+                shown.append((number, number))
+        offset = line_end
+        if offset >= end:
+            break
+    if shown:
+        first, last = shown[0]
+        context.remember_read(
+            target,
+            content_hash,
+            start_line=first,
+            end_line=last,
+            total_lines=len(lines),
+            whole_file=first == 1 and last == len(lines),
+        )
+    else:
+        context.remember_read(target, content_hash, total_lines=len(lines), whole_file=False)
+    context.remember_content(target, content_hash, data)
+
+
 def fs_read(
     path: str | None = None,
     file_path: str | None = None,
@@ -334,6 +434,8 @@ def fs_read(
     end_line: int | None = None,
     show_line_numbers: bool = True,
     context: ToolContext | None = None,
+    start_byte: int | None = None,
+    end_byte: int | None = None,
 ) -> str:
     assert context is not None
     raw_path = file_path or path
@@ -342,6 +444,11 @@ def fs_read(
     if isinstance(range, dict):
         start_line = start_line if start_line is not None else range.get("start_line")
         end_line = end_line if end_line is not None else range.get("end_line")
+        start_byte = start_byte if start_byte is not None else range.get("start_byte")
+        end_byte = end_byte if end_byte is not None else range.get("end_byte")
+    byte_start = int_or_default(start_byte, -1, minimum=0)
+    byte_end = int_or_default(end_byte, -1, minimum=0)
+    byte_ranged = byte_start != -1 or byte_end != -1
     # A whole-file read (no range asked for) is the only one gated by
     # max_read_bytes. Once the caller names a range it is reading deliberately,
     # so a 40 MB log stays addressable line-by-line — max_file_bytes is still
@@ -353,6 +460,8 @@ def fs_read(
         int_or_default(start_line, -1, minimum=1) != -1
         or int_or_default(end_line, -1, minimum=1) != -1
     )
+    if byte_ranged and ranged:
+        return "ERROR: pass a line range (start_line/end_line) or a byte range (start_byte/end_byte), not both"
     target = context.resolve_path(raw_path)
     if not target.exists():
         return f"ERROR: no such file: {target}"
@@ -366,6 +475,10 @@ def fs_read(
         return f"ERROR: {exc}"
 
     mime = _detect_visual_mime(target, header)
+    if byte_ranged:
+        if mime or _is_binary(target):
+            return f"ERROR: byte ranges read text files; {target} is not text"
+        return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
         if size > context.max_file_bytes:
             return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -1612,9 +1725,11 @@ def tools() -> tuple[Tool, ...]:
                     "properties": {
                         "start_line": {"type": "integer", "description": "Optional 1-based first line for text files."},
                         "end_line": {"type": "integer", "description": "Optional inclusive 1-based last line for text files."},
+                        "start_byte": {"type": "integer", "description": "0-based offset of the first byte to read, for text files. Use instead of lines."},
+                        "end_byte": {"type": "integer", "description": "Optional 0-based offset one past the last byte to read."},
                     },
                     "additionalProperties": False,
-                    "description": "Optional line range for partial reads.",
+                    "description": "Optional line range or byte range for partial reads.",
                 },
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its anchored line number."},
             },

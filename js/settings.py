@@ -215,7 +215,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum file bytes read by fs tools."),
     SettingSpec("limits.max_read_bytes", "int", DEFAULT_MAX_READ_BYTES,
                 "Maximum file bytes for a whole-file read(); ignored when the call "
-                "passes start_line/end_line, so ranged reads work on any size file."),
+                "passes a line or byte range, so ranged reads work on any size file."),
     SettingSpec("limits.max_tool_results_per_turn_bytes", "int", DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES,
                 "Aggregate cap on all tool results returned by one batch of parallel "
                 "calls; the largest results are clipped first. 0 = unlimited."),

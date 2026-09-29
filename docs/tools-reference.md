@@ -13,8 +13,24 @@ Reads one file.
 Parameters:
 
 - `file_path`: required path.
-- `range`: optional `{start_line, end_line}` for text files.
+- `range`: optional `{start_line, end_line}` for text files, or a byte range
+  `{start_byte, end_byte}`: `start_byte` is a 0-based offset and `end_byte`
+  the offset one past the last byte. Passing both kinds is an error.
 - `show_line_numbers`: default true.
+
+A byte-range read returns raw text, no line prefixes, at most half the tighter
+of `limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes`
+per call, so a page is never spilled again. Both ends move back to a UTF-8
+character start, and a footer names the offsets returned and the `range` that
+continues. A file over `limits.max_file_bytes` is read by seeking to the page,
+and that read authorizes no edit; within the limit, the lines a page shows whole
+count as read for `patch`.
+
+A tool result over `limits.max_tool_result_inline_bytes` is spilled to
+`~/oldinbox/js-tool-results/` and replaced by a preview plus a notice naming
+the file and the `range` that continues past the preview: always a byte range,
+plus a line range when the result has more than one line. A single-line
+payload, such as a JSON tool response, is reachable only by byte range.
 
 Text output lines are prefixed like:
 
