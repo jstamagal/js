@@ -113,6 +113,7 @@ REPL commands:
 /on turn_start set compact.auto off
 /turns
 /persona
+/tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session
 /reset
 /wipe
