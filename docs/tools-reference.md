@@ -462,13 +462,17 @@ get a `DEFINED` line, deletions a `GONE` line.
 
 A `wait` that exceeds `timeout`, an `action="interrupt"`, and Ctrl-C on the turn
 that submitted the cell all SIGINT the cell, exactly like Ctrl-C in a notebook —
-never a restart. The cell dies, the namespace lives. A cell blocked in a syscall
+never a restart. The cell dies, the namespace lives. A signalled cell that is
+still running is signalled again every second (`RESIGNAL_INTERVAL`), since the
+kernel can record a SIGINT without waking a cell blocked in `time.sleep`. A cell blocked in a syscall
 that ignores SIGINT (a DNS lookup on a dead resolver is the observed case) is
 cleared only by `restart=true`. A kernel that actually dies is reported as such,
 naming the cell, instead of blocking until the deadline. Image output (matplotlib
 and friends) is written under `~/.js/state/kernel/<run>/` and reported as
 `IMAGE <path>`; the kernel process's own stderr goes to `kernel.log` in the same
-directory, never the terminal.
+directory, never the terminal. The kernel's sockets are unix sockets in a
+private `js-kernel-*` directory under the temp dir, removed at shutdown, so two
+js processes starting kernels at once cannot be handed the same TCP port.
 The result string is capped by `limits.max_tool_result_bytes` with the standard
 truncation marker.
 

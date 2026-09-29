@@ -36,7 +36,9 @@ import json
 import math
 import queue
 import re
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -106,6 +108,12 @@ DRAIN_SLICE = 0.02
 # C extension only checks signals between chunks, so the first polls after the
 # signal routinely return nothing.
 INTERRUPT_GRACE = 10.0
+# How long a signalled cell may keep running before it is signalled again. The
+# kernel can record a SIGINT without acting on it: Python runs signal handlers
+# on the main thread only when that thread next checks for them, and a cell
+# blocked in a system call such as time.sleep makes no such check until the call
+# returns. A further signal interrupts the call, and the recorded one is handled.
+RESIGNAL_INTERVAL = 1.0
 
 KERNEL_ACTIONS = ("run", "poll", "interrupt", "wait")
 
@@ -317,6 +325,8 @@ class CellHandle:
     # by the kernel, so `resignal` asks record() to send it again at that point.
     running: bool = False
     resignal: bool = False
+    # When the last SIGINT for this cell was sent (time.monotonic), 0.0 if never.
+    signalled_at: float = 0.0
     signal_lock: threading.Lock = field(default_factory=threading.Lock, repr=False,
                                         compare=False)
 
@@ -347,6 +357,7 @@ class KernelSession:
     namespace: dict[str, str] = field(default_factory=dict)
     visible_names: set[str] = field(default_factory=set)
     log_handle: Any = None
+    socket_dir: Path | None = None
 
     @property
     def log_path(self) -> Path:
@@ -356,13 +367,24 @@ class KernelSession:
         from jupyter_client.manager import KernelManager
 
         self.artifacts.mkdir(parents=True, exist_ok=True)
-        # The kernel process writes its own chatter to stderr — the "running over
-        # TCP without encryption" banner on every single start, among others.
-        # Inherited, that lands on the operator's terminal ahead of the render
-        # and buries it. It goes to a file instead: still there when a kernel
-        # fails to boot, never on screen.
+        # The kernel process writes its own chatter to stderr. Inherited, that
+        # lands on the operator's terminal ahead of the render and buries it.
+        # It goes to a file instead: still there when a kernel fails to boot,
+        # never on screen.
         self.log_handle = self.log_path.open("ab")
-        self.manager = KernelManager(kernel_name="python3")
+        # The kernel's sockets are unix sockets in a directory private to this
+        # session. TCP ports are picked by binding port 0 and closing it before
+        # the kernel binds again, so two processes starting kernels at once can
+        # be handed the same port and one kernel dies with "Address already in
+        # use". A unix socket path is never shared. The directory sits in the
+        # temp dir rather than the artifacts dir because a socket path is
+        # limited to about 100 bytes.
+        self.socket_dir = Path(tempfile.mkdtemp(prefix="js-kernel-"))
+        self.manager = KernelManager(
+            kernel_name="python3",
+            transport="ipc",
+            connection_file=str(self.socket_dir / "kernel.json"),
+        )
         self.manager.start_kernel(cwd=str(self.cwd), stdout=self.log_handle,
                                   stderr=self.log_handle)
         self.client = self.manager.blocking_client()
@@ -387,6 +409,9 @@ class KernelSession:
             except OSError:
                 pass
             self.log_handle = None
+        if self.socket_dir is not None:
+            shutil.rmtree(self.socket_dir, ignore_errors=True)
+            self.socket_dir = None
         self.manager = None
         self.client = None
         _LIVE_SESSIONS.discard(self)
@@ -432,6 +457,8 @@ class KernelSession:
                 with handle.signal_lock:
                     handle.running = True
                     resend, handle.resignal = handle.resignal, False
+                    if resend:
+                        handle.signalled_at = time.monotonic()
                 if resend:
                     self.interrupt()
             if (msg["header"]["msg_type"] == "status"
@@ -489,6 +516,7 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     try:
         session.start()
     except Exception as exc:  # noqa: BLE001 - a dead start is a tool result, not a crash
+        session.shutdown()
         return None, f"ERROR: could not start the IPython kernel: {type(exc).__name__}: {exc}", False
     context.kernel_session = session
     return session, "", True
@@ -523,6 +551,7 @@ def collect_until(session: KernelSession, handle: CellHandle, deadline: float) -
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
+        resignal_if_still_running(session, handle)
         try:
             msg = session.client.get_iopub_msg(timeout=min(POLL_SLICE, max(0.01, remaining)))
         except queue.Empty:
@@ -565,7 +594,19 @@ def signal_cell(session: Any, handle: CellHandle) -> None:
     with handle.signal_lock:
         if not handle.running:
             handle.resignal = True
+        handle.signalled_at = time.monotonic()
     session.interrupt()
+
+
+def resignal_if_still_running(session: Any, handle: CellHandle) -> None:
+    """SIGINT a signalled cell again once RESIGNAL_INTERVAL has passed without it stopping."""
+    with handle.signal_lock:
+        due = (handle.signalled_at > 0 and handle.running and not handle.finished
+               and time.monotonic() - handle.signalled_at >= RESIGNAL_INTERVAL)
+        if due:
+            handle.signalled_at = time.monotonic()
+    if due:
+        session.interrupt()
 
 
 def busy_handle(session: KernelSession) -> CellHandle | None:

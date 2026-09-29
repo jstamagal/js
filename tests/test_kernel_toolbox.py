@@ -391,6 +391,23 @@ def test_state_survives_between_calls_and_the_namespace_line_lists_it(ctx):
 
 
 @needs_kernel
+def test_the_kernel_listens_on_unix_sockets_that_shutdown_removes(ctx):
+    """TCP ports are handed out racily between processes; the kernel's
+    sockets live in a private directory instead, one per session."""
+    assert "42" in kmod.kernel(code="6 * 7", context=ctx)
+    session = ctx.kernel_session
+    socket_dir = session.socket_dir
+    connection = json.loads(Path(session.manager.connection_file).read_text(encoding="utf-8"))
+
+    assert connection["transport"] == "ipc"
+    assert Path(connection["ip"]).parent == socket_dir
+    assert socket_dir.stat().st_mode & 0o077 == 0
+
+    session.shutdown()
+    assert not socket_dir.exists()
+
+
+@needs_kernel
 def test_cells_run_in_the_interpreter_running_js(ctx):
     import sys
 
@@ -625,6 +642,10 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     The first cell ignores SIGINT and runs until the test opens its gate, after
     the interrupt was sent, so the signal lands before the kernel starts the
     second cell, the one the interrupt was meant for.
+
+    A resent SIGINT that lands after the kernel announces the cell but before
+    its code runs is caught by ipykernel itself, and the cell is dropped with
+    no error message. Either way the 30-second cell stops.
     """
     kmod.kernel(code="x = 1", context=ctx)
     session = ctx.kernel_session
@@ -647,9 +668,8 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     kmod.collect_until(session, target, started + 20)
     assert target.finished
     assert time.monotonic() - started < 15
-    assert any(m["header"]["msg_type"] == "error"
-               and m["content"].get("ename") == "KeyboardInterrupt"
-               for m in target.messages)
+    assert all(m["content"].get("ename") == "KeyboardInterrupt"
+               for m in target.messages if m["header"]["msg_type"] == "error")
 
 
 @needs_kernel
@@ -695,14 +715,22 @@ def test_image_output_lands_in_an_artifact_file_named_in_the_result(ctx):
 
 
 @needs_kernel
-def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx, monkeypatch):
+def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx, monkeypatch, tmp_path):
+    # An IPython startup file writes to the kernel process's stderr while the
+    # kernel boots, outside any cell.
+    ipython_dir = tmp_path / "ipython"
+    startup = ipython_dir / "profile_default" / "startup"
+    startup.mkdir(parents=True)
+    (startup / "00-mark.py").write_text("import os\nos.write(2, b'KERNEL-BOOT-MARK\\n')\n", encoding="utf-8")
+    monkeypatch.setenv("IPYTHONDIR", str(ipython_dir))
+
     _result, screen = stderr_of(monkeypatch, lambda: kmod.kernel(
         code="1 + 1", verbosity="verbose", context=ctx))
 
     log = ctx.kernel_session.log_path.read_text(encoding="utf-8")
     assert ctx.kernel_session.log_path.parent.parent == paths.kernel_state_root()
-    assert "IPKernelApp" in log
-    assert "IPKernelApp" not in screen
+    assert "KERNEL-BOOT-MARK" in log
+    assert "KERNEL-BOOT-MARK" not in screen
 
 
 @needs_kernel
