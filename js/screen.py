@@ -20,7 +20,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.filters import has_focus, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
@@ -477,11 +477,13 @@ def build_app(
     status_colours: Callable[[], str] = lambda: STATUS_STYLE,
     editing_mode: Callable[[], str] = lambda: "emacs",
     on_ex: Callable[[str, InputEditor], Coroutine] | None = None,
+    key_bindings: KeyBindingsBase | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
     the input is a multi-line buffer: Enter is a newline and `:` in normal mode
-    opens the ex line, whose text goes to ``on_ex``."""
+    opens the ex line, whose text goes to ``on_ex``. ``key_bindings`` are added
+    after the screen's own and win a shared key."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         history=history,
@@ -609,7 +611,7 @@ def build_app(
 
     app = Application(
         layout=layout,
-        key_bindings=kb,
+        key_bindings=kb if key_bindings is None else merge_key_bindings([kb, key_bindings]),
         style=DynamicStyle(_style),
         # Truecolor always: on TERM=linux prompt_toolkit would otherwise pick
         # 4-bit and snap the bar's hex to the nearest of sixteen colours.

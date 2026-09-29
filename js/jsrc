@@ -25,6 +25,8 @@ set ui.tools 1
 set ui.tools_preview_lines 12
 set ui.markdown on
 set ui.editing_mode emacs
+set ui.paste_image_key c-v
+set -ui.paste_image_command
 
 # --- provider ---
 set -provider.id
