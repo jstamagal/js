@@ -29,6 +29,7 @@ from jsonschema import validators as jsonschema_validators
 from . import colors as C
 from . import context_budget
 from . import display
+from . import jail as _jail
 from . import messages as msgs
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
@@ -605,6 +606,8 @@ class ToolErrorTracker:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record(self, tool_name: str, result: str) -> str:
+        if isinstance(result, _jail.Refusal):
+            return result
         with self._lock:
             if not result.startswith("ERROR"):
                 self.errors.pop(tool_name, None)
