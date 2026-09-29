@@ -197,8 +197,11 @@ in truecolor on every terminal, including the Linux console.
 (`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
 retrying; at 2 (the default) each
 model request, including subagents and compaction, also prints
-`*** Connecting` and `*** Connected ... Nms`, and the bar counts response
-bytes until the first token arrives; at 3 each retry, models.dev catalog
+`*** Connecting` and `*** Connected ... Nms`, the bar counts response
+bytes until the first token arrives, and a response that read more than 5%
+(and at least 2000 tokens) less from the prompt cache than the one before it
+prints one `*** Prompt cache break` line with both counts and the seconds
+since that request; at 3 each retry, models.dev catalog
 refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
