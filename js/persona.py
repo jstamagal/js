@@ -1,8 +1,7 @@
-"""Load agent prompts and optional YAML tool manifests."""
+"""Load agent prompt directories: *.md prompt text plus an agent.yaml manifest."""
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,8 @@ class PromptSpec:
     model: str = ""              # preferred/primary model for this agent and the subagents it spawns
     secondary_model: str = ""    # backup model — reserved for a future (non-config) selection flag
     reasoning_effort: str | None = None  # child thinking default; None inherits parent/provider default
-    max_output_tokens: int | None = None  # agent-default per-call cap from 00-tools.yaml; None = provider/metadata default
+    max_output_tokens: int | None = None  # agent-default per-call cap from agent.yaml; None = provider/metadata default
+    skills: tuple[str, ...] = ()  # agent.yaml `skills:` entries, family:name or family:*
 
 
 @dataclass(frozen=True)
@@ -47,14 +47,14 @@ def _is_benchmark_file(path: Path) -> bool:
     return stem == "benchmark" or stem.endswith("-benchmark") or stem.endswith("_benchmark")
 
 
-_DEPRECATED_MD_MANIFEST_NOTES: set[Path] = set()
+AGENT_MANIFEST = "agent.yaml"
+_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills")
+_MIGRATE_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
 
 
 def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
+    """A pre-agent.yaml manifest (00-tools.yaml and kin). It is refused, never read."""
     candidates = sorted(p for p in prompts_dir.glob("00*.yaml") if _is_zero_file(p))
-    preferred = prompts_dir / "00-tools.yaml"
-    if preferred in candidates:
-        return preferred
     return candidates[0] if candidates else None
 
 
@@ -71,16 +71,27 @@ def _load_yaml_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def _emit_deprecated_md_manifest_note(path: Path) -> None:
-    key = path.resolve()
-    if key in _DEPRECATED_MD_MANIFEST_NOTES:
-        return
-    _DEPRECATED_MD_MANIFEST_NOTES.add(key)
-    print(
-        "NOTE: 00-tools.md frontmatter manifests are deprecated in favor of "
-        f"00-tools.yaml (sunset after 2 releases): {path}",
-        file=sys.stderr,
-    )
+def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
+    legacy = _find_yaml_zero_file(prompts_dir)
+    if legacy is not None:
+        raise ValueError(f"{legacy} is no longer read; {_MIGRATE_HINT}")
+    for path in md_files:
+        if _is_zero_file(path) and path.read_text(encoding="utf-8").startswith("---"):
+            raise ValueError(f"frontmatter in {path} is no longer read; {_MIGRATE_HINT}")
+
+
+def _coerce_skills(path: Path, raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"skills in {path} must be a list of family:name entries")
+    out: list[str] = []
+    for item in raw:
+        family, sep, name = str(item).strip().partition(":") if isinstance(item, str) else ("", "", "")
+        if not sep or not family.strip() or not name.strip():
+            raise ValueError(f"skills entry {item!r} in {path} is not family:name or family:*")
+        out.append(item.strip())
+    return tuple(out)
 
 
 def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
@@ -132,11 +143,11 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
     if raw is False:
         return "none"
     if not isinstance(raw, str):
-        raise ValueError(f"reasoning_effort in {path} must be a string")
+        raise ValueError(f"reasoning in {path} must be a string")
     spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
     value, error = settings.coerce_value(spec, raw)
     if error:
-        raise ValueError(f"reasoning_effort in {path}: {error}")
+        raise ValueError(f"reasoning in {path}: {error}")
     return value
 
 
@@ -186,24 +197,21 @@ def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_age
         candidate = root / agent_id
         if not candidate.is_dir():
             continue
-        if any(candidate.glob("*.md")) or _find_yaml_zero_file(candidate) is not None:
+        if _has_manifest(candidate) or any(candidate.glob("*.md")):
             return candidate
     return repo_prompts_root / agent_id
 
 
 def _has_manifest(prompts_dir: Path) -> bool:
-    """Whether a prompt dir carries its own tool manifest (00-tools.yaml, or a
-    deprecated 00*.md with frontmatter) — independent of whether it has any
-    other prompt text."""
-    if _find_yaml_zero_file(prompts_dir) is not None:
-        return True
-    return any(_is_zero_file(p) for p in prompts_dir.glob("*.md"))
+    """Whether a prompt dir carries a manifest of its own: agent.yaml, or a
+    refused 00-tools.yaml that must fail the load rather than be skipped."""
+    return (prompts_dir / AGENT_MANIFEST).is_file() or _find_yaml_zero_file(prompts_dir) is not None
 
 
 def _find_manifest_dir(agent_id: str, *roots: Path) -> Path | None:
     """Highest-priority root (in the order given) whose agent_id dir actually
     carries a manifest. Used to fall back past a winning prompt dir that
-    supplies prompt text but no 00-tools.yaml, so it doesn't silently shadow a
+    supplies prompt text but no agent.yaml, so it doesn't silently shadow a
     lower layer's tool selection."""
     for root in roots:
         candidate = root / agent_id
@@ -225,87 +233,62 @@ def load_agent_prompt_spec(
     if not _has_manifest(prompt_dir):
         # This dir won on prompt text alone (e.g. a project override that only
         # tweaks wording) and carries no manifest of its own — fall back to the
-        # nearest lower layer's 00-tools.yaml rather than silently booting with
+        # nearest lower layer's agent.yaml rather than silently booting with
         # zero tools and default model/sampling.
         manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
         if manifest_dir is not None and manifest_dir != prompt_dir:
-            manifest_spec = load_prompt_spec(manifest_dir)
-            spec = PromptSpec(
-                system=spec.system,
-                tool_selectors=manifest_spec.tool_selectors,
-                sampling=manifest_spec.sampling,
-                model=manifest_spec.model,
-                secondary_model=manifest_spec.secondary_model,
-                reasoning_effort=manifest_spec.reasoning_effort,
-                max_output_tokens=manifest_spec.max_output_tokens,
-            )
+            spec = replace(load_prompt_spec(manifest_dir), system=spec.system)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
     system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, reasoning_effort=spec.reasoning_effort, max_output_tokens=spec.max_output_tokens)
+    return replace(spec, system=system)
+
+def load_agent_manifest(manifest_path: Path) -> PromptSpec:
+    """One agent.yaml as a PromptSpec with an empty system prompt."""
+    manifest = _load_yaml_manifest(manifest_path)
+    unknown = sorted(str(key) for key in manifest if key not in _MANIFEST_KEYS)
+    if unknown:
+        raise ValueError(
+            f"unknown key(s) {', '.join(unknown)} in {manifest_path}; allowed: {', '.join(_MANIFEST_KEYS)}"
+        )
+    return PromptSpec(
+        system="",
+        tool_selectors=_coerce_tool_selectors(manifest_path, manifest.get("tools")),
+        sampling=_coerce_sampling(manifest_path, manifest.get("sampling")),
+        model=str(manifest.get("model") or "").strip(),
+        secondary_model=str(manifest.get("secondary_model") or "").strip(),
+        reasoning_effort=_coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
+        max_output_tokens=_coerce_max_tokens(manifest_path, manifest.get("max_tokens")),
+        skills=_coerce_skills(manifest_path, manifest.get("skills")),
+    )
+
 
 def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
         raise FileNotFoundError(
             f"prompts directory missing at {prompts_dir}. "
-            f"Drop .md prompt files and an optional 00-tools.yaml manifest in there."
+            f"Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
         )
 
     md_files = sorted(prompts_dir.glob("*.md"))
-    yaml_zero_file = _find_yaml_zero_file(prompts_dir)
-    if not md_files and yaml_zero_file is None:
+    _refuse_legacy_manifest(prompts_dir, md_files)
+    manifest_path = prompts_dir / AGENT_MANIFEST
+    has_manifest = manifest_path.is_file()
+    if not md_files and not has_manifest:
         raise FileNotFoundError(
-            f"prompts directory {prompts_dir} has no .md prompt files or 00*.yaml manifest."
+            f"prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
         )
 
-    markdown_zero_file = next((p for p in md_files if _is_zero_file(p)), None)
-    selectors: tuple[str, ...] = ()
-    sampling: dict[str, Any] = {}
-    model: str = ""
-    secondary_model: str = ""
-    reasoning_effort: str | None = None
-    max_output_tokens: int | None = None
+    spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
-
-    if yaml_zero_file is not None:
-        manifest = _load_yaml_manifest(yaml_zero_file)
-        selectors = _coerce_tool_selectors(yaml_zero_file, manifest.get("tools"))
-        sampling = _coerce_sampling(yaml_zero_file, manifest.get("sampling"))
-        model = str(manifest.get("model") or "").strip()
-        secondary_model = str(manifest.get("secondary_model") or "").strip()
-        reasoning_effort = _coerce_reasoning_effort(yaml_zero_file, manifest.get("reasoning_effort"))
-        max_output_tokens = _coerce_max_tokens(yaml_zero_file, manifest.get("max_tokens"))
-
     for path in md_files:
-        if yaml_zero_file is not None and _is_zero_file(path):
-            continue
         if _is_benchmark_file(path):
             continue  # --bench turns, never persona text (see load_benchmarks)
-        text = path.read_text(encoding="utf-8")
-        body = text.rstrip()
-        if yaml_zero_file is None and path == markdown_zero_file:
-            _emit_deprecated_md_manifest_note(path)
-            frontmatter, body = _split_frontmatter(path, text)
-            if frontmatter is not None:
-                selectors = _coerce_tool_selectors(path, frontmatter.get("tools"))
-                sampling = _coerce_sampling(path, frontmatter.get("sampling"))
-                model = str(frontmatter.get("model") or "").strip()
-                secondary_model = str(frontmatter.get("secondary_model") or "").strip()
-                reasoning_effort = _coerce_reasoning_effort(path, frontmatter.get("reasoning_effort"))
-                max_output_tokens = _coerce_max_tokens(path, frontmatter.get("max_tokens"))
+        body = path.read_text(encoding="utf-8").rstrip()
         if body:
             parts.append(body)
-
-    return PromptSpec(
-        system="\n\n".join(parts) + "\n",
-        tool_selectors=selectors,
-        sampling=sampling,
-        model=model,
-        secondary_model=secondary_model,
-        reasoning_effort=reasoning_effort,
-        max_output_tokens=max_output_tokens,
-    )
+    return replace(spec, system="\n\n".join(parts) + "\n")
 
 
 
@@ -331,15 +314,7 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
         spec = load_prompt_spec(cfg.prompts_dir)
         agents_parts = _existing_text_parts(list(getattr(cfg, "agents_files", ())))
         if agents_parts:
-            spec = PromptSpec(
-                system="\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n",
-                tool_selectors=spec.tool_selectors,
-                sampling=spec.sampling,
-                model=spec.model,
-                secondary_model=spec.secondary_model,
-                reasoning_effort=spec.reasoning_effort,
-                max_output_tokens=spec.max_output_tokens,
-            )
+            spec = replace(spec, system="\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
@@ -391,7 +366,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     )
     if system == spec.system:
         return spec
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, reasoning_effort=spec.reasoning_effort, max_output_tokens=spec.max_output_tokens)
+    return replace(spec, system=system)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system

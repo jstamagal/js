@@ -38,7 +38,7 @@ Start here:
 - [docs/technical-guide.md](docs/technical-guide.md): architecture and runtime internals.
 - [docs/tool-system.md](docs/tool-system.md): registry, schemas, dispatch, and descriptions.
 - [docs/tools-reference.md](docs/tools-reference.md): all public tools.
-- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `tools:` frontmatter, isolation, and limits.
+- [docs/subagents.md](docs/subagents.md): `task`, generated agent tools, creating global/project agents, `agent.yaml`, isolation, and limits.
 - [docs/inline-directives.md](docs/inline-directives.md): `{{VAR}}` / `!{sub}` / `` ```!lang `` expansion and the inline-code flag.
 - [docs/configuration-and-sessions.md](docs/configuration-and-sessions.md): config precedence, full key reference, env vars, sessions, memory, and compaction.
 - [docs/models-and-providers.md](docs/models-and-providers.md): ai-python routing, proxies, Claude naming, reasoning, vision.

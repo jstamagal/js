@@ -224,7 +224,7 @@ async def _run_one_task_async(
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >
-    #   inherit parent (if prefer_inherit) > frontmatter primary (`model:`) >
+    #   inherit parent (if prefer_inherit) > agent.yaml primary (`model:`) >
     #   parent model as fallback.
     locked = bool(getattr(parent_cfg, "lock_subagent_model", False))
     if model and not locked:

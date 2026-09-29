@@ -24,7 +24,7 @@ def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
 def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> Config:
     prompts = tmp_path / "prompts"
     prompts.mkdir(exist_ok=True)
-    (prompts / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (prompts / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     sessions = tmp_path / ".js" / "sessions" / "test-agent"
     return Config(
         agent_id="test-agent",

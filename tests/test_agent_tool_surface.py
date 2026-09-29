@@ -54,7 +54,7 @@ def write_prompt_dir(
     tmp_path: Path,
     zero: str | None,
     *rest: tuple[str, str],
-    zero_name: str = "00-tools.yaml",
+    zero_name: str = "agent.yaml",
 ) -> Path:
     prompts = tmp_path / "prompts"
     prompts.mkdir(parents=True)
@@ -113,27 +113,58 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
     assert spec.system == "FIRST\n\nSECOND\n"
 
 
-def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
+@pytest.mark.parametrize(("name", "text"), [
+    ("00-tools.yaml", "tools:\n  - read\n"),
+    ("00-tools.md", "---\ntools:\n  - shell\n---\nLEGACY BODY\n"),
+])
+def test_pre_agent_yaml_manifests_are_refused_naming_agent_yaml(tmp_path, name, text):
+    prompts = write_prompt_dir(tmp_path, text, ("01.md", "BODY\n"), zero_name=name)
+    (prompts / "agent.yaml").write_text("tools: [plan:eager]\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        persona.load_prompt_spec(prompts)
+
+    message = str(excinfo.value)
+    assert "\n" not in message
+    assert name in message and "agent.yaml" in message
+
+
+def test_zero_markdown_without_frontmatter_is_prompt_text(tmp_path):
+    prompts = write_prompt_dir(tmp_path, "HEAD\n", ("01.md", "BODY\n"), zero_name="00-intro.md")
+
+    assert persona.load_prompt_spec(prompts).system == "HEAD\n\nBODY\n"
+
+
+def test_agent_yaml_with_prompt_md_loads_model_reasoning_tools_and_skills(tmp_path):
     prompts = write_prompt_dir(
         tmp_path,
-        "tools:\n  - plan:lazy\n",
-        ("01.md", "BODY\n"),
-    )
-    (prompts / "00-tools.md").write_text(
-        "---\ntools:\n  - shell:lazy\n---\nLEGACY BODY\n",
-        encoding="utf-8",
+        "model: cpa/claude-fable-5-1\nreasoning: high\ntools:\n  - tag:read_only\n  - shell:ban\n"
+        "skills:\n  - engineering:*\n",
+        ("prompt.md", "PROMPT\n"),
     )
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("plan:lazy",)
-    assert spec.system == "BODY\n"
-    assert capsys.readouterr().err == ""
+    assert spec.model == "cpa/claude-fable-5-1"
+    assert spec.reasoning_effort == "high"
+    assert spec.tool_selectors == ("tag:read_only", "shell:ban")
+    assert spec.skills == ("engineering:*",)
+    assert spec.system == "PROMPT\n"
+    registry = build_default_registry().select(spec.tool_selectors)
+    assert "read" in registry.by_name and "shell" not in registry.by_name
+    assert not registry.lazy
+
+
+def test_agent_yaml_unknown_key_is_refused(tmp_path):
+    prompts = write_prompt_dir(tmp_path, "reasoning_effort: high\n", ("prompt.md", "PROMPT\n"))
+
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        persona.load_prompt_spec(prompts)
 
 
 def test_yaml_manifest_absent_tools_empty_list_and_missing_00_default_none(tmp_path):
     manifest_only = write_prompt_dir(tmp_path / "manifest", "tools: []\n", ("01.md", "BODY\n"))
-    no_tools_key = write_prompt_dir(tmp_path / "nokey", "name: x\n", ("01.md", "BODY\n"))
+    no_tools_key = write_prompt_dir(tmp_path / "nokey", "model: x\n", ("01.md", "BODY\n"))
     missing_zero = write_prompt_dir(tmp_path / "missing", None, ("01.md", "BODY\n"))
 
     assert persona.load_prompt_spec(manifest_only).tool_selectors == ()
@@ -149,29 +180,9 @@ def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
         persona.load_prompt_spec(prompts)
 
 
-def test_legacy_frontmatter_zero_file_still_loads_tools_once(tmp_path, capsys):
-    prompts = write_prompt_dir(
-        tmp_path,
-        "---\ntools:\n  - shell:lazy\n---\nLEGACY BODY\n",
-        ("01.md", "BODY\n"),
-        zero_name="00-tools.md",
-    )
-
-    spec = persona.load_prompt_spec(prompts)
-
-    assert spec.tool_selectors == ("shell:lazy",)
-    assert spec.system == "LEGACY BODY\n\nBODY\n"
-    first_note = capsys.readouterr().err
-    assert "00-tools.md frontmatter manifests are deprecated" in first_note
-    assert "00-tools.yaml" in first_note
-
-    persona.load_prompt_spec(prompts)
-    assert capsys.readouterr().err == ""
-
-
 def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_path):
     """A project agent dir that only overrides the prompt wording (no
-    00-tools.yaml of its own) must not silently boot with zero tools — it
+    agent.yaml of its own) must not silently boot with zero tools — it
     should inherit the nearest lower layer's manifest instead."""
     repo_root = tmp_path / "prompts"
     global_root = tmp_path / "global-agents"
@@ -181,7 +192,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     project_root.mkdir()
 
     (repo_root / "myagent").mkdir()
-    (repo_root / "myagent" / "00-tools.yaml").write_text(
+    (repo_root / "myagent" / "agent.yaml").write_text(
         "tools:\n  - wiki_*:lazy\nmodel: repo-model\n", encoding="utf-8"
     )
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
@@ -212,11 +223,11 @@ def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(
     project_root.mkdir()
 
     (repo_root / "myagent").mkdir()
-    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - wiki_*:lazy\n", encoding="utf-8")
+    (repo_root / "myagent" / "agent.yaml").write_text("tools:\n  - wiki_*:lazy\n", encoding="utf-8")
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
 
     (project_root / "myagent").mkdir()
-    (project_root / "myagent" / "00-tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    (project_root / "myagent" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
     (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
 
     spec = persona.load_agent_prompt_spec(

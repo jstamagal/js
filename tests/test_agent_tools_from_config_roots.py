@@ -118,12 +118,16 @@ def test_agent_shadowing_a_builtin_tool_name_warns(tmp_path, capsys):
     assert "shadows a builtin tool name" in capsys.readouterr().err
 
 
-def test_directory_without_markdown_is_not_an_agent(tmp_path):
+def test_directory_without_markdown_or_agent_yaml_is_not_an_agent(tmp_path):
     root = tmp_path / "agents"
     (root / "notanagent").mkdir(parents=True)
-    (root / "notanagent" / "00-tools.yaml").write_text("tools: []\n", encoding="utf-8")
+    (root / "notanagent" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
+    (root / "manifestonly").mkdir(parents=True)
+    (root / "manifestonly" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
 
-    assert registry_for_roots((root,)).resolve("notanagent") is None
+    registry = registry_for_roots((root,))
+    assert registry.resolve("notanagent") is None
+    assert registry.resolve("manifestonly") is not None
 
 
 def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):

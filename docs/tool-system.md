@@ -48,25 +48,74 @@ The registry stores canonical names and lowercased aliases. Current aliases are
 only used for provider-facing name transforms; old user-facing aliases are not
 kept.
 
-## Prompt Selection
+## Tool Selection: `agent.yaml` and `tools.yaml`
 
-Prompt frontmatter selects tools:
+Each agent directory has an `agent.yaml` beside its prompt files:
 
 ```yaml
+model: cpa/claude-fable-5-1
+reasoning: high
 tools:
-  - read
-  - fs_search
-  - wiki_*
-  - task
+  - tag:code_hacker
+  - fetch:lazy
+skills:
+  - engineering:*
 ```
 
-Selectors:
+Every `tools:` entry is `noun:modifier`. The noun is a tool name or a glob
+over tool names (quote a glob that starts with `*`: `"*:ban"`). The modifier
+is one of:
 
-- exact name: `read`
-- glob: `wiki_*`
-- full registry: `*`
+- `eager`: in the boot surface, published from the first model call
+- `lazy`: listed in the `tool_discovery` catalog and loadable from it
+- `ban`: not on this agent's surface
 
-No selected tools means no tools are exposed.
+`tag:NAME` expands the tag's entries in place. Tags are defined in
+`tools.yaml` in the platform config dir (`~/.config/js/tools.yaml`):
+
+```yaml
+tags:
+  code_editor:
+    - "*:ban"
+    - read:eager
+    - write:eager
+    - docs_search:lazy
+  code_hacker:
+    - shell:eager
+    - tag:code_editor
+ban:                  # argument patterns, refused before dispatch
+  shell: ["rm -rf", "git reset --hard"]
+  fetch: ["*://www.example.com/*"]
+```
+
+`tag:read_only` is intrinsic: it matches every tool whose `read_only` property
+is true (tools that write nothing). It takes an optional modifier,
+`tag:read_only:lazy`; without one it means eager.
+
+Resolution: the first entry that names a tool (its exact name or an intrinsic
+tag it carries) decides it. Only when nothing names the tool does the first
+matching glob decide. So `"*:ban"` is deny-by-default and a name allows past
+it, while two names resolve by position: in `[tavily_search:ban,
+tag:read_only]` the ban fires. A tool no entry matches is not on the surface.
+js has no built-in policy; the chain is what the files say. `/tools` in the
+REPL prints every tool with its state and the entry that decided it.
+
+`tool_discovery` is published only when the surface has lazy tools, skills,
+or MCP servers. Its native catalog is exactly the agent's lazy set.
+
+An entry that is not `noun:modifier`, an unknown tag, or a tag cycle fails
+the agent load with one line. An exact noun that names no tool prints one
+`matched no tool; ignoring` line naming the entry.
+
+The `ban:` block is checked before dispatch: a call whose string argument
+contains a plain pattern (or matches a glob pattern whole), ignoring case,
+returns one `ERROR:` line naming the pattern and runs nothing.
+
+`00-tools.yaml` and `tools:` frontmatter in a `00*.md` file are no longer
+read; an agent dir that has one fails to load with a line naming
+`agent.yaml`. `just migrate-agents` (dry run; `--apply` to write) converts
+them: bare selectors become `NAME:eager`, `reasoning_effort` becomes
+`reasoning`.
 
 ## Tool Descriptions
 
@@ -241,11 +290,11 @@ select them. Built-in modes select the full registry and rely on their mode
 prompts to steer behavior.
 
 Defaultagent does not select `wiki_*` by default. To let a normal prompt or
-subagent use those tools, add selectors to that prompt's frontmatter.
+subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every prompt directory with markdown files under repo `prompts/`, global
+Every prompt directory with markdown files or an `agent.yaml` under repo `prompts/`, global
 `agents/` in the platform config dir, and project `.js/agents/` becomes a direct agent tool unless
 its name collides with a base tool. Project scope wins over global, which wins
 over repo when the same agent id appears in multiple roots.
@@ -264,7 +313,7 @@ For another Python project, the behavior to preserve is:
 
 - canonical names only in the public registry
 - descriptions as contract text
-- prompt frontmatter tool selection
+- `agent.yaml` tool selection
 - `Tool` plus `ToolContext` separation
 - read-before-write state in context
 - exact patch/multi-patch behavior

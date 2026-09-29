@@ -411,7 +411,10 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
                 # A symlinked agent is trusted by name and checked when called:
                 # following it at startup wakes (or waits on) whatever host it
                 # points at, for an agent this run may never touch.
-                if not agent_dir.is_symlink() and (not agent_dir.is_dir() or not any(agent_dir.glob("*.md"))):
+                if not agent_dir.is_symlink() and (
+                    not agent_dir.is_dir()
+                    or not (any(agent_dir.glob("*.md")) or (agent_dir / "agent.yaml").is_file())
+                ):
                     continue
             except OSError as exc:
                 # A symlinked agent on a sleeping NFS/automount host stats as

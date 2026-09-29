@@ -1,7 +1,7 @@
 """Web search, library docs, and rendered-page tools.
 
-Four search backends and one reader, kept as separate tools so prompt
-frontmatter can hand each agent exactly the surface it needs. Every backend
+Four search backends and one reader, kept as separate tools so each agent's
+agent.yaml can name exactly the surface it needs. Every backend
 reads its API key from the environment at call time and fails with a plain
 ERROR string when the key is missing, so a surface can carry a tool the
 current shell cannot use without breaking registry assembly.

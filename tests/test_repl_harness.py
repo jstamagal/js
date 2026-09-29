@@ -135,7 +135,7 @@ def test_unknown_commands_that_share_prefixes_are_not_swallowed(tmp_path):
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     append_message(cfg.session_file, {"role": "user", "content": "existing"})
 
     class SessionStub:
@@ -167,7 +167,7 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
 def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     append_message(cfg.session_file, {"role": "user", "content": "existing"})
     seen: list[tuple[str, dict]] = []
 
@@ -207,7 +207,7 @@ def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     debug_log = tmp_path / "debug.log"
     cfg = replace(make_cfg(tmp_path), debug_log=debug_log)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
     class SessionStub:
         def __init__(self, history=None, **kwargs):
@@ -241,7 +241,7 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     state_root = tmp_path / ".js" / "state"
     debug_log = state_root / cfg.agent_id / "debug.log"
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
     class SessionStub:
         def __init__(self, history=None, **kwargs):
@@ -275,7 +275,7 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     debug_log = tmp_path / "debug.log"
     cfg = replace(make_cfg(tmp_path), debug_log=debug_log)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
     class SessionStub:
         def __init__(self, history=None, **kwargs):
@@ -307,7 +307,7 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
 def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "cancel.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []
@@ -340,7 +340,7 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
 def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     trace_overrides: list[bool] = []
 
     class SessionStub:
@@ -367,7 +367,7 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
 def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
 
     class SessionStub:
@@ -394,7 +394,7 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
 def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
 
     class SessionStub:
@@ -421,7 +421,7 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
 def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "model.irc").write_text("set model.id hook-model\nbogus nope\n", encoding="utf-8")
     models: list[str] = []
 
@@ -449,7 +449,7 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
 def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "provider.irc").write_text(
         "set provider.id openai\n"
         "set provider.base_url http://provider.test/v1\n"
@@ -483,7 +483,7 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
 def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "tools.irc").write_text(
         'set tools.alias_profiles [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
         "bogus nope\n",
@@ -515,7 +515,7 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
 def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     max_tool_result_bytes: list[int] = []
 
     class SessionStub:
@@ -542,7 +542,7 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
 def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     prefer_inherit: list[bool] = []
 
     class SessionStub:
@@ -569,7 +569,8 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
 def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: [task:lazy]\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: [task:lazy]\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[bool, bool]] = []
 
     class SessionStub:
@@ -603,7 +604,7 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     # already was (here: cfg's own None default, since nothing else set it).
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     max_output_tokens: list[int | None] = []
 
     class SessionStub:
@@ -636,7 +637,7 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
 def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     reasoning_efforts: list[str | None] = []
 
     class SessionStub:
@@ -665,7 +666,7 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
 def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
     class SessionStub:
@@ -692,7 +693,7 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
 def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
     class SessionStub:
@@ -722,7 +723,7 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
     # back to the provider default is only `set -model.reasoning_effort`.
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
     class SessionStub:
@@ -755,7 +756,7 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
 def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
 
     class SessionStub:
@@ -787,7 +788,7 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), trace=False)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     traces: list[bool] = []
 
     class SessionStub:
@@ -814,7 +815,7 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
 def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     params_seen: list[dict | None] = []
 
     class SessionStub:
@@ -864,7 +865,7 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
 def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "turn-end.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []

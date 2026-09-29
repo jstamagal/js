@@ -147,7 +147,7 @@ def test_unknown_tag_and_tag_cycles_are_refused(tmp_path):
 def test_bare_selector_in_an_agent_manifest_fails_the_prompt_load(tmp_path):
     prompts = tmp_path / "agent"
     prompts.mkdir()
-    (prompts / "00-tools.yaml").write_text("tools:\n  - read\n", encoding="utf-8")
+    (prompts / "agent.yaml").write_text("tools:\n  - read\n", encoding="utf-8")
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
 
     with pytest.raises(ValueError):

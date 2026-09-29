@@ -157,7 +157,7 @@ class Config:
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
     sampling_cli: Sampling = field(default_factory=Sampling)
-    explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent frontmatter model
+    explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
     vision_enabled: bool = False
     model_context_window: int | None = None  # explicit window for this model; None = server/metadata resolved

@@ -76,7 +76,7 @@ def make_cfg(tmp_path: Path, agent: str, prompts: Path) -> Config:
 def prompt_dir(tmp_path: Path, agent: str, manifest: str = "tools: []\n", body: str = "WORKER\n") -> Path:
     prompts = tmp_path / "prompts" / agent
     prompts.mkdir(parents=True)
-    (prompts / "00-tools.yaml").write_text(manifest, encoding="utf-8")
+    (prompts / "agent.yaml").write_text(manifest, encoding="utf-8")
     (prompts / "01-body.md").write_text(body, encoding="utf-8")
     return prompts
 
@@ -112,7 +112,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     ):
         worker = root / "worker"
         worker.mkdir(parents=True)
-        (worker / "00-tools.yaml").write_text(f"tools:\n  - {tool}:lazy\n", encoding="utf-8")
+        (worker / "agent.yaml").write_text(f"tools:\n  - {tool}:lazy\n", encoding="utf-8")
         (worker / "01-body.md").write_text(body, encoding="utf-8")
 
     def from_env_stub(*, save_session: bool = True):

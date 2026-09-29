@@ -113,7 +113,7 @@ js -m "model/id" -p "prompt"
 `-m` / `--model` overrides the effective configured/env model for that run:
 layered config and `JS_MODEL`.
 
-Agent manifests may also declare `model:` in `00-tools.yaml`. `js --agent <id>`
+Agent manifests may also declare `model:` in `agent.yaml`. `js --agent <id>`
 applies that model unless the operator has pinned one with `-m` / `--model`,
 `JS_MODEL`, or a configured non-default `model.id`. Subagent-specific precedence
 and lock behavior live in [subagents.md](subagents.md).
@@ -224,7 +224,7 @@ export JS_REPPEN=1.05
 export JS_PRPEN=1.2
 ```
 
-Agent manifests (`00-tools.yaml`) may set the same keys:
+Agent manifests (`agent.yaml`) may set the same keys:
 
 ```yaml
 sampling:
@@ -258,7 +258,7 @@ Order:
 1. `--max-out` or `/set model.max_output_tokens <tokens>`
 2. `JS_MAX_OUTPUT_TOKENS`
 3. `model.max_output_tokens` in `jsrc`
-4. agent manifest `max_tokens:` in `00-tools.yaml`
+4. agent manifest `max_tokens:` in `agent.yaml`
 5. models.dev metadata for the active model/provider
 6. if the catalog has no match, no explicit cap is sent
 

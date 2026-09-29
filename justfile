@@ -277,6 +277,12 @@ check: lint deps-fresh
 tool-bytes *args:
     uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
 
+# move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml. dry run
+# unless --apply; --show prints each agent.yaml. default root: the global
+# agents dir. just migrate-agents --apply ~/.config/js/agents .js/agents
+migrate-agents *args:
+    uv run {{ browser-extra }} python -m js.agent_migrate {{ args }}
+
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 
 # build sdist + wheel into dist/.

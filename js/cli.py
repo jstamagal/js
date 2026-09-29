@@ -1736,7 +1736,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
 
 
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
-    """Apply the active agent's frontmatter `model:` through the resolver, unless
+    """Apply the active agent's agent.yaml `model:` through the resolver, unless
     the operator pinned a model with -m / JS_MODEL / config."""
     agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
     if not agent_model or model is not None or getattr(cfg, "explicit_model", False):
@@ -1782,7 +1782,7 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
                 f"no such agent: {agent_id}; looked in project .js/agents, "
                 f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
                 f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
-                f"and an optional 00-tools.yaml manifest."
+                f"and an optional agent.yaml manifest."
             )
     return str(exc)
 
@@ -2056,7 +2056,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                debug: bool = False) -> int:
     """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
     context, no session), measuring TTFT / tok-s / turn time. The persona
-    (NN-prompt.md + 00-tools.yaml) is rebuilt into each benchmark's head;
+    (NN-prompt.md + agent.yaml) is rebuilt into each benchmark's head;
     benchmarks never see each other."""
     try:
         agent_id = validate_agent_id(bench_agent)
@@ -2104,7 +2104,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     interrupted = False
     for bench in benchmarks:
         # max_tokens: --max-out wins; else per-benchmark frontmatter (already
-        # -1 -> None=uncapped); else the agent default from 00-tools.yaml.
+        # -1 -> None=uncapped); else the agent default from agent.yaml.
         if maxout is not None:
             eff_max = maxout
         elif bench.max_tokens_set:
@@ -3314,7 +3314,7 @@ def main(argv: list[str] | None = None) -> int:
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
     elif (prompt_spec.max_output_tokens is not None
           and settings.get_dotted(live_settings, ("model", "max_output_tokens"), None) is None):
-        # Agent default from 00-tools.yaml — seed the per-turn source of truth so
+        # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
     event_hooks = events.EventHooks()

@@ -608,5 +608,5 @@ Direct agent tools take:
 {"tasks":["one or more task strings"]}
 ```
 
-Whether a model can see a generated tool depends on the active prompt
-frontmatter selection.
+Whether a model can see a generated tool depends on the active agent's
+`agent.yaml` `tools:` entries.
