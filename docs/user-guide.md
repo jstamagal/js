@@ -180,7 +180,7 @@ on, then clears the in-process messages.
 
 Reasoning streams visibly by default. `/set ui.reasoning 0` hides it, `1`
 auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
-token counts. In the standard async screen, **Ctrl-R** toggles retained reasoning
+token counts. In the standard async screen, **Ctrl-O** toggles retained reasoning
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
@@ -250,7 +250,36 @@ being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
 Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
-drops them without touching the turn. Already received text
+drops them without touching the turn.
+
+### Prompt history and keys
+
+Every line sent at a REPL prompt, in either REPL, is appended to one file
+shared by every run: `~/.js/state/history.jsonl` (`history.file`), one JSON
+object per line with `ts`, `cwd`, `session`, `agent` and `text`. Up walks the
+prompts typed in the current directory first, newest first, then the rest
+(`history.cwd_first off` walks them all in time order). **Ctrl-R** opens an
+incremental search over all of them: type to narrow, Ctrl-R again for the next
+older match, Enter or Esc to take it into the input line, Ctrl-G to give up.
+The newest `history.max_entries` prompts are loaded.
+
+`~/.js/keys` (`keys.file`) remaps the async screen's keys, in jsrc's grammar:
+
+```
+bind c-f history_search     # add a key to an action
+bind escape r redraw        # a sequence: Esc, then r
+unbind c-z                  # take a key off every action
+```
+
+A key bound to an action leaves every other action that fires in the same
+place. Key names are prompt_toolkit's (`c-r`, `escape`, `enter`, `tab`,
+`pageup`, `f5`, `space`, one character). The actions and their default keys:
+`submit` Enter, `history_search` Ctrl-R, `ex_open` `:` (vi normal mode),
+`ex_run` Enter and `ex_cancel` Esc (in the ex line), `interrupt` Ctrl-C, `eof`
+Ctrl-D, `suspend` Ctrl-Z, `reasoning_toggle` Ctrl-O, `redraw` Ctrl-L,
+`scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab. A bad line is one
+`path:line: error` line in the startup banner and is skipped. The `--blocking`
+REPL takes `history_search` from the file; its other keys are prompt_toolkit's. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
 recorded progress can be discarded; completed tool work is preserved.
 
