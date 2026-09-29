@@ -12,7 +12,10 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -242,8 +245,38 @@ def stamp_for(model: str | None, provider: str | None, reasoning: str | None) ->
     return {"model": model, "provider": provider, "reasoning": reasoning}
 
 
+# When each live message happened, by message object. A turn's messages are
+# persisted when the turn ends; the record written for a noted message carries
+# the time noted, not the write time. An entry leaves when its record is
+# written, or when more than _EVENT_TIMES_MAX are held.
+_EVENT_TIMES: OrderedDict[int, tuple[dict, float]] = OrderedDict()
+_EVENT_TIMES_MAX = 4096
+_event_times_lock = threading.Lock()
+
+
+def note_time(message: dict, ts: float | None = None) -> dict:
+    """Remember when ``message`` happened (now when ``ts`` is None); the record
+    later written for it carries that time. Returns ``message``."""
+    with _event_times_lock:
+        _EVENT_TIMES[id(message)] = (message, time.time() if ts is None else ts)
+        _EVENT_TIMES.move_to_end(id(message))
+        while len(_EVENT_TIMES) > _EVENT_TIMES_MAX:
+            _EVENT_TIMES.popitem(last=False)
+    return message
+
+
+def _take_time(message: dict) -> float:
+    """The noted time of ``message``, else now. The note is dropped."""
+    with _event_times_lock:
+        entry = _EVENT_TIMES.get(id(message))
+        if entry is None or entry[0] is not message:
+            return time.time()
+        del _EVENT_TIMES[id(message)]
+        return entry[1]
+
+
 def _message_record(message: dict, stamp: dict | None) -> Record:
-    return Record(kind="message", ts=time.time(), message=message,
+    return Record(kind="message", ts=_take_time(message), message=message,
                   stamp=stamp if stamp is not None and message.get("role") == "assistant" else None)
 
 
@@ -360,6 +393,24 @@ def record_turn_mode(memory_file: Path, mode: str) -> str | None:
     return previous
 
 
+def first_turn_mode(memory_file: Path) -> str | None:
+    """The mode the session's first turn ran in: the oldest `turn_mode:` mark,
+    or None when no turn has recorded one."""
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                marker = record.get("marker") if isinstance(record, dict) else None
+                if isinstance(marker, str) and marker.startswith(_TURN_MODE_MARK):
+                    return marker[len(_TURN_MODE_MARK):] or None
+    except OSError:
+        return None
+    return None
+
+
 _WORKSPACE_MARK = "workspace:"
 
 
@@ -394,7 +445,7 @@ def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, f
 
 def wipe(memory_file: Path) -> Path | None:
     """Rotate the memory file to a .bak suffix. Returns the .bak path or None."""
-    if not memory_file.exists():
+    if memory_file == Path(os.devnull) or not memory_file.exists():
         return None
     bak = memory_file.with_suffix(memory_file.suffix + ".bak")
     if bak.exists():

@@ -12,24 +12,29 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import EditingMode
-from prompt_toolkit.filters import has_focus, vi_mode, vi_navigation_mode
+from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.processors import HighlightIncrementalSearchProcessor
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
+from prompt_toolkit.widgets import SearchToolbar
 
+from . import keys
 from . import messages as msgs
+from . import session_store
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
 from .settings import default_value, is_hex_colour
@@ -126,11 +131,13 @@ def status_line(
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%`.
     Groups that do not fit give way in a fixed order: cache, then the model's
-    head, then the provider, then the centre count, then the agent id.
+    head, then the provider, then the centre count, then the agent id. The
+    session name stays, elided with an ellipsis when it still does not fit.
     """
     if width <= 0:
         return ""
     model_text = model or ""
+    session_text = session_short or ""
     show = {"cache": cache_pct is not None, "provider": bool(provider),
             "count": output_tokens is not None, "agent": bool(agent_id)}
 
@@ -142,7 +149,7 @@ def status_line(
         if throbber:
             count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
             centre = " ".join(filter(None, (throbber, phase, count)))
-        who = "/".join(filter(None, (agent_id if show["agent"] else "", session_short or "")))
+        who = "/".join(filter(None, (agent_id if show["agent"] else "", session_text)))
         right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "")))
         return left, centre, right
 
@@ -178,6 +185,9 @@ def status_line(
         line = left + " " * gap + right
     else:
         # Still too wide: keep the clock, throbber and session, cut the left group.
+        room = width - len(f"[{clock}]") - 1 - (len(centre) + 1 if centre else 0)
+        session_text = _elide(session_text, room)
+        left, centre, right = groups()
         tail = " ".join(filter(None, (centre, right)))
         room = max(len(f"[{clock}]"), width - len(tail) - 1)
         line = " ".join(filter(None, (left[:room], tail)))
@@ -185,9 +195,17 @@ def status_line(
 
 
 def session_short(session_file) -> str:
-    """First 8 hex chars of a `<timestamp>-<hex>` session file stem."""
+    """The session as the bar names it: the first 8 hex chars of a generated
+    `<timestamp>-<hex>` stem, else the whole stem, the name it was given."""
     stem = getattr(session_file, "stem", "") or ""
-    return stem.rsplit("-", 1)[-1][:8]
+    return stem.rsplit("-", 1)[-1][:8] if session_store.is_generated(stem) else stem
+
+
+def _elide(text: str, room: int) -> str:
+    """`text` in at most `room` cells, cut short with an ellipsis."""
+    if len(text) <= room:
+        return text
+    return text[:room - 1] + "…" if room > 1 else ""
 
 
 async def tick(app: Application, busy: Callable[[], bool]) -> None:
@@ -220,6 +238,8 @@ class Scrollback:
         # buffer order; each keeps its offsets current as text around it moves.
         self._spans: list[ReasoningBlock | AnswerSpan] = []
         self._answer: AnswerSpan | None = None
+        # The reasoning_toggle key a collapsed block names; "" names none.
+        self.toggle_key = keys.describe(keys.ACTION_BY_NAME["reasoning_toggle"].keys[0])
 
     def append(self, text: str) -> None:
         self._pending += _drawable(text)
@@ -342,7 +362,8 @@ class ReasoningBlock:
             count = str(self.tokens) if self.tokens is not None else f"~{estimate_text_tokens(self.text)}"
             heading += f" {count} tok"
         if self.collapsed:
-            return grey(heading + "  Ctrl-R to expand\n")
+            hint = f"  {self.owner.toggle_key} to expand" if self.owner.toggle_key else ""
+            return grey(heading + hint + "\n")
         return grey(heading + "\n" + self.text + ("" if self.text.endswith("\n") else "\n"))
 
     def append(self, text: str) -> None:
@@ -465,6 +486,24 @@ class InputEditor:
         await run_in_terminal(lambda: subprocess.call(argv), in_executor=True)
 
 
+@dataclass(frozen=True)
+class Handler:
+    """What an action runs, and where: prompt_toolkit's handler, filter and eager flag."""
+
+    fn: Callable
+    filter: FilterOrBool = True
+    eager: bool = False
+
+
+def bind_actions(kb: KeyBindings, keymap: keys.Keymap, handlers: dict[str, Handler]) -> None:
+    """Add each key sequence ``keymap`` gives an action to ``kb``, running that
+    action's handler. Every action in ``keymap`` has one in ``handlers``."""
+    for name, sequences in keymap.items():
+        handler = handlers[name]
+        for sequence in sequences:
+            kb.add(*sequence, filter=handler.filter, eager=handler.eager)(handler.fn)
+
+
 def build_app(
     *,
     prompt: str,
@@ -472,16 +511,23 @@ def build_app(
     completer,
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], None],
-    on_eof: Callable[[], None],
+    on_eof: Callable[[], Awaitable | None],
     status: Callable[[int], str] = lambda width: "",
     status_colours: Callable[[], str] = lambda: STATUS_STYLE,
     editing_mode: Callable[[], str] = lambda: "emacs",
     on_ex: Callable[[str, InputEditor], Coroutine] | None = None,
+    key_bindings: KeyBindingsBase | None = None,
+    keymap: keys.Keymap | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
     the input is a multi-line buffer: Enter is a newline and `:` in normal mode
-    opens the ex line, whose text goes to ``on_ex``."""
+    opens the ex line, whose text goes to ``on_ex``. ``keymap`` names the keys
+    of each action (`js.keys`); None is the defaults. The history_search key
+    opens a reverse incremental search over ``history``. ``key_bindings`` are
+    added after the screen's own and win a shared key. ``on_eof`` runs on the
+    eof key at an empty input line and ends the app with `app.exit()`; an
+    awaitable it returns runs as the key's handler."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         history=history,
@@ -491,6 +537,7 @@ def build_app(
         multiline=vi_mode,
     )
     ex_buffer = Buffer(multiline=False)
+    search_toolbar = SearchToolbar(ignore_case=True)
     kb = KeyBindings()
 
     async def submit() -> None:
@@ -503,11 +550,9 @@ def build_app(
 
     editor = InputEditor(input_buffer, submit)
 
-    @kb.add("enter", filter=has_focus(input_buffer) & ~vi_mode)
     async def _enter(event) -> None:
         await submit()
 
-    @kb.add(":", filter=has_focus(input_buffer) & vi_navigation_mode)
     def _ex_open(event) -> None:
         event.app.layout.focus(ex_buffer)
         event.app.vi_state.input_mode = InputMode.INSERT
@@ -519,56 +564,52 @@ def build_app(
         app.vi_state.input_mode = InputMode.NAVIGATION
         return text
 
-    @kb.add("enter", filter=has_focus(ex_buffer))
     async def _ex_run(event) -> None:
         text = _ex_close(event.app).strip()
         if text and on_ex is not None:
             await on_ex(text, editor)
 
-    @kb.add("escape", filter=has_focus(ex_buffer), eager=True)
     def _ex_cancel(event) -> None:
         _ex_close(event.app)
 
-    @kb.add("c-c")
-    def _ctrl_c(event) -> None:
-        on_interrupt()
-
-    @kb.add("c-d")
-    def _ctrl_d(event) -> None:
+    def _ctrl_d(event):
         if input_buffer.text:
             input_buffer.delete()
-            return
-        on_eof()
-        event.app.exit()
+            return None
+        return on_eof()
 
-    @kb.add("c-z")
-    def _ctrl_z(event) -> None:
-        event.app.suspend_to_background()
-
-    @kb.add("c-r")
-    def _ctrl_r(event) -> None:
+    def _toggle_reasoning(event) -> None:
         if scrollback.toggle_reasoning():
             event.app.invalidate()
 
-    @kb.add("c-l")
-    def _ctrl_l(event) -> None:
-        event.app.renderer.clear()
-
-    @kb.add("pageup")
-    def _pageup(event) -> None:
-        scrollback.buffer.cursor_up(count=max(1, event.app.output.get_size().rows - 3))
-
-    @kb.add("pagedown")
-    def _pagedown(event) -> None:
-        scrollback.buffer.cursor_down(count=max(1, event.app.output.get_size().rows - 3))
-
-    @kb.add("tab")
     def _tab(event) -> None:
         b = input_buffer
         if b.complete_state:
             b.complete_next()
         else:
             b.start_completion(select_first=False)
+
+    def _page() -> int:
+        return max(1, get_app().output.get_size().rows - 3)
+
+    keymap = keymap if keymap is not None else keys.default_keymap()
+    bind_actions(kb, keymap, {
+        "submit": Handler(_enter, has_focus(input_buffer) & ~vi_mode),
+        "history_search": Handler(keys.history_search, has_focus(input_buffer) | is_searching),
+        "ex_open": Handler(_ex_open, has_focus(input_buffer) & vi_navigation_mode),
+        "ex_run": Handler(_ex_run, has_focus(ex_buffer)),
+        "ex_cancel": Handler(_ex_cancel, has_focus(ex_buffer), eager=True),
+        "interrupt": Handler(lambda event: on_interrupt()),
+        "eof": Handler(_ctrl_d),
+        "suspend": Handler(lambda event: event.app.suspend_to_background()),
+        "reasoning_toggle": Handler(_toggle_reasoning),
+        "redraw": Handler(lambda event: event.app.renderer.clear()),
+        "scroll_up": Handler(lambda event: scrollback.buffer.cursor_up(count=_page())),
+        "scroll_down": Handler(lambda event: scrollback.buffer.cursor_down(count=_page())),
+        "complete": Handler(_tab),
+    })
+    toggle = keymap.get("reasoning_toggle", ())
+    scrollback.toggle_key = keys.describe(toggle[0]) if toggle else ""
 
     def _status_text() -> str:
         try:
@@ -589,7 +630,8 @@ def build_app(
                    wrap_lines=True),
             Window(FormattedTextControl(_status_text), height=1, style="class:status"),
             Window(BufferControl(buffer=input_buffer,
-                                 input_processors=[],
+                                 input_processors=[HighlightIncrementalSearchProcessor()],
+                                 search_buffer_control=search_toolbar.control,
                                  lexer=None),
                    height=Dimension(min=1, max=10), dont_extend_height=True,
                    get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(prompt if lineno == 0 and not wrap
@@ -598,6 +640,7 @@ def build_app(
                 Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                 filter=has_focus(ex_buffer),
             ),
+            search_toolbar,
         ]),
         focused_element=input_buffer,
     )
@@ -609,7 +652,7 @@ def build_app(
 
     app = Application(
         layout=layout,
-        key_bindings=kb,
+        key_bindings=kb if key_bindings is None else merge_key_bindings([kb, key_bindings]),
         style=DynamicStyle(_style),
         # Truecolor always: on TERM=linux prompt_toolkit would otherwise pick
         # 4-bit and snap the bar's hex to the nearest of sixteen colours.

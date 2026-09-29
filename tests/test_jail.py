@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -159,9 +160,28 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
     assert code == 0
     assert "hello-ran" in result
     for name in ("rg", "uv", "cargo"):
-        if shutil.which(name):
+        # Only a tool that runs outside the jail under this HOME: a rustup
+        # shim finds no toolchain in the test HOME even outside the jail.
+        if shutil.which(name) and subprocess.run([name, "--version"], capture_output=True).returncode == 0:
             code, result = run_shell(f"{name} --version", jailed)
             assert code == 0, result
+
+
+@needs_bwrap
+def test_path_directories_under_host_tmp_run(jailed, monkeypatch):
+    bin_dir = Path(tempfile.mkdtemp(prefix="js-jail-bin-", dir="/tmp"))
+    try:
+        hello = bin_dir / "hello-from-tmp"
+        hello.write_text("#!/bin/sh\necho hello-ran\n")
+        hello.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+        code, result = run_shell("hello-from-tmp", jailed)
+    finally:
+        shutil.rmtree(bin_dir)
+
+    assert code == 0, result
+    assert "hello-ran" in result
 
 
 @needs_bwrap
@@ -212,6 +232,40 @@ def test_tmp_is_private_and_shared_with_the_file_tools(jailed):
     assert not tool("write", jailed, path="/tmp/from-tool.txt", content="from-tool\n").startswith("ERROR")
     code, result = run_shell("cat /tmp/from-tool.txt", jailed)
     assert "from-tool" in result
+
+
+@needs_bwrap
+def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
+    """A /tmp path absent from the jail's private /tmp is outside the jail; the
+    refusal names the path the model gave and carries no retry count."""
+    host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
+    try:
+        (host_dir / "x.txt").write_text("host-only\n")
+        calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+
+        records = runtime._dispatch_tool_calls(
+            calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+            build_default_registry(), jailed,
+        )
+
+        result = records[0][2]
+        assert result.startswith("ERROR:")
+        assert "outside the jail" in result
+        assert str(jail.active().private) not in result
+        assert "<retry>" not in result
+        assert "host-only" not in result
+    finally:
+        shutil.rmtree(host_dir, ignore_errors=True)
+
+
+def test_a_jail_refusal_gets_no_retry_count_and_other_errors_do():
+    tracker = runtime.ToolErrorTracker()
+
+    refused = tracker.record("read", jail.Refusal("ERROR: /x is outside the jail"))
+    failed = tracker.record("read", "ERROR: no such file: /y")
+
+    assert "<retry>" not in refused
+    assert "<retry>" in failed
 
 
 @needs_bwrap

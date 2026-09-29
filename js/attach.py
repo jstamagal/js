@@ -12,6 +12,7 @@ from collections.abc import Iterable
 
 import ai
 
+from . import clipimage
 from . import messages as msgs
 from . import settings as _settings
 from .config import Config
@@ -96,6 +97,10 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     position-aware — everything else (quotes, repeated spaces, punctuation)
     survives byte-for-byte.
 
+    Each pasted-image placeholder (`[image #N]`, see `js.clipimage`) in the line
+    is an attachment too, after the @path ones; the placeholder stays in the
+    text so the model can tell which image the words refer to.
+
     An unbalanced quote (an apostrophe in ordinary prose like "isn't") makes
     shlex raise; that alone must never drop an attachment, so this falls back
     to a plain whitespace split for token/span extraction in that case.
@@ -115,13 +120,10 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
             attachments.append(text[1:])
             spans.append((start, end))
 
-    if not attachments:
-        return line, []
-
     prompt = line
     for start, end in sorted(spans, reverse=True):
         prompt = prompt[:start] + prompt[end:]
-    return prompt, attachments
+    return prompt, attachments + clipimage.placeholders(prompt)
 
 
 def build_user_message(
@@ -190,6 +192,9 @@ def _prepare_attachment(
         if stdin_attachment is None:
             raise AttachmentError(msgs.STDIN_ATTACHMENT_NOT_PIPED.text())
         return _prepare_bytes(STDIN_ATTACHMENT_NAME, Path(STDIN_ATTACHMENT_NAME), stdin_attachment, cfg)
+    pasted = clipimage.lookup(raw_path)
+    if pasted is not None:
+        return _prepare_bytes(raw_path, Path(raw_path), pasted, cfg)
 
     path = _resolve_path(raw_path, cwd or Path.cwd())
     try:

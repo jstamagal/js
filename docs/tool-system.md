@@ -215,7 +215,7 @@ Dispatch rules:
 - a repeated-error limit appends a final assistant error
 
 A call is read-only when its tool sets `read_only` (`read`, `fs_search`,
-`skill`, `docs_search`, `exa_search`, `serper_search`, `tavily_search`), or
+`lsp`, `skill`, `docs_search`, `exa_search`, `serper_search`, `tavily_search`), or
 when its tool's `read_only_when` accepts its arguments: `ast_search` without
 `apply`, `fetch` as a GET or HEAD without `save`, `browse` without
 `screenshot`. A call that cannot be resolved or parsed is not read-only.

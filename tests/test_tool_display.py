@@ -96,6 +96,30 @@ def test_shell_envelope_is_dropped_and_exit_shown_only_when_nonzero():
     assert _metrics(failed_line)[1] == [2]
 
 
+def test_level_one_line_carries_the_key_argument_and_fits_the_width():
+    result = "one\ntwo"
+    cases = [
+        ("read", {"file_path": "js/display.py", "range": {"start_line": 3}}, "js/display.py"),
+        ("fs_search", {"pattern": "def key_argument", "path": "js"}, "def key_argument"),
+        ("shell", {"command": "git status --short\ngit log -1"}, "git status --short"),
+        ("fetch", {"url": "https://example.com/page"}, "https://example.com/page"),
+    ]
+    for name, args, shown in cases:
+        line = _plain(display.render_tool_result(name, result, 1, args=args, width=80))[0]
+        assert shown in line, line
+        assert _metrics(line) == ([7], [2])
+    assert "git log" not in _plain(display.render_tool_result("shell", result, 1, args=cases[2][1]))[0]
+
+    deep = "/srv/" + "/".join(f"directory{n}" for n in range(20)) + "/target_file.py"
+    long_command = "rg --no-heading " + "x" * 200
+    for name, args, kept in (("read", {"file_path": deep}, "target_file.py"),
+                             ("shell", {"command": long_command}, "rg --no-heading")):
+        line = _plain(display.render_tool_result(name, result, 1, args=args, width=60))[0]
+        assert len(line) <= 60, line
+        assert kept in line and "…" in line
+        assert _metrics(line) == ([7], [2])
+
+
 def test_command_is_capped_by_lines_at_level_two_and_whole_at_level_three():
     script = "python3 - <<'EOF'\n" + "\n".join(f"print({n})" for n in range(30)) + "\nEOF"
     args = {"command": script}
