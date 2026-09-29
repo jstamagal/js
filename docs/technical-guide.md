@@ -285,8 +285,8 @@ A family lookup is an estimate of an alias target, not router configuration.
 Ollama, llama.cpp and vLLM can use their actual allocated context. Explicit
 model overrides remain available. `compact.context_window` applies a shared
 window to the run banner and both automatic compaction paths;
-`compact.context_window_fallback` defaults to 1,000,000 for unresolved models.
-Existing jsrc values override that default.
+`compact.context_window_fallback` is the window assumed for unresolved models;
+`js/jsrc` sets it to 1,000,000.
 
 Both automatic compaction paths cap reply headroom with
 `compact.summary_reserve_tokens` and reserve `compact.buffer_tokens`.

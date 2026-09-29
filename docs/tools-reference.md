@@ -330,7 +330,7 @@ Parameters:
 - `keys`: comma-separated named keys or literal text for `send`.
 - `cwd`: working directory for `start`.
 - `wait_ms`: redraw collection delay, default `700`.
-- `cols`, `rows`: terminal dimensions, defaults `64` by `36`.
+- `cols`, `rows`: terminal dimensions; unset, the `tools.terminal_cols` and `tools.terminal_rows` knobs.
 
 Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
 and F1 through F12. Results include the rendered screen, cursor, changed-line

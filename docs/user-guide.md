@@ -295,9 +295,8 @@ non-directory target prints an error and exits.
 `--ignore-local` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
 
-`--ignore-global` ignores the platform `jsrc`. With this flag `js` also skips
-writing the default config template, so it will not create the platform config
-file on first run.
+`--ignore-global` ignores the platform `jsrc`. The defaults in the package's
+`js/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
 [Configuration And Sessions](configuration-and-sessions.md) for the file-level
