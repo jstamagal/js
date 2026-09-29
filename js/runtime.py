@@ -45,13 +45,14 @@ from . import stream_transport
 from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
-from .reasoning_display import ReasoningDisplay, StderrReasoning
+from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
 from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
                            call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnConvo
 from .turn_surface import SurfaceJournal
+from .turn_stream import StreamSink, TurnEvents
 
 
 _UNSET = object()
@@ -1475,48 +1476,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         # Subagents started through this context answer to its tool_call guards.
         active_context.tool_call_hooks = event_hooks
 
-    def _emit_event(event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
-        """Raise ``event`` to the ON hooks and the event sink; the emission, or
-        None when this turn has no hooks. ``sink_extra`` fields reach the sink only."""
-        if event_sink is not None:
-            try:
-                event_sink(event, {**payload, **(sink_extra or {})})
-            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
-                telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
-        if event_hooks is None:
-            return None
-        emission = event_hooks.emit(event, **payload)
-        for result in emission.results:
-            if result.error:
-                telemetry.event(
-                    "event_handler_error",
-                    event=emission.event,
-                    handler=result.hook.handler,
-                    error=result.error,
-                )
-        return emission
-
+    events = TurnEvents(event_hooks, event_sink, telemetry, model=model, provider_id=provider_id)
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
-        mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
+        mcp_host.event_sink = events.emit
 
-    turn_usage = usage_mod.Tally()
-
-    def _on_usage(call: usage_mod.CallUsage, session: usage_mod.UsageTotals) -> None:
-        turn_usage.add(call)
-        if event_sink is not None:
-            event_sink("usage", {**call.as_dict(), "session": session.as_dict()})
-
-    def _end_turn(reason: str, **extra: Any) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id,
-                    sink_extra={"usage": turn_usage.as_dict()}, **extra)
-
-    _emit_event(
-        "turn_start",
-        model=model,
-        provider_id=provider_id,
-        message_count=len(messages),
-    )
+    events.start(len(messages))
 
     trace = trace_override if trace_override is not None else cfg.trace
     if trace:
@@ -1551,101 +1516,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         _bits.append(f"tools={_ntools}")
         print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(_bits))}{C.RESET}", flush=True)
 
-    # One Display per streamed answer, opened at its first chunk and finished
-    # when the stream ends.
-    answer_display: display.Display | None = None
-    markdown = display.markdown_enabled(getattr(cfg, "settings", None))
-    # Text already displayed but not yet recorded. The assistant record is only
-    # built after the stream completes, so a ^C mid-stream would otherwise leave
-    # the answer on screen and nothing in history.
-    streamed_text = {"value": ""}
-    _transcript_log = getattr(telemetry, "transcript_log", None)
-    streamed_reasoning: list[str] = []
-    reasoning_display: ReasoningDisplay | None = None
-    reasoning_level = _settings.knob(getattr(cfg, "settings", None), "ui.reasoning")
-    if not isinstance(reasoning_level, int) or reasoning_level not in range(4):
-        reasoning_level = _settings.default_value("ui.reasoning")
-
-    def _emit_reasoning(chunk: str) -> None:
-        nonlocal reasoning_display
-        if not chunk:
-            return
-        streamed_reasoning.append(chunk)
-        turn_status.stream(chunk)
-        if suppress_output or reasoning_level == 0:
-            return
-        if reasoning_display is None:
-            factory = telemetry.reasoning_factory
-            reasoning_display = (
-                factory(reasoning_level) if factory is not None
-                else StderrReasoning(reasoning_level, sys.stderr)
-            )
-        reasoning_display.append(chunk)
-
-    def _close_reasoning(tokens: int | None = None) -> None:
-        nonlocal reasoning_display
-        if reasoning_display is not None:
-            reasoning_display.finish(tokens)
-            reasoning_display = None
-
-    def _muted_transcript_tee():
-        mute = getattr(_transcript_log, "mute_tee", None)
-        if callable(mute):
-            return mute()
-        return contextlib.nullcontext()
-
-    def _emit_text(t: str) -> None:
-        nonlocal answer_display
-        if not t:
-            return
-        if reasoning_display is not None:
-            reasoning_display.answer_started()
-        streamed_text["value"] += t
-        turn_status.stream(t)
-        _emit_event("stream", text=t)
-        if suppress_output:
-            return
-        if _transcript_log is not None:
-            write_chunk = getattr(_transcript_log, "write_assistant_chunk", None)
-            if callable(write_chunk):
-                write_chunk(t)
-        with _muted_transcript_tee():
-            if answer_display is None:
-                factory = telemetry.display_factory
-                answer_display = (
-                    factory(markdown) if factory is not None
-                    else display.Display.for_stream(sys.stdout, markdown=markdown)
-                )
-            answer_display.chunk("text", t)
-
-    def _commit_streamed_partial() -> None:
-        """Record received text and reasoning before cancellation.
-
-        A partial assistant record marks progress even when its reasoning was
-        hidden, so the caller preserves the turn rather than discarding it.
-        """
-        partial = streamed_text["value"]
-        partial_reasoning = "".join(streamed_reasoning)
-        streamed_text["value"] = ""
-        streamed_reasoning.clear()
-        if not partial and not partial_reasoning:
-            return
-        record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
-        if partial_reasoning:
-            record["reasoning_content"] = partial_reasoning
-        messages.append(memory.note_time(record))
-
-    def _close_text(reasoning_tokens: int | None = None) -> None:
-        nonlocal answer_display
-        if not suppress_output and answer_display is not None:
-            if _transcript_log is not None:
-                end_stream = getattr(_transcript_log, "end_assistant_stream", None)
-                if callable(end_stream):
-                    end_stream()
-            with _muted_transcript_tee():
-                answer_display.finish()
-        answer_display = None
-        _close_reasoning(reasoning_tokens)
+    sink = StreamSink(telemetry, turn_status, events, settings=getattr(cfg, "settings", None),
+                      suppress_output=suppress_output)
 
     # Full request trace: dump system prompt + full tool schemas once (first
     # model call), then only the newly-sent messages each call. This goes ONLY to
@@ -1783,7 +1655,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     result = await compaction.compact_now(
                         active_compact_cfg, system, messages, focus=focus, forced=True,
                         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                        tail_tokens=tail_tokens, context=active_context, emit=_emit_event,
+                        tail_tokens=tail_tokens, context=active_context, emit=events.emit,
                     )
             except Exception as exc:  # noqa: BLE001
                 msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
@@ -1865,7 +1737,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
     usage_token = usage_mod.start(usage_mod.Meter(
         (getattr(cfg, "session_file", None), *getattr(active_context, "usage_chain", ())),
-        on_call=_on_usage,
+        on_call=events.on_usage,
     ))
     try:
         await surface.restore()
@@ -1907,7 +1779,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # without signed reasoning.
             for attempt in range(retry_budget.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 3):
                 t0 = time.time()
-                streamed_text["value"] = ""
+                sink.clear()
                 try:
                     if mcp_host is not None:
                         await mcp_host.before_model_call()
@@ -1919,7 +1791,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         )
                         budget_checked = True
                     ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
-                    _emit_event(
+                    events.emit(
                         "prompt",
                         model=model,
                         provider_id=provider_id,
@@ -1927,7 +1799,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         tool_count=len(specs),
                         tool_names=[spec["function"]["name"] for spec in specs],
                     )
-                    streamed_reasoning.clear()
                     _res = model_client.stream_model_async(
                         model_id=model,
                         provider_id=provider_id,
@@ -1937,8 +1808,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         tools=ai_tools,
                         max_output_tokens=call_max_out,
                         reasoning_effort=effort,
-                        on_text=_emit_text,
-                        on_reasoning=_emit_reasoning,
+                        on_text=sink.text,
+                        on_reasoning=sink.reasoning,
                         thinking_budget=getattr(cfg, "thinking_budget", None),
                         provider_headers=getattr(cfg, "provider_headers", None),
                         provider_extra=routing.provider_extra_params(cfg),
@@ -1956,7 +1827,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     # test stub patched onto stream_model_async that returns a result
                     # directly) so the seam accepts either shape.
                     result = await _res if inspect.isawaitable(_res) else _res
-                    _close_text(getattr(result.usage, "reasoning_tokens", None))
+                    sink.close(getattr(result.usage, "reasoning_tokens", None))
                     text = result.text
                     pending_calls = [
                         _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
@@ -2030,7 +1901,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     cut_by_cap = _cut_off_by_cap(incomplete_reason, pending_calls)
                     # Reply text already on the screen or stdout. Sending the
                     # request again would print a second reply after it.
-                    shown = not suppress_output and bool(streamed_text["value"])
+                    shown = sink.shown
                     # A compact.context_window above the catalog's says the
                     # real window is larger than the catalog knows.
                     window = max(
@@ -2043,7 +1914,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         # it cut the input: shed history and ask again. A reply
                         # already shown is kept, and the shed history serves the
                         # next request.
-                        _close_text()
+                        sink.close()
                         overflow_recovered += 1
                         overflow = compaction.SilentOverflowError(silent, window)
                         telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
@@ -2067,7 +1938,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     ):
                         # Cut off by its cap: send the same request once more
                         # with room to finish, before any resume nudge.
-                        _close_text()
+                        sink.close()
                         max_output_escalated = True
                         telemetry.event("max_output_escalated", model=model,
                                         max_output_tokens=call_max_out, escalated_to=escalated)
@@ -2079,7 +1950,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 except ai.ProviderAPIError as e:
                     # Finish any partially streamed text before we retry or abort,
                     # so the next attempt's output starts on its own line.
-                    _close_text()
+                    sink.close()
                     if call_max_out != max_out and not e.is_retryable:
                         # The provider refused the escalated cap, often as a
                         # context-length error because prompt plus cap passes
@@ -2123,8 +1994,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             if too_long:
                                 telemetry.event("retry_after_too_long", model=model,
                                                 retry_after=wait, limit=retry_budget.max_wait)
-                            _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
-                            _end_turn("error")
+                            events.emit("error", error=f"{type(e).__name__}: {e}", retryable=True)
+                            events.end("error")
                             raise
                         delay = wait if wait is not None else _backoff(transport_retries)
                         transport_retries += 1
@@ -2133,20 +2004,20 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     else:
                         telemetry.event("fatal_error", model=model,
                                         error=f"{type(e).__name__}: {e}")
-                        _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
-                        _end_turn("error")
+                        events.emit("error", error=f"{type(e).__name__}: {e}", retryable=False)
+                        events.end("error")
                         raise
                 except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
-                    _close_text()
+                    sink.close()
                     telemetry.event("fatal_error", model=model,
                                     error=f"{type(e).__name__}: {e}")
-                    _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
-                    _end_turn("error")
+                    events.emit("error", error=f"{type(e).__name__}: {e}", retryable=False)
+                    events.end("error")
                     raise
             else:
                 stream_transport.report_held_failure()
                 msgs.say(msgs.RETRY_BUDGET_EXHAUSTED)
-                _end_turn("retry_budget_exhausted")
+                events.end("retry_budget_exhausted")
                 return
 
             assistant_message_override: ai.messages.Message | None = None
@@ -2160,8 +2031,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     tools=[pc.name for pc in pending_calls],
                 )
                 if not suppress_output:
-                    _emit_text(("\n\n" if text else "") + notice)
-                    _close_text()
+                    sink.text(("\n\n" if text else "") + notice)
+                    sink.close()
                 text = f"{text}\n\n{notice}" if text else notice
                 pending_calls = []
                 assistant_message_override = ai.assistant_message(text)
@@ -2237,8 +2108,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             convo.ai.append(_sanitize_assistant_message(assistant_message))
             messages.append(memory.note_time(history_assistant_record))
             # Recorded in full now; a later ^C in this turn must not re-append it.
-            streamed_text["value"] = ""
-            streamed_reasoning.clear()
+            sink.clear()
             durable_side_effects_started = True
             token_state.record_provider_usage(
                 None if usage_stale else usage,
@@ -2258,7 +2128,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 payload = {"text": text, "finish_reason": finish}
                 if incomplete_reason:
                     payload["incomplete_reason"] = incomplete_reason
-                _emit_event("response", **payload)
+                events.emit("response", **payload)
             resuming = (
                 not pending_calls
                 and resumes_sent < max_output_resumes
@@ -2282,9 +2152,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=resumes_sent, limit=max_output_resumes)
                     continue
                 if incomplete_reason:
-                    _end_turn("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
+                    events.end("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
                 else:
-                    _end_turn("stop")
+                    events.end("stop")
                 return
 
             # --- Dispatch tools, append result messages ---
@@ -2292,7 +2162,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # turn; messages — persisted and replayed on every future turn — carries the
             # dehydrated stub so base64 is billed once.
             for index, pc in enumerate(pending_calls):
-                emission = _emit_event(
+                emission = events.emit(
                     "tool_call",
                     id=pc.id,
                     name=_canonical_tool_call_name(pc.name, active_registry),
@@ -2357,7 +2227,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 batch_media_msgs: list[ai.messages.Message] = []
                 for pc, _args, result_value in dispatch_records:
                     canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
-                    _emit_event(
+                    events.emit(
                         "tool_result",
                         id=pc.id,
                         name=canonical_pc.name,
@@ -2384,8 +2254,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 final_error = {"role": "assistant", "content": failure}
                 convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
                 messages.append(memory.note_time(final_error))
-                _emit_event("error", error=failure, retryable=False)
-                _end_turn("tool_error_limit")
+                events.emit("error", error=failure, retryable=False)
+                events.end("tool_error_limit")
                 return
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
                 steered = steer()
@@ -2399,21 +2269,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         msgs.say(msgs.STEERED, flush=True)
 
         msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
-        _end_turn("max_iterations")
+        events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
         # turn_start is emitted unconditionally and every normal/handled exit
         # already emitted turn_end; only cancellation (CancelledError /
         # KeyboardInterrupt — BaseException, not Exception) reaches here
         # unbalanced, so pair turn_start with a turn_end before propagating.
         if not isinstance(_turn_exc, Exception):
-            _close_text()
-            _commit_streamed_partial()
-            _end_turn("cancelled")
+            sink.close()
+            sink.commit_partial(messages)
+            events.end("cancelled")
         else:
             stream_transport.report_held_failure()
         raise
     finally:
-        _close_reasoning()
+        sink.close_reasoning()
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         turn_status.reset()
