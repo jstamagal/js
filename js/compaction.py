@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 import traceback
 from dataclasses import dataclass, field
 from typing import Any
@@ -531,19 +530,14 @@ def _run_pre_hook(cfg: Config) -> str:
     hook = _pre_hook_command(cfg)
     if not hook:
         return ""
-    shell_path = (
-        os.environ.get("COMSPEC", "cmd.exe")
-        if sys.platform == "win32"
-        else os.environ.get("SHELL", "/bin/sh")
-    )
-    shell_arg = "/C" if sys.platform == "win32" else "-c"
+    shell_path = os.environ.get("SHELL", "/bin/sh")
     cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
     ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
     if ceiling > 0:
         cap = min(cap, ceiling)
     try:
         result = _run_capped(
-            [shell_path, shell_arg, hook],
+            [shell_path, "-c", hook],
             timeout=30,
             cwd=str(getattr(cfg, "project_dir", os.getcwd())),
             env=None,

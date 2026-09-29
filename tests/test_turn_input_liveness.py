@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import threading
 import time
 from dataclasses import replace
@@ -129,7 +128,6 @@ def test_second_line_is_processed_while_a_tool_runs(monkeypatch, tmp_path):
     assert finished.is_set()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fd semantics")
 def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
     """Whatever js's stdin is (the terminal the input line reads), a shell
     command started by the tool gets none of it and does not wait on it."""
@@ -155,7 +153,6 @@ def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
         os.close(write_end)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
 def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path):
     marker = tmp_path / "pid"
     command = f"echo $$ > {marker}; exec sleep 60"

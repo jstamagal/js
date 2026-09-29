@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import signal
-import sys
 import threading
 
 import pytest
@@ -11,7 +10,6 @@ from js import capped_process
 from js.capped_process import CappedProcessTimeout, _run_capped
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix process-group behavior")
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     with pytest.raises(CappedProcessTimeout) as raised:
         _run_capped(
@@ -34,7 +32,6 @@ def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     assert raised.value.stderr_truncated is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix process-group behavior")
 def test_run_capped_timeout_retains_truncation_metadata():
     with pytest.raises(CappedProcessTimeout) as raised:
         _run_capped(
@@ -49,7 +46,6 @@ def test_run_capped_timeout_retains_truncation_metadata():
     assert raised.value.stderr_truncated is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix inherited-pipe behavior")
 def test_run_capped_stops_readers_when_grandchild_keeps_pipes_open(monkeypatch):
     real_thread = threading.Thread
     created_threads = []

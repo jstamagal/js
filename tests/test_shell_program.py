@@ -4,7 +4,6 @@ and names the filtered environment only when the command asked for it."""
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ import pytest
 from js import settings
 from js.toolkit import ToolContext, process_net
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
 needs_zsh = pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

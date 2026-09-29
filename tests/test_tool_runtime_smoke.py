@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import shutil
-import sys
 
 import pytest
 
@@ -906,7 +905,6 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
 
     assert waits == [42, 42]
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkeypatch):
     fake_shell = tmp_path / "fake-shell"
     fake_shell.write_text(
@@ -1323,7 +1321,6 @@ def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     assert (real / "f.txt").read_text(encoding="utf-8") == "payload"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 def test_shell_output_capped_while_streaming(tmp_path):
     # Regression: subprocess.run(capture_output=True) buffered the WHOLE
     # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
@@ -1334,7 +1331,6 @@ def test_shell_output_capped_while_streaming(tmp_path):
     assert len(out) <= context.max_bash_output_bytes + 200
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # A backgrounded grandchild inherits the pipe and never closes it; the
     # child's own output must still come back instead of being lost to a
@@ -1346,7 +1342,6 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     assert "done" in out
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
 def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)

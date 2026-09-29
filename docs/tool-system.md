@@ -271,9 +271,8 @@ anchors, and supports snapshot-backed structural rewrite previews and applies.
 
 `shell` runs the `shell.program` setting:
 
-- Unix: `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
+- `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
   shells run with `-c` alone
-- Windows: `COMSPEC /C`
 
 It passes a small allowlist of environment variables by default. Extra env var
 names can be requested through the `env` parameter if the parent process has
@@ -325,7 +324,7 @@ For another Python project, the behavior to preserve is:
 - read-before-write state in context
 - exact patch/multi-patch behavior
 - in-process undo snapshots
-- `shell.program`/`COMSPEC` shell execution
+- `shell.program` shell execution
 - task parallelism and child context isolation
 - Claude provider-facing name transform based on model string only
 - canonical persisted history

@@ -10,7 +10,6 @@ import mimetypes
 import os
 import re
 import shutil
-import sys
 import tempfile
 import threading
 import time
@@ -71,15 +70,11 @@ _VAR_REF_RE = re.compile(r"\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)")
 
 def _resolve_shell(program: str) -> str | None:
     """The executable the shell tool runs: `shell.program` looked up on PATH
-    (or taken as given when it is a path). Windows runs COMSPEC."""
-    if sys.platform == "win32":
-        return os.environ.get("COMSPEC", "cmd.exe")
+    (or taken as given when it is a path)."""
     return shutil.which(program)
 
 
 def _shell_argv(shell_path: str, command: str) -> list[str]:
-    if sys.platform == "win32":
-        return [shell_path, "/C", command]
     flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
     return [shell_path, *flags, "-c", command]
 

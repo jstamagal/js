@@ -421,10 +421,9 @@ Current prompt dirs:
 
 The `shell` tool runs commands with the `shell.program` setting:
 
-- Unix: `bash -o pipefail -c` by default. `set shell.program zsh` runs
-  `zsh -o pipefail -c`; any other program (such as `sh`) runs with `-c` and no
-  pipefail. A name is looked up on PATH; a path is used as given.
-- Windows: `COMSPEC /C`.
+`bash -o pipefail -c` by default. `set shell.program zsh` runs
+`zsh -o pipefail -c`; any other program (such as `sh`) runs with `-c` and no
+pipefail. A name is looked up on PATH; a path is used as given.
 
 The Python harness does not itself require `fzf` or `bat`. `fs_search` invokes the
 pinned `tools/bin/rg` installed by `just install`, falling back to PATH only
