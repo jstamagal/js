@@ -768,6 +768,18 @@ def _reconcile_read_delivery(
 
 
 
+def _tool_results_in(messages: list[dict]) -> dict[str, str]:
+    """The text result each tool call id holds in ``messages``."""
+    return {
+        message["tool_call_id"]: message["content"]
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") == "tool"
+        and isinstance(message.get("tool_call_id"), str)
+        and isinstance(message.get("content"), str)
+    }
+
+
 def _fair_share_ceiling(sizes: list[int], budget: int) -> int:
     """Largest per-result allowance L where sum(min(size, L)) <= budget.
 
@@ -2052,6 +2064,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # thread so the shared loop stays free while they execute. Fan-out (task /
             # named-agent) calls are awaited ON the loop instead, so a parent turn
             # never parks a dispatch thread its descendants need (see _dispatch_batch).
+            # A read that repeats an earlier one returns a stub naming it only
+            # while that earlier result is still in the history the model sees.
+            active_context.keep_shown_reads(_tool_results_in(messages))
             progress = _DispatchProgress()
             turn_status.tool_begin([_canonical_tool_call_name(pc.name, active_registry) for pc in pending_calls])
             try:

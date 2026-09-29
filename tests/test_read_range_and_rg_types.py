@@ -15,15 +15,12 @@ requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not
 
 
 def _numbered_lines(body: str) -> list[int]:
-    """Line numbers out of read()'s `<number>:<2-char checksum>|<text>` prefix."""
+    """Line numbers out of read()'s `<number>|<text>` prefix."""
     out = []
     for line in body.splitlines():
         head, sep, _rest = line.partition("|")
-        if not sep or len(head) < 3:
-            continue
-        number, hash_sep, line_hash = head.partition(":")
-        if hash_sep and len(line_hash) == 2 and number.isdigit():
-            out.append(int(number))
+        if sep and head.isdigit():
+            out.append(int(head))
     return out
 
 

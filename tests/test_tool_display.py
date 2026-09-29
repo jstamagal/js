@@ -12,7 +12,7 @@ from js.transcript import TranscriptLogSink
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
-RESULT_292 = "\n".join(f"{index}:ab|row {index} of the file" for index in range(1, 293))
+RESULT_292 = "\n".join(f"{index}|row {index} of the file" for index in range(1, 293))
 
 
 def _plain(text: str) -> list[str]:
@@ -164,15 +164,15 @@ def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys):
 
 
 def test_level_three_read_highlights_the_file_text_and_keeps_every_byte():
-    result = '1:ab|def f(x):\n2:cd|    return "s"\n3:ef|\n[9 total lines; continue with {}]'
+    result = '1|def f(x):\n2|    return "s"\n3|\n[9 total lines; continue with {}]'
 
     rendered = display.render_tool_result("read", result, 3, args={"file_path": "x.py"}, width=80)
     rows = rendered.splitlines()
 
     assert _plain(rendered)[:4] == result.split("\n")
-    assert SGR.sub("", rows[0]).startswith("1:ab|def")
+    assert SGR.sub("", rows[0]).startswith("1|def")
     # The source is highlighted; the paging note is not.
-    assert SGR.search(rows[0].removeprefix("1:ab|"))
+    assert SGR.search(rows[0].removeprefix("1|"))
     assert rows[3] == "[9 total lines; continue with {}]" + display.C.RESET
 
 

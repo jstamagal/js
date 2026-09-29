@@ -33,14 +33,20 @@ the file and the `range` that continues past the preview: always a byte range,
 plus a line range when the result has more than one line. A single-line
 payload, such as a JSON tool response, is reachable only by byte range.
 
-Text output lines are prefixed like:
+Text output lines are prefixed with their line number:
 
 ```text
-12:ab|line content
+12|line content
 ```
 
-The prefix is a display anchor, not file content. Do not include it in `patch`
-strings.
+The prefix is not file content. Do not include it in `patch` strings.
+
+A line read that repeats an earlier one (same file content, same lines, same
+`show_line_numbers`) returns a one-line note naming the earlier read's call id
+instead of the lines, and counts as reading them. It does so only while that
+earlier result is in the history the model sees, whole: a result that was
+clipped, spilled, cleared by compaction or summarised away is not repeated, and
+the lines come back in full. Any write, patch or undo of the file starts over.
 
 Images return either a vision-disabled text stub or an internal image marker
 that the runtime expands for vision models. PDFs use `pdftotext`. Both are
@@ -85,6 +91,16 @@ the retry needs no second `read`. A diff larger than half the tighter of
 replaced by the changed line numbers. `patch` then stays gated on those lines
 until they are read; an overwrite retry goes through and discards them, and
 `undo` brings them back.
+
+When `old_string` is not in the file exactly, it is matched again in a
+normalised view of both: trailing whitespace dropped from every line, smart
+quotes read as `'` and `"`, Unicode dashes and minus as `-`, and no-break and
+typographic spaces as a space. The replacement is applied over the original
+text. Every line of `old_string` that `new_string` keeps is written back from
+the file, byte for byte, and within a changed line the characters the edit kept
+come from the file too, so a smart quote the model typed as `"` stays a smart
+quote. The result says the match was normalised. A normalised match whose
+replacement would leave the file as it is is refused.
 
 Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals
@@ -176,7 +192,7 @@ Parameters:
 - `apply`: set true to apply a supplied rewrite, default false.
 - `max_results`: maximum matches returned or rewritten, default `100`.
 
-Search output uses absolute path headings and the same anchored source lines as
+Search output uses absolute path headings and the same numbered source lines as
 `read`. Applying a rewrite snapshots every affected file for `undo`, clears the
 shared search cache, and refuses match sets larger than `max_results`. Search
 results mark the matches omitted past `max_results`, and an ast-grep parse

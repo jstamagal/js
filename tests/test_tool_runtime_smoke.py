@@ -17,10 +17,10 @@ from js.toolkit.core import ToolResult, call_tool
 import ai
 
 
-ANCHOR_RE = re.compile(r"^1:[a-f0-9]{2}\|alpha$", re.MULTILINE)
+NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
 
 
-def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
+def test_numbered_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     target = tmp_path / "sample.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
@@ -29,7 +29,7 @@ def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     assert unread_patch == "ERROR: You must read the file with the read tool before attempting to edit it."
 
     read_result = fs.read("sample.txt", context=context)
-    assert ANCHOR_RE.search(read_result)
+    assert NUMBERED_RE.search(read_result)
     assert "2" in read_result and "|beta" in read_result
 
     patch_result = fs.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
@@ -41,17 +41,14 @@ def test_anchored_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
-def test_read_prefix_separates_numeric_line_number_from_content_hash(tmp_path):
+def test_read_prefix_is_the_line_number_alone(tmp_path):
     target = tmp_path / "numbered.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
     rendered = fs.read("numbered.txt", context=context)
 
-    assert rendered.splitlines() == [
-        f"1:{fs._line_hash('alpha')}|alpha",
-        f"2:{fs._line_hash('beta')}|beta",
-    ]
+    assert rendered.splitlines() == ["1|alpha", "2|beta"]
 
 
 def _read_file(tmp_path, name: str, body: str) -> tuple:

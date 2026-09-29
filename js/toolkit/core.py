@@ -415,9 +415,21 @@ class ToolContext:
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
     # Read-only calls run in parallel threads; this lock covers read_paths,
     # file_hashes, read_ranges, read_line_totals, fully_read_paths,
-    # known_content and _read_windows.
+    # known_content, _read_windows, _shown_reads and _offered_reads.
     _coverage_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _read_windows: dict[Path, _ReadWindow] = field(default_factory=dict, init=False, repr=False)
+    # Line reads whose whole text reached the model. Per path, a read key
+    # (content hash, first line, last line, numbered) maps to the read call's
+    # id and the sha256 of the text it returned.
+    _shown_reads: dict[Path, dict[tuple, tuple[str, str]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    # Reads of the batch still running, by call id: (path, read key, sha256 of
+    # the text). settle_reads moves the ones the runtime delivered whole into
+    # _shown_reads.
+    _offered_reads: dict[str, tuple[Path, tuple, str]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:
@@ -459,6 +471,7 @@ class ToolContext:
                 self.read_line_totals.pop(path, None)
                 self.fully_read_paths.discard(path)
                 self._read_windows.pop(path, None)
+                self._shown_reads.pop(path, None)
             # The runtime can clip this read's text after the handler returns;
             # record_delivered_read then narrows this call's share and keeps
             # what earlier and concurrent reads delivered.
@@ -557,8 +570,10 @@ class ToolContext:
     ) -> None:
         with self._coverage_lock:
             # Reads recorded before this replacement no longer describe the
-            # coverage, so a later clip of one of them changes nothing.
+            # coverage, so a later clip of one of them changes nothing, and
+            # none of them is the read a later one repeats.
             self._read_windows.pop(path, None)
+            self._forget_shown_reads(path)
             self.read_paths.add(path)
             self.file_hashes[path] = content_hash
             self.read_ranges[path] = _merge_line_ranges(ranges)
@@ -585,12 +600,14 @@ class ToolContext:
         complete = raw[:limit].rsplit("\n", 1)[0]
         seen: list[tuple[int, int]] = []
         for line in complete.splitlines():
-            head, separator, _text = line.partition(":")
+            head, separator, _text = line.partition("|")
             if separator and head.isdigit():
                 number = int(head)
                 seen.append((number, number))
         call_id = call_id or _CALL_ID.get()
         with self._coverage_lock:
+            if call_id is not None:
+                self._offered_reads.pop(call_id, None)
             window = self._read_windows.get(path)
             if window is None or call_id not in window.reads:
                 return
@@ -611,10 +628,58 @@ class ToolContext:
                 self.fully_read_paths.discard(path)
 
     def settle_reads(self) -> None:
-        """Forget which call recorded which read. The runtime calls it once a
-        batch's results are final, after the last clip."""
+        """Forget which call recorded which read, and record the reads the
+        batch delivered whole as shown. The runtime calls it once a batch's
+        results are final, after the last clip."""
         with self._coverage_lock:
             self._read_windows.clear()
+            for call_id, (path, key, digest) in self._offered_reads.items():
+                self._shown_reads.setdefault(path, {})[key] = (call_id, digest)
+            self._offered_reads.clear()
+
+    def shown_read(self, path: Path, key: tuple) -> str | None:
+        """The id of the read call that showed the model the text read key
+        ``key`` of ``path`` renders, when that result is still in its
+        history; None otherwise."""
+        with self._coverage_lock:
+            entry = self._shown_reads.get(path, {}).get(key)
+        return entry[0] if entry else None
+
+    def offer_read(self, path: Path, key: tuple, text: str) -> None:
+        """Record that the read call running in this thread returned ``text``
+        for read key ``key`` of ``path``. It counts as shown once the runtime
+        settles the batch without clipping it. A read outside a tool call
+        records nothing."""
+        call_id = _CALL_ID.get()
+        if call_id is None:
+            return
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        with self._coverage_lock:
+            self._offered_reads[call_id] = (path, key, digest)
+
+    def keep_shown_reads(self, results: dict[str, str]) -> None:
+        """Keep the shown reads whose text is still in the model's history.
+
+        ``results`` maps tool call ids to the result text the history holds
+        for them. A read whose result was cleared, summarised or dropped is
+        forgotten, so a later read of the same lines returns them in full."""
+        with self._coverage_lock:
+            for path in list(self._shown_reads):
+                kept = {
+                    key: (call_id, digest)
+                    for key, (call_id, digest) in self._shown_reads[path].items()
+                    if call_id in results
+                    and hashlib.sha256(results[call_id].encode("utf-8")).hexdigest() == digest
+                }
+                if kept:
+                    self._shown_reads[path] = kept
+                else:
+                    del self._shown_reads[path]
+
+    def _forget_shown_reads(self, path: Path) -> None:
+        self._shown_reads.pop(path, None)
+        for call_id in [cid for cid, offer in self._offered_reads.items() if offer[0] == path]:
+            del self._offered_reads[call_id]
 
     def configure_snapshot_store(
         self,
