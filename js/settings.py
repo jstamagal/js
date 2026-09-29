@@ -119,8 +119,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- ui ---
     SettingSpec("ui.reasoning", "int",
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
-                "3 leave visible with token counts. The reasoning_toggle key (Ctrl-O "
-                "unless keys.file moves it) folds and unfolds it in the async screen. "
+                "3 leave visible with token counts. The reasoning_toggle key, Ctrl-O "
+                "unless keys.file moves it, folds and unfolds it in the async screen. "
                 "Display only; session reasoning is always retained."),
     SettingSpec("ui.net", "int",
                 "Network display in the async screen: 0 nothing, 1 failures, 2 also "
@@ -153,7 +153,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("history.cwd_first", "bool",
                 "Up offers the prompts typed in the current directory first, newest "
                 "first, then the rest; off, every prompt in time order. The "
-                "history_search key (Ctrl-R) searches all of them either way. Read "
+                "history_search key, Ctrl-R, searches all of them either way. Read "
                 "when the REPL starts.", empty=EMPTY_OFF),
     SettingSpec("history.max_entries", "int",
                 "Newest prompts loaded from history.file for Up and Ctrl-R. Read when "

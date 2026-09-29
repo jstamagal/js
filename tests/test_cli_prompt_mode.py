@@ -82,12 +82,13 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
 
     actual = from_env()
 
-    # Sessions are filed by start directory; what is the agent's lives in its state dir.
+    # Sessions are filed by start directory; what is the agent's lives in its
+    # state dir; the prompt history is one file for every agent.
     expected_sessions_dir = tmp_path / ".js" / "sessions" / session_store.slug(Path.cwd())
     expected_state_dir = tmp_path / ".js" / "state" / "defaultagent"
     assert actual.agent_id == "defaultagent"
     assert actual.agent_dir == expected_state_dir
-    assert actual.history_file == expected_state_dir / "history"
+    assert actual.history_file == tmp_path / ".js" / "state" / "history.jsonl"
     assert actual.session_file.parent == expected_sessions_dir
     assert actual.session_file.suffix == ".jsonl"
     assert actual.session_file.exists()

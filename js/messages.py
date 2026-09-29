@@ -760,7 +760,7 @@ EX_FAILED = Message(":{verb}: {error}", GRAVE)
 
 # --- The keys file -----------------------------------------------------------
 
-KEYS_BAD_KEY = Message("not a key name: {key!r} (e.g. c-r, escape, enter, pageup, f5, x)")
+KEYS_BAD_KEY = Message("not a key name: {key!r}. Key names are like c-r, escape, enter, pageup, f5, x")
 KEYS_BIND_USAGE = Message("bind needs a key and an action: bind KEY... ACTION")
 KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
 KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
