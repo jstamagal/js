@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -159,9 +160,28 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
     assert code == 0
     assert "hello-ran" in result
     for name in ("rg", "uv", "cargo"):
-        if shutil.which(name):
+        # Only a tool that runs outside the jail under this HOME: a rustup
+        # shim finds no toolchain in the test HOME even outside the jail.
+        if shutil.which(name) and subprocess.run([name, "--version"], capture_output=True).returncode == 0:
             code, result = run_shell(f"{name} --version", jailed)
             assert code == 0, result
+
+
+@needs_bwrap
+def test_path_directories_under_host_tmp_run(jailed, monkeypatch):
+    bin_dir = Path(tempfile.mkdtemp(prefix="js-jail-bin-", dir="/tmp"))
+    try:
+        hello = bin_dir / "hello-from-tmp"
+        hello.write_text("#!/bin/sh\necho hello-ran\n")
+        hello.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+        code, result = run_shell("hello-from-tmp", jailed)
+    finally:
+        shutil.rmtree(bin_dir)
+
+    assert code == 0, result
+    assert "hello-ran" in result
 
 
 @needs_bwrap

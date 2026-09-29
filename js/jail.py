@@ -8,8 +8,9 @@ hostile model. Under `-C`:
   are empty tmpfs mounts, and so are `/run/user` and every network
   filesystem mount. The jail's `/tmp` and `~/.js/tmp` are directories private
   to this js process. DIR is bound read-write at its real path. The PATH
-  directories under a hidden tree, the `jail.bind` entries and the `/add`
-  binds are bound back. The network is shared.
+  directories and the kernel's interpreter under a hidden tree or the host's
+  `/tmp`, the `jail.bind` entries and the `/add` binds are bound back. The
+  network is shared.
 - the file tools resolve every path and refuse one outside DIR and the bound
   paths (`confine`).
 
@@ -323,8 +324,11 @@ class Jail:
         implicit = [Bind(p, False) for p in self._path_binds(env_path)]
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
+        # The jail's /tmp is private, so an interpreter or PATH directory under
+        # the host's /tmp is bound back like one under a hidden tree.
+        replaced = [*hidden, Path("/tmp")]
         implicit = [b for b in implicit
-                    if any(_under(b.path, h) for h in hidden) and not covered(b.path)]
+                    if any(_under(b.path, h) for h in replaced) and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
         for bind in binds:
