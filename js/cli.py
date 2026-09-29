@@ -54,6 +54,7 @@ from . import prompt_history
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
 from . import screen
+from . import session_query
 from . import setcmd
 from . import skills
 from . import settings
@@ -395,13 +396,16 @@ def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
 
 
 def _print_session_list(*, json_lines: bool) -> int:
-    records = catalog_sessions(_paths.sessions_root())
+    """Every session, newest first; the table shows times in local time as the
+    picker does."""
+    records = sorted(catalog_sessions(_paths.sessions_root()), key=lambda record: -record["mtime"])
     if json_lines:
         for record in records:
             print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
         return 0
 
     headings = tuple(msgs.LIST_HEADINGS.text().split())
+    now = time.time()
     rows = []
     for record in records:
         identity = record["caller_key"]
@@ -411,7 +415,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             (
                 record["agent"] or "-",
                 record["name"],
-                datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
+                session_query.when_text(record["mtime"], now),
                 str(record["size"]),
                 str(record["user_turns"]),
                 (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).text(),

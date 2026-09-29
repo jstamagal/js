@@ -435,7 +435,10 @@ does not hit it. The children of an unsaved run are not saved either.
 
 `js --session` (no name) or `/session [query]` in the REPL lists every session,
 newest first, across every directory and agent. `•` marks sessions started in
-the current directory; branches sit under the session they came from.
+the current directory; branches sit under the session they came from. A
+session started with `--session NAME` shows NAME in the last column, before
+its tags. `js --list` prints every session file as a table, newest first,
+with local times.
 
 | key | does |
 |---|---|
@@ -444,7 +447,7 @@ the current directory; branches sit under the session they came from.
 | `/` | type a search query; Enter keeps it, Esc clears it |
 | `b` | the message list: Enter branches at the highlighted message, `r` resumes at the end, Esc goes back |
 | `i` | the file path, model stamps, estimated token count and branch parent |
-| `a` | also show the hidden kinds (below), marked in the tags column |
+| `a` | also show the hidden kinds (below), marked in the last column |
 | Esc | clear the query, or close |
 
 Hidden until `a`: **empty** sessions (nothing came back), **quick** ones (one
