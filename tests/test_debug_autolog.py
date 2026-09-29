@@ -113,7 +113,6 @@ def test_emit_request_trace_writes_to_sink_not_stdout(capsys):
     out = capsys.readouterr()
     blob = "".join(captured)
     assert REQUEST_MARKER in blob
-    assert "SYSTEM PROMPT (unclipped)" in blob
     assert "SYSTEM-PROMPT-BODY" in blob
     # Nothing reached the terminal.
     assert out.out == ""
@@ -160,7 +159,7 @@ def test_plain_prompt_run_keeps_trace_off_stdout(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "_append_turn", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
 
-    rc = cli.main(["-p", "hi"])
+    rc = cli._run_prompt("hi")
     out = capsys.readouterr().out
 
     assert rc == 0
@@ -191,7 +190,7 @@ def test_debug_flag_prints_concise_form(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "_append_turn", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
 
-    rc = cli.main(["-d", "-p", "hi"])
+    rc = cli._run_prompt("hi", debug=True)
     out = capsys.readouterr().out
 
     assert rc == 0

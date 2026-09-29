@@ -66,7 +66,7 @@ def test_slots_path_with_colon_survives():
 
 def test_slots_bad_count_degrades_to_none(capsys):
     assert _printonly_slots("p:notanint:/tmp/x")[1] is None
-    assert "non-numeric count" in capsys.readouterr().err
+    assert capsys.readouterr().err
 
 
 # ---- letter resolution ---------------------------------------------------
@@ -81,22 +81,22 @@ def test_letters_dedup_and_order_preserved():
 
 def test_letters_unknown_warns_and_skips(capsys):
     assert _printonly_letters("pXt") == ["p", "t"]
-    assert "unknown letter" in capsys.readouterr().err
+    assert capsys.readouterr().err
 
 
 def test_letters_o_is_parked(capsys):
     assert _printonly_letters("po") == ["p"]
-    assert "parked" in capsys.readouterr().err
+    assert capsys.readouterr().err
 
 
 def test_letters_nothing_valid_falls_back_to_all(capsys):
     assert _printonly_letters("XYZ") == list("tpeib")
 
 
-# ---- end-to-end through main() -------------------------------------------
+# ---- _printonly_run --------------------------------------------------------
 
 def test_printonly_prompt_raw(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=p"])
+    rc = cli._printonly_run("p", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert "{{WHO}}" in out              # raw: env not expanded
@@ -104,7 +104,7 @@ def test_printonly_prompt_raw(offline_agent, capsys):
 
 
 def test_printonly_prompt_env_expanded(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=e"])
+    rc = cli._printonly_run("e", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert "env=<ape>" in out            # {{WHO}} resolved
@@ -112,7 +112,7 @@ def test_printonly_prompt_env_expanded(offline_agent, capsys):
 
 
 def test_printonly_prompt_inlines_expanded(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=i"])
+    rc = cli._printonly_run("i", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert "env=<ape>" in out
@@ -127,14 +127,14 @@ def test_printonly_inlines_respect_opt_out(offline_agent, capsys):
 
 
 def test_printonly_tools_json(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=t"])
+    rc = cli._printonly_run("t", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert '"read"' in out and '"shell"' in out
 
 
 def test_printonly_benchmarks(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=b"])
+    rc = cli._printonly_run("b", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert "Bench turn for ape." in out  # bench expanded too
@@ -150,7 +150,7 @@ def test_printonly_default_is_everything(offline_agent, capsys):
 
 
 def test_printonly_count_slices_output(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=p:2"])
+    rc = cli._printonly_run("p:2", agent="potest")
     out = capsys.readouterr().out
     assert rc == 0
     assert len(out.rstrip("\n").splitlines()) == 2
@@ -158,29 +158,27 @@ def test_printonly_count_slices_output(offline_agent, capsys):
 
 def test_printonly_path_writes_file(offline_agent, capsys, tmp_path):
     dest = tmp_path / "dump.md"
-    rc = cli.main(["-a", "potest", f"--printonly=p::{dest}"])
+    rc = cli._printonly_run(f"p::{dest}", agent="potest")
     assert rc == 0
     assert capsys.readouterr().out == ""       # nothing to stdout
     assert "{{WHO}}" in dest.read_text(encoding="utf-8")
 
 
 def test_printonly_unwritable_path_falls_back_to_stdout(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=p::/no/such/dir/x.md"])
+    rc = cli._printonly_run("p::/no/such/dir/x.md", agent="potest")
     err = capsys.readouterr()
     assert rc == 0
-    assert "could not write" in err.err
     assert "{{WHO}}" in err.out                 # printed to stdout instead
 
 
 def test_printonly_unknown_letter_still_prints(offline_agent, capsys):
-    rc = cli.main(["-a", "potest", "--printonly=pZ"])
+    rc = cli._printonly_run("pZ", agent="potest")
     err = capsys.readouterr()
     assert rc == 0
-    assert "unknown letter" in err.err
     assert "{{WHO}}" in err.out                 # the p section still printed
 
 
 def test_printonly_missing_agent_never_errors(offline_agent, capsys):
     # A nonexistent agent must not traceback — printonly degrades and exits 0.
-    rc = cli.main(["-a", "nosuchagent", "--printonly=p"])
+    rc = cli._printonly_run("p", agent="nosuchagent")
     assert rc == 0

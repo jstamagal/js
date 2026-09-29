@@ -195,7 +195,7 @@ def test_deselect_all_keeps_list_models_empty_without_network(monkeypatch, capsy
     assert login_cli._run_models_edit("mine") == 0
     capsys.readouterr()
     monkeypatch.setattr(logins, "test_login", lambda *_: pytest.fail("empty curated cache must not fetch"))
-    assert cli.main(["--list-models", "mine"]) == 0
+    assert cli._print_model_list("mine", None) == 0
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == ""

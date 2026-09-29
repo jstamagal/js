@@ -12,6 +12,7 @@ from ai.providers.openai.protocol import _messages_to_openai
 from js import cli, memory, model_client, runtime
 from js.config import from_env
 from js.toolkit import ToolContext
+from repl_driver import run_blocking
 
 
 _THOUGHT = " first thought\n  keep spacing and Unicode: λ\n"
@@ -75,7 +76,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
 
 
 @pytest.mark.parametrize("mode", ["prompt", "repl"])
-def test_resume_retains_reasoning_without_rewriting_the_journal(replay, monkeypatch, mode):
+def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
     cfg, wire, _context = replay
     memory.append_message(cfg.session_file, {"role": "user", "content": "first"})
     memory.append_message(cfg.session_file, {
@@ -83,19 +84,9 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, monkeypa
     })
     original = cfg.session_file.read_bytes()
     if mode == "prompt":
-        argv = ["-p", "next"]
+        assert cli._run_prompt("next") == 0
     else:
-        class PromptSession:
-            def __init__(self, *args, **kwargs):
-                self.lines = iter(["next", "exit"])
-
-            def prompt(self, *args, **kwargs):
-                return next(self.lines)
-
-        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-        monkeypatch.setattr(cli, "PromptSession", PromptSession)
-        argv = ["--blocking"]
-    assert cli.main(argv) == 0
+        run_blocking(cfg, ["next", "exit"])
     prior = next(m for m in wire[0] if m["role"] == "assistant")
     assert prior["reasoning"] == _THOUGHT
     assert prior["content"] == "answer"

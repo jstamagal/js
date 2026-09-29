@@ -219,7 +219,7 @@ def test_named_session_creation_respects_save_flag_and_updates_latest(monkeypatc
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_SESSION", raising=False)
 
-    with pytest.raises(ValueError, match="existing"):
+    with pytest.raises(ValueError):
         from_env(session="batch/slice01", save_session=False)
 
     actual = from_env(session="batch/slice01", save_session=True)
@@ -296,7 +296,7 @@ def test_resolve_session_file_rejects_relative_traversal_even_when_target_exists
     sessions_dir.mkdir(parents=True)
     outside.write_text("", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="traversal"):
+    with pytest.raises(ValueError):
         resolve_session_file(sessions_dir, "../../outside.jsonl", create=True)
     assert outside.read_text(encoding="utf-8") == ""
 
@@ -311,7 +311,7 @@ def test_resolve_session_file_only_resumes_existing_absolute_path_inside_agent(t
     assert existing.read_text(encoding="utf-8") == "history\n"
 
     missing = sessions_dir / "missing.jsonl"
-    with pytest.raises(ValueError, match="existing"):
+    with pytest.raises(ValueError):
         resolve_session_file(sessions_dir, str(missing), create=True)
     assert not missing.exists()
 

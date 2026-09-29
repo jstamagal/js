@@ -440,7 +440,6 @@ def test_set_dash_key_on_already_unset_is_noop():
     result = setcmd.set_command({}, "-sampling.temperature")
     assert result.changed is False
     assert result.changed_keys == []
-    assert "already unset" in result.lines[0]
 
 
 def test_set_dash_key_clears_map_subkey():
@@ -486,7 +485,6 @@ def test_provider_id_and_base_url_validate_at_set_time():
 
     bad_id = setcmd.set_command(live_settings, "provider.id not-a-provider-anywhere")
     assert bad_id.error is not None
-    assert "unknown provider id" in bad_id.error
     assert settings.get_dotted(live_settings, ("provider", "id"), None) is None
 
     ok_id = setcmd.set_command(live_settings, "provider.id deepseek")

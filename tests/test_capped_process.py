@@ -68,6 +68,7 @@ def test_run_capped_stops_readers_when_grandchild_keeps_pipes_open(monkeypatch):
             created_threads.append(self)
 
     monkeypatch.setattr(capped_process.threading, "Thread", ObservedThread)
+    monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
     result = _run_capped(
         ["/bin/sh", "-c", "sleep 30 & printf '%s\\n' \"$!\""],
         timeout=5,

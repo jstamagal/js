@@ -2609,6 +2609,25 @@ def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> l
 
 
 
+def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
+    """Print one `provider/model` line per model of `provider_arg`, or of
+    every saved login when it is None. A provider whose models cannot be
+    listed gets a `#` line on stderr and the rest still print."""
+    provider_ids = _list_models_provider_ids(provider_arg, cfg)
+    if not provider_ids:
+        print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
+        return 0
+    for pid in provider_ids:
+        try:
+            model_ids = _models_cached_or_live(pid, cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        for model_id in model_ids:
+            print(f"{pid}/{model_id}" if pid else model_id)
+    return 0
+
+
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
     payload = _list_models_payload(provider_id, cfg)
     return {"models": payload["models"]}
@@ -3082,6 +3101,194 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     return 0
 
 
+def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
+                system: str | None = None, model: str | None = None,
+                live_settings: dict | None = None, tool_registry=None) -> dict:
+    """The REPL's live state for one session.
+
+    ``model`` is a --model flag value; without one the session runs on
+    ``cfg.model``. Unset arguments come from ``cfg`` and ``prompt_spec``: the
+    session file's replayed messages, the agent's system prompt, a copy of the
+    configured settings, and the configured registry narrowed to the agent's
+    tool selectors. The state's event hooks dispatch into this state."""
+    if messages is None:
+        messages = M.load_replay_messages(cfg.session_file)
+    if system is None:
+        system = prompt_spec.system
+    if live_settings is None:
+        live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
+    if tool_registry is None:
+        tool_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    event_hooks = events.EventHooks()
+    state = {
+        "running": True,
+        "messages": messages,
+        "system": system,
+        "model": model if model is not None else cfg.model,
+        # Where state["model"] came from, for the effective /set view. A --model
+        # flag never lands in the settings store, so record it here so /set can
+        # annotate `model.id = ... (live: --model flag)`.
+        "model_source": "--model flag" if model is not None else None,
+        "provider_id": cfg.provider_id,
+        "provider_base_url": cfg.provider_base_url,
+        "provider_api_key": cfg.provider_api_key,
+        "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
+        "settings": live_settings,
+        "prompt_spec": prompt_spec,
+        "events": event_hooks,
+        "tool_registry": tool_registry,
+        "tool_selectors": prompt_spec.tool_selectors,
+        "sampling_cli": cfg.sampling_cli,
+        "compact_notified": False,
+        "compact_consecutive": 0,
+        "compact_incomplete_consecutive": 0,
+        "compact_paused": False,
+    }
+    event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
+    return state
+
+
+def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
+    """The --blocking REPL: read a line from ``session``, run it as a command
+    or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
+    mcp_loop = asyncio.Runner()
+    interrupt_armed = False
+    while state["running"]:
+        try:
+            line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
+            interrupt_armed = False
+        except KeyboardInterrupt:
+            # One stray ^C at the prompt should not end a session that took real
+            # work to build; the second one within the same idle stretch does.
+            if not interrupt_armed:
+                interrupt_armed = True
+                print(f"\n{C.GREY}(press ^C again to exit){C.RESET}")
+                continue
+            print()
+            break
+        except EOFError:
+            print()
+            break
+        if not line:
+            continue
+        if _handle_command(line, state, cfg):
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            continue
+        if (sink := _transcript_sink(telemetry)) is not None:
+            sink.write_user(line)
+
+        prompt_text, line_attachments = attach.split_repl_attachments(line)
+        _emit_repl_event(
+            state,
+            telemetry,
+            "input",
+            text=prompt_text,
+            attachments=line_attachments,
+        )
+        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        try:
+            prompt_text = _expand_skill_line(prompt_text)
+            turn_cfg = _cfg_for_live_state(cfg, state)
+            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+        except ValueError as e:
+            # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
+            # routing error from re-resolving the live model: degrade to one friendly
+            # line, keep the REPL.
+            print(f"{C.ORANGE}error: {e}{C.RESET}")
+            continue
+
+        state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+        before_len = len(state["messages"])
+        state["messages"].append(user_bundle.runtime_message)
+        _append_turn(cfg, user_bundle.history_message)
+        try:
+            before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+            before_turn_model = _model_from_live_settings(state["settings"])
+            before_turn_provider = _provider_from_live_settings(state["settings"])
+            before_turn_lock = _live_bool_setting(
+                state["settings"],
+                ("subagents", "lock_model"),
+                cfg.lock_subagent_model,
+            )
+            runtime.run_turn(
+                turn_cfg,
+                state["system"],
+                state["messages"],
+                telemetry,
+                trace_override=bool(
+                    settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+                ),
+                reasoning_effort_override=turn_cfg.reasoning_effort,
+                max_output_override=turn_cfg.max_output_tokens,
+                tool_registry=state["tool_registry"],
+                sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+                event_hooks=state.get("events"),
+                mcp_host=state.get("mcp_host"),
+                loop_runner=mcp_loop,
+            )
+            after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
+            if after_turn_sampling != before_turn_sampling:
+                state["sampling_cli"] = after_turn_sampling
+            after_turn_model = _model_from_live_settings(state["settings"])
+            if after_turn_model != before_turn_model:
+                _sync_model_from_live_settings(state)
+            after_turn_provider = _provider_from_live_settings(state["settings"])
+            _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+            after_turn_lock = _live_bool_setting(
+                state["settings"],
+                ("subagents", "lock_model"),
+                cfg.lock_subagent_model,
+            )
+            if after_turn_lock != before_turn_lock:
+                _sync_tool_registry_from_live_settings(cfg, state)
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            _replace_runtime_user_message(
+                state["messages"],
+                user_bundle.runtime_message,
+                user_bundle.history_message,
+                before_len,
+            )
+            _persist_turn_messages(cfg, state["messages"])
+            _maybe_auto_compact(turn_cfg, state)
+        except KeyboardInterrupt:
+            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
+            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+                # Turn did real work (assistant/tool messages beyond the user
+                # prompt) before ^C landed. Keep it: persist the partial turn,
+                # then heal any orphaned tool_calls in memory so the next turn is
+                # valid. The mark is informational ONLY — a `rollback_to:` mark
+                # would silently re-truncate this turn on the next session load.
+                print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
+                _replace_runtime_user_message(
+                    state["messages"],
+                    user_bundle.runtime_message,
+                    user_bundle.history_message,
+                    before_len,
+                )
+                _persist_turn_messages(cfg, state["messages"])
+                M.append_mark(cfg.session_file, "turn_interrupted")
+                state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+            else:
+                # Stopped before the model produced anything worth keeping — drop
+                # the bare user prompt (rollback removes it on reload too).
+                print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
+                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                M.append_mark(cfg.session_file, "turn_aborted")
+        except Exception as e:  # noqa: BLE001
+            print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
+            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+                _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
+                                              user_bundle.history_message, before_len)
+                _persist_turn_messages(cfg, state["messages"])
+            else:
+                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
+    mcp_loop.run(_close_session_mcp_host(state))
+    model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
+    mcp_loop.close()
+
+
 # --------------------------------------------------------------------------
 # --printonly: dry-run dump of what would be sent to the model. NEVER errors —
 # every step degrades to a warning and keeps going (that is the whole point).
@@ -3142,14 +3349,16 @@ def _raw_configured_spec(cfg):
     return P.load_prompt_spec(cfg.prompts_dir)
 
 
-def _printonly_run(args, cli_agent, presets) -> int:
-    letters, count, path = _printonly_slots(args.printonly)
+def _printonly_run(spec: str, *, agent: str | None = None, session: str | None = None,
+                   extras: list[str] | None = None, ignore_local_config: bool = False,
+                   ignore_global_config: bool = False, presets: list[str] | None = None) -> int:
+    letters, count, path = _printonly_slots(spec)
     sections = _printonly_letters(letters)
 
     try:
         cfg = _cfg_from_env_compat(
-            args.session, save_session=False, extras=args.extras, agent_id=cli_agent,
-            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            session, save_session=False, extras=extras, agent_id=agent,
+            ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
             presets=presets,
         )
     except Exception as e:  # noqa: BLE001 — printonly never errors
@@ -3431,19 +3640,7 @@ def main(argv: list[str] | None = None) -> int:
                     ignore_local_config=args.ignore_local,
                     ignore_global_config=args.ignore_global,
                 )
-            provider_ids = _list_models_provider_ids(provider_arg, cfg)
-            if not provider_ids:
-                print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
-                return 0
-            for pid in provider_ids:
-                try:
-                    model_ids = _models_cached_or_live(pid, cfg)
-                except Exception as e:  # noqa: BLE001
-                    print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
-                    continue
-                for model_id in model_ids:
-                    print(f"{pid}/{model_id}" if pid else model_id)
-            return 0
+            return _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
             return 1
@@ -3478,7 +3675,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.printonly is not None:
-        return _printonly_run(args, cli_agent, presets)
+        return _printonly_run(
+            args.printonly, agent=cli_agent, session=args.session, extras=args.extras,
+            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            presets=presets,
+        )
 
     selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
@@ -3668,32 +3869,14 @@ def main(argv: list[str] | None = None) -> int:
         # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
-    event_hooks = events.EventHooks()
-    state = {
-        "running": True,
-        "messages": messages,
-        "system": system,
-        "model": args.model if args.model is not None else cfg.model,
-        # Where state["model"] came from, for the effective /set view. A --model
-        # flag never lands in the settings store, so record it here so /set can
-        # annotate `model.id = ... (live: --model flag)`.
-        "model_source": "--model flag" if args.model is not None else None,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
-        "settings": live_settings,
-        "prompt_spec": prompt_spec,
-        "events": event_hooks,
-        "tool_registry": active_registry,
-        "tool_selectors": prompt_spec.tool_selectors,
-        "sampling_cli": cfg.sampling_cli,
-        "compact_notified": False,
-        "compact_consecutive": 0,
-        "compact_incomplete_consecutive": 0,
-        "compact_paused": False,
-    }
-    event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
+    state = _repl_state(
+        cfg, prompt_spec,
+        messages=messages,
+        system=system,
+        model=args.model,
+        live_settings=live_settings,
+        tool_registry=active_registry,
+    )
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.ignore_local,
@@ -3712,153 +3895,18 @@ def main(argv: list[str] | None = None) -> int:
     ])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
-    if args.blocking:
-        print(banner)
-    else:
+    if not args.blocking:
         try:
             return model_client.run_owning_loop(
                 _repl_main(cfg, state, telemetry, session, prompt_spec, banner)
             )
         finally:
             transcript_stack.close()
-
-    mcp_loop = asyncio.Runner()
-    interrupt_armed = False
-    while state["running"]:
-        try:
-            line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
-            interrupt_armed = False
-        except KeyboardInterrupt:
-            # One stray ^C at the prompt should not end a session that took real
-            # work to build; the second one within the same idle stretch does.
-            if not interrupt_armed:
-                interrupt_armed = True
-                print(f"\n{C.GREY}(press ^C again to exit){C.RESET}")
-                continue
-            print()
-            break
-        except EOFError:
-            print()
-            break
-        if not line:
-            continue
-        if _handle_command(line, state, cfg):
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            continue
-        if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(line)
-
-        prompt_text, line_attachments = attach.split_repl_attachments(line)
-        _emit_repl_event(
-            state,
-            telemetry,
-            "input",
-            text=prompt_text,
-            attachments=line_attachments,
-        )
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        try:
-            prompt_text = _expand_skill_line(prompt_text)
-            turn_cfg = _cfg_for_live_state(cfg, state)
-            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-        except ValueError as e:
-            # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
-            # routing error from re-resolving the live model: degrade to one friendly
-            # line, keep the REPL.
-            print(f"{C.ORANGE}error: {e}{C.RESET}")
-            continue
-
-        state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-        before_len = len(state["messages"])
-        state["messages"].append(user_bundle.runtime_message)
-        _append_turn(cfg, user_bundle.history_message)
-        try:
-            before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-            before_turn_model = _model_from_live_settings(state["settings"])
-            before_turn_provider = _provider_from_live_settings(state["settings"])
-            before_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("subagents", "lock_model"),
-                cfg.lock_subagent_model,
-            )
-            runtime.run_turn(
-                turn_cfg,
-                state["system"],
-                state["messages"],
-                telemetry,
-                trace_override=bool(
-                    settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
-                ),
-                reasoning_effort_override=turn_cfg.reasoning_effort,
-                max_output_override=turn_cfg.max_output_tokens,
-                tool_registry=state["tool_registry"],
-                sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
-                event_hooks=state.get("events"),
-                mcp_host=state.get("mcp_host"),
-                loop_runner=mcp_loop,
-            )
-            after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-            if after_turn_sampling != before_turn_sampling:
-                state["sampling_cli"] = after_turn_sampling
-            after_turn_model = _model_from_live_settings(state["settings"])
-            if after_turn_model != before_turn_model:
-                _sync_model_from_live_settings(state)
-            after_turn_provider = _provider_from_live_settings(state["settings"])
-            _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
-            after_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("subagents", "lock_model"),
-                cfg.lock_subagent_model,
-            )
-            if after_turn_lock != before_turn_lock:
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            _replace_runtime_user_message(
-                state["messages"],
-                user_bundle.runtime_message,
-                user_bundle.history_message,
-                before_len,
-            )
-            _persist_turn_messages(cfg, state["messages"])
-            _maybe_auto_compact(turn_cfg, state)
-        except KeyboardInterrupt:
-            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-                # Turn did real work (assistant/tool messages beyond the user
-                # prompt) before ^C landed. Keep it: persist the partial turn,
-                # then heal any orphaned tool_calls in memory so the next turn is
-                # valid. The mark is informational ONLY — a `rollback_to:` mark
-                # would silently re-truncate this turn on the next session load.
-                print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-                _replace_runtime_user_message(
-                    state["messages"],
-                    user_bundle.runtime_message,
-                    user_bundle.history_message,
-                    before_len,
-                )
-                _persist_turn_messages(cfg, state["messages"])
-                M.append_mark(cfg.session_file, "turn_interrupted")
-                state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-            else:
-                # Stopped before the model produced anything worth keeping — drop
-                # the bare user prompt (rollback removes it on reload too).
-                print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-                M.append_mark(cfg.session_file, "turn_aborted")
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-                _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
-                                              user_bundle.history_message, before_len)
-                _persist_turn_messages(cfg, state["messages"])
-            else:
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-            M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
-    mcp_loop.run(_close_session_mcp_host(state))
-    model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
-    mcp_loop.close()
-    transcript_stack.close()
+    print(banner)
+    try:
+        _blocking_repl(cfg, state, telemetry, session, prompt_spec)
+    finally:
+        transcript_stack.close()
     _print_resume_hint(cfg, state)
     return 0
 if __name__ == "__main__":

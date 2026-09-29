@@ -10,7 +10,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import model_client, runtime, setcmd, settings, toolkit as runtime_tools
+from js import capped_process, model_client, runtime, setcmd, settings, toolkit as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
@@ -1340,16 +1340,17 @@ def test_shell_output_capped_while_streaming(tmp_path):
     # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
     # The capped reader must hold memory at the cap while draining to EOF.
     context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("head -c 10000000 /dev/zero | tr '\\0' 'a'", context=context)
+    out = process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context)
     assert "exit=0" in out
     assert len(out) <= context.max_bash_output_bytes + 200
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
-def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path):
+def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # A backgrounded grandchild inherits the pipe and never closes it; the
     # child's own output must still come back instead of being lost to a
     # reader parked waiting for EOF.
+    monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out

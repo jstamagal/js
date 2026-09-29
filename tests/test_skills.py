@@ -147,9 +147,7 @@ def test_project_beats_global_beats_package_and_native_beats_agents_with_warning
     assert catalog.lookup("same").source == "project"
     assert catalog.lookup("same").path == winning_path
     assert catalog.load("same") == "project"
-    warnings = capsys.readouterr().err
-    assert "shadows" in warnings
-    assert str(shadowed) in warnings
+    assert str(shadowed) in capsys.readouterr().err
 
 
 def test_metadata_is_derived_and_bounded(tmp_path):
@@ -163,6 +161,10 @@ def test_metadata_is_derived_and_bounded(tmp_path):
     assert metadata is not None
     assert metadata.description.startswith("word word")
     assert len(metadata.description) == 500
+
+
+def _listed_once(lines, text):
+    return sum(text in line for line in lines) == 1
 
 
 def test_catalog_skips_each_malformed_skill_and_warns_with_its_path(tmp_path, capsys):
@@ -184,10 +186,10 @@ def test_catalog_skips_each_malformed_skill_and_warns_with_its_path(tmp_path, ca
     catalog = _catalog(project, package, global_dir)
 
     assert {skill.name for skill in catalog.skills} == {"duplicate", "valid"}
-    warnings = capsys.readouterr().err
+    warnings = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
+    assert len(warnings) == len(malformed)
     for dirname in malformed:
-        assert str(package / dirname / "SKILL.md") in warnings
-    assert warnings.count("WARNING: skipping malformed skill") == len(malformed)
+        assert _listed_once(warnings, str(package / dirname / "SKILL.md"))
 
 
 def test_frontmatter_closing_delimiter_is_found_beyond_metadata_prefix(tmp_path):

@@ -391,6 +391,23 @@ def test_state_survives_between_calls_and_the_namespace_line_lists_it(ctx):
 
 
 @needs_kernel
+def test_the_kernel_listens_on_unix_sockets_that_shutdown_removes(ctx):
+    """TCP ports are handed out racily between processes; the kernel's
+    sockets live in a private directory instead, one per session."""
+    assert "42" in kmod.kernel(code="6 * 7", context=ctx)
+    session = ctx.kernel_session
+    socket_dir = session.socket_dir
+    connection = json.loads(Path(session.manager.connection_file).read_text(encoding="utf-8"))
+
+    assert connection["transport"] == "ipc"
+    assert Path(connection["ip"]).parent == socket_dir
+    assert socket_dir.stat().st_mode & 0o077 == 0
+
+    session.shutdown()
+    assert not socket_dir.exists()
+
+
+@needs_kernel
 def test_cells_run_in_the_interpreter_running_js(ctx):
     import sys
 
@@ -421,15 +438,14 @@ def test_waiting_on_the_kernels_own_loop_never_completes_but_await_does(ctx):
     itself is the defect rather than anything slow: the thread that would run
     the coroutine is the one the cell blocked. `await` runs the same coroutine.
     """
-    ctx.kernel_wait_seconds = 1
-    kmod.kernel(code=(
+    ctx.kernel_wait_seconds = 30
+    blocked = kmod.kernel(code=(
         "import asyncio\n"
         "loop = asyncio.get_running_loop()\n"
         "async def q():\n"
         "    return 7\n"
-        "print(asyncio.run_coroutine_threadsafe(q(), loop).result(timeout=3))\n"
+        "print(asyncio.run_coroutine_threadsafe(q(), loop).result(timeout=0.3))\n"
     ), context=ctx)
-    blocked = kmod.kernel(action="wait", timeout=30, context=ctx)
     awaited = kmod.kernel(code="print(await q())", context=ctx)
 
     assert "TimeoutError" in blocked
@@ -439,7 +455,7 @@ def test_waiting_on_the_kernels_own_loop_never_completes_but_await_does(ctx):
 @needs_kernel
 def test_a_cell_blocked_on_the_kernels_own_loop_returns_a_handle_and_recovers(ctx):
     """The #101 wedge shape: a sync wrapper waiting on this kernel's own loop."""
-    ctx.kernel_wait_seconds = 1
+    ctx.kernel_wait_seconds = 0.2
     kmod.kernel(code=(
         "import asyncio\n"
         "def blocked():\n"
@@ -521,14 +537,14 @@ def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
 @needs_kernel
 def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
     kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
-    ctx.kernel_wait_seconds = 1
+    ctx.kernel_wait_seconds = 0.2
     kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
 
     started = time.monotonic()
-    result = kmod.kernel(action="wait", timeout=1, context=ctx)
+    result = kmod.kernel(action="wait", timeout=0.5, context=ctx)
     elapsed = time.monotonic() - started
 
-    assert result.startswith("INTERRUPTED after 1s.")
+    assert result.startswith("INTERRUPTED after 0.5s.")
     assert "KeyboardInterrupt" in result
     assert elapsed < 30
     assert result.splitlines()[-1].startswith("NAMESPACE ")
@@ -537,7 +553,7 @@ def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intac
 
 @needs_kernel
 def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx):
-    ctx.kernel_wait_seconds = 1
+    ctx.kernel_wait_seconds = 0.2
 
     started = time.monotonic()
     result = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
@@ -546,7 +562,7 @@ def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx)
     handle = result.splitlines()[-1].removeprefix("HANDLE ").removesuffix(" RUNNING")
     assert elapsed < 20
     assert "still running" in result
-    assert f"cell 1 is still running after 1.0s (handle {handle})." in result
+    assert f"cell 1 is still running after 0.2s (handle {handle})." in result
     assert f"HANDLE {handle} RUNNING" in kmod.kernel(action="poll", context=ctx)
 
     stopped = kmod.kernel(action="interrupt", context=ctx)
@@ -558,7 +574,7 @@ def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx)
 
 @needs_kernel
 def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
-    ctx.kernel_wait_seconds = 1
+    ctx.kernel_wait_seconds = 0.2
     first = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
     assert "still running" in first
 
@@ -571,15 +587,26 @@ def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
 
 @needs_kernel
 def test_output_a_cell_produces_after_the_call_returned_arrives_on_the_next_poll(ctx):
-    ctx.kernel_wait_seconds = 1
-    kmod.kernel(code="import time\ntime.sleep(1.5)\nprint('late output')", context=ctx)
-    time.sleep(2)
+    # The cell prints only once the test opens the gate, after the call returned.
+    ctx.kernel_wait_seconds = 0.2
+    first = kmod.kernel(code=(
+        "import os, time\n"
+        "while not os.path.exists('gate'):\n"
+        "    time.sleep(0.01)\n"
+        "print('late output')"
+    ), context=ctx)
+    assert first.splitlines()[-1].endswith(" RUNNING")
+    (Path(ctx.cwd) / "gate").touch()
 
-    polled = kmod.kernel(action="poll", context=ctx)
+    polls: list[str] = []
+    deadline = time.monotonic() + 30
+    while not polls or polls[-1].splitlines()[-1].endswith(" RUNNING"):
+        assert time.monotonic() < deadline, polls
+        polls.append(kmod.kernel(action="poll", context=ctx))
 
-    assert "late output" in polled
-    assert "finished" in polled
-    assert polled.splitlines()[-1].startswith("NAMESPACE ")
+    assert "late output" in "\n".join(polls)
+    assert "finished" in polls[-1]
+    assert polls[-1].splitlines()[-1].startswith("NAMESPACE ")
 
 
 @needs_kernel
@@ -612,15 +639,21 @@ def test_a_cell_abandoned_by_a_cancelled_turn_leaves_the_kernel_idle(ctx):
 def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx):
     """The cancel path can signal a cell that is sent but not yet executing.
 
-    The first cell ignores SIGINT while it runs, so the signal lands before the
-    kernel starts the second cell, the one the interrupt was meant for.
+    The first cell ignores SIGINT and runs until the test opens its gate, after
+    the interrupt was sent, so the signal lands before the kernel starts the
+    second cell, the one the interrupt was meant for.
+
+    A resent SIGINT that lands after the kernel announces the cell but before
+    its code runs is caught by ipykernel itself, and the cell is dropped with
+    no error message. Either way the 30-second cell stops.
     """
     kmod.kernel(code="x = 1", context=ctx)
     session = ctx.kernel_session
-    blocker = session.submit("import signal, time\n"
+    blocker = session.submit("import os, signal, time\n"
                              "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
                              "print('ignoring', flush=True)\n"
-                             "time.sleep(3)")
+                             "while not os.path.exists('gate'):\n"
+                             "    time.sleep(0.01)")
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline and not any(
             m["header"]["msg_type"] == "stream" for m in blocker.messages):
@@ -629,14 +662,14 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     target = session.submit("import time\ntime.sleep(30)")
 
     assert kmod.interrupt_inflight(ctx) is True
+    (Path(ctx.cwd) / "gate").touch()
 
     started = time.monotonic()
     kmod.collect_until(session, target, started + 20)
     assert target.finished
     assert time.monotonic() - started < 15
-    assert any(m["header"]["msg_type"] == "error"
-               and m["content"].get("ename") == "KeyboardInterrupt"
-               for m in target.messages)
+    assert all(m["content"].get("ename") == "KeyboardInterrupt"
+               for m in target.messages if m["header"]["msg_type"] == "error")
 
 
 @needs_kernel
@@ -682,14 +715,22 @@ def test_image_output_lands_in_an_artifact_file_named_in_the_result(ctx):
 
 
 @needs_kernel
-def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx, monkeypatch):
+def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx, monkeypatch, tmp_path):
+    # An IPython startup file writes to the kernel process's stderr while the
+    # kernel boots, outside any cell.
+    ipython_dir = tmp_path / "ipython"
+    startup = ipython_dir / "profile_default" / "startup"
+    startup.mkdir(parents=True)
+    (startup / "00-mark.py").write_text("import os\nos.write(2, b'KERNEL-BOOT-MARK\\n')\n", encoding="utf-8")
+    monkeypatch.setenv("IPYTHONDIR", str(ipython_dir))
+
     _result, screen = stderr_of(monkeypatch, lambda: kmod.kernel(
         code="1 + 1", verbosity="verbose", context=ctx))
 
     log = ctx.kernel_session.log_path.read_text(encoding="utf-8")
     assert ctx.kernel_session.log_path.parent.parent == paths.kernel_state_root()
-    assert "IPKernelApp" in log
-    assert "IPKernelApp" not in screen
+    assert "KERNEL-BOOT-MARK" in log
+    assert "KERNEL-BOOT-MARK" not in screen
 
 
 @needs_kernel

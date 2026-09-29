@@ -9,7 +9,6 @@ message after it. /flush drops pending lines without touching the turn.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import threading
 
 import ai
@@ -17,12 +16,13 @@ import ai.types.usage
 from ai.providers import history_utils
 
 from js import cli, runtime, settings
-from js.config import Config
+from js.config import Config, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
+from repl_driver import run_async
 
 
 def _text(text: str) -> ModelStreamResult:
@@ -178,36 +178,17 @@ class _Harness:
         monkeypatch.delenv("JS_AGENT", raising=False)
         monkeypatch.delenv("JS_SESSION", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-        monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
         monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_with_hold)
         monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
         self.monkeypatch = monkeypatch
 
     def run(self, script) -> None:
-        harness = self
+        async def run_script(on_line):
+            self.text_gate = asyncio.Event()
+            self.text_gate_entered = asyncio.Event()
+            await script(on_line, self)
 
-        class AppStub:
-            def __init__(self, on_line, on_eof):
-                self.on_line, self.on_eof = on_line, on_eof
-
-            async def run_async(self):
-                harness.text_gate = asyncio.Event()
-                harness.text_gate_entered = asyncio.Event()
-                await script(self.on_line, harness)
-                self.on_eof()
-
-            def exit(self):
-                pass
-
-            def invalidate(self):
-                pass
-
-        self.monkeypatch.setattr(
-            cli.screen, "build_app",
-            lambda *, on_line, on_eof, **_: (AppStub(on_line, on_eof), cli.screen.Scrollback()),
-        )
-        assert cli.main([]) == 0
+        run_async(self.monkeypatch, from_env(), run_script)
 
     async def wait_hold(self) -> None:
         while not self.hold_started.is_set():

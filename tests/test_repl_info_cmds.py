@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 from js import cli
@@ -30,7 +32,7 @@ def make_cfg(tmp_path: Path) -> Config:
 
 
 def test_turns_command_prints_message_count(tmp_path, capsys):
-    # /turns -> cli.py:588-590, prints len(state["messages"]).
+    # /turns prints len(state["messages"]).
     cfg = make_cfg(tmp_path)
     state = {
         "messages": [
@@ -44,11 +46,11 @@ def test_turns_command_prints_message_count(tmp_path, capsys):
 
     assert handled is True
     out = capsys.readouterr().out
-    assert "3 messages in context" in out
+    assert re.search(r"(?<!\d)3(?!\d)", out)
 
 
 def test_persona_command_prints_system_prompt(tmp_path, capsys):
-    # /persona -> cli.py:582-587, prints state["system"][:2048].
+    # /persona prints state["system"][:2048].
     cfg = make_cfg(tmp_path)
     state = {"messages": [], "system": "YOU ARE A HELPFUL APE"}
 
@@ -56,14 +58,13 @@ def test_persona_command_prints_system_prompt(tmp_path, capsys):
 
     assert handled is True
     out = capsys.readouterr().out
-    assert "YOU ARE A HELPFUL APE" in out
-    # short prompt -> no truncation note.
-    assert "truncated" not in out
+    # short prompt -> the prompt and nothing after it.
+    assert out == "YOU ARE A HELPFUL APE\n"
 
 
 def test_persona_command_truncates_at_2048_bytes_with_note(tmp_path, capsys):
     # state["system"] longer than 2048 -> only first 2048 printed + a note that
-    # carries the FULL byte length (cli.py:584-586).
+    # carries the FULL byte length.
     cfg = make_cfg(tmp_path)
     full = "A" * 2048 + "TAIL_THAT_MUST_NOT_PRINT"
     state = {"messages": [], "system": full}
@@ -74,8 +75,7 @@ def test_persona_command_truncates_at_2048_bytes_with_note(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "A" * 2048 in out
     assert "TAIL_THAT_MUST_NOT_PRINT" not in out
-    assert "truncated" in out
-    assert str(len(full)) in out
+    assert str(len(full)) in out  # the note names the full length
 
 
 def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, capsys):
@@ -88,12 +88,11 @@ def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, ca
 
     assert handled is True
     out = capsys.readouterr().out
-    assert "B" * 2048 in out
-    assert "truncated" not in out
+    assert out == "B" * 2048 + "\n"
 
 
 def test_session_command_prints_session_file_path(tmp_path, capsys):
-    # /session -> cli.py:591-593, prints cfg.session_file.
+    # /session prints cfg.session_file.
     cfg = make_cfg(tmp_path)
     state = {"messages": []}
 

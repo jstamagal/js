@@ -12,6 +12,11 @@ import time
 from dataclasses import dataclass
 
 
+# After the process exits, how long its reader threads get to drain the pipes
+# before a reader still blocked (a grandchild holding the pipe) is stopped.
+READER_GRACE_S = 2.0
+
+
 @dataclass(frozen=True)
 class CappedProcessResult:
     returncode: int
@@ -119,7 +124,7 @@ class CappedProcess:
         return self._captures["stdout"].snapshot()[0], self._captures["stderr"].snapshot()[0]
 
     def _finish_readers(self) -> None:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + READER_GRACE_S
         for thread in self._threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in self._threads):

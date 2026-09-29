@@ -144,7 +144,7 @@ async def wire(mode):
     owner = SimpleNamespace(mode=mode, calls=0, summary_calls=0, requests=[])
     server = ThreadingHTTPServer(("127.0.0.1", 0), Server)
     server.owner = owner
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
     cfg = cfg_for("wire_" + mode, context_window=128000, tail_tokens=100)
     cfg = replace(cfg, provider_base_url=f"http://127.0.0.1:{server.server_port}/v1")

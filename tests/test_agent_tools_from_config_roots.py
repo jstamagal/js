@@ -49,7 +49,7 @@ def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):
 
     cli._registry_for(_cfg((root,))).select(["triage:lazy"])
 
-    assert "matched no tool" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 def test_locked_subagent_model_still_sees_config_agents(tmp_path):
@@ -115,7 +115,8 @@ def test_agent_shadowing_a_builtin_tool_name_warns(tmp_path, capsys):
     registry = registry_for_roots((root,))
 
     assert registry.resolve("read").name == "read"
-    assert "shadows a builtin tool name" in capsys.readouterr().err
+    warning = capsys.readouterr().err
+    assert "read" in warning and str(root) in warning
 
 
 def test_directory_without_markdown_or_agent_yaml_is_not_an_agent(tmp_path):

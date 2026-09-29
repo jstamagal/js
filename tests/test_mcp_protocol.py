@@ -302,7 +302,7 @@ def test_notification_handlers_can_request_without_blocking_reader_and_stay_orde
         await asyncio.wait_for(completed.wait(), 1)
         assert seen == [("start", 1), ("result", 1), ("start", 2), ("result", 2)]
         assert not peer.closed
-        assert "MCP notification handler failed" in caplog.text
+        assert "callback broke" in caplog.text
         await peer.close()
 
     asyncio.run(drive())

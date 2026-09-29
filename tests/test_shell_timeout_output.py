@@ -6,14 +6,49 @@ printed so far plus a handle, and comes back for the rest.
 """
 from __future__ import annotations
 
+import time
+
 from js.toolkit import ToolContext
+from js.toolkit import process_net
 from js.toolkit.process_net import shell
 
 
-def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path):
+def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
+    """Hold a started command's first wait until ``marker`` is captured.
+
+    The wait window then opens after the command has printed ``marker``, so
+    "printed before the window closed" holds however slowly the shell starts.
+    """
+    real_start = process_net.start_capped
+
+    def start(*args, **kwargs):
+        process = real_start(*args, **kwargs)
+        real_wait = process.wait
+
+        def wait(timeout):
+            deadline = time.monotonic() + 30
+            while marker not in process.snapshot()[0]:
+                assert time.monotonic() < deadline, "the command never printed its marker"
+                time.sleep(0.01)
+            process.wait = real_wait
+            return real_wait(timeout)
+
+        process.wait = wait
+        return process
+
+    monkeypatch.setattr(process_net, "start_capped", start)
+
+
+def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path, monkeypatch):
+    # The command blocks until the test opens the gate, so it cannot finish
+    # inside the wait window.
+    hold_first_wait_until_printed(monkeypatch, b"IMPORTANT_PROGRESS_LINE")
+    gate = tmp_path / "gate"
     context = ToolContext(cwd=tmp_path)
     result = shell(
-        "printf 'IMPORTANT_PROGRESS_LINE\\n'; sleep 3; printf 'LATE_LINE\\n'; exit 7",
+        "printf 'IMPORTANT_PROGRESS_LINE\\n'; "
+        "while [ ! -e gate ]; do sleep 0.01; done; "
+        "printf 'LATE_LINE\\n'; exit 7",
         timeout=1,
         context=context,
     )
@@ -22,14 +57,16 @@ def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path
     assert "LATE_LINE" not in result
     handle = result.split("handle ", 1)[1].split(",", 1)[0]
 
-    finished = shell(action="wait", handle=handle, timeout=10, context=context)
+    gate.touch()
+    finished = shell(action="wait", handle=handle, timeout=30, context=context)
     assert "exit=7" in finished
     assert "LATE_LINE" in finished
     # Already-delivered output is not repeated on the follow-up.
     assert "IMPORTANT_PROGRESS_LINE" not in finished
 
 
-def test_poll_returns_new_output_without_blocking(tmp_path):
+def test_poll_returns_new_output_without_blocking(tmp_path, monkeypatch):
+    hold_first_wait_until_printed(monkeypatch, b"one")
     context = ToolContext(cwd=tmp_path)
     started = shell("printf 'one\\n'; sleep 30", timeout=1, context=context)
     handle = started.split("handle ", 1)[1].split(",", 1)[0]
