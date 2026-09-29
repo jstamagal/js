@@ -51,6 +51,7 @@ from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scop
                            call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnConvo
+from .turn_surface import SurfaceJournal
 
 
 _UNSET = object()
@@ -1434,20 +1435,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
-    surface_file = getattr(cfg, "session_file", None)
-    if surface_file is not None and Path(surface_file).resolve() == Path(os.devnull):
-        surface_file = None
-    surface_scope = {"version": 1, "agent_id": cfg.agent_id, "cwd": str(active_context.cwd.resolve())}
-    prior_surface = memory.load_tool_surface(surface_file) if surface_file is not None else None
-    last_surface = active_registry.snapshot()
-
-    def save_surface(state: dict) -> None:
-        nonlocal last_surface
-        if state != last_surface:
-            if surface_file is not None:
-                memory.append_tool_surface(surface_file, {**surface_scope, **state})
-            last_surface = state
-
+    surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
+                             cwd=active_context.cwd, registry=active_registry)
     active_context.tool_registry = active_registry
     active_context.agent_id = cfg.agent_id
     active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
@@ -1879,10 +1868,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         on_call=_on_usage,
     ))
     try:
-        if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
-            await active_registry.restore(prior_surface)
-        last_surface = active_registry.snapshot()
-        active_registry.on_change = save_surface
+        await surface.restore()
         opening = _last_user_message_index(messages)
         user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
         note_skill_loaded = getattr(active_registry, "note_skill_loaded", None)
