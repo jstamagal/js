@@ -52,7 +52,8 @@ from .. import jail
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
-from .core import Tool, ToolContext
+from . import kernel_bridge
+from .core import Tool, ToolContext, current_registry
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
@@ -66,11 +67,11 @@ MISSING_DEPS = (
     "then; every other tool is unaffected."
 )
 
-# Names IPython puts in the user namespace itself. Reporting these as things the
-# agent built would bury the two functions it actually wrote under a dozen REPL
-# artifacts.
+# Names IPython and js put in the user namespace themselves (`tools` is the js
+# tool bridge). Reporting these as things the agent built would bury the two
+# functions it actually wrote under a dozen REPL artifacts.
 _IPYTHON_NOISE = frozenset({
-    "In", "Out", "get_ipython", "exit", "quit", "open",
+    "In", "Out", "get_ipython", "exit", "quit", "open", "tools",
 })
 
 # Probes run with store_history=False so they never land in `In` and never
@@ -362,6 +363,8 @@ class KernelSession:
     visible_names: set[str] = field(default_factory=set)
     log_handle: Any = None
     socket_dir: Path | None = None
+    # Serves the `tools.<name>(...)` calls cells make; its socket is in socket_dir.
+    bridge: kernel_bridge.ToolBridge | None = None
     # Under `js -C` the kernel runs in the jail with these binds and only the
     # allowlisted environment names; taken from the ToolContext that started it.
     jail_bind: tuple[str, ...] = ()
@@ -388,6 +391,7 @@ class KernelSession:
         # temp dir rather than the artifacts dir because a socket path is
         # limited to about 100 bytes.
         self.socket_dir = Path(tempfile.mkdtemp(prefix="js-kernel-"))
+        self.bridge = kernel_bridge.ToolBridge(self.socket_dir / "tools.sock")
         self.manager = KernelManager(
             kernel_name="python3",
             transport="ipc",
@@ -402,6 +406,19 @@ class KernelSession:
         self.client.start_channels()
         self.client.wait_for_ready(timeout=60)
         _LIVE_SESSIONS.add(self)
+        self.install_tools()
+
+    def install_tools(self) -> None:
+        """Bind `tools` in the kernel's namespace, pointed at this session's bridge.
+        A failure goes to the kernel log; the kernel runs on without `tools`."""
+        if self.bridge is None:
+            return
+        cell = kernel_bridge.install_cell(self.bridge.socket_path, self.bridge.token)
+        result = run_cell(self, cell, timeout=60, store_history=False)
+        problem = result.error or ("timed out" if result.timed_out else "")
+        if problem and self.log_handle is not None:
+            self.log_handle.write(f"js: could not bind `tools` in the kernel: {problem}\n".encode())
+            self.log_handle.flush()
 
     def _jail_kernel_command(self) -> dict[str, str]:
         """Make the manager launch (and relaunch) the kernel in the jail, and
@@ -429,6 +446,9 @@ class KernelSession:
                 self.manager.shutdown_kernel(now=True)
         except Exception:  # noqa: BLE001 - teardown must never raise into a tool result
             pass
+        if self.bridge is not None:
+            self.bridge.close()
+            self.bridge = None
         if self.log_handle is not None:
             try:
                 self.log_handle.close()
@@ -458,6 +478,7 @@ class KernelSession:
         # IPython's own `In[n]` counter restarts too. Letting ours run on would
         # print "kernel cell 9" beside a traceback that says "Cell In[1]".
         self.executions = 0
+        self.install_tools()
 
     def submit(self, code: str, *, store_history: bool = True, label: str = "") -> CellHandle:
         """Send one cell and return its handle. Does not wait for the cell."""
@@ -536,6 +557,7 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
         return None, problem, False
     session = getattr(context, "kernel_session", None)
     if session is not None and session.alive():
+        _attach_tools(session, context)
         return session, "", False
     artifacts = paths.kernel_state_root() / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts,
@@ -547,7 +569,16 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
         session.shutdown()
         return None, f"ERROR: could not start the IPython kernel: {type(exc).__name__}: {exc}", False
     context.kernel_session = session
+    _attach_tools(session, context)
     return session, "", True
+
+
+def _attach_tools(session: KernelSession, context: Any) -> None:
+    """Point the session's tool bridge at the registry and context of the
+    running call, so cells call tools as the agent running them."""
+    bridge = getattr(session, "bridge", None)
+    if bridge is not None:
+        bridge.attach(current_registry(), context)
 
 
 # --------------------------------------------------------------------------

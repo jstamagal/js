@@ -23,8 +23,6 @@ from typing import Any
 from . import events as event_mod
 from . import model_client, memory
 import ai
-from jsonschema import exceptions as jsonschema_exceptions
-from jsonschema import validators as jsonschema_validators
 
 from . import colors as C
 from . import context_budget
@@ -43,7 +41,8 @@ from . import stream_transport
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
-from .toolkit.core import ToolContext, ToolResult, call_is_read_only, call_scope, call_tool, call_tool_async
+from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
+                           call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 
 
@@ -393,13 +392,8 @@ def _normalize_tool_call_batch(
             validation_error = registry.unavailable_error(canonical_name)
             if scheduled_loads & {f"native:{canonical_name}", f"mcp:{canonical_name}"}:
                 validation_error += " A load in this same response cannot authorize a sibling call."
-        if validation_error is None and schema is not None:
-            try:
-                validator_type = jsonschema_validators.validator_for(schema)
-                validator_type.check_schema(schema)
-                validator_type(schema).validate(arguments)
-            except (jsonschema_exceptions.SchemaError, jsonschema_exceptions.ValidationError) as exc:
-                validation_error = " ".join(exc.message.split())
+        if validation_error is None:
+            validation_error = tool_args.schema_error(arguments, schema)
         refused = False
         if validation_error is None and tool is not None:
             refusal = registry.argument_refusal(tool.name, arguments)
@@ -854,7 +848,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
     started = time.time()
     try:
-        with call_scope(call_id):
+        with call_scope(call_id), registry_scope(active_registry):
             result = call_tool(tool, args, context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
@@ -1118,7 +1112,7 @@ async def _dispatch_async_tool(
         _trace_call(telemetry, tool_context, tool.name, args)
     started = time.time()
     try:
-        with call_scope(pc.id):
+        with call_scope(pc.id), registry_scope(registry):
             result = await call_tool_async(tool, args, tool_context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:

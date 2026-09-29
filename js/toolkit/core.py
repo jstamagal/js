@@ -57,6 +57,27 @@ def call_scope(call_id: str):
         _CALL_ID.reset(token)
 
 
+# The registry the running tool call was dispatched through. The kernel's tool
+# bridge dispatches a cell's `tools.<name>(...)` calls through it, so a cell
+# reaches exactly the tools, and the argument bans, of the agent that ran it.
+_REGISTRY: contextvars.ContextVar[Any] = contextvars.ContextVar("js_tool_registry", default=None)
+
+
+@contextmanager
+def registry_scope(registry: Any):
+    """Run the body as a call dispatched through ``registry``."""
+    token = _REGISTRY.set(registry)
+    try:
+        yield
+    finally:
+        _REGISTRY.reset(token)
+
+
+def current_registry() -> Any:
+    """The registry the running tool call was dispatched through, or None."""
+    return _REGISTRY.get()
+
+
 def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
     """True when calling ``tool`` with ``args`` writes nothing."""
     if tool.read_only:

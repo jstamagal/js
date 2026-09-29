@@ -116,3 +116,20 @@ def sdk_safe_tool_args(raw: str) -> str:
     """Return args that the SDK integrity pass will accept without warnings."""
     fixed = canonical_tool_args(raw)
     return fixed if is_json_object(fixed) else "{}"
+
+
+def schema_error(arguments: object, schema: object) -> str | None:
+    """One line saying how ``arguments`` break ``schema``; None when they fit
+    or there is no schema."""
+    if not isinstance(schema, dict):
+        return None
+    from jsonschema import exceptions as jsonschema_exceptions
+    from jsonschema import validators as jsonschema_validators
+
+    try:
+        validator_type = jsonschema_validators.validator_for(schema)
+        validator_type.check_schema(schema)
+        validator_type(schema).validate(arguments)
+    except (jsonschema_exceptions.SchemaError, jsonschema_exceptions.ValidationError) as exc:
+        return " ".join(exc.message.split())
+    return None
