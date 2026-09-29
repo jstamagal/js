@@ -25,6 +25,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
 from . import logins, providers
+from . import messages as msgs
 
 
 @dataclass(frozen=True)
@@ -83,8 +84,7 @@ _STYLE = Style.from_dict(
         "help": "ansigreen",
     }
 )
-_HELP = "tab panes • ↑↓ move • enter select • f fetch • /login adds providers • esc/q quit"
-_NO_LOGINS = "no logged-in providers — use /login or js --login"
+
 
 
 class ModelPicker:
@@ -122,19 +122,20 @@ class ModelPicker:
         self.model_index = 0
         if not self.provider_rows:
             self.model_rows = []
-            self.detail = _NO_LOGINS
+            self.detail = msgs.PICK_NO_LOGINS.text()
             return
         provider = self.provider_rows[self.provider_index]
         self.model_rows = _model_rows(provider.id)
         if not self.model_rows:
-            self.detail = f"{provider.id}: no cached models — press f to fetch"
+            self.detail = msgs.PICK_NO_CACHED.text(provider=provider.id)
             return
         if self._initial_model:
             for idx, row in enumerate(self.model_rows):
                 if row.id == self._initial_model:
                     self.model_index = idx
                     break
-        self.detail = f"{provider.id} [{provider.source}] — {len(self.model_rows)} model(s)"
+        self.detail = msgs.PICK_PROVIDER_DETAIL.text(provider=provider.id, source=provider.source,
+                                                     models=msgs.plural(len(self.model_rows), "model"))
 
     def current_provider(self) -> ProviderRow | None:
         if not self.provider_rows:
@@ -184,7 +185,7 @@ class ModelPicker:
             return
         login = logins.load_logins().get(provider.id)
         if login is None:
-            self.detail = f"{provider.id}: not logged in — use /login first"
+            self.detail = msgs.PICK_NOT_LOGGED_IN.text(provider=provider.id)
             return
         base_url, api_key = self._provider_selection_values(provider)
         if base_url is not None or api_key is not None:
@@ -198,19 +199,19 @@ class ModelPicker:
             logins.cache_models(provider.id, models)
             self._load_models()
         except Exception as exc:  # noqa: BLE001
-            self.detail = f"fetch failed: {type(exc).__name__}: {exc}"
+            self.detail = msgs.PICK_FETCH_FAILED.text(error=f"{type(exc).__name__}: {exc}")
 
     # -- view --------------------------------------------------------------
 
     def _rows_text(self, pane: str) -> StyleAndTextTuples:
         if pane == "providers":
-            labels = [f"● {row.id}  ({row.name})" for row in self.provider_rows]
+            labels = [msgs.PICK_PROVIDER_ROW.text(provider=row.id, name=row.name) for row in self.provider_rows]
             index = self.provider_index
         else:
             labels = [row.id for row in self.model_rows]
             index = self.model_index
             if not labels:
-                empty = "no cached models — press f to fetch" if self.provider_rows else _NO_LOGINS
+                empty = (msgs.PICK_NO_MODELS if self.provider_rows else msgs.PICK_NO_LOGINS).text()
                 return [("class:row.dim", empty)]
         focused = self.focus == pane
         out: StyleAndTextTuples = []
@@ -280,7 +281,7 @@ class ModelPicker:
 
         @kb.add("f")
         def _fetch(event: KeyPressEvent) -> None:
-            self.detail = "fetching…"
+            self.detail = msgs.PICK_FETCHING.text()
 
             async def run() -> None:
                 await self.fetch()
@@ -290,8 +291,8 @@ class ModelPicker:
 
         body = VSplit(
             [
-                self._pane("providers", "Providers", Dimension.exact(38)),
-                self._pane("models", "Models", None),
+                self._pane("providers", msgs.PICK_PROVIDERS.text(), Dimension.exact(38)),
+                self._pane("models", msgs.PICK_MODELS.text(), None),
             ],
             padding=1,
         )
@@ -299,7 +300,7 @@ class ModelPicker:
             [
                 body,
                 Window(FormattedTextControl(lambda: [("class:detail", self.detail)]), height=1),
-                Window(FormattedTextControl([("class:help", _HELP)]), height=1),
+                Window(FormattedTextControl([("class:help", msgs.PICK_HELP.text())]), height=1),
             ]
         )
         return Application(

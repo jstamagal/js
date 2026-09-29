@@ -1555,7 +1555,7 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if not parts:
         for name, body in aliases.items():
-            print(f"alias {name} {body}")
+            msgs.say(msgs.ALIAS_ROW, name=name, body=body)
         if not aliases:
             msgs.say(msgs.NO_ALIASES)
         return None
@@ -1567,12 +1567,12 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
     if len(parts) == 1:
         if name not in aliases:
             return msgs.NO_ALIAS.text(name=name)
-        print(f"alias {name} {aliases[name]}")
+        msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
         return None
     if name in COMMANDS:
         return msgs.ALIAS_IS_COMMAND.text(name=name)
     aliases[name] = parts[1].strip()
-    print(f"alias {name} {aliases[name]}")
+    msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
     return None
 
 
