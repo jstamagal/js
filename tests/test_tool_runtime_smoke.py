@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -1347,7 +1348,8 @@ def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
     assert "[truncated: limits.max_tool_result_inline_bytes" in out
-    assert "the whole stdout is at" in out
+    spill = re.search(r"(/\S+?\.log)", out)
+    assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
 
 def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):

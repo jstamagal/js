@@ -6,6 +6,9 @@ A background run is the same fan-out a foreground `task` call runs. Under the
 REPL supervisor it is one "subagent" job on the REPL's loop, so it outlives the
 turn that started it and shows in /jobs. Without a supervisor (`-p`, tests) it
 runs on a private loop in a daemon thread, and ends with the process.
+
+Each job belongs to the ToolContext that started it (``ToolContext.task_owner``):
+the main agent and each subagent see only their own jobs.
 """
 
 from __future__ import annotations
@@ -28,8 +31,10 @@ KEEP_FINISHED_JOBS = 5
 
 
 class TaskJob:
-    def __init__(self, job_id: str, agent_id: str, count: int, depth: int, result_path: Path) -> None:
+    def __init__(self, job_id: str, agent_id: str, count: int, depth: int, result_path: Path,
+                 owner: str = "") -> None:
         self.id = job_id
+        self.owner = owner
         self.agent_id = agent_id
         self.count = count
         self.depth = depth
@@ -85,23 +90,36 @@ def _next_id() -> str:
 
 
 def _prune() -> None:
+    """Drop all but the newest KEEP_FINISHED_JOBS finished jobs that need
+    nothing more: read, noted, or started by a subagent (never noted)."""
     with _JOBS_LOCK:
         settled = [job for job in _JOBS.values()
-                   if not job.running() and (job.delivered or job.noted)]
+                   if not job.running() and (job.delivered or job.noted or job.depth != 0)]
         for stale in settled[:-KEEP_FINISHED_JOBS] if len(settled) > KEEP_FINISHED_JOBS else []:
             _JOBS.pop(stale.id, None)
 
 
-def find(handle: str | None) -> TaskJob | None:
-    """The job named ``handle``; without one, the newest running job, else the
-    newest job."""
+def find(handle: str | None, owner: str) -> TaskJob | None:
+    """``owner``'s job named ``handle``; without one, its newest running job,
+    else its newest job."""
     with _JOBS_LOCK:
-        if handle:
-            return _JOBS.get(str(handle).strip())
-        running = [job for job in _JOBS.values() if job.running()]
-        if running:
-            return running[-1]
-        return next(reversed(_JOBS.values()), None) if _JOBS else None
+        mine = [job for job in _JOBS.values() if job.owner == owner]
+    if handle:
+        wanted = str(handle).strip()
+        return next((job for job in mine if job.id == wanted), None)
+    running = [job for job in mine if job.running()]
+    if running:
+        return running[-1]
+    return mine[-1] if mine else None
+
+
+def forget(owner: str) -> None:
+    """Send no completion note for ``owner``'s jobs: the conversation that
+    started them is gone."""
+    with _JOBS_LOCK:
+        for job in _JOBS.values():
+            if job.owner == owner:
+                job.noted = True
 
 
 def _save(job: TaskJob, text: str) -> None:
@@ -141,6 +159,7 @@ def start(
     *,
     agent_id: str,
     depth: int,
+    owner: str,
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
 ) -> TaskJob:
@@ -153,7 +172,7 @@ def start(
 
     job_id = _next_id()
     result_path = paths.tool_results_dir() / f"task-{job_id}-{secrets.token_hex(4)}.txt"
-    job = TaskJob(job_id, agent_id, len(indexed_items), depth, result_path)
+    job = TaskJob(job_id, agent_id, len(indexed_items), depth, result_path, owner)
 
     async def run_all() -> str:
         results: list[str | None] = [None] * len(indexed_items)
@@ -255,12 +274,12 @@ async def wait_async(job: TaskJob, timeout: float | None) -> None:
             raise
 
 
-def completion_notes() -> list[str]:
-    """One reminder per job the main agent started that has finished since
-    the last call and whose result the model has not read."""
+def completion_notes(owner: str) -> list[str]:
+    """One reminder per job ``owner`` started at depth 0 that has finished
+    since the last call and whose result the model has not read."""
     notes: list[str] = []
     with _JOBS_LOCK:
-        jobs = list(_JOBS.values())
+        jobs = [job for job in _JOBS.values() if job.owner == owner]
     for job in jobs:
         if job.depth != 0 or job.running() or job.delivered or job.noted:
             continue

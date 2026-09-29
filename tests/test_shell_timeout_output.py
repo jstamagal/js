@@ -27,7 +27,7 @@ def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
 
         def wait(timeout):
             deadline = time.monotonic() + 30
-            while marker not in process.snapshot()[0]:
+            while marker not in (out := process.stream("stdout")).read(0, out.total):
                 assert time.monotonic() < deadline, "the command never printed its marker"
                 time.sleep(0.01)
             process.wait = real_wait

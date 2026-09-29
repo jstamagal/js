@@ -190,22 +190,20 @@ def _clean(raw: bytes, keep_ansi: bool) -> str:
     return text if keep_ansi else _ANSI_RE.sub("", text)
 
 
-# Bytes held back from the output budget for the lines around the output: the
-# header, the stream labels, and one omission marker per stream.
-_RESULT_OVERHEAD = 1024
+# Bytes held back from the inline limit for the stream labels and the HANDLE
+# line around the rendered output.
+_FRAME_BYTES = 128
 
 
-def _output_budget(job: _ShellJob, context: Any, header: str) -> tuple[int, str]:
-    """Bytes of stdout and stderr together that one result shows, and the
-    setting that set it. The result has to fit the inline limit, or the runtime
-    would spill it again and the preview would lose the tail."""
-    budget, knob = job.cap, f"limits.max_bash_output_bytes ({job.cap})"
+def _output_room(context: Any, header: str) -> int | None:
+    """Bytes the rendered stdout and stderr together may take so the whole
+    result fits limits.max_tool_result_inline_bytes, or None without that
+    limit. Past it the runtime would spill the result again, and the preview
+    would lose the tail."""
     inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
-    if inline > 0:
-        room = max(0, inline - len(header.encode("utf-8")) - _RESULT_OVERHEAD)
-        if room < budget:
-            budget, knob = room, f"limits.max_tool_result_inline_bytes ({inline})"
-    return budget, knob
+    if inline <= 0:
+        return None
+    return max(0, inline - len(header.encode("utf-8")) - _FRAME_BYTES)
 
 
 def _split_budget(sizes: tuple[int, int], budget: int) -> tuple[int, int]:
@@ -245,13 +243,34 @@ def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) 
     streams = (job.process.stream("stdout"), job.process.stream("stderr"))
     totals = tuple(stream.total for stream in streams)
     starts = job.delivered if since_last else (0, 0)
-    budget, knob = _output_budget(job, context, header)
-    shares = _split_budget((totals[0] - starts[0], totals[1] - starts[1]), budget)
     job.delivered = totals
-    return tuple(  # type: ignore[return-value]
-        _render_stream(name, stream.excerpt(start, share), job.keep_ansi, knob)
-        for name, stream, start, share in zip(("stdout", "stderr"), streams, starts, shares)
-    )
+    sizes = (totals[0] - starts[0], totals[1] - starts[1])
+    budget, knob = job.cap, f"limits.max_bash_output_bytes ({job.cap})"
+    room = _output_room(context, header)
+    if room is not None and room < budget:
+        budget = room
+        knob = f"limits.max_tool_result_inline_bytes ({context.max_tool_result_inline_bytes})"
+
+    def render(budget: int) -> tuple[str, str]:
+        shares = _split_budget(sizes, budget)
+        return tuple(  # type: ignore[return-value]
+            _render_stream(name, stream.excerpt(start, share, end=total), job.keep_ansi, knob)
+            for name, stream, start, share, total in zip(("stdout", "stderr"), streams, starts, shares, totals)
+        )
+
+    # The budget counts raw bytes. Rendered text can be larger (each invalid
+    # UTF-8 byte becomes a 3-byte U+FFFD, and the markers add their own), so
+    # the budget shrinks until the rendered text fits the room.
+    rendered = render(budget)
+    while room is not None and budget > 0:
+        used = sum(len(text.encode("utf-8")) for text in rendered)
+        if used <= room:
+            break
+        if knob.startswith("limits.max_bash_output_bytes"):
+            knob = f"limits.max_tool_result_inline_bytes ({context.max_tool_result_inline_bytes})"
+        budget = max(0, min(budget - 1, budget * room // used - 64))
+        rendered = render(budget)
+    return rendered
 
 
 def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,

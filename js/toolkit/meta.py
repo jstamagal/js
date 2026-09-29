@@ -495,10 +495,10 @@ def _job_action(action: Any) -> str:
     return (text_or_default(action, "run") or "run").strip().lower()
 
 
-def _find_job(action: str, handle: Any) -> tuple[str | None, task_jobs.TaskJob | None]:
+def _find_job(action: str, handle: Any, context: ToolContext) -> tuple[str | None, task_jobs.TaskJob | None]:
     if action not in ("poll", "wait", "kill"):
         return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill", None
-    job = task_jobs.find(text_or_default(handle) or None)
+    job = task_jobs.find(text_or_default(handle) or None, context.task_owner)
     if job is None:
         return f"ERROR: no background task{' ' + str(handle) if handle else ''} to {action}", None
     return None, job
@@ -517,6 +517,7 @@ def _start_background(indexed_items, coro_factory, agent_id: str, session_id: st
         lambda results: _assemble_task_results(results, agent_id, session_id),
         agent_id=agent_id,
         depth=int(getattr(context, "task_depth", 0) or 0),
+        owner=context.task_owner,
         # A subagent can write anything, so the parent's memoized fs_search
         # results are stale once it is done.
         on_done=context.invalidate_search_cache,
@@ -539,7 +540,7 @@ def task(
     assert context is not None
     action = _job_action(action)
     if action != "run":
-        error, job = _find_job(action, handle)
+        error, job = _find_job(action, handle, context)
         if job is None:
             return error  # type: ignore[return-value]
         was_running = job.running()
@@ -585,7 +586,7 @@ async def task_async(
     assert context is not None
     action = _job_action(action)
     if action != "run":
-        error, job = _find_job(action, handle)
+        error, job = _find_job(action, handle, context)
         if job is None:
             return error  # type: ignore[return-value]
         was_running = job.running()

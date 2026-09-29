@@ -325,6 +325,9 @@ ANSI is stripped unless `keep_ansi=true`.
 Stdout and stderr together get a budget: `limits.max_bash_output_bytes`, or
 less when the result would otherwise pass `limits.max_tool_result_inline_bytes`.
 A stream under half the budget is shown whole and the other gets the rest.
+The budget counts raw bytes; when the rendered text is still larger than the
+inline limit (invalid UTF-8 renders as 3-byte U+FFFD, and the markers add
+their own bytes), the budget shrinks until it fits.
 A stream past its share shows its head and its tail, with a marker between
 them naming the byte range left out, the total, and the file holding the
 whole stream.

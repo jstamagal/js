@@ -73,7 +73,8 @@ Background:
 - `action="poll", handle="t1"` says whether it is still running and returns the
   result once it is done. `action="wait", handle="t1", timeout=N` blocks up to
   N seconds, or until the end without `timeout`. `action="kill", handle="t1"`
-  stops it. `handle` defaults to the most recent running task. `tasks` and
+  stops it. `handle` defaults to your most recent running task. You see only
+  the tasks you started. `tasks` and
   `agent_id` are needed only to start one.
 - The finished result is also written to the file the handle names. If you have
   not polled it by then, the next user message carries a `<js-reminder>` that

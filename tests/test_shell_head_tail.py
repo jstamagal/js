@@ -14,10 +14,13 @@ from js.toolkit import ToolContext
 from js.toolkit import fs
 from js.toolkit.process_net import shell
 
+# The facts a marker carries, in order: the limit that cut the output, the
+# stream, the omitted byte range, the stream's total, the file with all of it,
+# and the read range that continues at the gap.
 MARKER_RE = re.compile(
-    r"\[truncated: (?P<knob>[\w.]+) \((?P<limit>\d+)\) reached; (?P<stream>stdout|stderr) "
-    r"bytes (?P<first>\d+)-(?P<stop>\d+) of (?P<total>\d+) \(\d+ bytes\) are not shown; "
-    r"the whole (?P=stream) is at (?P<path>\S+) — read it on with range (?P<range>\{[^}]*\})\]"
+    r"\[truncated: (?P<knob>[\w.]+) \((?P<limit>\d+)\) reached\b[^\]]*?\b(?P<stream>stdout|stderr)\b"
+    r"[^\]]*?\b(?P<first>\d+)-(?P<stop>\d+)\b[^\]]*?\b(?P<total>\d+)\b[^\]]*?(?P<path>/\S+?\.log)"
+    r"[^\]]*?(?P<range>\{[^}]*\})\]"
 )
 
 # 1 MB of stdout: a first line, a middle token at a known offset, ANSI color
@@ -62,6 +65,31 @@ def test_the_result_fits_the_inline_limit_so_the_runtime_does_not_spill_it_again
     result = shell(MB_COMMAND, timeout=60, context=context)
     assert len(result.encode()) <= context.max_tool_result_inline_bytes
     assert _marker(result)["knob"] == "limits.max_tool_result_inline_bytes"
+
+
+def test_binary_output_still_fits_the_inline_limit(tmp_path):
+    # Each invalid UTF-8 byte renders as a 3-byte replacement character.
+    context = ToolContext(cwd=tmp_path)
+    for size in (30000, 400000):
+        result = shell(f"head -c {size} /dev/urandom", timeout=60, context=context)
+        assert "exit=0" in result
+        assert len(result.encode()) <= context.max_tool_result_inline_bytes
+        assert _marker(result)
+
+
+def test_both_streams_under_a_long_spill_path_fit_the_inline_limit(tmp_path, monkeypatch):
+    deep = tmp_path / ("d" * 200) / ("e" * 60)
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: deep)
+    context = ToolContext(cwd=tmp_path)
+    result = shell(
+        "head -c 400000 /dev/zero | tr '\\0' o; head -c 400000 /dev/zero | tr '\\0' e >&2; seq 1 50000",
+        timeout=60, context=context,
+    )
+    assert len(result.encode()) <= context.max_tool_result_inline_bytes
+    markers = [match["stream"] for match in MARKER_RE.finditer(result)]
+    assert sorted(markers) == ["stderr", "stdout"]
+    stdout = result.split("--- stdout ---\n", 1)[1].split("--- stderr ---\n", 1)[0]
+    assert stdout.rstrip().endswith("50000")
 
 
 def test_the_spill_file_holds_the_full_raw_output(tmp_path):

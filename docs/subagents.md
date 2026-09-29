@@ -153,7 +153,11 @@ The handle works like a shell handle, through the same tool:
 - `action="wait", handle="t1", timeout=N`: block up to N seconds; without
   `timeout`, until it ends.
 - `action="kill", handle="t1"`: cancel the workers.
-- `handle` defaults to the newest running task.
+- `handle` defaults to the caller's newest running task.
+
+Each run belongs to the context that started it (`ToolContext.task_owner`): the
+main agent and each subagent see, poll, wait on and kill only their own runs.
+`/reset` and `/wipe` drop the reminder for runs of the conversation they end.
 
 Under the REPL the run is one `subagent` job on the REPL's loop
 (`js/toolkit/task_jobs.py`), so it outlives the turn that started it, shows in

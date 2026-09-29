@@ -218,11 +218,12 @@ class _StreamCapture:
                 kept += bytes(self._tail[max(start, tail_start) - tail_start:end - tail_start])
             return kept
 
-    def excerpt(self, start: int, budget: int) -> Excerpt:
-        """Bytes ``start`` to the end of the stream, cut to ``budget``: half
-        from the front of the range, half from its end, split on UTF-8
-        character boundaries, and on a line break near the cut."""
-        total = self.total
+    def excerpt(self, start: int, budget: int, end: int | None = None) -> Excerpt:
+        """Bytes ``start`` to ``end`` (default: the end of the stream so far),
+        cut to ``budget``: half from the front of the range, half from its end,
+        split on UTF-8 character boundaries, and on a line break near the cut.
+        ``total`` is ``end``."""
+        total = self.total if end is None else min(int(end), self.total)
         start = max(0, min(start, total))
         budget = max(0, int(budget))
         if total - start <= budget:
@@ -260,7 +261,7 @@ class CappedProcess:
 
     ``wait(timeout)`` blocks up to ``timeout`` seconds and returns the result
     once the process exits, or ``None`` while it is still running — the caller
-    decides whether to keep waiting, look at ``snapshot()``, or ``kill()``.
+    decides whether to keep waiting, read a ``stream()``, or ``kill()``.
     """
 
     def __init__(self, proc: subprocess.Popen, captures: dict[str, _StreamCapture],
@@ -282,10 +283,6 @@ class CappedProcess:
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started
-
-    def snapshot(self) -> tuple[bytes, bytes]:
-        """Everything captured so far, whether or not the process has exited."""
-        return self._captures["stdout"].snapshot()[0], self._captures["stderr"].snapshot()[0]
 
     def stream(self, name: str) -> _StreamCapture:
         """The capture of ``stdout`` or ``stderr``."""

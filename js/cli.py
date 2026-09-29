@@ -1784,6 +1784,7 @@ def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
 
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
+    task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     M.append_mark(cfg.session_file, "session_reset")
     msgs.say(msgs.RESET_DONE)
     return None
@@ -1792,6 +1793,7 @@ def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     state["messages"].clear()
+    task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     if bak:
         msgs.say(msgs.WIPE_ROTATED, path=bak.name)
     else:
@@ -1928,7 +1930,7 @@ def _queue_note(state: dict, note: str) -> None:
 def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
     """``bundle`` carrying the reminders queued since the last user message,
     and one for each background task that finished unread since then."""
-    for note in [*(state.pop("pending_notes", None) or ()), *task_jobs.completion_notes()]:
+    for note in [*(state.pop("pending_notes", None) or ()), *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]:
         bundle = attach.with_note(bundle, note)
     return bundle
 

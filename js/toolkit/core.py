@@ -411,6 +411,9 @@ class ToolContext:
     last_incomplete_reason: str | None = None
     turn_status: TurnStatus = field(default_factory=TurnStatus)
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
+    # Names this context as the owner of the background tasks it starts; only
+    # the owner can poll, wait on or kill them.
+    task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
     # Read-only calls run in parallel threads; this lock covers read_paths,
