@@ -201,9 +201,9 @@ test-vision:
 # tool descriptions + per-agent tool surface
 test-tools:
     uv run {{ browser-extra }} --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
-# runtime loop: offline integration + tool runtime smoke
+# runtime loop: offline integration, tool runtime smoke, and the turn_* modules
 test-runtime:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py
+    uv run {{ browser-extra }} --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py tests/test_turn_stream.py tests/test_turn_surface.py tests/test_turn_budget.py tests/test_turn_call.py
 # subagent isolation
 test-subagents:
     uv run {{ browser-extra }} --extra test pytest -q tests/test_subagent_isolation.py

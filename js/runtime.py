@@ -52,7 +52,8 @@ from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_surface import SurfaceJournal
 from .turn_stream import StreamSink, TurnEvents
-from .turn_call import CallLimits, ModelCaller, ModelRequest, cut_off_by_cap, dangling_arguments
+from .turn_call import (CallLimits, ModelCaller, ModelReply, ModelRequest, cut_off_by_cap,
+                        dangling_arguments)
 
 
 _UNSET = object()
@@ -1319,6 +1320,385 @@ async def _dispatch_batch(
 # Turn loop
 # --------------------------------------------------------------------------
 
+def _turn_request(cfg: Config, *, model_override: str | None, provider_id_override: str | None,
+                  provider_base_url_override: str | None, provider_api_key_override: str | None,
+                  reasoning_effort_override: Any, max_output_override: Any,
+                  sampling: Sampling | None) -> ModelRequest:
+    """What this turn's model calls send: ``cfg`` with the overrides that are set."""
+    model = model_override or cfg.model
+    provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
+    max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
+    if max_out is None:
+        max_out = model_metadata.resolve_max_output(model, provider_id)
+    return ModelRequest(
+        model=model,
+        provider_id=provider_id,
+        base_url=provider_base_url_override if provider_base_url_override is not None else cfg.provider_base_url,
+        api_key=provider_api_key_override if provider_api_key_override is not None else cfg.provider_api_key,
+        effort=cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override,
+        max_out=max_out,
+        thinking_budget=getattr(cfg, "thinking_budget", None),
+        headers=getattr(cfg, "provider_headers", None),
+        extra=routing.provider_extra_params(cfg),
+        sampling=sampling,
+        cache_key=_cache_key(cfg),
+    )
+
+
+def _cache_key(cfg: Config) -> str | None:
+    """One conversation, one cache key: OpenAI-compatible endpoints use it to
+    route a request to the machine already holding that conversation's prefix.
+    Keyed on the session rather than the agent so two concurrent sessions do
+    not contend for one prefix. A session-less run sends no key and falls back
+    to the provider's own longest-prefix matching."""
+    session_file = getattr(cfg, "session_file", None)
+    if session_file is None or Path(session_file).name in ("", os.devnull, "null"):
+        return None
+    return f"js-{cfg.agent_id}-{Path(session_file).stem}"
+
+
+def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
+                          registry: ToolRegistry, event_hooks: Any) -> context_budget.TokenState:
+    """Set ``context`` up for this turn and return its token state, which
+    persists across the turns of one context."""
+    # Delegation inherits this turn's effective settings, not a fresh env load
+    # or a stale config left on a reused context. Do not mutate the caller's cfg.
+    context.config = replace(
+        cfg, model=request.model, provider_id=request.provider_id,
+        provider_base_url=request.base_url, provider_api_key=request.api_key,
+        reasoning_effort=request.effort, max_output_tokens=request.max_out,
+        vision_enabled=vision_enabled_for_model(request.model, getattr(cfg, "settings", None)),
+    )
+    context.tool_registry = registry
+    context.agent_id = cfg.agent_id
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
+    _turn_settings.install(context, cfg)
+    install_context_window_overrides(cfg)
+    context.model = request.model
+    context.last_incomplete_reason = None
+    context.last_output_tokens = 0
+    context.last_max_output_tokens = request.max_out
+    context.compacted_during_turn = False
+    context.context_tokens = 0
+    context.tokens_until_compaction = None
+    context.turn_status.reset()
+    chars_per_token = compaction.get_float(cfg, "chars_per_token")
+    token_state = getattr(context, "context_budget_state", None)
+    if not isinstance(token_state, context_budget.TokenState):
+        token_state = context_budget.TokenState(chars_per_token=chars_per_token)
+    else:
+        token_state.chars_per_token = chars_per_token
+    context.context_budget_state = token_state
+    context.vision_enabled = context.config.vision_enabled
+    if event_hooks is not None:
+        # Subagents started through this context answer to its tool_call guards.
+        context.tool_call_hooks = event_hooks
+    return token_state
+
+
+def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolRegistry,
+                  resolve_window: Callable[[], int | None]) -> None:
+    """Print the run line: model, provider, window, output cap, effort, vision, tools."""
+    model, provider_id = request.model, request.provider_id
+    if provider_id:
+        provider_label = provider_id
+        base = request.base_url or "provider-default"
+    else:
+        provider_label = "ai-sdk"
+        base = model.split(":")[0] if ":" in model else "ai-gateway"
+    # ctx is the number that decides when compaction fires and how much room
+    # is left to work in; max_out only bounds one reply. Showing the second
+    # without the first invites reading 128000 as the window.
+    ctx = compaction.configured_context_window(context.config, resolve_window)
+    bits = [f"model={model}",
+            f"provider={provider_label}",
+            f"base={base}",
+            f"ctx={ctx if ctx else 'unknown'}",
+            f"max_out={request.max_out if request.max_out is not None else 'provider-default'}"]
+    if request.effort:
+        bits.append(f"effort={request.effort}")
+    bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
+    try:
+        ntools = len(registry.openai_specs())
+    except Exception:  # noqa: BLE001 — registry internals
+        ntools = "?"
+    bits.append(f"tools={ntools}")
+    print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(bits))}{C.RESET}", flush=True)
+
+
+def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:
+    """Mark a skill the user invoked in the turn's opening message as loaded."""
+    opening = _last_user_message_index(messages)
+    user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
+    note_skill_loaded = getattr(registry, "note_skill_loaded", None)
+    if user_skill and callable(note_skill_loaded):
+        note_skill_loaded(user_skill)
+
+
+def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, system: str,
+                      messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
+                      context: ToolContext, token_state: context_budget.TokenState,
+                      telemetry: Telemetry, events: TurnEvents, sink: StreamSink,
+                      suppress_output: bool) -> tuple[list[_PendingToolCall], str | None, ToolRegistry]:
+    """Append the reply to the history and the convo. Returns the tool calls
+    to run, the reply's incomplete reason, and the registry that authorizes
+    the calls: the surface this model call saw."""
+    result = reply.result
+    text = result.text
+    pending_calls = [
+        _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
+        for call in result.tool_calls
+    ]
+    provider_metadata, incomplete_reason = reply.provider_metadata, reply.incomplete_reason
+    assistant_message_override: ai.messages.Message | None = None
+    if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
+        notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
+        telemetry.event(
+            "tool_call_dropped",
+            reason="incomplete_truncated_args",
+            incomplete_reason=incomplete_reason,
+            n_tool_calls=len(pending_calls),
+            tools=[pc.name for pc in pending_calls],
+        )
+        if not suppress_output:
+            sink.text(("\n\n" if text else "") + notice)
+            sink.close()
+        text = f"{text}\n\n{notice}" if text else notice
+        pending_calls = []
+        assistant_message_override = ai.assistant_message(text)
+
+    # Freeze dispatch authorization to the schemas this model call saw.
+    # Discovery may mutate the turn surface while this batch runs, but a
+    # newly loaded tool is callable only after its schema is emitted on
+    # the next model iteration.
+    dispatch_registry = registry.dispatch_registry()
+    batch_diagnostic_suffix = ""
+    if pending_calls:
+        pending_calls, batch_stats = _normalize_tool_call_batch(
+            pending_calls,
+            dispatch_registry,
+            getattr(
+                cfg,
+                "max_tool_calls_per_message",
+                _settings.default_value("limits.max_tool_calls_per_message"),
+            ),
+        )
+        telemetry.event(
+            "tool_call_batch_normalized",
+            received=batch_stats.received,
+            retained=batch_stats.retained,
+            duplicate=batch_stats.duplicate,
+            invalid=batch_stats.invalid,
+            capped=batch_stats.capped,
+        )
+        if batch_stats.capped:
+            diagnostic = (
+                "Tool-call batch limit reached: "
+                f"retained {batch_stats.retained} distinct calls and rejected "
+                f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
+            )
+            batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
+            text += batch_diagnostic_suffix
+
+    record: dict = {"role": "assistant", "content": text}
+    if pending_calls:
+        record["tool_calls"] = [
+            {"id": pc.id, "type": "function",
+             "function": {"name": pc.name, "arguments": pc.arguments()}}
+            for pc in pending_calls
+        ]
+    if result.reasoning:
+        record["reasoning_content"] = result.reasoning
+    if not isinstance(provider_metadata, dict):
+        provider_metadata = None
+    incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
+    if provider_metadata:
+        record["provider_metadata"] = provider_metadata
+    if incomplete_reason:
+        record["incomplete_reason"] = incomplete_reason
+    assistant_message = assistant_message_override or result.assistant_message
+    if result.tool_calls:
+        assistant_message = _assistant_message_with_tool_calls(
+            assistant_message,
+            pending_calls,
+            diagnostic_suffix=batch_diagnostic_suffix,
+        )
+    # The signed parts as this turn replays them, after batch normalization.
+    signed_reasoning = (
+        model_client.signed_reasoning_parts(assistant_message)
+        if assistant_message_override is None else None
+    )
+    if signed_reasoning:
+        record["reasoning_parts"] = signed_reasoning
+        record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
+    if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
+        assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
+    convo.ai.append(_sanitize_assistant_message(assistant_message))
+    messages.append(memory.note_time(record))
+    # Recorded in full now; a later ^C in this turn must not re-append it.
+    sink.clear()
+    token_state.record_provider_usage(
+        None if reply.usage_stale else result.usage,
+        message_count=len(messages),
+        messages=messages,
+        system=system,
+        tools=reply.ai_tools,
+    )
+    current_tokens, _estimate, used_provider = token_state.current_context_tokens(
+        system=system,
+        messages=messages,
+        tools=reply.ai_tools,
+    )
+    context.context_tokens = current_tokens
+    context.context_tokens_used_provider_usage = used_provider
+    if text:
+        payload = {"text": text, "finish_reason": reply.finish}
+        if incomplete_reason:
+            payload["incomplete_reason"] = incomplete_reason
+        events.emit("response", **payload)
+    return pending_calls, incomplete_reason, dispatch_registry
+
+
+def _send_resume_nudge(messages: list[dict], convo: TurnConvo, *, n: int, limit: int,
+                       incomplete_reason: str | None, model: str, telemetry: Telemetry,
+                       suppress_output: bool) -> None:
+    """Keep the partial reply and ask the model to carry on from where the
+    cap cut it."""
+    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
+    messages.append(nudge)
+    convo.add([nudge])
+    telemetry.event("max_output_resume", model=model, n=n, incomplete_reason=incomplete_reason)
+    if not suppress_output:
+        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=n, limit=limit)
+
+
+async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Config, trace: bool,
+                               messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
+                               dispatch_registry: ToolRegistry, context: ToolContext,
+                               error_tracker: ToolErrorTracker, telemetry: Telemetry,
+                               events: TurnEvents) -> list[tuple[_PendingToolCall, dict, Any]]:
+    """Run the batch and append its results to the history and the convo.
+    Returns the (call, arguments, result) records of the calls that ran.
+
+    convo.ai carries the heavy form (image bytes embedded in tool messages)
+    for THIS turn; messages, persisted and replayed on every future turn,
+    carries the dehydrated stub so base64 is billed once."""
+    for index, pc in enumerate(pending_calls):
+        emission = events.emit(
+            "tool_call",
+            id=pc.id,
+            name=_canonical_tool_call_name(pc.name, registry),
+            arguments=_canonical_tool_args(pc.arguments()),
+        )
+        refusal = event_mod.refusal_of(emission)
+        if refusal and pc.validation_error is None:
+            # An `on tool_call` handler refused it: the call never runs
+            # and the model reads the refusal as its result.
+            pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+            telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
+    # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
+    # thread so the shared loop stays free while they execute. Fan-out (task /
+    # named-agent) calls are awaited ON the loop instead, so a parent turn
+    # never parks a dispatch thread its descendants need (see _dispatch_batch).
+    # A read that repeats an earlier one returns a stub naming it only
+    # while that earlier result is still in the history the model sees.
+    context.keep_shown_reads(_tool_results_in(messages))
+    progress = _DispatchProgress()
+    context.turn_status.tool_begin([_canonical_tool_call_name(pc.name, registry) for pc in pending_calls])
+    try:
+        dispatch_records = await _dispatch_batch(
+            pending_calls,
+            telemetry,
+            cfg.max_tool_result_bytes,
+            trace,
+            error_tracker,
+            dispatch_registry,
+            context,
+            asyncio.get_running_loop(),
+            progress,
+        )
+    finally:
+        context.turn_status.tool_end()
+        # Also runs on cancellation, before the REPL persists the turn
+        # and balances genuinely unanswered calls with orphan markers.
+        dispatch_records = [progress.records[pc.id] for pc in pending_calls
+                            if pc.id in progress.records]
+        capped = _cap_batch_results(
+            [r for _, _, r in dispatch_records],
+            getattr(cfg, "max_tool_results_per_turn_bytes", 0),
+        )
+        reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
+        for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
+            _reconcile_read_delivery(
+                _canonical_tool_call_name(pc.name, registry),
+                args,
+                old_result,
+                new_result,
+                context,
+                pc.id,
+            )
+            reconciled.append((pc, args, new_result))
+        dispatch_records = reconciled
+        context.settle_reads()
+        # A batch's tool results must stay contiguous: the SDK's history
+        # check ends the pending tool-call window at the first following
+        # user/assistant message, so an image's user FilePart inserted
+        # between two tool results orphans every later one. Collect the
+        # batch's tool messages first, then the media that follows it.
+        batch_tool_msgs: list[ai.messages.Message] = []
+        batch_media_msgs: list[ai.messages.Message] = []
+        for pc, _args, result_value in dispatch_records:
+            canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, registry))
+            events.emit(
+                "tool_result",
+                id=pc.id,
+                name=canonical_pc.name,
+                result=result_value,
+            )
+            for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
+                if built.role == "tool":
+                    batch_tool_msgs.append(built)
+                else:
+                    batch_media_msgs.append(built)
+            done_at = progress.finished.get(pc.id)
+            messages.extend(memory.note_time(item, done_at)
+                            for item in _history_tool_result_message(canonical_pc, result_value))
+        convo.ai.extend(batch_tool_msgs)
+        convo.ai.extend(batch_media_msgs)
+    return dispatch_records
+
+
+def _record_tool_error_limit(dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
+                             registry: ToolRegistry, messages: list[dict], convo: TurnConvo,
+                             events: TurnEvents) -> None:
+    """End the turn on an assistant message naming the last failed call."""
+    name, last_error = next(
+        ((_canonical_tool_call_name(pc.name, registry), result_value)
+         for pc, _, result_value in reversed(dispatch_records)
+         if isinstance(result_value, str) and result_value.startswith("ERROR")),
+        (dispatch_records[-1][0].name, dispatch_records[-1][2]),
+    )
+    failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
+    convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
+    messages.append(memory.note_time({"role": "assistant", "content": failure}))
+    events.emit("error", error=failure, retryable=False)
+    events.end("tool_error_limit")
+
+
+async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]], messages: list[dict],
+                      convo: TurnConvo, telemetry: Telemetry, suppress_output: bool) -> None:
+    """Append the message ``steer`` returns, if any, at this tool boundary."""
+    steered = steer()
+    if inspect.isawaitable(steered):
+        steered = await steered
+    if steered is not None:
+        messages.append(memory.note_time(steered))
+        convo.add([steered])
+        telemetry.event("steered", message_index=len(messages) - 1)
+        if not suppress_output:
+            msgs.say(msgs.STEERED, flush=True)
+
+
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              telemetry: Telemetry, model_override: str | None = None,
              trace_override: bool | None = None,
@@ -1355,27 +1735,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     reloading config; unset values fall back to the Config values. The sync
     ``run_turn`` below wraps this for callers not yet on the async runtime.
     """
-    model = model_override or cfg.model
-    provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
-    provider_base_url = provider_base_url_override if provider_base_url_override is not None else cfg.provider_base_url
-    provider_api_key = provider_api_key_override if provider_api_key_override is not None else cfg.provider_api_key
-    effort = cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override
-    max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
-    if max_out is None:
-        max_out = model_metadata.resolve_max_output(model, provider_id)
+    request = _turn_request(
+        cfg, model_override=model_override, provider_id_override=provider_id_override,
+        provider_base_url_override=provider_base_url_override,
+        provider_api_key_override=provider_api_key_override,
+        reasoning_effort_override=reasoning_effort_override, max_output_override=max_output_override,
+        sampling=sampling,
+    )
+    model, provider_id = request.model, request.provider_id
     convo = TurnConvo(system, messages, provider_id=provider_id, model=model)
-    error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
-    # Delegation inherits this turn's effective settings, not a fresh env load
-    # or a stale config left on a reused context. Do not mutate the caller's cfg.
-    active_context.config = replace(
-        cfg, model=model, provider_id=provider_id,
-        provider_base_url=provider_base_url, provider_api_key=provider_api_key,
-        reasoning_effort=effort, max_output_tokens=max_out,
-        vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)),
-    )
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
@@ -1386,106 +1757,36 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
-    active_context.tool_registry = active_registry
-    active_context.agent_id = cfg.agent_id
-    active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
-    # One conversation, one cache key: OpenAI-compatible endpoints use it to route
-    # a request to the machine already holding that conversation's prefix. Keyed on
-    # the session rather than the agent so two concurrent sessions do not contend
-    # for one prefix. A session-less run sends no key and falls back to the
-    # provider's own longest-prefix matching.
-    _session_file = getattr(cfg, "session_file", None)
-    _cache_key = (
-        f"js-{cfg.agent_id}-{Path(_session_file).stem}"
-        if _session_file is not None and Path(_session_file).name not in ("", os.devnull, "null")
-        else None
-    )
-    _turn_settings.install(active_context, cfg)
-    install_context_window_overrides(cfg)
-    active_context.model = model
-    active_context.last_incomplete_reason = None
-    active_context.last_output_tokens = 0
-    active_context.last_max_output_tokens = max_out
-    active_context.compacted_during_turn = False
-    active_context.context_tokens = 0
-    active_context.tokens_until_compaction = None
+    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks)
     turn_status = active_context.turn_status
-    turn_status.reset()
-    chars_per_token = compaction.get_float(cfg, "chars_per_token")
-    token_state = getattr(active_context, "context_budget_state", None)
-    if not isinstance(token_state, context_budget.TokenState):
-        token_state = context_budget.TokenState(chars_per_token=chars_per_token)
-    else:
-        token_state.chars_per_token = chars_per_token
-    active_context.context_budget_state = token_state
-    active_context.vision_enabled = active_context.config.vision_enabled
-
-    if event_hooks is not None:
-        # Subagents started through this context answer to its tool_call guards.
-        active_context.tool_call_hooks = event_hooks
 
     events = TurnEvents(event_hooks, event_sink, telemetry, model=model, provider_id=provider_id)
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
         mcp_host.event_sink = events.emit
-
     events.start(len(messages))
 
     trace = trace_override if trace_override is not None else cfg.trace
+    resolve_window = functools.partial(_resolve_context_window, model, provider_id, request.base_url)
     if trace:
-        if provider_id:
-            _provider_label = provider_id
-            _base = provider_base_url or "provider-default"
-        else:
-            _provider_label = "ai-sdk"
-            if ":" in model:
-                _base = model.split(":")[0]
-            else:
-                _base = "ai-gateway"
-        # ctx is the number that decides when compaction fires and how much room
-        # is left to work in; max_out only bounds one reply. Showing the second
-        # without the first invites reading 128000 as the window.
-        _ctx_for_banner = compaction.configured_context_window(
-            active_context.config,
-            lambda: _resolve_context_window(model, provider_id, provider_base_url),
-        )
-        _bits = [f"model={model}",
-                 f"provider={_provider_label}",
-                 f"base={_base}",
-                 f"ctx={_ctx_for_banner if _ctx_for_banner else 'unknown'}",
-                 f"max_out={max_out if max_out is not None else 'provider-default'}"]
-        if effort:
-            _bits.append(f"effort={effort}")
-        _bits.append(f"vision={'on' if active_context.vision_enabled else 'off'}")
-        try:
-            _ntools = len(active_registry.openai_specs())
-        except Exception:  # noqa: BLE001 — registry internals
-            _ntools = "?"
-        _bits.append(f"tools={_ntools}")
-        print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(_bits))}{C.RESET}", flush=True)
+        _trace_banner(request, active_context, active_registry, resolve_window)
 
     sink = StreamSink(telemetry, turn_status, events, settings=getattr(cfg, "settings", None),
                       suppress_output=suppress_output)
-
     budget = TurnBudget(
         replace(cfg, model=model, provider_id=provider_id,
-                provider_base_url=provider_base_url, provider_api_key=provider_api_key),
+                provider_base_url=request.base_url, provider_api_key=request.api_key),
         convo, token_state, active_context, telemetry=telemetry, turn_status=turn_status,
-        emit=events.emit, resolve_window=functools.partial(_resolve_context_window, model, provider_id, provider_base_url),
-        max_out=max_out,
+        emit=events.emit, resolve_window=resolve_window, max_out=request.max_out,
     )
     limits = CallLimits.from_settings(getattr(cfg, "settings", None))
     caller = ModelCaller(
-        ModelRequest(model=model, provider_id=provider_id, base_url=provider_base_url,
-                     api_key=provider_api_key, effort=effort, max_out=max_out,
-                     thinking_budget=getattr(cfg, "thinking_budget", None),
-                     headers=getattr(cfg, "provider_headers", None),
-                     extra=routing.provider_extra_params(cfg), sampling=sampling, cache_key=_cache_key),
-        limits, convo=convo, budget=budget, sink=sink, events=events, telemetry=telemetry,
+        request, limits, convo=convo, budget=budget, sink=sink, events=events, telemetry=telemetry,
         context=active_context, turn_status=turn_status, registry=active_registry,
         alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
         call_stats=call_stats, trace=trace, suppress_output=suppress_output,
     )
+    error_tracker = ToolErrorTracker()
 
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
@@ -1496,11 +1797,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     ))
     try:
         await surface.restore()
-        opening = _last_user_message_index(messages)
-        user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
-        note_skill_loaded = getattr(active_registry, "note_skill_loaded", None)
-        if user_skill and callable(note_skill_loaded):
-            note_skill_loaded(user_skill)
+        _note_user_skill(messages, active_registry)
         durable_side_effects_started = False
         resumes_sent = 0
         for iteration in range(cfg.max_tool_iterations):
@@ -1510,261 +1807,43 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 msgs.say(msgs.RETRY_BUDGET_EXHAUSTED)
                 events.end("retry_budget_exhausted")
                 return
-            result = reply.result
-            text = result.text
-            pending_calls = [
-                _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
-                for call in result.tool_calls
-            ]
-            finish, reasoning, usage = reply.finish, result.reasoning, result.usage
-            provider_metadata, incomplete_reason = reply.provider_metadata, reply.incomplete_reason
-
-            assistant_message_override: ai.messages.Message | None = None
-            if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
-                notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
-                telemetry.event(
-                    "tool_call_dropped",
-                    reason="incomplete_truncated_args",
-                    incomplete_reason=incomplete_reason,
-                    n_tool_calls=len(pending_calls),
-                    tools=[pc.name for pc in pending_calls],
-                )
-                if not suppress_output:
-                    sink.text(("\n\n" if text else "") + notice)
-                    sink.close()
-                text = f"{text}\n\n{notice}" if text else notice
-                pending_calls = []
-                assistant_message_override = ai.assistant_message(text)
-
-            # Freeze dispatch authorization to the schemas this model call saw.
-            # Discovery may mutate the turn surface while this batch runs, but a
-            # newly loaded tool is callable only after its schema is emitted on
-            # the next model iteration.
-            dispatch_registry = active_registry.dispatch_registry()
-            batch_diagnostic_suffix = ""
-            if pending_calls:
-                pending_calls, batch_stats = _normalize_tool_call_batch(
-                    pending_calls,
-                    dispatch_registry,
-                    getattr(
-                        cfg,
-                        "max_tool_calls_per_message",
-                        _settings.default_value("limits.max_tool_calls_per_message"),
-                    ),
-                )
-                telemetry.event(
-                    "tool_call_batch_normalized",
-                    received=batch_stats.received,
-                    retained=batch_stats.retained,
-                    duplicate=batch_stats.duplicate,
-                    invalid=batch_stats.invalid,
-                    capped=batch_stats.capped,
-                )
-                if batch_stats.capped:
-                    diagnostic = (
-                        "Tool-call batch limit reached: "
-                        f"retained {batch_stats.retained} distinct calls and rejected "
-                        f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
-                    )
-                    batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
-                    text += batch_diagnostic_suffix
-
-            # --- Record the assistant turn ---
-            history_assistant_record: dict = {"role": "assistant", "content": text}
-            if pending_calls:
-                history_assistant_record["tool_calls"] = [
-                    {"id": pc.id, "type": "function",
-                     "function": {"name": pc.name, "arguments": pc.arguments()}}
-                    for pc in pending_calls
-                ]
-            if reasoning:
-                history_assistant_record["reasoning_content"] = reasoning
-            if not isinstance(provider_metadata, dict):
-                provider_metadata = None
-            incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
-            if provider_metadata:
-                history_assistant_record["provider_metadata"] = provider_metadata
-            if incomplete_reason:
-                history_assistant_record["incomplete_reason"] = incomplete_reason
-            assistant_message = assistant_message_override or result.assistant_message
-            if result.tool_calls:
-                assistant_message = _assistant_message_with_tool_calls(
-                    assistant_message,
-                    pending_calls,
-                    diagnostic_suffix=batch_diagnostic_suffix,
-                )
-            # The signed parts as this turn replays them, after batch normalization.
-            signed_reasoning = (
-                model_client.signed_reasoning_parts(assistant_message)
-                if assistant_message_override is None else None
+            pending_calls, incomplete_reason, dispatch_registry = _record_assistant(
+                reply, cfg=cfg, request=request, system=system, messages=messages, convo=convo,
+                registry=active_registry, context=active_context, token_state=token_state,
+                telemetry=telemetry, events=events, sink=sink, suppress_output=suppress_output,
             )
-            if signed_reasoning:
-                history_assistant_record["reasoning_parts"] = signed_reasoning
-                history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
-            if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
-                assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
-            convo.ai.append(_sanitize_assistant_message(assistant_message))
-            messages.append(memory.note_time(history_assistant_record))
-            # Recorded in full now; a later ^C in this turn must not re-append it.
-            sink.clear()
             durable_side_effects_started = True
-            token_state.record_provider_usage(
-                None if reply.usage_stale else usage,
-                message_count=len(messages),
-                messages=messages,
-                system=system,
-                tools=reply.ai_tools,
-            )
-            current_tokens, _estimate, used_provider = token_state.current_context_tokens(
-                system=system,
-                messages=messages,
-                tools=reply.ai_tools,
-            )
-            active_context.context_tokens = current_tokens
-            active_context.context_tokens_used_provider_usage = used_provider
-            if text:
-                payload = {"text": text, "finish_reason": finish}
-                if incomplete_reason:
-                    payload["incomplete_reason"] = incomplete_reason
-                events.emit("response", **payload)
             resuming = (
                 not pending_calls
                 and resumes_sent < limits.max_output_resumes
                 and iteration + 1 < cfg.max_tool_iterations
-                and cut_off_by_cap(incomplete_reason, [pc.arguments() for pc in pending_calls])
+                and cut_off_by_cap(incomplete_reason, [])
             )
             if incomplete_reason and not suppress_output and not resuming:
                 msgs.warn(msgs.RESPONSE_INCOMPLETE, reason=incomplete_reason)
-
+            if resuming:
+                resumes_sent += 1
+                _send_resume_nudge(messages, convo, n=resumes_sent, limit=limits.max_output_resumes,
+                                   incomplete_reason=incomplete_reason, model=model,
+                                   telemetry=telemetry, suppress_output=suppress_output)
+                continue
             if not pending_calls:
-                if resuming:
-                    # Keep the partial reply and ask the model to carry on
-                    # from where the cap cut it.
-                    resumes_sent += 1
-                    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
-                    messages.append(nudge)
-                    convo.add([nudge])
-                    telemetry.event("max_output_resume", model=model, n=resumes_sent,
-                                    incomplete_reason=incomplete_reason)
-                    if not suppress_output:
-                        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=resumes_sent, limit=limits.max_output_resumes)
-                    continue
                 if incomplete_reason:
-                    events.end("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
+                    events.end("incomplete", finish_reason=reply.finish, incomplete_reason=incomplete_reason)
                 else:
                     events.end("stop")
                 return
-
-            # --- Dispatch tools, append result messages ---
-            # convo.ai carries the heavy form (image bytes embedded in tool messages) for THIS
-            # turn; messages — persisted and replayed on every future turn — carries the
-            # dehydrated stub so base64 is billed once.
-            for index, pc in enumerate(pending_calls):
-                emission = events.emit(
-                    "tool_call",
-                    id=pc.id,
-                    name=_canonical_tool_call_name(pc.name, active_registry),
-                    arguments=_canonical_tool_args(pc.arguments()),
-                )
-                refusal = event_mod.refusal_of(emission)
-                if refusal and pc.validation_error is None:
-                    # An `on tool_call` handler refused it: the call never runs
-                    # and the model reads the refusal as its result.
-                    pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
-                    telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
-            # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
-            # thread so the shared loop stays free while they execute. Fan-out (task /
-            # named-agent) calls are awaited ON the loop instead, so a parent turn
-            # never parks a dispatch thread its descendants need (see _dispatch_batch).
-            # A read that repeats an earlier one returns a stub naming it only
-            # while that earlier result is still in the history the model sees.
-            active_context.keep_shown_reads(_tool_results_in(messages))
-            progress = _DispatchProgress()
-            turn_status.tool_begin([_canonical_tool_call_name(pc.name, active_registry) for pc in pending_calls])
-            try:
-                dispatch_records = await _dispatch_batch(
-                    pending_calls,
-                    telemetry,
-                    cfg.max_tool_result_bytes,
-                    trace,
-                    error_tracker,
-                    dispatch_registry,
-                    active_context,
-                    asyncio.get_running_loop(),
-                    progress,
-                )
-            finally:
-                turn_status.tool_end()
-                # Also runs on cancellation, before the REPL persists the turn
-                # and balances genuinely unanswered calls with orphan markers.
-                dispatch_records = [progress.records[pc.id] for pc in pending_calls
-                                    if pc.id in progress.records]
-                capped = _cap_batch_results(
-                    [r for _, _, r in dispatch_records],
-                    getattr(cfg, "max_tool_results_per_turn_bytes", 0),
-                )
-                reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
-                for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
-                    _reconcile_read_delivery(
-                        _canonical_tool_call_name(pc.name, active_registry),
-                        args,
-                        old_result,
-                        new_result,
-                        active_context,
-                        pc.id,
-                    )
-                    reconciled.append((pc, args, new_result))
-                dispatch_records = reconciled
-                active_context.settle_reads()
-                # A batch's tool results must stay contiguous: the SDK's history
-                # check ends the pending tool-call window at the first following
-                # user/assistant message, so an image's user FilePart inserted
-                # between two tool results orphans every later one. Collect the
-                # batch's tool messages first, then the media that follows it.
-                batch_tool_msgs: list[ai.messages.Message] = []
-                batch_media_msgs: list[ai.messages.Message] = []
-                for pc, _args, result_value in dispatch_records:
-                    canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
-                    events.emit(
-                        "tool_result",
-                        id=pc.id,
-                        name=canonical_pc.name,
-                        result=result_value,
-                    )
-                    for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
-                        if built.role == "tool":
-                            batch_tool_msgs.append(built)
-                        else:
-                            batch_media_msgs.append(built)
-                    done_at = progress.finished.get(pc.id)
-                    messages.extend(memory.note_time(item, done_at)
-                                    for item in _history_tool_result_message(canonical_pc, result_value))
-                convo.ai.extend(batch_tool_msgs)
-                convo.ai.extend(batch_media_msgs)
+            dispatch_records = await _record_tool_results(
+                pending_calls, cfg=cfg, trace=trace, messages=messages, convo=convo,
+                registry=active_registry, dispatch_registry=dispatch_registry, context=active_context,
+                error_tracker=error_tracker, telemetry=telemetry, events=events,
+            )
             if error_tracker.limit_reached():
-                name, last_error = next(
-                    ((_canonical_tool_call_name(pc.name, active_registry), result_value)
-                     for pc, _, result_value in reversed(dispatch_records)
-                     if isinstance(result_value, str) and result_value.startswith("ERROR")),
-                    (dispatch_records[-1][0].name, dispatch_records[-1][2]),
-                )
-                failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
-                final_error = {"role": "assistant", "content": failure}
-                convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-                messages.append(memory.note_time(final_error))
-                events.emit("error", error=failure, retryable=False)
-                events.end("tool_error_limit")
+                _record_tool_error_limit(dispatch_records, registry=active_registry, messages=messages,
+                                         convo=convo, events=events)
                 return
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
-                steered = steer()
-                if inspect.isawaitable(steered):
-                    steered = await steered
-                if steered is not None:
-                    messages.append(memory.note_time(steered))
-                    convo.add([steered])
-                    telemetry.event("steered", message_index=len(messages) - 1)
-                    if not suppress_output:
-                        msgs.say(msgs.STEERED, flush=True)
+                await _take_steer(steer, messages, convo, telemetry, suppress_output)
 
         msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")
