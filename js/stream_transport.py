@@ -284,17 +284,21 @@ def begin_call(url: str, model: str) -> NetCall | None:
 
 
 class _OwnedCoreStream:
-    def __init__(self, stream: Any, call: NetCall | None = None) -> None:
+    def __init__(self, stream: Any, call: NetCall | None = None,
+                 on_bytes: Callable[[], None] | None = None) -> None:
         self._stream = stream
         self._iterator: AsyncIterator[bytes] = aiter(stream)
         self._closed = False
         self._call = call
+        self._on_bytes = on_bytes
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self
 
     async def __anext__(self) -> bytes:
         chunk = await anext(self._iterator)
+        if self._on_bytes is not None:
+            self._on_bytes()
         if self._call is not None:
             self._call.received(len(chunk))
         return chunk
@@ -311,9 +315,11 @@ class _OwnedCoreStream:
 
 
 @asynccontextmanager
-async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None):
+async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None,
+                        on_bytes: Callable[[], None] | None = None):
     """Close this model request's byte iterators when its stream scope exits.
-    With a `call`, its handshake and response bytes feed the network channel."""
+    With a `call`, its handshake and response bytes feed the network channel.
+    `on_bytes` is called for every response chunk read."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
@@ -321,7 +327,7 @@ async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None)
             if isinstance(stream, BoundAsyncStream):
                 stream = stream._stream
             if isinstance(stream, AsyncResponseStream):
-                wrapper = _OwnedCoreStream(stream._httpcore_stream, call)
+                wrapper = _OwnedCoreStream(stream._httpcore_stream, call, on_bytes)
                 stream._httpcore_stream = wrapper
                 cleanup.push_async_callback(wrapper.aclose)
 

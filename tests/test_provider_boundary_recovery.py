@@ -7,6 +7,7 @@ import ai
 import pytest
 
 from js import compaction, model_client, runtime
+from js import settings as _settings
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 from test_lazy_tool_discovery import _cfg, _result
@@ -93,7 +94,8 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         asyncio.run(call)
         assert messages[-1]["content"] == "recovered"
     if kind != "overflow":
-        assert len(attempts) == (1 if kind == "fatal" else 3 if persistent else 2)
+        budget = _settings.default_value("runtime.retry_attempts")
+        assert len(attempts) == (1 if kind == "fatal" else budget + 1 if persistent else 2)
         assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
     else:
         assert len(attempts) <= compaction.MAX_OVERFLOW_ROUNDS + 1

@@ -175,6 +175,19 @@ def is_context_overflow_error(exc: BaseException) -> bool:
     return any(needle in haystack for needle in _CONTEXT_OVERFLOW_NEEDLES)
 
 
+class SilentOverflowError(ai.ProviderAPIError):
+    """A reply the provider accepted although its prompt exceeded the context
+    window: the provider cut the input to fit without an error."""
+
+    def __init__(self, prompt_tokens: int, context_window: int | None) -> None:
+        super().__init__(
+            f"provider reported {prompt_tokens} input tokens, over the {context_window}-token context window",
+            code="silent_context_overflow", is_retryable=False,
+        )
+        self.prompt_tokens = prompt_tokens
+        self.context_window = context_window
+
+
 # How many rounds of recovery a single turn may attempt after the provider
 # rejects the request for size. One was never enough: the first compaction
 # targets whatever window we *believe* we have, and if that belief is wrong
@@ -589,6 +602,8 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         configured_headers=getattr(cfg, "provider_headers", None),
         explicit_model=True,
     )
+    idle = float(_settings.knob(getattr(cfg, "settings", None), "runtime.stream_idle_seconds") or 0) or None
+
     async def summarize_chunk(head: list[dict], depth: int) -> str:
         try:
             result = await model_client.stream_model_async(
@@ -605,6 +620,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_extra=routing.provider_extra_params(cfg),
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),
+                stream_idle_seconds=idle,
             )
         except ai.ProviderAPIError as exc:
             if not is_context_overflow_error(exc) or depth >= _SUMMARY_SPLIT_DEPTH or len(head) < 2:

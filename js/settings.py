@@ -295,6 +295,26 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Most read-only tool calls of one model response that run at once: "
                 "read, fs_search, the web searches, a GET fetch. A call that writes "
                 "runs alone, after the calls before it. 1 runs every call in turn."),
+    SettingSpec("runtime.retry_attempts", "int",
+                "Retries of one model request after a retryable failure: a 429, a "
+                "5xx, a dropped or idle stream. Each waits what the provider's "
+                "Retry-After or retry-after-ms header asks, else 1s, 2s, 4s ... up to "
+                "16s. 0 fails on the first error."),
+    SettingSpec("runtime.retry_max_wait_seconds", "float",
+                "Longest Retry-After wait honoured. A provider asking for longer "
+                "fails the request at once. 0 honours any wait."),
+    SettingSpec("runtime.stream_idle_seconds", "float",
+                "Seconds a model request may go without a response byte before it "
+                "is aborted and retried under runtime.retry_attempts. SSE keep-alive "
+                "comments count as bytes. 0 waits forever."),
+    SettingSpec("runtime.max_output_escalation", "int",
+                "A reply cut off by its output-token cap is sent again once with "
+                "this cap, when it is larger than the one used and not above the "
+                "model's known output limit. 0 never resends."),
+    SettingSpec("runtime.max_output_resumes", "int",
+                "After a reply is cut off by its output-token cap, how many times per "
+                "turn the partial reply is kept and the model is told to resume. 0 "
+                "ends the turn on the cutoff."),
     SettingSpec("runtime.steer", "str",
                 "What a line typed while a turn runs does. now: it reaches the model "
                 "at the turn's next tool boundary, as a user message. A turn with no "
@@ -499,6 +519,12 @@ def parse_bool(raw: str) -> bool | None:
     return None
 
 
+_NONNEGATIVE_KNOBS = frozenset({
+    "runtime.retry_attempts", "runtime.retry_max_wait_seconds", "runtime.stream_idle_seconds",
+    "runtime.max_output_escalation", "runtime.max_output_resumes",
+})
+
+
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
     VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
@@ -546,6 +572,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             value = int(text)
         except ValueError:
             return None, msgs.EXPECTED_INTEGER.text()
+        if spec.key in _NONNEGATIVE_KNOBS and value < 0:
+            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.text()
         if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
             return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
@@ -560,6 +588,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             number = float(text)
         except ValueError:
             return None, msgs.EXPECTED_NUMBER.text()
+        if spec.key in _NONNEGATIVE_KNOBS and number < 0:
+            return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
         if spec.key == "mcp.request_timeout_s" and number <= 0:
             return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
         return number, None

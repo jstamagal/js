@@ -265,13 +265,18 @@ def _flaky_model(monkeypatch, failures: list[Exception]) -> list[int]:
     return calls
 
 
+def _retrying(tmp_path, attempts: int):
+    """A config whose retry budget runs out before five failures do."""
+    return dataclasses.replace(_cfg(tmp_path), settings={"runtime": {"retry_attempts": attempts}})
+
+
 def test_turn_that_gives_up_on_dns_prints_one_line_at_level_1(monkeypatch, sink, tmp_path):
     lines, level = sink
     level["value"] = 1
     calls = _flaky_model(monkeypatch, [_dns_failure() for _ in range(5)])
 
     with pytest.raises(ai.ProviderAPIError):
-        _turn(tmp_path, ToolContext(cwd=tmp_path))
+        _turn(tmp_path, ToolContext(cwd=tmp_path), cfg=_retrying(tmp_path, 2))
 
     assert len(calls) > 1                       # the runtime retried
     assert len(_naming(lines, "nowhere.invalid")) == 1
@@ -283,7 +288,7 @@ def test_turn_retries_show_at_level_3_and_end_with_the_failure(monkeypatch, sink
     calls = _flaky_model(monkeypatch, [_dns_failure() for _ in range(5)])
 
     with pytest.raises(ai.ProviderAPIError):
-        _turn(tmp_path, ToolContext(cwd=tmp_path))
+        _turn(tmp_path, ToolContext(cwd=tmp_path), cfg=_retrying(tmp_path, 2))
 
     # Each call says Connecting (with the URL); each failure after it names the
     # host alone: one per retry, then the one the runtime gave up on.

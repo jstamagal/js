@@ -62,6 +62,23 @@ class FriendlyProviderError(routing.ProviderNotLoggedInError):
     """Provider-boundary failure already formatted for one-line user display."""
 
 
+class StreamIdleError(ai.ProviderTimeoutError):
+    """A model request went `seconds` without a response byte and was aborted.
+    Retryable: the runtime sends the request again under its retry budget."""
+
+    def __init__(self, seconds: float, *, provider: str | None = None) -> None:
+        super().__init__(
+            f"no response bytes for {seconds:g}s (runtime.stream_idle_seconds)",
+            provider=provider, is_retryable=True,
+        )
+        self.seconds = seconds
+
+
+# The SDK finish reason for a reply that hit its output-token cap: OpenAI chat
+# "length" and Anthropic "max_tokens" both arrive as this.
+_OUTPUT_CAP_FINISH = "length"
+
+
 def _provider_label(provider_id: str | None, exc: BaseException | None = None) -> str:
     provider = getattr(exc, "provider", None) if exc is not None else None
     if isinstance(provider, str) and provider:
@@ -533,20 +550,27 @@ async def _open_stream(
     messages: list[ai.messages.Message],
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None = None,
+    on_bytes: Callable[[], None] | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
 
     ai 0.4 removed the public ``executor=`` argument from :func:`ai.stream`.
     Keeping the test seam here lets offline tests supply a public
     :class:`ai.models.Stream` without reaching into SDK internals.
+
+    ``on_bytes`` is called for each response body chunk the transport reads.
+    The OpenAI and Anthropic SDK clients retry nothing themselves: the runtime
+    owns the retry budget and the Retry-After wait.
     """
     from ai.providers.anthropic.provider import AnthropicCompatibleProvider
     from ai.providers.openai.provider import OpenAICompatibleProvider
 
     async with AsyncExitStack() as cleanup:
         if isinstance(model.provider, (OpenAICompatibleProvider, AnthropicCompatibleProvider)):
+            sdk_client = model.provider.sdk_client
+            sdk_client.max_retries = 0
             await cleanup.enter_async_context(stream_transport.own_responses(
-                model.provider.sdk_client._client, stream_transport.current_call(),
+                sdk_client._client, stream_transport.current_call(), on_bytes=on_bytes,
             ))
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
@@ -580,6 +604,12 @@ _reasoning_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextv
     "js_reasoning_sink", default=None,
 )
 
+# runtime.stream_idle_seconds for the `stream_model_async` call running in this
+# context; None or 0 leaves the stream without a watchdog.
+_idle_seconds: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "js_stream_idle_seconds", default=None,
+)
+
 
 async def _stream_async(
     model: ai.Model,
@@ -599,17 +629,39 @@ async def _stream_async(
     start = time.perf_counter()
     first_token_s: float | None = None
     stream_provider_metadata: dict[str, Any] | None = None
-    async with _open_stream(**kwargs) as stream:
-        async for event in stream:
-            event_metadata = getattr(event, "provider_metadata", None)
-            if isinstance(event_metadata, dict):
-                stream_provider_metadata = event_metadata
-            if isinstance(event, ai.events.TextDelta):
-                if first_token_s is None:
-                    first_token_s = time.perf_counter() - start
-                on_text(event.chunk)
-            elif isinstance(event, ai.events.ReasoningDelta) and on_reasoning is not None:
-                on_reasoning(event.chunk)
+    finish_reason: str | None = None
+    idle = _idle_seconds.get() or None
+    loop = asyncio.get_running_loop()
+    # The idle deadline moves forward on every response byte and every event.
+    # It covers the wait for the response headers too.
+    deadline = asyncio.timeout(idle)
+    try:
+        async with deadline:
+
+            def alive() -> None:
+                if idle is not None and not deadline.expired():
+                    deadline.reschedule(loop.time() + idle)
+
+            async with _open_stream(**kwargs, on_bytes=alive) as stream:
+                async for event in stream:
+                    alive()
+                    event_metadata = getattr(event, "provider_metadata", None)
+                    if isinstance(event_metadata, dict):
+                        stream_provider_metadata = event_metadata
+                    if isinstance(event, ai.events.TextDelta):
+                        if first_token_s is None:
+                            first_token_s = time.perf_counter() - start
+                        on_text(event.chunk)
+                    elif isinstance(event, ai.events.ReasoningDelta) and on_reasoning is not None:
+                        on_reasoning(event.chunk)
+                    elif isinstance(event, ai.events.StreamEnd):
+                        finish_reason = event.finish_reason
+    except Exception as exc:
+        # The expired deadline cancelled the read; asyncio.timeout reports that
+        # as TimeoutError, and an SDK may have wrapped it on the way out.
+        if idle is not None and deadline.expired():
+            raise StreamIdleError(idle, provider=getattr(model.provider, "name", None)) from exc
+        raise
     elapsed_s = time.perf_counter() - start
 
     text = stream.text
@@ -621,6 +673,8 @@ async def _stream_async(
         or getattr(stream, "provider_metadata", None)
     )
     incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
+    if incomplete_reason is None and finish_reason == _OUTPUT_CAP_FINISH:
+        incomplete_reason = "max_output_tokens"
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,
@@ -837,6 +891,7 @@ async def stream_model_async(
     trace_request_schemas: bool = True,
     trace_request_from: int = 0,
     cache_key: str | None = None,
+    stream_idle_seconds: float | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
 
@@ -844,6 +899,9 @@ async def stream_model_async(
     closes the provider-owned client in ``finally`` — all without owning a loop,
     so many turns/subagents can run concurrently on one shared loop. The sync
     ``stream_model`` below wraps this for callers not yet on the async runtime.
+
+    ``stream_idle_seconds`` (None or 0: no limit) aborts the request with
+    :class:`StreamIdleError` once that long passes without a response byte.
     """
     try:
         model = resolve_model(
@@ -1032,6 +1090,7 @@ async def stream_model_async(
                 _on_reasoning(chunk)
 
     reasoning_token = _reasoning_sink.set(on_reasoning)
+    idle_token = _idle_seconds.set(stream_idle_seconds)
     try:
         return await _stream_async(
             model=model,
@@ -1050,6 +1109,7 @@ async def stream_model_async(
             raise friendly from exc
         raise
     finally:
+        _idle_seconds.reset(idle_token)
         _reasoning_sink.reset(reasoning_token)
         stream_transport.reset_call(net_token)
         try:
