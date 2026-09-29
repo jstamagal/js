@@ -36,8 +36,8 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
 | Branch / fork / rewind | no (designed) | yes | yes | yes |
 | Session picker with search | no (designed) | yes | yes | yes |
-| Structured headless output | no | stream-json | `exec --json` | json + rpc |
-| Cost accounting | no | yes | tokens only | yes |
+| Structured headless output | yes, `-p --json` (done in js-1g1.18) | stream-json | `exec --json` | json + rpc |
+| Cost accounting | yes, `/cost` and the bar (done in js-1g1.19) | yes | tokens only | yes |
 | One config grammar (file = REPL) | yes | no | no | no |
 | Prompt-time code directives | yes | no | no | no |
 | Project memory walks up the tree | no, by design | yes | yes | yes |
@@ -157,8 +157,8 @@ pi retries once. Codex does not recover inside a normal turn.
 
 ## Entirely lacking
 
-- **Cost and cumulative token accounting.** There are per-call bench rows only.
-- **Structured headless output.** There's no stream-json from `-p`, no JSON-RPC and no SDK, so another agent can't drive js as an event stream.
+- **Cost and cumulative token accounting** (done in js-1g1.19: `usage.py`, `/cost`, the status bar).
+- **Structured headless output.** `-p --json` streams events (done in js-1g1.18: `headless.py`); there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
 - **Branch, fork and rewind of history.** (designed)
 - **An in-REPL picker, titles and search.** (designed)
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.
@@ -191,5 +191,5 @@ Hot spots over 441 commits in two months:
 3. **`Retry-After` plus a real retry budget.**
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
 5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.
-6. **stream-json output for `-p`.**
+6. **stream-json output for `-p`** (done in js-1g1.18).
 7. **Architecture #1 (settings projection) and #4 (delete the shims).**

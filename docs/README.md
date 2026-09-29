@@ -21,6 +21,7 @@ Root `README.md` is only a launch pad.
    name handling, reasoning, output caps, and vision.
 9. [Testing And Development](testing-and-development.md): test suite layout and
    verification commands.
+10. [Headless JSON Events](headless-json.md): the `js -p --json` event schema.
 
 ## What This Project Is
 

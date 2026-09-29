@@ -118,6 +118,7 @@ REPL commands:
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session [query]               open the session picker
+/cost                          the session's tokens and cost, in total and by model
 /cd [dir]                      print or change the session's working directory
 /add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
 /drop <path>                   under -C, stop showing a path added with /add
@@ -185,11 +186,13 @@ without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
 The line above the input is the status bar: `[HH:MM] provider/model context`
-on the left, `agent/session cache N%` on the right, and while a turn runs a
+on the left, `agent/session cache N% cost` on the right, and while a turn runs a
 spinner in the middle with the output-token count, the running tool and its
-elapsed seconds, or `compacting`. On a narrow terminal it drops the cache
-figure first, then shortens the model name, then drops the provider, the
-token count and the agent id; the clock, spinner and session id stay. Its
+elapsed seconds, or `compacting`. The cost is the session's spend so far
+(`/cost` breaks it down); with no priced call it is a token count. On a narrow
+terminal it drops the cache figure first, then shortens the model name, then
+drops the provider, the token count, the cost and the agent id; the clock,
+spinner and session id stay. Its
 colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
@@ -277,8 +280,14 @@ js -p "prompt" --debug-file /tmp/js-debug.log
 js -p "prompt" --reasoning off
 js -p "prompt" --max-out 64000
 js -p "prompt" --quiet
+js -p "prompt" --json
 js --migrate-config
 ```
+
+`--json` writes the run to stdout as JSON events, one per line: the session,
+streamed text, each tool call and a summary of its result, token usage and
+cost per model call, errors, and a closing `result`. Everything else goes to
+stderr. The schema is in [Headless JSON Events](headless-json.md).
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
 file and keeps stdout clean. They are mutually exclusive.
