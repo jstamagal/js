@@ -96,11 +96,10 @@ empty system prompt and no tools.
 Child contexts copy:
 
 - cwd
-- read limits
-- file size limits
-- tool result cap
-- shell output cap
-- fetch timeout
+- model
+- every `on_context` row of `js/turn_settings.py` (read and file limits,
+  tool result and shell output caps, network timeouts, shell, kernel, jail,
+  lsp and notebook settings)
 
 Child contexts do not inherit:
 

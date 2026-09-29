@@ -36,6 +36,7 @@ persists each completed turn.
 | Module | Responsibility |
 | `js/cli.py` | argument parser, REPL, prompt/pipe mode, commit orchestration |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
+| `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
@@ -108,11 +109,15 @@ prompt directory whose name collides with an existing tool is skipped.
 - undo snapshots
 - search cache
 
-`run_turn()` hydrates the active context from `Config` each turn for output caps,
-fetch timeout, agent id, selected registry, and vision mode.
+`run_turn()` hydrates the active context from `Config` each turn: the
+`on_context` rows of `js/turn_settings.py` (`turn_settings.install`), agent id,
+selected registry, and vision mode. In the REPL the Config itself is
+re-projected from the live settings store before each turn
+(`turn_settings.project`), so `/set` of any row takes effect on the next turn.
 
-Child task contexts copy limits and cwd from the parent but start with fresh
-read sets, snapshots, and search cache.
+Child task contexts copy the parent's cwd, model and `on_context` rows
+(`turn_settings.inherit`) but start with fresh read sets, snapshots, and
+search cache.
 
 ## Runtime Loop
 

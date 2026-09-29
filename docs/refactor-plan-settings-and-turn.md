@@ -47,6 +47,10 @@ Every setting a merged bead added shows up in this diff. Each one becomes one ro
 
 ## Part 1: One per-turn settings projection (`js/knobs.py`)
 
+> Done in js-1g1.31 as `js/turn_settings.py`: `TurnSetting` rows in `TURN_SETTINGS`,
+> bases `ConfigSettings` and `ContextSettings`. The code is the reference now; the
+> text below is the plan as written.
+
 ### Current structure (at `31900da`)
 
 | Copy | Location | What it holds |
