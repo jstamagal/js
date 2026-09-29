@@ -149,6 +149,14 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
                 "async screen. Display only; session reasoning is always retained.",
                 env="JS_UI_REASONING"),
+    SettingSpec("ui.net", "int", 2,
+                "Network display in the async screen: 0 nothing, 1 failures, 2 also "
+                "Connecting/Connected lines and a response byte counter on the status "
+                "bar until the first token, 3 also per-call stream stats."),
+    SettingSpec("ui.status_bg", "str", "#00007f",
+                "Status bar background, #rrggbb. Drawn in truecolor on every terminal."),
+    SettingSpec("ui.status_fg", "str", "#ffffff",
+                "Status bar foreground, #rrggbb."),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
@@ -358,6 +366,7 @@ SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
 KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
 SECTION_ORDER: tuple[str, ...] = (
     "model",
+    "ui",
     "provider",
     "limits",
     "shell",
@@ -378,6 +387,7 @@ SECTION_ORDER: tuple[str, ...] = (
 _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+_HEX_COLOUR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 # The only values `model.reasoning_effort` accepts. "off" disables reasoning
 # (stored as the literal "none"); everything else is rejected outright — no
@@ -416,6 +426,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 f"custom one with `js --login`"
             )
         return text, None
+    if spec.key in {"ui.status_bg", "ui.status_fg"} and not _HEX_COLOUR_RE.fullmatch(text):
+        return None, f"expected a #rrggbb colour (got {text!r})"
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
             return None, f"expected a URL starting with http:// or https:// (got {text!r})"
@@ -431,7 +443,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             value = int(text)
         except ValueError:
             return None, "expected an integer"
-        if spec.key == "ui.reasoning" and value not in range(4):
+        if spec.key in {"ui.reasoning", "ui.net"} and value not in range(4):
             return None, "expected an integer from 0 to 3"
         if spec.key in {"limits.max_tool_calls_per_message", "limits.subagent_max_workers"} and value < 1:
             return None, "expected an integer >= 1"
@@ -718,6 +730,7 @@ _SECTION_INTRO: dict[str, list[str]] = {
         "# wait_seconds bounds how long a call blocks; verbosity and render_max_lines",
         "# only change what you see. The model always receives the full result.",
     ],
+    "ui": ["# The async screen: status bar colours and what each display channel shows."],
     "runtime": ["# Live-runtime toggles."],
     "compact": ["# Cache-first context compaction knobs."],
     "subagents": ["# Subagent model-selection policy."],
