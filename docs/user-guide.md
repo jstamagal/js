@@ -197,7 +197,7 @@ in truecolor on every terminal, including the Linux console.
 
 `ui.net` sets how much of the network shows, 0 to 3. At 1 only failures print
 (`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
-retrying; at 2 (the default) each
+retrying, and so does a retry that waits 10s or more; at 2 (the default) each
 model request, including subagents and compaction, also prints
 `*** Connecting` and `*** Connected ... Nms`, and the bar counts response
 bytes until the first token arrives; at 3 each retry, models.dev catalog
