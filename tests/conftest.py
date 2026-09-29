@@ -63,10 +63,13 @@ def fresh_model_catalog(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def local_model_catalog(monkeypatch, fresh_model_catalog):
     """Every test reads the session's fresh catalog, so no lookup downloads
-    models.dev. A refresh that reaches the download fails instead."""
+    models.dev. A refresh that reaches the download fails instead. The
+    catalog path the models.dev package reads is reset per test, since
+    model_metadata activates a database by writing it to the environment."""
     db, status_path, status = fresh_model_catalog
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: db)
     monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
+    monkeypatch.setenv(model_metadata.modelsdotdev_data.DATABASE_PATH_ENV, str(db))
     if not status_path.exists():
         model_metadata._write_status_file(status)
 

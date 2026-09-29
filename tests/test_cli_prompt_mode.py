@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 import pytest
 
-from js import cli, runtime
+from js import cli, runtime, settings
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -536,7 +536,12 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     assert not (agent_dir / ".no-save.jsonl").exists()
 
 
-def test_js_pipe_modes_no_save_pass_save_false(monkeypatch):
+# Agent drivers read this stderr line after a headless run as the signal that
+# the next round cannot resume (docs/configuration-and-sessions.md).
+NO_SAVE_WARNING = "session not saved; resume unavailable"
+
+
+def test_js_pipe_modes_no_save_pass_save_false(monkeypatch, capsys):
     calls: list[dict] = []
 
     class StdinStub:
@@ -549,12 +554,38 @@ def test_js_pipe_modes_no_save_pass_save_false(monkeypatch):
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
-    assert cli.main(["--no-save"]) == 0
-    assert cli.main(["--no-save", "-p"]) == 0
+    for argv in (["--no-save"], ["--no-save", "-p"], ["-n", "-p", "hi"]):
+        assert cli.main(argv) == 0
+        err = capsys.readouterr().err
+        assert err.splitlines().count(NO_SAVE_WARNING) == 1
+        assert err.endswith(f"{NO_SAVE_WARNING}\n")
     assert [(call["prompt"], call["save"]) for call in calls] == [
         ("Reply with PIPE_NO_SAVE_OK", False),
         ("Reply with PIPE_NO_SAVE_OK", False),
+        ("hi\n\nReply with PIPE_NO_SAVE_OK", False),
     ]
+
+
+def test_no_save_warning_is_only_for_a_headless_no_save_run(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    class PromptSessionStub:
+        def __init__(self, history, **kwargs):
+            pass
+
+        def prompt(self, *_args, **_kwargs):
+            raise EOFError
+
+    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
+
+    assert cli.main(["-p", "hi"]) == 0
+    assert NO_SAVE_WARNING not in capsys.readouterr().err
+    assert cli.main(["--blocking", "-n"]) == 0
+    assert NO_SAVE_WARNING not in capsys.readouterr().err
 
 
 def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
@@ -669,7 +700,9 @@ def test_warn_missing_binaries_once_per_binary(monkeypatch, capsys):
     cli._warned_binaries.clear()
 
 
-def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_path):
+def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_path, capsys):
+    """Finding 55: a nonexistent agent id names the agent and the global agents
+    dir where one is created, not the raw missing prompts directory."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -678,16 +711,26 @@ def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_pa
 
     assert cli._run_prompt("hi", agent="ghostagent") == 2
 
+    err = capsys.readouterr().err
+    assert "ghostagent" in err
+    assert str(tmp_path / ".js" / "agents") in err
 
-def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatch, tmp_path):
+
+def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatch, tmp_path, capsys):
     """Ruling B: `--reasoning default` (or any non-ladder token) is rejected with
-    rc 2, never shipped verbatim to the provider."""
+    rc 2, never shipped verbatim to the provider. The error names the rejected
+    token and every accepted value."""
     def explode(**kwargs):
         raise AssertionError("provider must not be reached for an invalid --reasoning")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", explode)
 
     assert cli._run_prompt("hi", reasoning="default") == 2
+
+    err = capsys.readouterr().err
+    assert "default" in err
+    for value in settings.REASONING_EFFORT_VALUES:
+        assert value in err
 
 
 def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):

@@ -75,8 +75,7 @@ def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir):
 
 
 def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_logins_dir):
-    # A saved login whose id is not in the known registry shows up as "custom"
-    #.
+    # A saved login whose id is not in the known registry shows up as "custom".
     known = {p.id for p in providers.login_providers()}
     custom_id = "my-private-proxy-xyz"
     assert custom_id not in known
@@ -189,8 +188,7 @@ def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
 
 def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, monkeypatch):
     # Offline, with no saved login and no creds, the SDK raises on missing
-    # credentials before any request; cli wraps it as {"error": ...}, rc=1
-    #.
+    # credentials before any request; cli wraps it as {"error": ...}, rc=1.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_ADMIN_KEY", raising=False)
 
