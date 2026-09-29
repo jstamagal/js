@@ -705,6 +705,8 @@ HOME_REFILED = Message("Filed {reason} from {source} by start directory")
 HOME_WOULD_REFILE = Message("Would file {reason} from {source} by start directory")
 HOME_SESSION_IN_USE = Message("a js process has it open")
 HOME_NOT_EMPTY = Message("not empty after filing its sessions")
+HOME_UNUSED = Message("Left in place, js does not use it: {source}")
+HOME_WOULD_LEAVE_UNUSED = Message("Would leave in place, js does not use it: {source}")
 
 # --- Agent manifests to agent.yaml -------------------------------------------
 

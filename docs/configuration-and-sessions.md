@@ -302,11 +302,17 @@ them, js moves them in and prints one line per move on stderr, then writes
 the same moves without making them; `just migrate-home --apply` makes them,
 marker or not.
 
-- Old config entries land at `~/.js/<name>`, except `logins.toml` and
-  `models-cache.json`, which go to `~/.js/logins/`.
-- Old data entries land at `~/.js/<name>`, except `transcript` (to
-  `logs/transcript`), `modelsdotdev` (to `cache/modelsdotdev`), `notes` (to
-  `work/notes`) and `commit-backups` (to `state/commit-backups`).
+- Of the old config directory, only what js reads moves: `jsrc`,
+  `config.toml` (for `js --migrate-config`), `JS.md`, `JS.local.md`,
+  `agents`, `skills`, `toolbox`, `tools.yaml` and `.env` land at
+  `~/.js/<name>`; `logins.toml` and `models-cache.json` go to `~/.js/logins/`.
+- Of the old data directory, only what js reads moves: `sessions`, `state`
+  and `logs` land at `~/.js/<name>`; `transcript` goes to `logs/transcript`,
+  `modelsdotdev` to `cache/modelsdotdev`, `notes` to `work/notes` and
+  `commit-backups` to `state/commit-backups`.
+- Every other entry of the two (`sessions2`, `jsrc.bak`, a `js.zsh` your
+  shell sources, …) is left where it is, with one line naming it, and its
+  old directory stays.
 - `~/inbox/agents/js` becomes `~/.js/work`.
 
 Each entry moves by one rename, so a directory lands whole or not at all. A

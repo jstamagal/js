@@ -84,6 +84,58 @@ def test_first_run_moves_every_old_location_into_the_layout(tmp_path):
     assert len(out.getvalue().splitlines()) == len(steps)
 
 
+def _unused_entries() -> list[Path]:
+    legacy = _legacy()
+    return [
+        _write(legacy["config"] / "jsrc.bak", "set model.id older\n"),
+        _write(legacy["config"] / "workspace" / "scratch.md", "w\n"),
+        _write(legacy["data"] / "sessions2" / "defaultagent" / "s.jsonl", '{"role":"user","content":"x"}\n'),
+        _write(legacy["data"] / "logs2" / "debug.log", "l\n"),
+        _write(legacy["data"] / "state.bak", "b\n"),
+    ]
+
+
+def test_entries_js_does_not_use_are_left_in_place_and_named(tmp_path):
+    _old_layout(tmp_path)
+    unused = _unused_entries()
+    config, data = _legacy()["config"], _legacy()["data"]
+    left = sorted([config / "jsrc.bak", config / "workspace", data / "sessions2", data / "logs2", data / "state.bak"])
+    out = io.StringIO()
+
+    steps = home.migrate_once(out)
+
+    assert sorted(step.source for step in steps if step.kind == "unused") == left
+    for path in unused:
+        assert path.is_file()
+    lines = out.getvalue().splitlines()
+    for path in left:
+        assert len([line for line in lines if home._short(path) in line]) == 1
+    assert config.is_dir() and data.is_dir()
+    # What js reads still moved, and the inbox became ~/.js/work.
+    assert paths.global_config_file().read_text(encoding="utf-8") == "set model.id old-model\n"
+    assert (paths.work_dir() / "design.md").is_file()
+    assert not os.path.lexists(_legacy()["inbox"])
+
+
+def test_home_holds_only_layout_entries_after_migration(tmp_path):
+    legacy = _legacy()
+    _old_layout(tmp_path)
+    _unused_entries()
+    for name in ("JS.md", "JS.local.md", "tools.yaml", ".env", "config.toml", "models-cache.json"):
+        _write(legacy["config"] / name, "x\n")
+    _write(legacy["config"] / "toolbox" / "t" / "tool.md", "t\n")
+    for name in ("state", "logs", "commit-backups"):
+        _write(legacy["data"] / name / "f", "f\n")
+
+    home.migrate_once(io.StringIO())
+
+    layout = {path.name for path in paths.layout_dirs()}
+    files = {"jsrc", "config.toml", "JS.md", "JS.local.md", "tools.yaml", ".env"}
+    assert {entry.name for entry in paths.home().iterdir()} <= layout | files
+    assert sorted(entry.name for entry in legacy["config"].iterdir()) == ["jsrc.bak", "workspace"]
+    assert sorted(entry.name for entry in legacy["data"].iterdir()) == ["logs2", "sessions2", "state.bak"]
+
+
 def test_a_directory_others_are_renamed_into_still_moves_whole(tmp_path):
     data = _legacy()["data"]
     _write(data / "state" / "defaultagent" / "debug.log", "d\n")

@@ -27,7 +27,15 @@ ways:
 
 The automatic migration stays. The fixed one:
 
-1. Moves each old location into the layout below, as today.
+1. Moves each old location into the layout below. Of the old config and
+   data directories only the entries js reads move (config: `jsrc`,
+   `config.toml`, `JS.md`, `JS.local.md`, `agents`, `skills`, `toolbox`,
+   `tools.yaml`, `.env`, `logins.toml`, `models-cache.json`; data:
+   `sessions`, `state`, `logs`, `transcript`, `modelsdotdev`, `notes`,
+   `commit-backups`). Anything else (`sessions2`, `logs2`, `workspace`,
+   `jsrc.bak`, `js.zsh`, which a shell sources by its path) is left in place
+   with one line naming it, so nothing lands in `~/.js` that js does not
+   use. `~/inbox/agents/js` moves whole to `~/.js/work`.
 2. Converts every moved agent to `agent.yaml` in the same step. A tools
    entry is kept only when it matches a tool: a `tag:` entry, a glob that
    matches at least one tool, or a name that is a tool or an agent in the

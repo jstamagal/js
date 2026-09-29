@@ -6,6 +6,11 @@ Without --apply it prints what it would move. `migrate_once()` runs the same
 move at js startup, once: the marker `paths.home_migration_marker()` records
 that it ran, so later starts do nothing even if an old location reappears.
 
+The old agent inbox moves whole to ~/.js/work. Of the old config and data
+directories, only the entries js reads move, each to the place js reads it
+from now (`_CONFIG_ENTRIES`, `_DATA_ENTRIES`). Every other entry is left in
+place with one line naming it, and its old directory is then not removed.
+
 After the moves, every agent in ~/.js/agents is converted to agent.yaml
 (`js.agent_migration`), and the sessions of each old per-agent folder
 (`sessions/<agent>/`) are filed by the directory they started in
@@ -53,17 +58,29 @@ from . import session_catalog
 from . import session_store
 from . import session_text
 
-# Entries of the old data directory that do not keep their name under ~/.js.
-# Every other entry of the old config and data directories lands at ~/.js/<name>.
-_DATA_RENAMES = {
+# The entries of the old config and data directories js reads, each with the
+# place it reads it from now. Every other entry is left where it is.
+_CONFIG_ENTRIES = {
+    "jsrc": paths.global_config_file,
+    "config.toml": paths.legacy_global_config_file,
+    "JS.md": lambda: paths.global_instruction_files()[0],
+    "JS.local.md": lambda: paths.global_instruction_files()[1],
+    "agents": paths.global_agents_dir,
+    "skills": paths.global_skills_dir,
+    "toolbox": paths.global_toolbox_dir,
+    "tools.yaml": paths.tools_config_file,
+    ".env": paths.global_env_file,
+    "logins.toml": lambda: paths.login_store_dir() / "logins.toml",
+    "models-cache.json": lambda: paths.login_store_dir() / "models-cache.json",
+}
+_DATA_ENTRIES = {
+    "sessions": paths.sessions_root,
+    "state": paths.state_root,
+    "logs": paths.logs_root,
     "transcript": paths.transcript_root,
     "modelsdotdev": paths.model_catalog_dir,
     "notes": paths.notes_dir,
     "commit-backups": paths.commit_backups_dir,
-}
-_CONFIG_RENAMES = {
-    "logins.toml": lambda: paths.login_store_dir() / "logins.toml",
-    "models-cache.json": lambda: paths.login_store_dir() / "models-cache.json",
 }
 
 # `~/.js/tmp` entries untouched for this long are removed at startup.
@@ -72,7 +89,7 @@ TMP_MAX_AGE_SECONDS = 24 * 60 * 60
 
 @dataclass(frozen=True)
 class Step:
-    kind: str  # "move", "duplicate", "refuse", "rmdir", "relink", "convert", "drop", "skip", "refile"
+    kind: str  # "move", "duplicate", "refuse", "rmdir", "relink", "convert", "drop", "skip", "refile", "unused"
     source: Path
     target: Path | None = None
     reason: str = ""
@@ -95,6 +112,7 @@ def describe(step: Step, *, apply: bool) -> msgs.Said:
         ("drop", True): msgs.HOME_DROPPED, ("drop", False): msgs.HOME_WOULD_DROP,
         ("skip", True): msgs.HOME_LEFT, ("skip", False): msgs.HOME_WOULD_LEAVE,
         ("refile", True): msgs.HOME_REFILED, ("refile", False): msgs.HOME_WOULD_REFILE,
+        ("unused", True): msgs.HOME_UNUSED, ("unused", False): msgs.HOME_WOULD_LEAVE_UNUSED,
     }.get((step.kind, apply)) or (msgs.HOME_REFUSED if apply else msgs.HOME_WOULD_REFUSE)
     return entry.said(source=source, target=target, reason=step.reason)
 
@@ -311,8 +329,9 @@ class _Walk:
             return
         yield Step("rmdir", directory)
 
-    def spread(self, root: Path, renames: dict) -> Iterator[Step]:
-        """Move each entry of an old directory to ~/.js/<name> or its renamed place."""
+    def spread(self, root: Path, entries: dict) -> Iterator[Step]:
+        """Move each entry of an old directory that `entries` names to its place
+        under ~/.js; leave every other entry where it is, one step each."""
         try:
             root_stat = _lstat(root)
         except OSError as exc:
@@ -324,15 +343,17 @@ class _Walk:
             yield Step("refuse", root, None, msgs.HOME_NOT_A_DIR.text(kind=_kind(root_stat.st_mode)))
             return
         try:
-            # Entries that keep their name go first, so a directory another entry
-            # is renamed into (state/, logs/) arrives whole before it is added to.
-            names = sorted(os.listdir(root), key=lambda name: (name in renames, name))
+            names = os.listdir(root)
         except OSError as exc:
             yield Step("refuse", root, None, msgs.HOME_NOT_LISTED.text(error=exc))
             return
-        for name in names:
-            target = renames[name]() if name in renames else paths.home() / name
-            yield from self.entry(root / name, target)
+        for name in sorted(name for name in names if name not in entries):
+            yield Step("unused", root / name)
+        # Entries that land directly in ~/.js go first, so a directory another
+        # entry moves into (state/, logs/) arrives whole before it is added to.
+        targets = {name: entries[name]() for name in names if name in entries}
+        for name in sorted(targets, key=lambda name: (targets[name].parent != paths.home(), name)):
+            yield from self.entry(root / name, targets[name])
         yield from self.remove_if_empty(root)
 
 
@@ -584,8 +605,8 @@ def steps(*, apply: bool) -> Iterator[Step]:
     legacy = paths.legacy_homes()
     walk = _Walk(apply=apply)
     yield from walk.entry(legacy["inbox"], paths.work_dir())
-    yield from walk.spread(legacy["config"], _CONFIG_RENAMES)
-    yield from walk.spread(legacy["data"], _DATA_RENAMES)
+    yield from walk.spread(legacy["config"], _CONFIG_ENTRIES)
+    yield from walk.spread(legacy["data"], _DATA_ENTRIES)
     yield from convert_agents(apply=apply)
     yield from refile_sessions(apply=apply)
 
