@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from js import cli, colors as C, commit_helper, home, paths, settings, stream_transport, tool_binaries
+from js import tooldiag, toolstats
 from js import messages as msgs
 from js.promptexpand import expand_prompt
 from js.toolkit import policy
@@ -226,10 +227,13 @@ def test_help_lists_every_command_without_a_paren_aside_or_dead_word(capsys):
     assert _clean(lines) == []
 
 
-@pytest.mark.parametrize("flag", ["--help", "--help-full"])
-def test_the_help_screens_carry_no_paren_aside_or_dead_word(flag, capsys):
+@pytest.mark.parametrize(("main", "flag"), [
+    (cli.main, "--help"), (cli.main, "--help-full"),
+    (home.main, "--help"), (toolstats.main, "--help"), (tooldiag.main, "--help"),
+])
+def test_the_help_screens_carry_no_paren_aside_or_dead_word(main, flag, capsys):
     with pytest.raises(SystemExit) as exc:
-        cli.main([flag])
+        main([flag])
     assert exc.value.code == 0
     out = capsys.readouterr().out.splitlines()
     assert out and _clean(out) == []

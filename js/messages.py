@@ -136,11 +136,13 @@ class ArgumentParser(argparse.ArgumentParser):
     """argparse with its headings and its refusal in entries. A bad command
     line prints the usage, then ARGUMENTS_REFUSED on stderr, and exits 2."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, add_help: bool = True, **kwargs: Any) -> None:
         kwargs.setdefault("formatter_class", _HelpFormatter)
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, add_help=False, **kwargs)
         self._positionals.title = ARGS_POSITIONALS.text()
         self._optionals.title = ARGS_OPTIONS.text()
+        if add_help:
+            self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.text())
 
     def error(self, message: str) -> Any:
         self.print_usage(sys.stderr)
@@ -339,6 +341,7 @@ ARGS_USAGE_PREFIX = Message("Usage: ")
 ARGS_POSITIONALS = Message("Arguments")
 ARGS_OPTIONS = Message("Options")
 ARGUMENTS_REFUSED = Message("{error}", GRAVE)
+OPT_HELP_THIS = Message("Show this help and exit.")
 OPT_HELP = Message("Show the short usage guide and exit.")
 OPT_HELP_FULL = Message("Show the complete option reference and exit.")
 OPT_LOGIN = Message("Interactive provider login. Without PROVIDER it lists the providers.")
