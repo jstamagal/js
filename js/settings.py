@@ -141,6 +141,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Render assistant Markdown on a terminal: finished blocks are "
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
+    SettingSpec("ui.resume_exchanges", "int",
+                "Exchanges of a resumed session the REPL shows before its prompt, "
+                "drawn as a turn draws them. 0 shows none."),
     SettingSpec("ui.editing_mode", "str",
                 "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
                 "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),

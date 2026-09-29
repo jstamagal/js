@@ -308,6 +308,30 @@ def test_parallel_exchanges_print_whole(capsys, tmp_path):
         assert sum(" row " in row for row in body) == 3
 
 
+def test_parallel_reads_at_ui_tools_one_each_name_their_file(capsys, tmp_path):
+    context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
+    context.config = SimpleNamespace(settings={"ui": {"tools": 1}})
+
+    def read(file_path: str, context=None) -> str:
+        time.sleep(0.02)
+        return "same size\n" * 20
+
+    registry = ToolRegistry((Tool("read", "test", read, {"file_path": {"type": "string"}},
+                                  read_only=True),), {})
+    paths = [f"src/module_{name}.py" for name in "abcd"]
+    calls = [runtime._PendingToolCall(f"c{i}", "read", [json.dumps({"file_path": path})])
+             for i, path in enumerate(paths)]
+
+    _dispatch(calls, registry, context, trace=True)
+
+    out = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in capsys.readouterr().out.splitlines()]
+    traces = [line for line in out if line.startswith(display.TOOL_MARKER + " ")]
+    assert len(traces) == 4
+    assert len(set(traces)) == 4
+    for path in paths:
+        assert sum(path in line for line in traces) == 1
+
+
 def test_which_calls_are_read_only():
     registry = build_default_registry()
 

@@ -23,11 +23,16 @@ def grey(text: str) -> str:
 
 
 class StderrReasoning:
-    """Streaming fallback for terminals without the editable scrollback view."""
+    """Streaming fallback for terminals without the editable scrollback view.
+    Grey on a terminal; a stream that is not one gets plain text."""
 
     def __init__(self, level: int, stream) -> None:
         self.level = level
         self.stream = stream
+        try:
+            self.tty = bool(stream.isatty())
+        except (AttributeError, ValueError, OSError):
+            self.tty = False
         self.started = False
         self.closed = False
         self.last_newline = True
@@ -35,7 +40,7 @@ class StderrReasoning:
 
     def _write(self, text: str) -> None:
         write = getattr(self.stream, "write_unlogged", self.stream.write)
-        write(grey(text))
+        write(grey(text) if self.tty else clean(text))
         self.stream.flush()
 
     def append(self, text: str) -> None:

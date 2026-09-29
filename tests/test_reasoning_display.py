@@ -253,6 +253,28 @@ def test_unlogged_reasoning_bypasses_nested_and_replaced_transcript_sinks():
     assert first.getvalue() == second.getvalue() == ""
 
 
+@pytest.mark.parametrize("level", [1, 2, 3])
+def test_reasoning_to_stderr_that_is_not_a_terminal_is_plain_text(level):
+    from js.reasoning_display import StderrReasoning
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    plain, terminal = io.StringIO(), Terminal()
+    for stream in (plain, terminal):
+        display = StderrReasoning(level, stream)
+        for fragment in ("weigh", "ing the ", "options\nthen pick"):
+            display.append(fragment)
+        display.answer_started()
+        display.finish(tokens=7)
+
+    assert "\x1b" not in plain.getvalue()
+    assert "weighing the options\nthen pick" in plain.getvalue()
+    assert transcript.strip_ansi(terminal.getvalue()) == plain.getvalue()
+    assert "\x1b[" in terminal.getvalue()
+
+
 def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(monkeypatch, tmp_path):
     cfg = config.from_env(extras=[
         "model.id=qwen-test", "provider.id=openai", "provider.base_url=http://local.test/v1",
