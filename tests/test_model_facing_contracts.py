@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy
-from js.toolkit.core import ToolContext, call_tool
 from js.toolkit.registry import build_default_registry
 
 
