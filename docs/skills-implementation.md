@@ -13,7 +13,7 @@ reference implementation, not as the target.
 | Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools`, `disable-model-invocation` and `paths`. `js/skills.py` indexes metadata only; bodies read at activation. |
 | **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
 | Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
-| Path-scoped | Claude Code `paths:` | The first `read`, `patch` or `write` of a matching file appends one `<js-reminder>` offering the skill, once per session (see `docs/tools-reference.md`, `skill`). The skill stays in the catalog either way. |
+| Path-scoped | Claude Code `paths:` | The first `read`, `patch` or `write` of a matching file starts its result with one `<js-reminder>` offering the skill, once per session (see `docs/tools-reference.md`, `skill`). The skill stays in the catalog either way. |
 | User-only | `disable-model-invocation: true` | Honored. The skill is absent from the `tool_discovery` catalog, `skill` and `load=skill:<name>` refuse it, and `/skill <name>` still loads it. |
 | Protect | exempt skill content from compaction | Not checked in this pass. |
 

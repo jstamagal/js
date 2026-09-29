@@ -1744,7 +1744,10 @@ def list_dir(path: str, recursive: bool = False, context: ToolContext | None = N
 
 def _offering_path_skills(handler):
     """Wrap a read, patch or write handler so a successful call on a file that
-    matches a skill's ``paths:`` ends with that skill's one-time offer."""
+    matches a skill's ``paths:`` starts with that skill's one-time offer.
+
+    The offer goes first because the runtime keeps the head of a result it
+    spills or clips; the offer is spent when made, so it must be delivered."""
 
     @functools.wraps(handler)
     def wrapped(*args, **kwargs):
@@ -1756,7 +1759,7 @@ def _offering_path_skills(handler):
             return result
         path = Path(os.path.expanduser(str(raw)))
         reminder = offer(path if path.is_absolute() else context.cwd / path, context.cwd)
-        return f"{result}\n{reminder}" if reminder else result
+        return f"{reminder}\n{result}" if reminder else result
 
     return wrapped
 

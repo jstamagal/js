@@ -36,20 +36,20 @@ def project(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _run(project, monkeypatch, cfg, responses, context=None):
+def _run(project, monkeypatch, cfg, responses, context=None, *, prompt='work', selection=SELECTION):
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(responses))
-    messages = [{'role': 'user', 'content': 'work'}]
+    messages = [{'role': 'user', 'content': prompt}]
     runtime.run_turn(cfg, 'system', messages, runtime.Telemetry(None),
-                     tool_registry=build_default_registry().select(SELECTION),
+                     tool_registry=build_default_registry().select(selection),
                      tool_context=context or ToolContext(cwd=project))
     return [m['content'] for m in messages if m.get('role') == 'tool']
 
 
-def _turn(project, monkeypatch, cfg, calls, context=None):
+def _turn(project, monkeypatch, cfg, calls, context=None, **kwargs):
     """One turn: each call is its own model response, then a final answer."""
     responses = iter([*(_result((f'c{i}', name, json.dumps(args))) for i, (name, args) in enumerate(calls)),
                       _result(text='done')])
-    return _run(project, monkeypatch, cfg, responses, context)
+    return _run(project, monkeypatch, cfg, responses, context, **kwargs)
 
 
 def _reminders(results):
@@ -86,6 +86,19 @@ def test_paths_frontmatter_accepts_a_list_or_a_comma_string(project):
     assert catalog.get('web').paths == ('*.ts', '*.tsx')
     assert catalog.get('everything').paths == ()
     assert catalog.get('plain').paths == ()
+
+
+def test_paths_frontmatter_takes_unquoted_globs_and_expands_braces(project):
+    _skill(project, 'bare', 'paths: *.rs\n')
+    _skill(project, 'bare-list', 'paths:\n  - *.rs\n  - src/**/*.{ts,tsx}\n')
+    _skill(project, 'braces', "paths: '{src,lib}/**/*.rs, *.md'\n")
+    catalog = skills_mod.discover_skills(project)
+    assert catalog.get('bare').paths == ('*.rs',)
+    assert catalog.get('bare-list').paths == ('*.rs', 'src/**/*.ts', 'src/**/*.tsx')
+    braces = catalog.get('braces')
+    assert braces.paths == ('src/**/*.rs', 'lib/**/*.rs', '*.md')
+    assert braces.matches_path('src/x/y.rs') and braces.matches_path('lib/y.rs')
+    assert not braces.matches_path('app/y.rs')
 
 
 def test_paths_frontmatter_of_the_wrong_type_skips_the_skill(project):
@@ -154,6 +167,35 @@ def test_a_loaded_skill_is_not_offered(project, monkeypatch):
     ])
     assert 'Body of rust-style' in results[0]
     assert _reminders(results) == []
+
+
+def test_a_skill_loaded_with_the_skill_tool_is_not_offered(project, monkeypatch):
+    results = _turn(project, monkeypatch, _cfg(project), [
+        ('skill', {'name': 'rust-style'}),
+        ('read', {'file_path': 'src/main.rs'}),
+    ], selection=['read:eager', 'skill:eager'])
+    assert 'Body of rust-style' in results[0]
+    assert _reminders(results) == []
+
+
+def test_a_skill_the_user_loaded_with_slash_skill_is_not_offered(project, monkeypatch):
+    prompt = skills_mod.expand_user_invocation(skills_mod.discover_skills(project), '/skill rust-style fix it')
+    cfg = _cfg(project)
+    results = _turn(project, monkeypatch, cfg, [('read', {'file_path': 'src/main.rs'})], prompt=prompt)
+    assert _reminders(results) == []
+    # The record outlives the turn that carried the skill.
+    again = _turn(project, monkeypatch, cfg, [('read', {'file_path': 'src/lib.rs'})])
+    assert _reminders(again) == []
+
+
+def test_offer_survives_a_result_spilled_past_the_inline_cap(project, monkeypatch):
+    (project / 'big.rs').write_text(('// ' + 'x' * 200 + '\n') * 1200)
+    context = ToolContext(cwd=project)
+    context.max_tool_result_inline_bytes = 51200
+    results = _turn(project, monkeypatch, _cfg(project), [('read', {'file_path': 'big.rs'})], context)
+    assert 'max_tool_result_inline_bytes' in results[0]
+    offered = _reminders(results)
+    assert len(offered) == 1 and 'rust-style' in offered[0]
 
 
 def test_failed_touch_offers_nothing(project, monkeypatch):

@@ -39,6 +39,7 @@ from . import settings as _settings
 from . import toolkit as T
 from . import tool_args
 from . import routing
+from . import skills
 from . import compaction
 from . import stream_transport
 from .config import Config, vision_enabled_for_model
@@ -1736,6 +1737,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             await active_registry.restore(prior_surface)
         last_surface = active_registry.snapshot()
         active_registry.on_change = save_surface
+        opening = _last_user_message_index(messages)
+        user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
+        note_skill_loaded = getattr(active_registry, "note_skill_loaded", None)
+        if user_skill and callable(note_skill_loaded):
+            note_skill_loaded(user_skill)
         durable_side_effects_started = False
         overflow_recovered = 0
         for iteration in range(cfg.max_tool_iterations):

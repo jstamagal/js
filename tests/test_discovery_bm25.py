@@ -48,6 +48,14 @@ def test_camel_case_name_splits_into_words():
     assert _ranked('probe') == ['browserProbe']
 
 
+def test_camel_case_query_word_matches_the_word_written_whole():
+    catalog = (
+        _entry('create_pr', 'Open a pull request.', source='github'),
+        _entry('create_mr', 'Open a merge request.', source='gitlab'),
+    )
+    assert [item.name for item in ranked_entries(catalog, 'GitHub')][0] == 'create_pr'
+
+
 def test_rare_term_outweighs_common_term():
     # 'repository' is in three descriptions, 'user' in one.
     assert _ranked('repository user')[0] == 'list_gists'

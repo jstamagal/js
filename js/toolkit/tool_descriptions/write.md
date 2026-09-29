@@ -14,6 +14,11 @@ The replaced content is snapshotted, so `undo` brings it back.
 {{/if}}
 When js runs with `-C DIR`, a path outside DIR and the writable paths the
 operator bound is refused with one ERROR line.
+{{#if skill tool_discovery}}
+The first call that touches a file a skill's `paths:` names starts its result
+with a `<js-reminder>` offering that skill, once per session. The reminder is
+not file content.
+{{/if}}
 {{#if patch}}
 Edit existing files with `patch`; use this only for new files or a deliberate
 full rewrite.

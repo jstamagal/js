@@ -17,6 +17,11 @@ call leaves the file untouched and names the offending edit.
 {{#if undo}}
 One call is one `undo` step.
 {{/if}}
+{{#if skill tool_discovery}}
+The first call that touches a file a skill's `paths:` names starts its result
+with a `<js-reminder>` offering that skill, once per session. The reminder is
+not file content.
+{{/if}}
 {{#if write}}
 Use `write` for new files or a deliberate full rewrite.
 {{/if}}

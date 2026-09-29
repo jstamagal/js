@@ -337,11 +337,20 @@ class TurnToolSurface:
                     offers.append((item_id, skill))
             self._state_changed()
         lines = [
-            f"Skill {skill.name} applies to {relative}: {skill.description} "
+            f"Skill {skill.name} applies to {relative}: {' '.join(skill.description.split())} "
             f'Load it with tool_discovery {{"load":"{item_id}"}}.'
             for item_id, skill in offers
         ]
         return f"<js-reminder>{' '.join(lines)}</js-reminder>" if lines else ""
+
+    def note_skill_loaded(self, name: str) -> None:
+        """Record that ``name``'s instructions are in the conversation, so no
+        path-scoped offer names it later this session."""
+        with self._activation_lock:
+            if name in self._offered_skills:
+                return
+            self._offered_skills.add(name)
+            self._state_changed()
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
         present = set(self.allowed.by_name)

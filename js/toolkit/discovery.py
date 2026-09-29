@@ -89,13 +89,16 @@ def tokenize(text: str) -> list[str]:
 
     Splits at camelCase boundaries, underscores and punctuation, so ``kill``
     never matches inside ``skill`` and ``browserProbe`` reads as two words.
+    A camelCase word also stays whole after its parts, so ``GitHub`` matches
+    ``github``.
     """
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text))
-    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
-    return [
-        _stem(token) for token in re.findall(r"[^\W_]+", spaced.casefold())
-        if token not in _STOP_WORDS
-    ]
+    words: list[str] = []
+    for word in re.findall(r"[^\W_]+", str(text)):
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", word)
+        spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+        parts = spaced.casefold().split()
+        words += parts if len(parts) == 1 else [*parts, word.casefold()]
+    return [_stem(token) for token in words if token not in _STOP_WORDS]
 
 
 def search_tokens(text: str) -> set[str]:
