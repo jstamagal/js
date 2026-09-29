@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+from . import agent_migration
 from . import messages as msgs
 from . import paths
 
@@ -54,7 +55,7 @@ TMP_MAX_AGE_SECONDS = 24 * 60 * 60
 
 @dataclass(frozen=True)
 class Step:
-    kind: str  # "move", "duplicate", "refuse", "rmdir"
+    kind: str  # "move", "duplicate", "refuse", "rmdir", "relink", "convert", "drop", "skip", "refile"
     source: Path
     target: Path | None = None
     reason: str = ""
@@ -72,6 +73,11 @@ def describe(step: Step, *, apply: bool) -> msgs.Said:
         ("move", True): msgs.HOME_MOVED, ("move", False): msgs.HOME_WOULD_MOVE,
         ("duplicate", True): msgs.HOME_REMOVED_DUPLICATE, ("duplicate", False): msgs.HOME_WOULD_REMOVE_DUPLICATE,
         ("rmdir", True): msgs.HOME_REMOVED_EMPTY, ("rmdir", False): msgs.HOME_WOULD_REMOVE_EMPTY,
+        ("relink", True): msgs.HOME_RELINKED, ("relink", False): msgs.HOME_WOULD_RELINK,
+        ("convert", True): msgs.HOME_CONVERTED, ("convert", False): msgs.HOME_WOULD_CONVERT,
+        ("drop", True): msgs.HOME_DROPPED, ("drop", False): msgs.HOME_WOULD_DROP,
+        ("skip", True): msgs.HOME_LEFT, ("skip", False): msgs.HOME_WOULD_LEAVE,
+        ("refile", True): msgs.HOME_REFILED, ("refile", False): msgs.HOME_WOULD_REFILE,
     }.get((step.kind, apply)) or (msgs.HOME_REFUSED if apply else msgs.HOME_WOULD_REFUSE)
     return entry.said(source=source, target=target, reason=step.reason)
 
@@ -138,6 +144,60 @@ def _rename(source: Path, target: Path, mode: int) -> None:
         if exc.errno != errno.EXDEV:
             raise
         _move_across(source, target, mode)
+
+
+def _links_under(root: Path, mode: int) -> list[Path]:
+    """`root` itself when it is a symlink, else every symlink below it; never
+    descends through one."""
+    if stat.S_ISLNK(mode):
+        return [root]
+    if not stat.S_ISDIR(mode):
+        return []
+    found = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        found.extend(Path(directory) / name for name in (*dirnames, *filenames)
+                     if os.path.islink(os.path.join(directory, name)))
+    return found
+
+
+def _inside(path: str, root: Path) -> bool:
+    return path == str(root) or path.startswith(str(root) + os.sep)
+
+
+def _relinks(source: Path, target: Path, mode: int, *, apply: bool) -> Iterator[Step]:
+    """Point each relative symlink the move carried at the absolute target it
+    resolved to before the move. A link to something that moved with it still
+    resolves to it and is left alone."""
+    where = target if apply else source
+    try:
+        links = _links_under(where, mode)
+    except OSError:
+        return
+    for link in links:
+        relative = link.relative_to(where)
+        old_link, new_link = source / relative, target / relative
+        try:
+            text = os.readlink(link)
+        except OSError:
+            continue
+        if os.path.isabs(text):
+            continue
+        before = os.path.normpath(os.path.join(old_link.parent, text))
+        if not stat.S_ISLNK(mode) and _inside(before, source):
+            continue
+        if os.path.normpath(os.path.join(new_link.parent, text)) == before:
+            continue
+        if apply:
+            staging = new_link.with_name(f".{new_link.name}.relink-{os.getpid()}")
+            try:
+                os.symlink(before, staging)
+                os.replace(staging, new_link)
+            except OSError as exc:
+                with contextlib.suppress(OSError):
+                    os.unlink(staging)
+                yield Step("refuse", new_link, Path(before), msgs.HOME_NOT_MOVED.text(target=before, error=exc))
+                continue
+        yield Step("relink", new_link if apply else old_link, Path(before))
 
 
 class _Walk:
@@ -210,17 +270,20 @@ class _Walk:
         if not self.apply:
             self.planned[target] = source
             yield Step("move", source, target)
+            yield from _relinks(source, target, mode, apply=False)
             return
         try:
             _rename(source, target, mode)
         except _OldCopyLeft as exc:
             yield Step("move", source, target)
             yield Step("refuse", source, target, msgs.HOME_OLD_COPY_LEFT.text(target=_short(target), error=exc))
+            yield from _relinks(source, target, mode, apply=True)
             return
         except OSError as exc:
             yield Step("refuse", source, target, msgs.HOME_NOT_MOVED.text(target=_short(target), error=exc))
             return
         yield Step("move", source, target)
+        yield from _relinks(source, target, mode, apply=True)
 
     def remove_if_empty(self, directory: Path) -> Iterator[Step]:
         if not self.apply:
@@ -256,6 +319,37 @@ class _Walk:
         yield from self.remove_if_empty(root)
 
 
+def _agent_step(result: agent_migration.Result) -> Iterator[Step]:
+    if result.action == "migrate":
+        yield Step("convert", result.agent_dir, None, result.message)
+    elif result.action == "skip":
+        yield Step("skip", result.agent_dir, None, result.message)
+    elif result.action == "error":
+        yield Step("refuse", result.agent_dir, None, result.message)
+    if result.dropped:
+        yield Step("drop", result.agent_dir, None, ", ".join(result.dropped))
+
+
+def convert_agents(*, apply: bool) -> Iterator[Step]:
+    """Convert every agent in ~/.js/agents to agent.yaml, dropping tools entries
+    that match no tool. A dry run looks where the agents are before the moves."""
+    roots = [paths.global_agents_dir()]
+    if not apply:
+        roots.insert(0, paths.legacy_homes()["config"] / "agents")
+    roots = [root for root in roots if root.is_dir() and not root.is_symlink()]
+    if not roots:
+        return
+    keep = agent_migration.tool_matcher(agent_migration.default_roots(*roots))
+    for root in roots:
+        try:
+            results = agent_migration.migrate_root(root, apply=apply, keep=keep)
+        except OSError as exc:
+            yield Step("refuse", root, None, msgs.HOME_NOT_LISTED.text(error=exc))
+            continue
+        for result in results:
+            yield from _agent_step(result)
+
+
 def steps(*, apply: bool) -> Iterator[Step]:
     """Every step of the migration, each performed as it is yielded when `apply` is true."""
     legacy = paths.legacy_homes()
@@ -263,6 +357,7 @@ def steps(*, apply: bool) -> Iterator[Step]:
     yield from walk.entry(legacy["inbox"], paths.work_dir())
     yield from walk.spread(legacy["config"], _CONFIG_RENAMES)
     yield from walk.spread(legacy["data"], _DATA_RENAMES)
+    yield from convert_agents(apply=apply)
 
 
 @contextlib.contextmanager

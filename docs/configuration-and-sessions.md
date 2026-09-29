@@ -308,14 +308,23 @@ marker or not.
 - `~/inbox/agents/js` becomes `~/.js/work`.
 
 Each entry moves by one rename, so a directory lands whole or not at all. A
-symlink moves as the link and is never followed. When the destination already
+symlink moves as the link and is never followed. A relative symlink that the
+move would point somewhere else is rewritten to the absolute path it reached
+before; one that points at something that moved with it is left as it is. When the destination already
 exists, a directory is merged entry by entry, an identical file or link drops
 the old copy, and anything else is refused with the reason and left in place.
 An entry that cannot be read or compared is refused the same way; the rest
 still move. The dry run accounts for its own planned moves, so two old entries
 that land in the same place show the same merges and refusals as `--apply`.
 A refused entry is reported once at startup; the marker is written anyway, so
-`just migrate-home` is how to see it again. Across filesystems an entry is copied beside its destination, renamed into
+`just migrate-home` is how to see it again.
+
+In the same step every agent in `~/.js/agents` is converted to `agent.yaml`
+(see `just migrate-agents` in [tool-system.md](tool-system.md)): a tools entry
+that matches no tool is dropped, and one line per agent names what was
+dropped. A symlinked agent is left for the host it lives on.
+
+Every start creates each directory of the layout above that is missing. Across filesystems an entry is copied beside its destination, renamed into
 place, and only then removed from the old location.
 
 The per-agent `sessions/` and `state/` directories are created lazily when an

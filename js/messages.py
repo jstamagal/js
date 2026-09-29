@@ -686,9 +686,36 @@ HOME_NOT_MOVED = Message("not moved to {target}: {error}")
 HOME_NOT_A_DIR = Message("is {kind}, not a directory. Move it by hand")
 HOME_MIGRATION_FAILED = Message("Move into {home} failed: {error}", GRAVE)
 HOME_NOTHING_TO_MOVE = Message("Nothing to move into {home}.", banner=False)
+HOME_RELINKED = Message("Relinked {source} to {target}")
+HOME_WOULD_RELINK = Message("Would relink {source} to {target}")
+HOME_CONVERTED = Message("Converted {source}: {reason}")
+HOME_WOULD_CONVERT = Message("Would convert {source}: {reason}")
+HOME_DROPPED = Message("Dropped from {source}, matching no tool: {reason}")
+HOME_WOULD_DROP = Message("Would drop from {source}, matching no tool: {reason}")
+HOME_LEFT = Message("Left {source}: {reason}", WARN)
+HOME_WOULD_LEAVE = Message("Would leave {source}: {reason}", WARN)
+HOME_REFILED = Message("Filed {reason} from {source} by start directory")
+HOME_WOULD_REFILE = Message("Would file {reason} from {source} by start directory")
+HOME_SESSION_IN_USE = Message("a js process has it open")
+HOME_NOT_EMPTY = Message("not empty after filing its sessions")
+
+# --- Agent manifests to agent.yaml -------------------------------------------
+
+AGENT_MIGRATE_CONVERTED = Message("{file} -> agent.yaml")
+AGENT_MIGRATE_PRUNED = Message("{file} rewritten")
+AGENT_MIGRATE_BOTH = Message("both agent.yaml and {file} exist; merge by hand")
+AGENT_MIGRATE_ZERO_MD = Message(
+    "{files} were ignored beside {file} and would load as prompt text after migration; move them first")
+AGENT_MIGRATE_BAD_YAML = Message("{file}: invalid YAML: {error}")
+AGENT_MIGRATE_NOT_A_MAPPING = Message("{file} is not a mapping")
+AGENT_MIGRATE_UNKNOWN_KEYS = Message("{file}: unknown keys {keys}")
+AGENT_MIGRATE_RESTORED = Message("restored {file}; agent.yaml did not load: {error}")
+AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives")
 
 # --- Session files -----------------------------------------------------------
 
+SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
+SESSION_NOT_RESERVED = Message("No free session name in {folder}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
     "History may be incomplete.", WARN)

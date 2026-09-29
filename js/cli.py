@@ -3406,8 +3406,11 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
 @_session_scope
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
-    # Before anything reads or writes ~/.js: move the old locations in, once.
+    # Before anything reads or writes ~/.js: move the old locations in, once,
+    # then make sure every directory of the layout is there.
     _home.migrate_once()
+    with contextlib.suppress(OSError):
+        _paths.ensure_home()
     _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;

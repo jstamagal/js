@@ -358,3 +358,67 @@ def test_a_fresh_working_directory_is_left_empty_by_plans_and_snapshots(tmp_path
 
     assert list(work.iterdir()) == []
     assert (paths.plans_dir() / "p-v1.md").is_file()
+
+
+def test_one_start_converts_moved_agents_and_prints_what_it_dropped(tmp_path, monkeypatch, capsys):
+    from js import persona
+
+    monkeypatch.chdir(tmp_path)
+    agents = _legacy()["config"] / "agents"
+    _write(agents / "builder" / "00-tools.yaml",
+           "tools:\n  - read\n  - multi_patch\n  - helper\n  - wiki_*\n  - artifact_*\n")
+    _write(agents / "builder" / "01-prompt.md", "BUILD\n")
+    _write(agents / "helper" / "01-prompt.md", "HELP\n")
+
+    assert cli.main(["--list"]) == 0
+
+    builder = paths.global_agents_dir() / "builder"
+    assert not (builder / "00-tools.yaml").exists()
+    assert persona.load_prompt_spec(builder).tool_selectors == ("read:eager", "helper:eager", "wiki_*:eager")
+    printed = [line for line in capsys.readouterr().err.splitlines() if _is(msgs.HOME_DROPPED, line)]
+    assert len(printed) == 1
+    assert "multi_patch" in printed[0] and "artifact_*" in printed[0] and "builder" in printed[0]
+
+
+def test_the_dry_run_names_the_conversion_and_changes_nothing(tmp_path):
+    agents = _legacy()["config"] / "agents"
+    manifest = _write(agents / "builder" / "00-tools.yaml", "tools: [read, multi_patch]\n")
+    _write(agents / "builder" / "01-prompt.md", "BUILD\n")
+
+    planned = list(home.steps(apply=False))
+
+    assert [(step.kind, step.reason) for step in planned if step.kind == "drop"] == [("drop", "multi_patch")]
+    assert any(step.kind == "convert" for step in planned)
+    assert manifest.read_text(encoding="utf-8") == "tools: [read, multi_patch]\n"
+
+
+def test_a_moved_relative_symlink_still_reaches_what_it_reached(tmp_path):
+    shared = tmp_path / "srv" / "research"
+    _write(shared / "01-prompt.md", "remote\n")
+    agents = _legacy()["config"] / "agents"
+    _write(agents / "mine" / "01-prompt.md", "mine\n")
+    os.symlink(os.path.relpath(shared, agents), agents / "research")
+    os.symlink("mine", agents / "alias")  # a sibling that moves along with it
+    top = _legacy()["config"] / "JS.md"
+    _write(tmp_path / "notes" / "context.md", "context\n")
+    os.symlink(os.path.relpath(tmp_path / "notes" / "context.md", top.parent), top)
+
+    steps = home.migrate_once(io.StringIO())
+
+    moved = paths.global_agents_dir() / "research"
+    assert moved.resolve() == shared.resolve()
+    assert (moved / "01-prompt.md").read_text(encoding="utf-8") == "remote\n"
+    assert (paths.home() / "JS.md").read_text(encoding="utf-8") == "context\n"
+    assert os.readlink(paths.global_agents_dir() / "alias") == "mine"
+    assert sorted(step.source.name for step in steps if step.kind == "relink") == ["JS.md", "research"]
+
+
+def test_every_start_lays_out_the_whole_home(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["--list"]) == 0
+
+    names = {entry.name for entry in paths.home().iterdir() if entry.is_dir()}
+    assert names >= {"agents", "skills", "toolbox", "logins", "sessions", "state", "logs",
+                     "cache", "work", "tmp", "plans", "probes"}
+    assert {path.name for path in paths.layout_dirs()} <= names

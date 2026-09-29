@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from js import cli, runtime, settings
+from js import paths as _paths
 from js import messages as msgs
 from js.config import Config
 from js.memory import load_messages
@@ -151,7 +152,9 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     actual = cli.main(["--agent", "../../etc", "-p", "ignored"])
 
     assert actual == 2
-    assert not (tmp_path / ".js").exists()
+    # Every start lays out ~/.js; a refused id adds nothing to it or beside it.
+    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(_paths.layout_dirs())
+    assert not (tmp_path / "etc").exists()
 
 
 @pytest.mark.parametrize(
