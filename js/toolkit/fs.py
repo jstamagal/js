@@ -116,6 +116,98 @@ def _line_hash(line: str) -> str:
     return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
 
 
+def _result_page_bytes(context: ToolContext) -> int:
+    """Bytes of text one tool result can carry to the model whole: half the
+    tighter of the inline spill cap and the hard result cap, leaving room for
+    the text around it. 0 when neither cap is set."""
+    caps = [
+        cap
+        for cap in (
+            int(getattr(context, "max_tool_result_inline_bytes", 0) or 0),
+            int(getattr(context, "max_tool_result_bytes", 0) or 0),
+        )
+        if cap > 0
+    ]
+    return min(caps) // 2 if caps else 0
+
+
+def _render_line_spans(spans: list[tuple[int, int]]) -> str:
+    return ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in spans)
+
+
+def _changed_since_read(
+    context: ToolContext, target: Path, action: str, current: bytes, current_hash: str
+) -> str | None:
+    """Refuse an edit of a file that changed on disk since the model read it,
+    and hand the model the diff from the content it read to the content there now.
+
+    Read coverage moves to the current content: lines the model had seen that
+    the change left alone keep counting as seen, and every current line the
+    diff shows (changed lines and their context) counts as seen when the diff
+    is delivered whole, so the retry needs no second read.
+    A diff over the result budget is replaced by the changed line numbers.
+    Returns None when the file is unchanged since the read, or when js holds no
+    UTF-8 copy of the content that was read; require_read covers those cases.
+    """
+    if target not in context.read_paths:
+        return None
+    known_hash = context.file_hashes.get(target)
+    if known_hash == current_hash:
+        return None
+    cached = context.known_content.get(target)
+    if cached is None or cached[0] != known_hash:
+        return None
+    try:
+        old_text = cached[1].decode("utf-8")
+        new_text = current.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    # The same line split and matcher _unified_diff uses, so the hunks
+    # credited below are the hunks the model is shown.
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    was_whole = target in context.fully_read_paths
+    prior = [(1, len(old_lines))] if was_whole else list(context.read_ranges.get(target, []))
+    carried: list[tuple[int, int]] = []
+    changed: list[tuple[int, int]] = []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for seen_start, seen_end in prior:
+                low, high = max(seen_start, i1 + 1), min(seen_end, i2)
+                if low <= high:
+                    carried.append((low - i1 + j1, high - i1 + j1))
+        elif j2 > j1:
+            changed.append((j1 + 1, j2))
+    shown = [
+        (group[0][3] + 1, group[-1][4])
+        for group in matcher.get_grouped_opcodes(3)
+        if group[-1][4] > group[0][3]
+    ]
+    diff = _unified_diff(old_text, new_text, f"{target} (as read)", f"{target} (now)")
+    budget = _result_page_bytes(context)
+    delivered = not budget or len(diff.encode("utf-8")) <= budget
+    context.replace_read_coverage(
+        target,
+        current_hash,
+        carried + (shown if delivered else []),
+        len(new_lines),
+        whole_file=was_whole and delivered,
+    )
+    context.remember_content(target, current_hash, current)
+    head = (
+        f"ERROR: {target} changed on disk since it was read (hash {known_hash} when read, "
+        f"{current_hash} now); nothing was written."
+    )
+    if delivered:
+        return f"{head} Diff from what you read to what is there now:\n{diff}Retry to {action} against the current text."
+    return (
+        f"{head} The diff is too large to show; the changed lines are now "
+        f"{_render_line_spans(changed) or 'none (lines were only removed)'}. "
+        f"Read those, then retry to {action}."
+    )
+
+
 def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
     """Read bytes from *path*, refusing anything that is not a regular file and
     never blocking on a FIFO/socket/device.
@@ -320,6 +412,7 @@ def fs_read(
     total = len(all_lines)
     if total == 0:
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
+        context.remember_content(target, content_hash, data)
         return f"{target} is empty (hash {content_hash})"
 
     # Resolve the window: a reversed range is
@@ -346,6 +439,7 @@ def fs_read(
         total_lines=total,
         whole_file=start == 1 and end == total,
     )
+    context.remember_content(target, content_hash, data)
     # Lines are returned whole: `read` pages by line, not by column, so a cut
     # line is unreachable content. max_read_bytes/max_read_lines bound the read,
     # and the tool-result spill bounds what reaches the model.
@@ -376,14 +470,21 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     if target.exists() and not overwrite:
         return (
             f"ERROR: {raw_path} already exists. To change part of it use patch; "
-            "to replace it whole, read it in full first and pass overwrite=true."
+            "to replace it whole, read it first and pass overwrite=true."
         )
-    if target.exists() and overwrite:
+    replacing = target.exists()
+    if replacing:
+        # One read of any page is the gate: it shows the model what the file
+        # is. The hash proves nothing moved since; the snapshot makes the
+        # discard undoable.
         try:
-            current_hash = _hash_bytes(target.read_bytes())
+            current = target.read_bytes()
         except OSError as exc:
             return f"ERROR: {exc}"
-        guard = context.require_read(target, "overwrite it", whole_file=True, content_hash=current_hash)
+        current_hash = _hash_bytes(current)
+        guard = _changed_since_read(context, target, "overwrite it", current, current_hash) or context.require_read(
+            target, "overwrite it", content_hash=current_hash
+        )
         if guard:
             return guard
     try:
@@ -392,7 +493,14 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     except OSError as exc:
         return f"ERROR: {exc}"
     content_hash = _hash_bytes(data)
-    context.file_hashes[target] = content_hash
+    if replacing:
+        # The model wrote every byte of the new content.
+        context.replace_read_coverage(
+            target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True
+        )
+    else:
+        context.file_hashes[target] = content_hash
+    context.remember_content(target, content_hash, data)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
@@ -499,6 +607,7 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                 len(previous.decode("utf-8", errors="replace").splitlines()),
                 whole_file=bool(valid and coverage["whole"]),
             )
+            context.remember_content(target, content_hash, previous)
             return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
@@ -744,7 +853,9 @@ def patch(
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
     source_hash = _hash_bytes(source_bytes)
-    guard = context.require_read(target, "edit it", content_hash=source_hash)
+    guard = _changed_since_read(context, target, "edit it", source_bytes, source_hash) or context.require_read(
+        target, "edit it", content_hash=source_hash
+    )
     if guard:
         return guard
 
@@ -782,6 +893,7 @@ def patch(
         len(updated.splitlines()),
         whole_file=was_whole,
     )
+    context.remember_content(target, content_hash, data)
     diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
@@ -1456,6 +1568,7 @@ def ast_search(
         if updated != source:
             changed += 1
         context.file_hashes[target] = _hash_bytes(updated)
+        context.remember_content(target, context.file_hashes[target], updated)
         prepared[target] = (source, updated)
     diff = _ast_rewrite_diff(prepared) or "(no changes)"
     summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"

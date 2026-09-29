@@ -39,8 +39,9 @@ Parameters:
 - `content`
 - `overwrite`
 
-Existing files require `overwrite=true` and a prior `read` in the same process.
-The previous state is snapshotted for `undo`.
+Existing files require `overwrite=true` and a prior `read` in the same process;
+one page of the file is enough. The file's hash must still match the one the
+read saw, and the previous state is snapshotted for `undo`.
 
 ### `patch`
 
@@ -55,7 +56,18 @@ Parameters:
 - `edits`: list of `{old_string, new_string, replace_all?}`, used instead of
   `old_string`/`new_string`
 
-Requires a prior `read`. Each edit fails when its old string is absent, on
+Requires a prior `read` that showed every line an edit touches.
+
+When `write(overwrite=true)` or `patch` finds the file changed on disk since
+the read (the hash differs), the call writes nothing. js keeps the bytes each
+read saw, so the error carries the diff from that content to the current one
+and names both hashes. Lines the model had seen that the change left alone stay
+seen at their new line numbers, and the lines the diff shows count as read, so
+the retry needs no second `read`. A diff larger than half the tighter of
+`limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes` is
+replaced by the changed line numbers.
+
+Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals
 `new_string` (also after line-ending normalization, which would leave the file
 unchanged). Overlapping occurrences count as separate matches, so `aba` in
