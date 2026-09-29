@@ -368,8 +368,8 @@ def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     """Expand {{VAR}} / !{sub ...} / ```!sub directives in the assembled system prompt."""
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
-    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
-    max_output_bytes = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
+    max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
     system = expand_prompt(
         spec.system,
         allow_code=allow_code,

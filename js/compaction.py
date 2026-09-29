@@ -528,7 +528,7 @@ def _run_pre_hook(cfg: Config) -> str:
         else os.environ.get("SHELL", "/bin/sh")
     )
     shell_arg = "/C" if sys.platform == "win32" else "-c"
-    cap = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
+    cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
     ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
     if ceiling > 0:
         cap = min(cap, ceiling)

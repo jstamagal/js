@@ -723,6 +723,13 @@ def knob(settings: dict | None, key: str) -> Any:
     return default_value(key) if value is missing else value
 
 
+def knob_attr(obj: Any, attr: str, key: str) -> Any:
+    """``obj.attr`` (a Config or ToolContext field), or knob ``key``'s js/jsrc
+    value when ``obj`` has no such attribute."""
+    value = getattr(obj, attr, None)
+    return default_value(key) if value is None else value
+
+
 # ---------------------------------------------------------------------------
 # Collect: js/jsrc < jsrc files < env < CLI extras
 # ---------------------------------------------------------------------------

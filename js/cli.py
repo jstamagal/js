@@ -710,7 +710,7 @@ def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
     """Resolve the per-session autolog path, or None when autolog is off. Mirrors
     how sessions/<agent>/<session>.jsonl is built, one directory over in logs/."""
     if not _live_bool_setting(
-        live_settings, ("runtime", "debug_autolog"), getattr(cfg, "debug_autolog", True)
+        live_settings, ("runtime", "debug_autolog"), settings.knob_attr(cfg, "debug_autolog", "runtime.debug_autolog")
     ):
         return None
     session = cfg.session_file
@@ -3160,7 +3160,7 @@ def _printonly_run(args, cli_agent, presets) -> int:
         raw_spec = None
 
     allow_code = bool(getattr(cfg, "allow_inline_code", True))
-    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
     system = raw_spec.system if raw_spec is not None else ""
     selectors = raw_spec.tool_selectors if raw_spec is not None else ()
 
