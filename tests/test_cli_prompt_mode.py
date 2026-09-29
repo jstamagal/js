@@ -781,7 +781,7 @@ def test_commit_mode_defaults_to_cwd_and_uses_prompt_as_operator_context(monkeyp
     prompt = calls[0]["prompt"]
     assert prompt.startswith(f"Commit all work in this target directory: {tmp_path}")
     assert "js.commit_helper" in prompt and "stage" in prompt
-    assert "SURVEY" in prompt
+    assert msgs.SURVEY_HEADING.text(repo=tmp_path.resolve()) in prompt
     assert "Operator context:\nalmost all housekeeping tasks" in prompt
     assert calls[0]["agent"] == "commit"
     assert calls[0]["save"] is False
