@@ -358,3 +358,23 @@ def test_steered_line_goes_through_the_input_event(monkeypatch, tmp_path):
     h.run(script)
 
     assert inputs == ["first", "actually check the logs"]
+
+
+def test_steered_skill_line_carries_the_skill(monkeypatch, tmp_path):
+    skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")
+    h = _Harness(monkeypatch, tmp_path)
+
+    async def script(on_line, h):
+        await on_line("first")
+        await h.wait_hold()
+        await on_line("/skill secret check the plan")
+        h.hold_release.set()
+
+    h.run(script)
+
+    assert len(h.calls) == 2
+    steered = _user_texts(h.calls[1])[-1]
+    assert "user-only body" in steered
+    assert "check the plan" in steered
