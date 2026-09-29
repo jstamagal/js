@@ -370,9 +370,11 @@ How it is built (`js/jail.py`):
   bound in the jail and also at their own path. They last for the js
   process, so a file one command leaves in `/tmp` is there for the next. The
   file tools map `/tmp/…` and `~/.js/tmp/…` to them.
-- PATH directories under a hidden tree are bound back with every symlinked
-  directory on the way (`jail.reach`), so a venv interpreter that links into
-  `~/.local/share/uv/python` still starts.
+- PATH directories and the kernel's interpreter under a hidden tree or the
+  host `/tmp` are bound back with every symlinked directory on the way
+  (`jail.reach`), so a venv interpreter that links into
+  `~/.local/share/uv/python`, or a venv in a checkout under `/tmp`, still
+  starts.
 - No pid namespace: a command's background server outlives the command, as
   outside the jail. `--unshare-ipc --unshare-uts --unshare-cgroup-try`, network
   shared, `--die-with-parent`.
