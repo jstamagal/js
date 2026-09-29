@@ -15,8 +15,9 @@ from ..events import RefusableOnly
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
+from . import task_jobs
 from .descriptions import load_description
-from .sanitize import int_or_default
+from .sanitize import int_or_default, text_or_default
 
 
 # The ToolContext settings a subagent takes from its parent. A subagent gets its
@@ -490,20 +491,79 @@ def _assemble_task_results(results: list[str | None], agent_id: str, session_id:
     return "\n\n".join([header, *numbered])
 
 
+def _flag(raw: Any) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(raw)
+
+
+def _job_action(action: Any) -> str:
+    return (text_or_default(action, "run") or "run").strip().lower()
+
+
+def _find_job(action: str, handle: Any, context: ToolContext) -> tuple[str | None, task_jobs.TaskJob | None]:
+    if action not in ("poll", "wait", "kill"):
+        return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill", None
+    job = task_jobs.find(text_or_default(handle) or None, context.task_owner)
+    if job is None:
+        return f"ERROR: no background task{' ' + str(handle) if handle else ''} to {action}", None
+    return None, job
+
+
+def _wait_limit(timeout: Any) -> float | None:
+    """Seconds a wait blocks; None (no timeout given) waits for the end."""
+    seconds = int_or_default(timeout, 0, minimum=0)
+    return float(seconds) if seconds > 0 else None
+
+
+def _start_background(indexed_items, coro_factory, agent_id: str, session_id: str | None,
+                      context: ToolContext, *, on_loop: bool) -> str:
+    job = task_jobs.start(
+        indexed_items, coro_factory,
+        lambda results: _assemble_task_results(results, agent_id, session_id),
+        agent_id=agent_id,
+        depth=int(getattr(context, "task_depth", 0) or 0),
+        owner=context.task_owner,
+        # A subagent can write anything, so the parent's memoized fs_search
+        # results are stale once it is done.
+        on_done=context.invalidate_search_cache,
+        on_loop=on_loop,
+    )
+    return task_jobs.started_text(job)
+
+
 def task(
-    tasks: list[Any],
+    tasks: list[Any] | None = None,
     agent_id: str = "",
     session_id: str | None = None,
     model: str = "",
+    background: bool = False,
+    action: str = "run",
+    handle: str | None = None,
+    timeout: int | None = None,
     context: ToolContext | None = None,
 ) -> str:
     assert context is not None
+    action = _job_action(action)
+    if action != "run":
+        error, job = _find_job(action, handle, context)
+        if job is None:
+            return error  # type: ignore[return-value]
+        was_running = job.running()
+        if action == "kill":
+            job.kill()
+            task_jobs.wait(job, task_jobs.KILL_GRACE_S)
+        elif action == "wait":
+            task_jobs.wait(job, _wait_limit(timeout))
+        return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
     error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
+    if _flag(background):
+        return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=False)
     results = _fan_out(indexed_items, coro_factory)
     # A subagent runs with its own ToolContext and can write anything under any
     # root, so the parent's memoized fs_search results are no longer trustworthy.
@@ -515,10 +575,14 @@ task._js_fan_out = True  # type: ignore[attr-defined]
 
 
 async def task_async(
-    tasks: list[Any],
+    tasks: list[Any] | None = None,
     agent_id: str = "",
     session_id: str | None = None,
     model: str = "",
+    background: bool = False,
+    action: str = "run",
+    handle: str | None = None,
+    timeout: int | None = None,
     context: ToolContext | None = None,
 ) -> str:
     """Async twin of :func:`task` for the non-blocking REPL: awaits child turns
@@ -526,12 +590,26 @@ async def task_async(
     dispatch thread. The runtime routes fan-out calls here when a supervisor is
     live (see ``runtime._dispatch_batch``)."""
     assert context is not None
+    action = _job_action(action)
+    if action != "run":
+        error, job = _find_job(action, handle, context)
+        if job is None:
+            return error  # type: ignore[return-value]
+        was_running = job.running()
+        if action == "kill":
+            job.kill()
+            await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
+        elif action == "wait":
+            await task_jobs.wait_async(job, _wait_limit(timeout))
+        return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
     error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
+    if _flag(background):
+        return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=True)
     results = await _fan_out_async(indexed_items, coro_factory)
     context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
@@ -557,6 +635,10 @@ async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: Tool
         agent_id=agent_id,
         session_id=args.get("session_id"),
         model=args.get("model", ""),
+        background=args.get("background", False),
+        action=args.get("action", "run"),
+        handle=args.get("handle"),
+        timeout=args.get("timeout"),
         context=context,
     )
 
@@ -588,6 +670,10 @@ def _task_params(flags: tuple[str, ...]) -> dict:
         "tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."},
         "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
         "session_id": {"type": "string", "description": "Optional session id for a worker context."},
+        "background": {"type": "boolean", "default": False, "description": "Return a handle at once and run the workers in the background."},
+        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": "run starts workers; poll, wait and kill act on a background handle."},
+        "handle": {"type": "string", "description": "Background task id from a HANDLE line, for poll/wait/kill."},
+        "timeout": {"type": "integer", "description": "Seconds a wait blocks; without it, wait blocks until the task ends."},
     }
     if "model_override" in flags:
         params["model"] = {"type": "string", "description": "Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise."}
@@ -603,6 +689,5 @@ def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
             load_description("task", flags=flags),
             task,
             _task_params(flags),
-            required=("tasks", "agent_id"),
         ),
     )

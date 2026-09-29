@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -892,6 +893,7 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
         def running(self): return False
         def elapsed(self): return 0.0
         def snapshot(self): return b"", b""
+        def stream(self, name): return capped_process._StreamCapture(0)
         def wait(self, timeout):
             waits.append(timeout)
             return process_net.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
@@ -1345,7 +1347,9 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
 def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
-    assert "[truncated: limits.max_bash_output_bytes" in out
+    assert "[truncated: limits.max_tool_result_inline_bytes" in out
+    spill = re.search(r"(/\S+?\.log)", out)
+    assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
 
 def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):

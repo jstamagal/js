@@ -35,9 +35,11 @@ When not to use:
 - Simple tasks that you can complete with one or two direct tool calls.
 
 Inputs:
-- `tasks` is required and should contain clear, detailed, self-contained prompts.
+- `tasks` is required to start workers and should contain clear, detailed,
+  self-contained prompts.
 - Each task is a string prompt.
-- `agent_id` is required and selects the worker persona and selected tools.
+- `agent_id` is required to start workers and selects the worker persona and
+  selected tools.
 - Workers inherit the parent turn's effective configuration and shared instruction
   files; worker persona and model-selection rules still apply.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
@@ -60,6 +62,28 @@ Parallelism:
   back to the model. One task returns the worker's reply verbatim; a fan-out
   returns them numbered under a `TASK_RESULTS` header.
 
+Background:
+- A call blocks until every worker finishes. With `background=true` it returns
+  at once with a handle instead, and the workers keep running while you do
+  other work:
+
+      task running in the background (handle t1): ...
+      HANDLE t1 RUNNING
+
+- `action="poll", handle="t1"` says whether it is still running and returns the
+  result once it is done. `action="wait", handle="t1", timeout=N` blocks up to
+  N seconds, or until the end without `timeout`. `action="kill", handle="t1"`
+  stops it. `handle` defaults to your most recent running task. You see only
+  the tasks you started. `tasks` and
+  `agent_id` are needed only to start one.
+- The finished result is also written to the file the handle names. If you have
+  not polled it by then, the next user message carries a `<js-reminder>` that
+  names that file.
+- In a one-shot run (`js -p`) a background task still running when the run ends
+  is stopped with it; wait for it before your final answer.
+- Use it for slow, independent work you do not need before your next step.
+  When the next step depends on the result, run it in the foreground.
+
 Prompting guidance:
 - Include the expected output shape.
 - Say whether code changes are allowed or whether the worker should only
@@ -75,5 +99,5 @@ Failure behavior:
 - One worker failure returns that worker's error without discarding sibling
   results.
 - A task recursion limit prevents unbounded worker spawning.
-- Workers are not exposed as controllable jobs; progress is visible only through
-  streamed child tool activity and the final worker result.
+- A foreground call is not a controllable job; its progress is visible only
+  through streamed child tool activity and the final worker result.

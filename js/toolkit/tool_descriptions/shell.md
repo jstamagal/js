@@ -1,8 +1,13 @@
 Run one command with bash (or the shell set in `shell.program`) and return
 exit code, stdout, and stderr. Under bash and zsh a pipeline fails when any
 stage fails (`pipefail`), so `false | cat` reports exit 1.
-Output is capped and marked where it was cut, so do not pipe through `head` or
-`tail` just to shrink it. Stdin is `/dev/null` and there is no terminal: a
+Long output comes back as its head and its tail, with a marker between them
+naming the bytes left out and the file that holds the whole stream, raw:
+
+    [truncated: ... reached; stdout bytes 25000-980000 of 1004000 (955000 bytes) are not shown; the whole stdout is at /path/shell-3-….log — read it on with range {"start_byte": 25000}]
+
+Read any part of that file with `read` and a byte range, so do not pipe through
+`head` or `tail` just to shrink the output. Stdin is `/dev/null` and there is no terminal: a
 command that reads input gets end-of-file, and a password or confirmation
 prompt gets no answer.
 

@@ -208,7 +208,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "duplicates are collapsed before this ceiling is applied.",
                 env="JS_MAX_TOOL_CALLS_PER_MESSAGE"),
     SettingSpec("limits.max_bash_output_bytes", "int",
-                "Hard cap on shell stdout per call.",
+                "Shell output shown per call, stdout and stderr together. Past it, the "
+                "head and tail are shown and the whole stream is written to a file.",
                 env="JS_MAX_BASH_OUTPUT_BYTES"),
     SettingSpec("limits.max_bash_output_ceiling", "int",
                 "Upper bound a caller may raise max_bash_output_bytes to; the effective "

@@ -422,6 +422,9 @@ class ToolContext:
     # The sessions above a `task` worker, nearest first: its model calls are
     # charged to each of them as well as to its own (js.usage).
     usage_chain: tuple[Path, ...] = ()
+    # Names this context as the owner of the background tasks it starts; only
+    # the owner can poll, wait on or kill them.
+    task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
     # Read-only calls run in parallel threads; this lock covers read_paths,

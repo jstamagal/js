@@ -92,6 +92,7 @@ from .session_catalog import (
 )
 from .tool_binaries import resolve_binary
 from .toolkit import policy as tool_policy
+from .toolkit import task_jobs
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
@@ -1855,6 +1856,7 @@ def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
 
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
+    task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     M.append_mark(cfg.session_file, "session_reset")
     msgs.say(msgs.RESET_DONE)
     return None
@@ -1888,6 +1890,7 @@ def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     usage_mod.forget(cfg.session_file)
     state["messages"].clear()
+    task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     if bak:
         msgs.say(msgs.WIPE_ROTATED, path=bak.name)
     else:
@@ -2081,8 +2084,10 @@ def _queue_note(state: dict, note: str) -> None:
 
 
 def _take_pending_notes(state: dict) -> list[str]:
-    """The reminders queued since the last user message, removed from the queue."""
-    return list(state.pop("pending_notes", None) or ())
+    """The reminders queued since the last user message, and one for each
+    background task that finished unread since then, removed from the queue."""
+    queued = list(state.pop("pending_notes", None) or ())
+    return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
 
 
 def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:

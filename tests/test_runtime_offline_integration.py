@@ -903,7 +903,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
             and any(
                 getattr(p, "result", None)
                 and "--- stdout ---" in str(p.result)
-                and "[truncated: limits.max_bash_output_bytes (3) reached]" in str(p.result)
+                and "[truncated: limits.max_bash_output_bytes (3) reached;" in str(p.result)
                 for p in msg.parts
             )
             for msg in kwargs["messages"]
@@ -912,7 +912,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "shell"))
     cfg = offline_config(tmp_path)
-    cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 128, "fetch_timeout_s": 9})
+    cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 1024, "fetch_timeout_s": 9})
     messages = [{"role": "user", "content": "run shell"}]
 
     runtime.run_turn(
@@ -927,7 +927,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
 
     assert calls == 2
     assert context.max_bash_output_bytes == 3
-    assert context.max_tool_result_bytes == 128
+    assert context.max_tool_result_bytes == 1024
     assert context.fetch_timeout_s == 9
     shell_result = next(m["content"] for m in messages if m.get("name") == "shell" and m.get("role") == "tool")
     assert "abcdef" not in shell_result

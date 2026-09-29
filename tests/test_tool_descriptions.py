@@ -139,8 +139,10 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert set(ast_search.params["lang"]["enum"]) == set(fs._AST_GREP_LANGUAGES)
     assert plan.required == ("plan_name", "version", "content")
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
-    assert task.required == ("tasks", "agent_id")
-    assert set(task.params) == {"tasks", "agent_id", "session_id", "model"}
+    # poll, wait and kill of a background handle take neither tasks nor agent_id.
+    assert task.required == ()
+    assert set(task.params) == {"tasks", "agent_id", "session_id", "model", "background", "action",
+                                "handle", "timeout"}
 
 
 def test_tools_reference_fs_search_section_matches_the_published_schema():

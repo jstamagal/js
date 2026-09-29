@@ -118,7 +118,7 @@ name, which wins when both are set. Default values are the lines in `js/jsrc`.
 | `JS_BASE_URL` | `provider.base_url` | Explicit provider base URL; unset = provider default. |
 | `JS_API_KEY` | `provider.api_key` | Explicit provider API key; unset = env/login default. |
 | `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | Max tool calls per turn before the loop gives up. |
-| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | Hard cap on shell stdout per call. |
+| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | Shell output shown per call, stdout and stderr together. Past it, the head and tail are shown and the whole stream is written to a file. |
 | `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | Hard cap on any tool result string. |
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
 | `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
