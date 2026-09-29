@@ -120,6 +120,7 @@ REPL commands:
 /session
 /cd [dir]                      print or change the session's working directory
 /add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
+/drop <path>                   under -C, stop showing a path added with /add
 /reset
 /wipe
 exit
@@ -164,10 +165,12 @@ directory is now `DIR`. Under `-C`, `/cd` goes only to `DIR` or a bound path;
 anywhere else is refused with a pointer to `/add`. `/add PATH` (under `-C`
 only) shows `PATH` in the jail from the next tool call on, read-only, or
 read-write as `PATH:rw`; the file tools accept it at once. A kernel or terminal
-session already running sees it after a restart. Both tell the model once, and
-write a `workspace:` mark to the session: resuming the session puts the
+session already running sees it after a restart. `/drop PATH` takes back a path
+added with `/add`; the `-C` root cannot be dropped, and neither can the path
+the working directory is in. Each of the three tells the model once, and
+writes a `workspace:` mark to the session: resuming the session puts the
 working directory back, and under the same `-C` it puts the `/add` paths back.
-`/cd` waits for a running turn to end.
+`/cd` and `/drop` wait for a running turn to end.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.

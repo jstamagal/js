@@ -269,6 +269,10 @@ ADD_MISSING = Message("/add: no such path: {path}")
 ADD_DONE = Message(
     "{path} is visible in the jail, {access}, from the next tool call. A running kernel or "
     "terminal session sees it after a restart.")
+DROP_ROOT = Message("/drop: {path} is the -C root and cannot be dropped.")
+DROP_UNKNOWN = Message("/drop: {path} was not added with /add.")
+DROP_CWD = Message("/drop: the working directory is inside {path}; /cd out of it first.")
+DROP_DONE = Message("{path} is no longer visible in the jail.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
@@ -311,6 +315,7 @@ CMD_CD = Message(
     "Change the session's working directory; with no argument, print it. Under -C, only to DIR "
     "or a bound path.")
 CMD_ADD = Message("Under -C, show PATH in the jail: read-only, or read-write with :rw.")
+CMD_DROP = Message("Under -C, stop showing a path added with /add.")
 
 # --- js --help ----------------------------------------------------------------
 

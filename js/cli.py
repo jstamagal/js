@@ -1765,12 +1765,13 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-# /cd and /add: where the session works. Each change queues one
+# /cd, /add and /drop: where the session works. Each change queues one
 # reminder for the next user message and records a `workspace:` mark, so a
 # resumed session works in the same place.
 
 _CD_NOTICE = "<js-reminder>The working directory is now {path}.</js-reminder>"
 _ADD_NOTICE = "<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>"
+_DROP_NOTICE = "<js-reminder>{path} is no longer visible inside the jail.</js-reminder>"
 
 
 def _access(bind: _jail.Bind) -> str:
@@ -1806,7 +1807,7 @@ def _record_workspace(cfg: Config) -> None:
 
 
 def _restore_workspace(cfg: Config) -> None:
-    """Put a resumed session back where its last /cd or /add left it.
+    """Put a resumed session back where its last /cd, /add or /drop left it.
     The /add binds come back only under a jail with the same -C root; the
     working directory only where the jail shows it."""
     mark = M.last_workspace(cfg.session_file)
@@ -1867,6 +1868,27 @@ def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
+    jail = _jail.active()
+    if jail is None:
+        return msgs.NO_JAIL.said(verb="drop")
+    raw = arg.strip()
+    path = Path(os.path.abspath(runtime.T.STOCK_CONTEXT.cwd / os.path.expanduser(raw)))
+    if path.resolve() == jail.root:
+        return msgs.DROP_ROOT.said(path=path)
+    dropped = next((bind for bind in jail.added if bind.path == path), None)
+    if dropped is None:
+        return msgs.DROP_UNKNOWN.said(path=path)
+    jail.drop(path)
+    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "jail.bind")):
+        jail.add(dropped)
+        return msgs.DROP_CWD.said(path=path)
+    _queue_note(state, _DROP_NOTICE.format(path=path))
+    _record_workspace(cfg)
+    msgs.say(msgs.DROP_DONE, path=path)
+    return None
+
+
 _LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
@@ -1912,6 +1934,7 @@ COMMANDS: dict[str, Command] = {
     "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
     "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
     "add": Command(_cmd_add, "add <path>[:rw]", msgs.CMD_ADD, complete="path"),
+    "drop": Command(_cmd_drop, "drop <path>", msgs.CMD_DROP, complete="path", turn_state=True),
 }
 
 

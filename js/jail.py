@@ -288,6 +288,13 @@ class Jail:
         takes the new access."""
         self.added = [b for b in self.added if b.path != bind.path] + [bind]
 
+    def drop(self, path: Path) -> bool:
+        """Stop showing an /add bind. False when ``path`` was not added."""
+        kept = [b for b in self.added if b.path != path]
+        dropped = len(kept) != len(self.added)
+        self.added = kept
+        return dropped
+
     # --- bwrap -------------------------------------------------------------
 
     def argv(self, argv: list[str], *, cwd: Path | str | None = None, env_path: str = "",

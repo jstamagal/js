@@ -1,5 +1,5 @@
-"""/cd moves the session's working directory; under `js -C`, /add changes
-what the jail shows. Each change reaches the model once as a reminder
+"""/cd moves the session's working directory; under `js -C`, /add and /drop
+change what the jail shows. Each change reaches the model once as a reminder
 on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
@@ -83,6 +83,21 @@ def places(tmp_path):
     return root, extra
 
 
+@needs_bwrap
+def test_add_shows_a_path_and_drop_hides_it(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"shell": shell_out(f"cat {extra}/data.txt"), "read": read(extra / "data.txt")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", "look", f"/drop {extra}", "look again"])
+
+    shown, hidden = turns.results
+    assert "exit=0" in shown["shell"] and "extra-data" in shown["shell"]
+    assert "extra-data" in shown["read"]
+    assert "exit=0" not in hidden["shell"]
+    assert hidden["read"].startswith("ERROR:")
+    assert cli._ADD_NOTICE.format(path=extra, access="read-only") in turns.sent[0]
+    assert cli._DROP_NOTICE.format(path=extra) in turns.sent[1]
+
 
 @needs_bwrap
 def test_add_is_read_only_unless_rw(monkeypatch, places, turns):
@@ -128,13 +143,24 @@ def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
 
 
-def test_add_needs_a_jail(places):
+def test_add_and_drop_need_a_jail(places):
     _root, extra = places
     state: dict = {}
 
     assert cli._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
+    assert cli._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
     assert "pending_notes" not in state
 
+
+@needs_bwrap
+def test_the_root_cannot_be_dropped(monkeypatch, places, turns):
+    root, _extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/drop {root}", "where"])
+
+    assert turns.sent == ["where"]
+    assert f"\n{root.resolve()}\n" in turns.results[0]["pwd"]
 
 
 @needs_bwrap
@@ -166,15 +192,12 @@ def test_a_resume_restores_the_working_directory(monkeypatch, places, turns):
 
 
 @needs_bwrap
-def test_add_shows_a_path(monkeypatch, places, turns):
+def test_drop_keeps_the_path_the_working_directory_is_in(monkeypatch, places, turns):
     root, extra = places
-    turns.probes = {"shell": shell_out(f"cat {extra}/data.txt"), "read": read(extra / "data.txt")}
+    turns.probes = {"pwd": shell_out("pwd")}
 
-    repl(monkeypatch, ["-C", str(root)], ["before", f"/add {extra}", "after"])
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", f"/cd {extra}", f"/drop {extra}", "where"])
 
-    hidden, shown = turns.results
-    assert "exit=0" not in hidden["shell"]
-    assert hidden["read"].startswith("ERROR:")
-    assert "exit=0" in shown["shell"] and "extra-data" in shown["shell"]
-    assert "extra-data" in shown["read"]
-    assert cli._ADD_NOTICE.format(path=extra, access="read-only") in turns.sent[1]
+    assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
+    assert cli._DROP_NOTICE.format(path=extra) not in turns.sent[0]
+    assert jail.active().added == [jail.Bind(extra, False)]

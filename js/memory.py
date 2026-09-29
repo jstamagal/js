@@ -346,7 +346,7 @@ _WORKSPACE_MARK = "workspace:"
 
 
 def append_workspace_mark(memory_file: Path, *, root: str | None, cwd: str, binds: list[str]) -> None:
-    """Record where the session works after a /cd or /add: the -C root
+    """Record where the session works after a /cd, /add or /drop: the -C root
     it ran under (None without one), its working directory, and the /add binds."""
     payload = {"root": root, "cwd": cwd, "binds": binds}
     append_mark(memory_file, _WORKSPACE_MARK + json.dumps(payload, separators=(",", ":")))

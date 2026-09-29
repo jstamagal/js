@@ -319,8 +319,10 @@ home.
   by default. The next command sees it (each builds its own bwrap argv); the
   file tools accept it at once. A kernel or terminal session already running
   needs a restart.
-- Each puts one `<js-reminder>` on the next user message ("working directory
-  is now DIR", "PATH is now visible inside the jail (read-only)") and writes a
+- `/drop PATH` removes an `/add` bind. The `-C` root cannot be dropped.
+- Each of the three puts one `<js-reminder>` on the next user message
+  ("working directory is now DIR", "PATH is now visible inside the jail
+  (read-only)", "PATH is no longer visible inside the jail") and writes a
   `workspace:` mark (root, cwd, `/add` binds). A resume restores the cwd, and
   under the same `-C` root the binds.
 
