@@ -148,8 +148,7 @@ class NetCall:
     """One model request on the network channel. Every hook is safe to call at
     any level; each decides for itself whether it prints."""
 
-    def __init__(self, sink: NetSink, role: NetRole, url: str, model: str) -> None:
-        self._sink = sink
+    def __init__(self, role: NetRole, url: str, model: str) -> None:
         self._role = role
         self._url = url
         self._model = model
@@ -158,14 +157,7 @@ class NetCall:
         self._sent = False
         if role.status is not None:
             role.status.call_started()
-        self._say(2, self._connecting_line())
-
-    def _say(self, level: int, text: str) -> None:
-        if (net_level() or 0) >= level:
-            try:
-                self._sink.emit(_banner(text))
-            except Exception:  # noqa: BLE001 — a display failure never fails the request
-                pass
+        say(2, self._connecting_line())
 
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
@@ -189,7 +181,7 @@ class NetCall:
         self._connected = True
         ms = int((time.perf_counter() - self._started) * 1000)
         who = f"{self._role.label}: connected" if self._role.label else "Connected"
-        self._say(2, f"{who}: {host or _host(self._url)}  {ms}ms")
+        say(2, f"{who}: {host or _host(self._url)}  {ms}ms")
 
     def received(self, n: int) -> None:
         self.connected()
@@ -201,7 +193,7 @@ class NetCall:
 
     def failed(self, exc: BaseException) -> None:
         prefix = f"{self._role.label}: " if self._role.label else ""
-        self._say(1, prefix + describe_failure(exc))
+        say(1, prefix + describe_failure(exc))
 
     async def trace(self, event: str, info: dict[str, Any]) -> None:
         """httpcore2's `trace` request extension: the handshake is the connect."""
@@ -231,7 +223,7 @@ def begin_call(url: str, model: str) -> NetCall | None:
     """Open the network channel for one model request, or None with no sink."""
     if _sink is None:
         return None
-    return NetCall(_sink, _role.get(), url, model)
+    return NetCall(_role.get(), url, model)
 
 
 class _OwnedCoreStream:
