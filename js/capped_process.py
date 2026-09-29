@@ -173,12 +173,17 @@ def start_capped(
     still blocked past that (a backgrounded grandchild deliberately keeps the
     pipe open) is stopped and the parent's read end is closed.
     Intentionally-spawned daemons are not killed.
+
+    The child's stdin is /dev/null. js's own stdin is the terminal the input
+    line reads; a child holding it (ssh, an interactive shell) would consume
+    the operator's keystrokes for as long as it runs.
     """
     popen_kwargs: dict = {}
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         argv,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,

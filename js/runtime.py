@@ -1067,16 +1067,20 @@ async def _dispatch_async_tool(
 
 
 def _interrupt_inflight(tool_context: ToolContext) -> None:
-    """Tell a live external process that the cell its tool call started is abandoned.
+    """Stop the external process a cancelled turn's tool call is blocked on.
 
     A worker thread running a sync tool cannot be cancelled, so a cancelled turn
     leaves the call running to its own deadline. The kernel tool owns a process
     that outlives the call, and a cell left executing there would sit behind the
-    next call; interrupting it makes the drain short and the kernel idle.
+    next call; interrupting it makes the drain short and the kernel idle. A
+    shell call blocked on its command gets that command's process tree killed,
+    so ^C ends the turn now rather than when the shell wait runs out.
     """
     from .toolkit import kernel as kernel_tool
+    from .toolkit import process_net
 
     kernel_tool.interrupt_inflight(tool_context)
+    process_net.interrupt_inflight(tool_context)
 
 
 async def _dispatch_batch(
