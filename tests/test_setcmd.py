@@ -506,3 +506,11 @@ def test_provider_id_and_base_url_validate_at_set_time():
 
     ok_url = setcmd.set_command(live_settings, "provider.base_url http://localhost:8050/v1")
     assert ok_url.error is None
+
+
+def test_editing_mode_accepts_emacs_or_vi_only():
+    store = settings.seed_defaults()
+
+    assert setcmd.set_command(store, "ui.editing_mode vi").error is None
+    assert setcmd.set_command(store, "ui.editing_mode vim").error is not None
+    assert settings.get_dotted(store, ("ui", "editing_mode")) == "vi"

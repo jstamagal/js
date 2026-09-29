@@ -34,6 +34,7 @@ from . import compaction
 from . import dotenv
 from . import endpoint_uri
 from . import events
+from . import exline
 from . import logins
 from . import memory as M
 from . import model_client
@@ -2816,6 +2817,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     def on_eof() -> None:
         state["running"] = False
 
+    async def on_ex(line: str, editor: screen.InputEditor) -> None:
+        await exline.run_ex(
+            line,
+            editor,
+            is_command=lambda verb: verb in COMMANDS or verb in (state.get("aliases") or {}),
+            dispatch=on_line,
+        )
+
     app, scrollback = screen.build_app(
         prompt=f"{C.YELLOW}LO> {C.RESET}",
         history=session.history,
@@ -2823,6 +2832,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_line=on_line,
         on_interrupt=on_interrupt,
         on_eof=on_eof,
+        editing_mode=lambda: settings.get_dotted(state["settings"], ("ui", "editing_mode"), "emacs"),
+        on_ex=on_ex,
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)

@@ -166,6 +166,25 @@ token counts. In the standard async screen, **Ctrl-R** toggles retained reasonin
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
+`/set ui.editing_mode vi` makes the input line a vi buffer (the default is
+`emacs`, where Enter sends). In vi mode typing starts in insert mode, Enter is a
+newline, and Esc then `:` opens the ex line at the bottom:
+
+```text
+:w [file]      write the buffer (default: the notes directory); it stays, unsent
+:x             send the buffer
+:q [note]      quit
+:e [file]      edit the buffer (or file) in $VISUAL/$EDITOR; it comes back unsent
+:r file        insert a file at the cursor
+:n text        append a timestamped note; never sent to the model
+:n             open the notes file in $EDITOR
+:set k v       any js command, without the /
+:nvim          any program on PATH runs on the buffer; it comes back unsent
+```
+
+Notes and `:w` saves live in the platform data `notes/` directory
+(`paths.notes_dir()`).
+
 Ctrl-C cancels the active turn and drops queued prompts. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
 recorded progress can be discarded; completed tool work is preserved.

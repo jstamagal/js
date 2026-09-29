@@ -9,16 +9,21 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Callable, Coroutine
 
-from prompt_toolkit.application import Application
+from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
+from prompt_toolkit.enums import EditingMode
+from prompt_toolkit.filters import has_focus, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.key_binding.vi_state import InputMode
+from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.styles import Style
 
@@ -228,6 +233,29 @@ class _ScreenStdout:
         return self._real.fileno()
 
 
+class InputEditor:
+    """The input line as a buffer the `:` ex line acts on."""
+
+    def __init__(self, buffer: Buffer, submit: Callable[[], Coroutine]) -> None:
+        self._buffer = buffer
+        self.submit = submit
+
+    @property
+    def text(self) -> str:
+        return self._buffer.text
+
+    @text.setter
+    def text(self, value: str) -> None:
+        self._buffer.set_document(Document(value, len(value)), bypass_readonly=True)
+
+    def insert(self, text: str) -> None:
+        self._buffer.insert_text(text)
+
+    async def run(self, argv: list[str]) -> None:
+        """Run a program on the real terminal, the screen suspended until it exits."""
+        await run_in_terminal(lambda: subprocess.call(argv), in_executor=True)
+
+
 def build_app(
     *,
     prompt: str,
@@ -236,25 +264,57 @@ def build_app(
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], None],
     on_eof: Callable[[], None],
+    editing_mode: Callable[[], str] = lambda: "emacs",
+    on_ex: Callable[[str, InputEditor], Coroutine] | None = None,
 ) -> tuple[Application, Scrollback]:
+    """In vi mode the input is a multi-line buffer: Enter is a newline and
+    `:` in normal mode opens the ex line, whose text goes to ``on_ex``."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         history=history,
         completer=completer,
         complete_while_typing=False,
         enable_history_search=True,
-        multiline=False,
+        multiline=vi_mode,
     )
+    ex_buffer = Buffer(multiline=False)
     kb = KeyBindings()
 
-    @kb.add("enter")
-    async def _enter(event) -> None:
+    async def submit() -> None:
         line = input_buffer.text
         input_buffer.append_to_history()
         input_buffer.reset()
         if line.strip():
             scrollback.append(f"{prompt}{line}\n")
         await on_line(line.strip())
+
+    editor = InputEditor(input_buffer, submit)
+
+    @kb.add("enter", filter=has_focus(input_buffer) & ~vi_mode)
+    async def _enter(event) -> None:
+        await submit()
+
+    @kb.add(":", filter=has_focus(input_buffer) & vi_navigation_mode)
+    def _ex_open(event) -> None:
+        event.app.layout.focus(ex_buffer)
+        event.app.vi_state.input_mode = InputMode.INSERT
+
+    def _ex_close(app) -> str:
+        text = ex_buffer.text
+        ex_buffer.reset()
+        app.layout.focus(input_buffer)
+        app.vi_state.input_mode = InputMode.NAVIGATION
+        return text
+
+    @kb.add("enter", filter=has_focus(ex_buffer))
+    async def _ex_run(event) -> None:
+        text = _ex_close(event.app).strip()
+        if text and on_ex is not None:
+            await on_ex(text, editor)
+
+    @kb.add("escape", filter=has_focus(ex_buffer), eager=True)
+    def _ex_cancel(event) -> None:
+        _ex_close(event.app)
 
     @kb.add("c-c")
     def _ctrl_c(event) -> None:
@@ -305,7 +365,13 @@ def build_app(
             Window(BufferControl(buffer=input_buffer,
                                  input_processors=[],
                                  lexer=None),
-                   height=1, get_line_prefix=lambda *_: to_formatted_text(ANSI(prompt))),
+                   height=Dimension(min=1, max=10), dont_extend_height=True,
+                   get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(prompt if lineno == 0 and not wrap
+                                                                               else " " * len(_plain(prompt))))),
+            ConditionalContainer(
+                Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
+                filter=has_focus(ex_buffer),
+            ),
         ]),
         focused_element=input_buffer,
     )
@@ -316,7 +382,20 @@ def build_app(
         full_screen=True,
         mouse_support=False,
     )
+
+    def _sync_editing_mode(_app) -> None:
+        app.editing_mode = EditingMode.VI if editing_mode() == "vi" else EditingMode.EMACS
+
+    _sync_editing_mode(app)
+    app.before_render += _sync_editing_mode
     return app, scrollback
+
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_ESCAPE.sub("", text)
 
 
 class capture_stdio:

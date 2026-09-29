@@ -150,6 +150,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
                 "async screen. Display only; session reasoning is always retained.",
                 env="JS_UI_REASONING"),
+    SettingSpec("ui.editing_mode", "str", "emacs",
+                "Input line key bindings in the async screen: emacs (Enter sends) or vi "
+                "(multi-line buffer; Esc then `:` opens the ex line, `:x` sends)."),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
@@ -422,6 +425,10 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 f"unknown provider id: {text!r} — pick a known id or add a "
                 f"custom one with `js --login`"
             )
+        return text, None
+    if spec.key == "ui.editing_mode":
+        if text not in ("emacs", "vi"):
+            return None, "expected emacs or vi"
         return text, None
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
