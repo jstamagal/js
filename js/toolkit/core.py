@@ -411,6 +411,9 @@ class ToolContext:
     last_incomplete_reason: str | None = None
     turn_status: TurnStatus = field(default_factory=TurnStatus)
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
+    # The sessions above a `task` worker, nearest first: its model calls are
+    # charged to each of them as well as to its own (js.usage).
+    usage_chain: tuple[Path, ...] = ()
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
     # Read-only calls run in parallel threads; this lock covers read_paths,

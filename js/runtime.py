@@ -40,6 +40,7 @@ from . import tool_args
 from . import routing
 from . import compaction
 from . import stream_transport
+from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
@@ -1287,7 +1288,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None,
              mcp_host: Any = None,
-             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None) -> None:
+             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
+             event_sink: Callable[[str, dict], None] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -1297,6 +1299,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     recorded, when another model call follows. It returns a user message or
     None, directly or as an awaitable. A returned message is appended there, so
     the model reads it before choosing its next tool call.
+
+    ``event_sink`` sees every event this turn emits, as ``(event, payload)``:
+    the `events.CANONICAL_EVENT_NAMES` the turn raises, and ``usage`` after
+    each model call charged to the session (`js.usage`). Subagent turns do not
+    reach it.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -1404,6 +1411,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.vision_enabled = active_context.config.vision_enabled
 
     def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
+        if event_sink is not None:
+            try:
+                event_sink(event, dict(payload))
+            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
+                telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
         if event_hooks is None:
             return []
         emission = event_hooks.emit(event, **payload)
@@ -1421,8 +1433,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         mcp_host.telemetry = telemetry
         mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
 
+    turn_usage = usage_mod.Tally()
+
+    def _on_usage(call: usage_mod.CallUsage, session: usage_mod.UsageTotals) -> None:
+        turn_usage.add(call)
+        if event_sink is not None:
+            event_sink("usage", {**call.as_dict(), "session": session.as_dict()})
+
     def _end_turn(reason: str, **extra: Any) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
+        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id,
+                    usage=turn_usage.as_dict(), **extra)
 
     _emit_event(
         "turn_start",
@@ -1723,6 +1743,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
+    usage_token = usage_mod.start(usage_mod.Meter(
+        (getattr(cfg, "session_file", None), *getattr(active_context, "usage_chain", ())),
+        on_call=_on_usage,
+    ))
     try:
         if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
             await active_registry.restore(prior_surface)
@@ -1810,6 +1834,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         finish = model_client.incomplete_finish_reason(incomplete_reason)
                     reasoning = result.reasoning
                     usage = result.usage
+                    usage_mod.record(usage, model=model, provider_id=provider_id)
                     active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
                     active_context.last_incomplete_reason = incomplete_reason
@@ -2153,6 +2178,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         raise
     finally:
         _close_reasoning()
+        usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         turn_status.reset()
         if owns_mcp_host and mcp_host is not None:

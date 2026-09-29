@@ -29,6 +29,7 @@ from . import model_metadata
 from . import routing
 from . import settings as _settings
 from . import toolkit as T
+from . import usage as usage_mod
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config
 
@@ -616,6 +617,8 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             left = await summarize_chunk(head[:middle], depth + 1)
             right = await summarize_chunk(head[middle:], depth + 1)
             return left + "\n\n" + right
+        usage_mod.record(getattr(result, "usage", None), model=route.model, provider_id=route.provider_id,
+                         session_file=getattr(cfg, "session_file", None))
         if (flight := ACTIVE_FLIGHT.get()) is not None:
             flight.record("summary_response", text=result.text,
                           usage=getattr(result, "usage", None),

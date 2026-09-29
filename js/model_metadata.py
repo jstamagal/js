@@ -90,6 +90,7 @@ class _ModelRow:
 def _clear_caches() -> None:
     _all_models.cache_clear()
     lookup_limits.cache_clear()
+    model_prices.cache_clear()
     accepts_image_input.cache_clear()
     _image_inputs.cache_clear()
     _probe_local_context_window_cached.cache_clear()
@@ -674,3 +675,34 @@ def resolve_max_output(model_id: str, provider_id: str | None = None) -> int | N
     if cached is not None and cached.max_output_tokens is not None:
         return cached.max_output_tokens
     return max_output_tokens(model_id, provider_id)
+
+
+@lru_cache(maxsize=256)
+def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ...] | None:
+    """The models.dev price tiers of the model a call ran on, in dollars per
+    million tokens, lowest ``min_context`` first; None when the catalog has no
+    price for it.
+
+    A call with a provider is priced only by that provider's own catalog row
+    (or the rows its SDK or login maps to), so a local server running a model
+    that some API sells is not charged that API's price. A call with no
+    provider goes through the gateway and is priced by the routed row. Reads
+    the catalog already cached; it never refreshes it.
+    """
+    current = current_catalog_status()
+    if current is not None:
+        _activate_database(current.db_path)
+    names = [f"{candidate}:{model_id}" for candidate in _provider_candidates(provider_id)]
+    bare_model, bare_provider = _normalize_request(model_id, provider_id)
+    if bare_provider:
+        names += [f"{candidate}:{bare_model}" for candidate in _provider_candidates(bare_provider)]
+    else:
+        limits = lookup_limits(bare_model, None)
+        if limits is not None and limits.provider_id is not None:
+            names.append(f"{limits.provider_id}:{limits.model_id}")
+    for name in names:
+        model = modelsdotdev.get_model_by_id(name)
+        tiers = getattr(model, "cost", None) if model is not None else None
+        if tiers:
+            return tuple(sorted(tiers, key=lambda tier: tier.min_context))
+    return None

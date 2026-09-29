@@ -267,6 +267,7 @@ async def _run_one_task_async(
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
+    child_context.usage_chain = (Path(parent_cfg.session_file), *getattr(parent_context, "usage_chain", ()))
     child_context.net_label = f"Subagent {idx}"
     if Path(cfg.session_file) != Path(os.devnull):
         from ..session_catalog import record_session_start

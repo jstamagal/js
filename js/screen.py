@@ -120,19 +120,22 @@ def status_line(
     agent_id: str | None,
     session_short: str | None,
     cache_pct: int | None,
+    cost: str | None = None,
 ) -> str:
     """The status bar as a plain string of exactly `width` cells.
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
-    while `throbber` is set, i.e. a turn runs), right `agent/session cache N%`.
+    while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
+    cost`, where `cost` is the session's spend (`usage.status_text`).
     Groups that do not fit give way in a fixed order: cache, then the model's
-    head, then the provider, then the centre count, then the agent id.
+    head, then the provider, then the centre count, then the cost, then the
+    agent id.
     """
     if width <= 0:
         return ""
     model_text = model or ""
     show = {"cache": cache_pct is not None, "provider": bool(provider),
-            "count": output_tokens is not None, "agent": bool(agent_id)}
+            "count": output_tokens is not None, "agent": bool(agent_id), "cost": bool(cost)}
 
     def groups() -> tuple[str, str, str]:
         route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
@@ -143,7 +146,8 @@ def status_line(
             count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
             centre = " ".join(filter(None, (throbber, phase, count)))
         who = "/".join(filter(None, (agent_id if show["agent"] else "", session_short or "")))
-        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "")))
+        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "",
+                                       cost if show["cost"] else "")))
         return left, centre, right
 
     def fits(left: str, centre: str, right: str) -> bool:
@@ -160,6 +164,7 @@ def status_line(
         truncate_model,
         lambda: show.update(provider=False),
         lambda: show.update(count=False),
+        lambda: show.update(cost=False),
         lambda: show.update(agent=False),
     )
     left, centre, right = groups()
