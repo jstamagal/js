@@ -236,8 +236,9 @@ HTML is converted to text unless `raw=true`. Inline output is capped by
 
 Saved GET responses, binary responses, and bodies over the inline result budget
 are transferred through the system aria2c with segmentation, retry, resume,
-and atomic destination replacement. Missing aria2c emits a runtime warning
-before urllib handles the transfer.
+and atomic destination replacement. Missing aria2c prints a `URLLIB_FALLBACK`
+line on stderr, once per purpose per process, before urllib handles the
+transfer.
 
 ## Search And Docs
 

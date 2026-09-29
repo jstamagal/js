@@ -255,20 +255,33 @@ its current position, including after compaction has shifted the history.
 
 The operator's messages are named `Message` entries in `js/messages.py`; code
 passes the values for their holes (`msgs.say(msgs.MODEL_SET, model=m)`,
-`msgs.warn(...)` for stderr, `.text()` for an error string returned to a
-caller or raised as exception text). A banner entry prints behind the `BANNER`
-slot (`***` today); no template spells the slot. Severity is colour, never a
-word: `WARN` paints the holes light yellow, `GRAVE` light red, and a message
-with no holes is painted whole. The commit helper prints its entries with
-`.text()`, because the commit agent reads its output: no colour, no slot.
+`msgs.warn(...)` for stderr, `.text()` for a string raised as exception text).
+A banner entry prints behind the `BANNER` slot (`***` today); no template
+spells the slot. Severity is colour, never a word: `WARN` paints the holes
+light yellow, `GRAVE` light red, and a message with no holes is painted whole.
+`say` paints only a stream that is a terminal, so a pipe gets plain lines.
 
-Registry text keeps its own home: command usage and doc strings in the command
-table, `SettingSpec` docs, argparse help and the kernel panel's field labels.
+`Message.said(...)` is `.text()` that keeps its entry: a `str` whose `message`
+and `fields` say what produced it. A REPL command returns its refusal that
+way, and the REPL prints it in that entry's severity, so a usage slip is not
+painted while a failed save is. `compact_now` returns its result the same way,
+and `compaction.compacted()` tells a compaction from a skip by the entry.
+
+The `/help` column (`CMD_*`), `js --help` (`SHORT_HELP`), every argparse help
+and description (`OPT_*`) and argparse's own headings and refusal go through
+entries too; `msgs.ArgumentParser` wires the last two. `SettingSpec` docs stay
+in the settings registry beside their key, and the kernel panel's field
+labels stay in the panel. The commit helper prints its entries with
+`.text()`, because the commit agent reads its output: no colour, no slot.
 Tool results, tool descriptions and prompts are the model's text and stay
-where they are. `tests/test_messages.py` fails on a `print`, `.print` or
-stream write in `js/`, or an argparse help string, that carries the slot,
-`error:`, `warning:`, `js:`, `knob` or `(no `, and it drives the `/tools`
-table, a failed prompt directive and the commit helper to check their output.
+where they are.
+
+`tests/test_messages.py` fails on a `print`, `.print` or stream write in
+`js/` that carries the slot, `error:`, `warning:`, `js:`, `knob` or `(no `;
+on a literal argparse help, description, `parser.error` or command doc; and
+on a setting doc with a paren aside. It drives `/help`, `--help`,
+`--help-full`, a bad flag, the `/tools` table, a failed prompt directive and
+the commit helper to check their output.
 
 ## Backward Compatibility Policy
 
