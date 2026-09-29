@@ -109,6 +109,7 @@ REPL commands:
 /load <file>                  run each line of a file as a command (also /source)
 /on [event handler]           list or register event hooks
 /alias [name [command]]       list, show or define a command alias
+/exec <command>               run a shell command; its stdout goes with the next message
 /set model.reasoning_effort high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
 /set ui.tools 3                show every tool call and its whole result
@@ -142,16 +143,71 @@ Paths resolve relative to the current project directory; nested `load
 other.irc` lines resolve relative to the script that contains them. The first
 error stops the file and names the file and line.
 
-`on` stores typed event hooks such as `turn_start`, `tool_call`, and
-`tool_result`. Handler text runs through the same table when the event fires.
-Handler errors are captured as event results and debug telemetry instead of
-aborting the turn. Nested event dispatch is skipped while a handler is already
-running. The `^` prefix is stored for future suppressive hooks; it does not yet
-suppress the default runtime action.
+`on` stores typed event hooks. The events: `input`, `prompt`, `stream`,
+`tool_call`, `tool_result`, `response`, `turn_start`, `turn_end`, `error`,
+`cancel`, the `mcp_*` events, and:
+
+- `session_start`: the REPL is up, after the jsrc replay and before the first
+  prompt. Both REPLs fire it on every start, a resume included.
+- `session_end`: the REPL is closing, after the last turn.
+- `pre_compact`: a compaction is about to summarize the history (`/compact`,
+  between turns, or mid-turn). A compaction that finds nothing worth
+  summarizing fires neither this nor `post_compact`.
+- `post_compact`: the summary replaced the history.
+
+Handler text runs through the same table when the event fires. Handler errors
+are captured as event results and debug telemetry instead of aborting the
+turn. Nested event dispatch is skipped while a handler is already running. The
+`^` prefix is stored for future suppressive hooks; it does not yet suppress the
+default runtime action.
+
+`exec CMD` runs `CMD` under `$SHELL -c` in the session's working directory and
+queues its stdout, if any, as one `<js-reminder>` on the next user message.
+Typed at the prompt it also shows the output. As a handler, `on EVENT exec
+CMD`, the command reads the event on stdin as one JSON object (`{"event":
+"tool_call", "id": ..., "name": ..., "arguments": ...}`), and `JS_EVENT`
+names it:
+
+```text
+on session_start exec git status --short --branch
+on post_compact exec cat .js/after-compact.md
+on tool_call exec ~/bin/js-guard
+```
+
+A `tool_call` handler whose command exits 2 refuses the call: the call never
+runs, and the model reads the first line of the command's stderr (else of its
+stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Subagents'
+tool calls go through the same `tool_call` handlers; a subagent's turn fires
+no other event. Any other status, or running past `events.exec_timeout_s`
+seconds (30, 0 for no limit; the process group is killed), prints one `exec:`
+line and queues nothing. A handler's command holds up the event that ran it
+until the shell exits; what it starts in the background (`cmd &`) keeps
+running, and its output is read for a moment after the shell exits and then
+dropped. `events.exec_output_bytes` caps what is kept of each stream. What a
+handler queues during a turn reaches the model with the next user message.
+`exec` commands are the operator's, not the model's: under `-C` they run on
+the host, outside the jail, with js's own environment.
 
 `/alias name command` defines `/name`. `$*` in the command is replaced by the
 alias's arguments; a command without `$*` gets them appended. `/alias -name`
 removes one. An alias cannot take the name of a built-in command.
+
+A markdown file `~/.js/commands/NAME.md` is the command `/NAME`, and a
+project's `.js/commands/NAME.md` shadows the global one. `/NAME args` sends
+the file's text as the user message, with its placeholders filled from the
+arguments (split like a shell line; quotes group words): `$1`, `$2` ... one
+argument, empty when missing; `$@` or `$ARGUMENTS` all of them; `${N:-text}`
+argument N or `text`; `${@:-text}` all of them or `text`; `${@:N}` and
+`${@:N:L}` the arguments from the Nth on, or L of them. Text an argument
+brings in is not substituted again. YAML frontmatter may give a
+`description`, which `/help` shows; without one the first line is shown. Tab
+completes the names. A built-in command or an alias of the same name wins.
+
+```text
+$ cat ~/.js/commands/review.md
+Review $1. Focus on ${2:-correctness}; list findings worst first.
+> /review js/cli.py "error paths"
+```
 
 `/save` rewrites the global jsrc from everything the session holds: settings
 that differ from their defaults, `on` handlers, and aliases. On the next start
@@ -261,6 +317,13 @@ Resuming a session in the screen shows its last `ui.resume_exchanges` exchanges
 (3 by default, 0 for none) as a turn draws them, below the startup lines and
 the `*** Resumed` and `*** Model` notices.
 
+A paste of more than `ui.paste_collapse_lines` lines (10) or
+`ui.paste_collapse_chars` characters (1000) shows in the input line as one
+marker, `[paste #N +X lines]` or `[paste #N X chars]`; the line sends the full
+text, in both REPLs. The scrollback echoes the line with the marker; the
+history file keeps the full text. A limit of 0 is no limit on that count.
+The terminal must send bracketed paste, which every common terminal does.
+
 ### Prompt history and keys
 
 Every line sent at a REPL prompt, in either REPL, is appended to one file
@@ -270,7 +333,8 @@ prompts typed in the current directory first, newest first, then the rest
 (`history.cwd_first off` walks them all in time order). **Ctrl-R** opens an
 incremental search over all of them: type to narrow, Ctrl-R again for the next
 older match, Enter or Esc to take it into the input line, Ctrl-G to give up.
-The newest `history.max_entries` prompts are loaded.
+The newest `history.max_entries` prompts are loaded. A collapsed paste is
+written out whole.
 
 `~/.js/keys` (`keys.file`) remaps the async screen's keys, in jsrc's grammar:
 
@@ -359,6 +423,8 @@ see `<dir>`, and it puts the tools in a jail:
   refuse a path outside `<dir>` and the bound paths with one `ERROR` line. A
   path under `/tmp` or `~/.js/tmp` names the file the jailed commands see there.
 - Subagents run in the same jail.
+- `exec` commands (typed, or run by an `on` handler) are not tools: they run
+  on the host with js's environment.
 - The `jail.bind` setting shows more paths: a JSON list of `"path"`
   (read-only) or `"path:rw"` entries. The default binds `~/.gitconfig`,
   `~/.config/git`, `~/.local/share/uv` and `~/.cache/uv:rw`, so git and uv

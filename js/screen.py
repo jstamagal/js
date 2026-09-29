@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
-from prompt_toolkit.enums import EditingMode
+from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
 from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
@@ -32,7 +32,7 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import keys
+from . import keys, pastes
 from . import messages as msgs
 from . import session_store
 from .context_budget import estimate_text_tokens
@@ -527,9 +527,12 @@ def build_app(
     opens a reverse incremental search over ``history``. ``key_bindings`` are
     added after the screen's own and win a shared key. ``on_eof`` runs on the
     eof key at an empty input line and ends the app with `app.exit()`; an
-    awaitable it returns runs as the key's handler."""
+    awaitable it returns runs as the key's handler. A sent line's paste
+    markers (`js.pastes`) are expanded before ``on_line`` gets it; the
+    scrollback echoes the line as typed."""
     scrollback = Scrollback()
     input_buffer = Buffer(
+        name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
         completer=completer,
         complete_while_typing=False,
@@ -546,7 +549,7 @@ def build_app(
         input_buffer.reset()
         if line.strip():
             scrollback.append(f"{prompt}{line}\n")
-        await on_line(line.strip())
+        await on_line(pastes.expand(line).strip())
 
     editor = InputEditor(input_buffer, submit)
 

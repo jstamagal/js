@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 
 
 CANONICAL_EVENT_NAMES: tuple[str, ...] = (
@@ -21,7 +22,15 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "mcp_catalog_collision",
     "error",
     "cancel",
+    "session_start",
+    "session_end",
+    "pre_compact",
+    "post_compact",
 )
+
+# The one event whose handlers can refuse what it announces: a refused tool
+# call never runs, and the model reads the refusal as its result.
+REFUSABLE_EVENTS = frozenset({"tool_call"})
 
 _EVENT_SET = frozenset(CANONICAL_EVENT_NAMES)
 
@@ -37,6 +46,8 @@ class EventHook:
 class EventHandlerResult:
     hook: EventHook
     error: str | None = None
+    # Set when the handler refused the event: the one line the model reads.
+    refusal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +60,33 @@ class EventEmission:
 
 
 EventHandlerDispatcher = Callable[[EventHook, EventEmission], EventHandlerResult]
+
+
+@dataclass
+class HandlerCall:
+    """The handler running now: its hook, the emission it answers, and the
+    refusal it records, if any."""
+
+    hook: EventHook
+    emission: EventEmission
+    refusal: str | None = None
+
+
+_CURRENT_CALL: ContextVar[HandlerCall | None] = ContextVar("js_event_handler_call", default=None)
+
+
+def current_call() -> HandlerCall | None:
+    """The handler call in progress on this thread of control; None outside one."""
+    return _CURRENT_CALL.get()
+
+
+def refusal_of(emission: object) -> str | None:
+    """The first refusal a handler of ``emission`` recorded; None when none did."""
+    for result in getattr(emission, "results", ()) or ():
+        refusal = getattr(result, "refusal", None)
+        if refusal:
+            return refusal
+    return None
 
 
 def normalize_event_name(raw: str) -> str | None:
@@ -118,6 +156,8 @@ class EventHooks:
         self._dispatch_depth += 1
         try:
             for hook in hooks:
+                call = HandlerCall(hook=hook, emission=emission)
+                token = _CURRENT_CALL.set(call)
                 try:
                     result = self._dispatcher(hook, emission)
                 except Exception as e:  # noqa: BLE001 - hook failures are data
@@ -125,11 +165,15 @@ class EventHooks:
                         hook=hook,
                         error=f"{type(e).__name__}: {e}",
                     )
+                finally:
+                    _CURRENT_CALL.reset(token)
                 if not isinstance(result, EventHandlerResult):
                     result = EventHandlerResult(
                         hook=hook,
                         error=f"invalid event handler result: {type(result).__name__}",
                     )
+                if call.refusal and result.refusal is None and name in REFUSABLE_EVENTS:
+                    result = replace(result, refusal=call.refusal)
                 emission.results.append(result)
         finally:
             self._dispatch_depth -= 1
@@ -137,3 +181,20 @@ class EventHooks:
 
     def all(self) -> dict[str, list[EventHook]]:
         return {event: list(hooks) for event, hooks in self._hooks.items() if hooks}
+
+
+class RefusableOnly:
+    """The part of an `on` table a subagent's turn answers to: the handlers of
+    the refusable events, so a tool_call guard vets a subagent's calls as it
+    vets the parent's. Every other event emits to no handler."""
+
+    def __init__(self, hooks: EventHooks | RefusableOnly) -> None:
+        self._hooks = hooks
+
+    def emit(self, event: str, **payload) -> EventEmission:
+        name = normalize_event_name(event)
+        if name is None:
+            raise ValueError(f"unknown event: {event}")
+        if name in REFUSABLE_EVENTS:
+            return self._hooks.emit(name, **payload)
+        return EventEmission(event=name, payload=dict(payload), hooks=[])

@@ -16,6 +16,8 @@ hostile model. Under `-C`:
   jail shows them, not the private directory behind them (`shown`).
 
 The jail is process-wide: subagents run in this process and use the same one.
+The operator's `exec` commands (js/hookexec.py) are not tools and run on the
+host.
 """
 
 from __future__ import annotations

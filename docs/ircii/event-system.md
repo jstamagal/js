@@ -53,7 +53,12 @@ hook is the enforcer — effectively a type system bolted onto the loop.
 `^` before an event suppresses its default action (e.g. display),
 ircII-style. The handler still runs.
 
-## Handler return contract (6 modes) — UNIMPLEMENTED — VISION
+## Handler return contract (6 modes) — PARTLY BUILT, the rest VISION
+Built (js-1g1.20): **inject**, an `exec` handler's stdout reaches the model
+once as a js-reminder; **suppress** for `tool_call` only, an `exec` handler
+that exits 2 refuses the call and the model reads its ERROR line. See
+`docs/user-guide.md`.
+
 1. pass     — observe only (log / metrics)
 2. modify   — change the payload, continue
 3. suppress — kill the default action (`^`); e.g. deny a tool / drop a line

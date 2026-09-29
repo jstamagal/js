@@ -60,6 +60,11 @@ def shared_skills_dir() -> Path:
     return user_home() / ".agents" / "skills"
 
 
+def global_commands_dir() -> Path:
+    """`~/.js/commands`: each NAME.md is the command /NAME."""
+    return home() / "commands"
+
+
 def global_toolbox_dir() -> Path:
     return home() / "toolbox"
 

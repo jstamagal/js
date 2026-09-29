@@ -41,6 +41,10 @@ persists each completed turn.
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
+| `js/events.py` | event names, `on` handler table, handler refusals |
+| `js/hookexec.py` | `exec`: runs a command for the command layer; event JSON on stdin, exit 2 refuses |
+| `js/prompt_commands.py` | `~/.js/commands/NAME.md` as `/NAME`, argument placeholders |
+| `js/pastes.py` | large bracketed pastes kept behind `[paste #N ...]` markers |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
