@@ -262,7 +262,7 @@ def _absolute(text: str, *, home: str, cwd: str) -> str:
 
 def dir_pattern(text: str, *, home: str, cwd: str) -> DirPattern:
     """`dir:` as a shell glob over start directories: `*` and `?` stay within
-    one path component, `**` spans any number of them, none included."""
+    one path component, `**` spans zero or more of them."""
     path = _absolute(text, home=home, cwd=cwd)
     parts = [part for part in path.split("/") if part]
     regex = "".join("(?:/[^/]+)*" if part == "**" else "/" + _component(part) for part in parts)

@@ -403,8 +403,8 @@ js --session reviews/parser-fix -p "apply the review corrections"
 js --session 6d65 -p "resume 2026-09-29T0802-6d65"
 ```
 
-`--session` with no name is kept for the session picker, which is not built
-yet; it says so and exits.
+`--session` with no name, and `/session` in the REPL, open the session picker
+(below).
 
 A resumed session continues on the model, provider and reasoning level of its
 last stamp (see below) unless the run names them with `--model` or
@@ -429,6 +429,59 @@ under `~/.js/sessions`. Relative traversal is rejected after resolution.
 A subagent run is filed in the folder named after its parent session
 (`<session>/task-<epoch>-xxxx.jsonl`), so a plain grep of a directory's folder
 does not hit it. The children of an unsaved run are not saved either.
+
+## The Session Picker
+
+`js --session` (no name) or `/session [query]` in the REPL lists every session,
+newest first, across every directory and agent. `•` marks sessions started in
+the current directory; branches sit under the session they came from.
+
+| key | does |
+|---|---|
+| Enter | resume the session in its own directory, with its own agent, on its last-stamped model |
+| `v` | cycle the views: flat, grouped by directory, grouped by agent |
+| `/` | type a search query; Enter keeps it, Esc clears it |
+| `b` | the message list: Enter branches at the highlighted message, `r` resumes at the end, Esc goes back |
+| `i` | the file path, model stamps, estimated token count and branch parent |
+| `a` | also show the hidden kinds (below), marked in the tags column |
+| Esc | clear the query, or close |
+
+Hidden until `a`: **empty** sessions (nothing came back), **quick** ones (one
+operator message, at most two tool calls, a final reply under 1,000
+characters), **subagent** runs and **script**-started runs (`--commit`). A
+query naming the kind (`mode:quick`, `mode:subagent`, `mode:commit`) shows
+them without `a`. In the message list a tool row is labelled with the text the
+model wrote alongside the call, or else the call's first line.
+
+In the REPL, choosing another session ends the REPL and js starts again in
+that session. Choosing a branch point creates the branch in the parent's
+folder first.
+
+Search terms combine with AND:
+
+| query | meaning |
+|---|---|
+| `niri motherboard` | BM25 over the conversation text; each word also matches as a prefix |
+| `"exact phrase"` | a phrase |
+| `>10`, `<2`, `>=10,<=20` | turn count |
+| `today` `yesterday` `week` `2026` `2026-09` `2026-09-29` | the session was active in that span; `today:niri` = `today niri` |
+| `agent:defaultagent`, `agent:*research*` | agent, glob |
+| `dir:~/js` | started in exactly `~/js`; a relative path is taken from the current directory |
+| `dir:~/js/*`, `dir:~/js/**` | one level under `~/js` / `~/js` or anywhere under it; `*` and `?` stay within one path component |
+| `mode:-p`, `mode:quick` | how it was started, or its kind |
+| `model:*qwen*` | any message stamped with a matching model |
+| `tag:nfs` | a tag containing the text, or matching a glob |
+
+The words are ranked over what the operator wrote, what the model wrote, the
+`/name` title, and each tool row's label and call line; tool output is not
+searched. The line under the query shows how it was read, and each hit shows
+its best-matching row.
+
+The list and the search read `~/.js/cache/sessions.sqlite`: each session's
+summary and an FTS5 table of its text. Every write to a session updates its
+entry. On open, a file whose size or mtime differs from its entry is read
+again, an entry whose file is gone is dropped, and a missing or unreadable
+index is built again from the sessions.
 
 ## The `.txt` Transcript
 

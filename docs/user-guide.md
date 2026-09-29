@@ -117,7 +117,7 @@ REPL commands:
 /turns
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
-/session
+/session [query]               open the session picker
 /cd [dir]                      print or change the session's working directory
 /add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
 /drop <path>                   under -C, stop showing a path added with /add
@@ -490,7 +490,8 @@ Saved sessions are filed by the directory js started in:
 
 `<start-dir>` is the absolute path with `/` and `_` replaced by `-`. Use
 `--session NAME` to continue a saved session from any directory, and `/name
-<text>` to title one. See [configuration-and-sessions.md](configuration-and-sessions.md).
+<text>` to title one. A bare `js --session`, or `/session` in the REPL, opens
+the session picker: every session newest first, with search. See [configuration-and-sessions.md](configuration-and-sessions.md).
 
 The memory layer is append-only JSONL plus control marks:
 
