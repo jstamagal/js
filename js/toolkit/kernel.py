@@ -36,6 +36,7 @@ import json
 import queue
 import re
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -305,6 +306,13 @@ class CellHandle:
     died: bool = False
     timed_out: bool = False
     elapsed: float = 0.0
+    # `running` turns true on the cell's execute_input, which the kernel publishes
+    # after it has armed its SIGINT handler. A SIGINT sent before that is ignored
+    # by the kernel, so `resignal` asks record() to send it again at that point.
+    running: bool = False
+    resignal: bool = False
+    signal_lock: threading.Lock = field(default_factory=threading.Lock, repr=False,
+                                        compare=False)
 
     def first_line(self) -> str:
         for line in self.code.strip().splitlines():
@@ -414,6 +422,12 @@ class KernelSession:
             if handle.finished:
                 return
             handle.messages.append(msg)
+            if msg["header"]["msg_type"] == "execute_input":
+                with handle.signal_lock:
+                    handle.running = True
+                    resend, handle.resignal = handle.resignal, False
+                if resend:
+                    self.interrupt()
             if (msg["header"]["msg_type"] == "status"
                     and msg["content"].get("execution_state") == "idle"):
                 handle.finished = True
@@ -531,8 +545,21 @@ def pump(session: KernelSession, deadline: float) -> None:
 def interrupt_and_collect(session: KernelSession, handle: CellHandle,
                           grace: float = INTERRUPT_GRACE) -> None:
     """SIGINT the cell, then keep reading until it reports idle."""
-    session.interrupt()
+    signal_cell(session, handle)
     collect_until(session, handle, time.monotonic() + grace)
+
+
+def signal_cell(session: Any, handle: CellHandle) -> None:
+    """SIGINT `handle`'s cell now, and again when it starts if it has not yet.
+
+    A cell is "current" from the moment it is sent, but the kernel ignores
+    SIGINT until it begins executing that cell; record() sends the second
+    signal when the cell's execute_input arrives.
+    """
+    with handle.signal_lock:
+        if not handle.running:
+            handle.resignal = True
+    session.interrupt()
 
 
 def busy_handle(session: KernelSession) -> CellHandle | None:
@@ -568,7 +595,7 @@ def interrupt_inflight(context: Any) -> bool:
     handle = busy_handle(session)
     if handle is None:
         return False
-    session.interrupt()
+    signal_cell(session, handle)
     return True
 
 
