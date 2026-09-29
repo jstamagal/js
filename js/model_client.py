@@ -22,7 +22,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 import ai
 
-from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, retry, routing, stream_transport, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -72,6 +72,14 @@ class StreamIdleError(ai.ProviderTimeoutError):
             provider=provider, is_retryable=True,
         )
         self.seconds = seconds
+
+
+def sends_max_output(provider_id: str | None) -> bool:
+    """Whether a request to this provider carries max_output_tokens. The Codex
+    endpoint takes no output cap, so a request there is sent without one."""
+    provider_def = providers.get_provider(provider_id)
+    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
+    return not codex_auth.is_codex_provider(provider_name)
 
 
 # The SDK finish reason for a reply that hit its output-token cap: OpenAI chat
@@ -559,8 +567,8 @@ async def _open_stream(
     :class:`ai.models.Stream` without reaching into SDK internals.
 
     ``on_bytes`` is called for each response body chunk the transport reads.
-    The OpenAI and Anthropic SDK clients retry nothing themselves: the runtime
-    owns the retry budget and the Retry-After wait.
+    The OpenAI and Anthropic SDK clients retry nothing themselves: every retry
+    runs under js's budget (js/retry.py).
     """
     from ai.providers.anthropic.provider import AnthropicCompatibleProvider
     from ai.providers.openai.provider import OpenAICompatibleProvider
@@ -957,7 +965,7 @@ async def stream_model_async(
 
     output_params = (
         ai_params.OutputParams(max_tokens=max_output_tokens)
-        if max_output_tokens is not None and not is_codex
+        if max_output_tokens is not None and sends_max_output(provider_id)
         else None
     )
 
@@ -1193,10 +1201,15 @@ def run_owning_loop(coro: Any) -> Any:
         runner.close()
 
 
-def stream_model(**kwargs: Any) -> ModelStreamResult:
+def stream_model(*, retry_budget: retry.Budget | None = None, **kwargs: Any) -> ModelStreamResult:
     """Sync wrapper over :func:`stream_model_async` — spins a throwaway loop per
     call. This is the OLD blocking path; the non-blocking runtime calls
     ``stream_model_async`` directly on its shared loop. Kept so un-migrated
     callers (and the current sync run_turn) keep working during the transition.
+
+    With ``retry_budget`` a retryable failure sends the request again under it;
+    without one the first failure raises.
     """
-    return run_owning_loop(stream_model_async(**kwargs))
+    if retry_budget is None:
+        return run_owning_loop(stream_model_async(**kwargs))
+    return run_owning_loop(retry.call(lambda: stream_model_async(**kwargs), retry_budget))

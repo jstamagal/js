@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 import asyncio
 import contextlib
-import email.utils
 import inspect
 import json
 import hashlib
@@ -16,10 +15,8 @@ import os
 import sys
 import threading
 from pathlib import Path
-import random
 import time
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
 from typing import Any
 
 from . import events as event_mod
@@ -38,6 +35,8 @@ from . import model_metadata
 from . import paths
 from . import providers
 from . import settings as _settings
+from .retry import backoff as _backoff, retry_after_seconds
+from . import retry
 from . import toolkit as T
 from . import tool_args
 from . import routing
@@ -278,81 +277,36 @@ def _is_retriable(exc: BaseException) -> bool:
     return False
 
 
-def _backoff(attempt: int) -> float:
-    """Exponential with jitter: 1s, 2s, 4s ... capped."""
-    base = min(2 ** attempt, 16)
-    return base + random.uniform(0, 1)
-
-
-def _error_chain(exc: BaseException) -> list[BaseException]:
-    chain: list[BaseException] = []
-    current: BaseException | None = exc
-    while current is not None and all(current is not seen for seen in chain):
-        chain.append(current)
-        current = current.__cause__ or current.__context__
-    return chain
-
-
-def _response_headers(err: BaseException) -> Any:
-    response = getattr(getattr(err, "http_context", None), "response", None)
-    if response is None:
-        response = getattr(err, "response", None)
-    headers = getattr(response, "headers", None)
-    return headers if headers is not None else getattr(err, "headers", None)
-
-
-def retry_after_seconds(exc: BaseException) -> float | None:
-    """The wait the failed response asked for: its `retry-after-ms` header,
-    else `Retry-After` as seconds or an HTTP date. None when it names none."""
-    for err in _error_chain(exc):
-        headers = _response_headers(err)
-        if headers is None:
-            continue
-        try:
-            millis = headers.get("retry-after-ms")
-            after = headers.get("retry-after")
-        except Exception:  # noqa: BLE001 — a header object without .get names no wait
-            continue
-        if millis:
-            try:
-                return max(0.0, float(millis) / 1000)
-            except ValueError:
-                pass
-        if after:
-            try:
-                return max(0.0, float(after))
-            except ValueError:
-                pass
-            try:
-                when = email.utils.parsedate_to_datetime(after)
-            except (TypeError, ValueError):
-                continue
-            if when.tzinfo is None:
-                when = when.replace(tzinfo=UTC)
-            return max(0.0, (when - datetime.now(UTC)).total_seconds())
-    return None
-
-
-def _escalated_max_output(max_out: int | None, ceiling: int | None, escalation: int) -> int | None:
+def _escalated_max_output(cut_at: int | None, ceiling: int | None, escalation: int,
+                          room: int | None) -> int | None:
     """The larger output cap for resending a cut-off reply, or None when there
-    is none: `escalation` held to the model's known ceiling, and only when it
-    exceeds the cap the cut-off reply ran under."""
+    is none. `escalation` is held to the model's known output ceiling and to
+    `room`, what the window has left after the prompt; it must exceed
+    `cut_at`, the cap the reply was cut at."""
     if escalation <= 0:
         return None
     target = escalation if ceiling is None else min(escalation, ceiling)
-    if max_out is not None and target <= max_out:
+    if room is not None:
+        target = min(target, room)
+    if target <= 0 or (cut_at is not None and target <= cut_at):
         return None
     return target
 
 
-def _silent_overflow(usage: Any, context_window: int | None) -> int | None:
-    """The prompt tokens of a reply the provider accepted although they exceed
-    the model's window, else None. Such a provider cut the input to fit
-    without saying so. The SDK's input_tokens already counts cache reads."""
+def _silent_overflow(usage: Any, context_window: int | None, *, cut_by_cap: bool) -> int | None:
+    """The prompt tokens of a reply whose input the provider cut to fit its
+    window without an error, else None. Two signs: prompt tokens over the
+    window, or a reply cut by its cap with no output and a prompt filling 99%
+    of the window. The SDK's input_tokens already counts cache reads."""
     if not context_window or context_window <= 0 or usage is None:
         return None
-    prompt = context_budget.usage_from_provider(usage).prompt_tokens
-    return prompt if prompt > context_window else None
+    reported = context_budget.usage_from_provider(usage)
+    prompt = reported.prompt_tokens
+    if prompt > context_window:
+        return prompt
+    if cut_by_cap and not reported.output_tokens and prompt >= context_window * 0.99:
+        return prompt
+    return None
 
 
 # Sent as a user message after a reply cut off by its output-token cap.
@@ -1856,8 +1810,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_registry.on_change = save_surface
         durable_side_effects_started = False
         overflow_recovered = 0
-        retry_attempts = int(_settings.knob(live_settings, "runtime.retry_attempts") or 0)
-        retry_max_wait = float(_settings.knob(live_settings, "runtime.retry_max_wait_seconds") or 0)
+        retry_budget = retry.Budget.from_settings(live_settings)
         stream_idle = float(_settings.knob(live_settings, "runtime.stream_idle_seconds") or 0) or None
         max_output_escalation = int(_settings.knob(live_settings, "runtime.max_output_escalation") or 0)
         max_output_resumes = int(_settings.knob(live_settings, "runtime.max_output_resumes") or 0)
@@ -1878,9 +1831,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # The cap this call runs under: max_out, or the escalated cap for
             # the one resend of a reply cut off by max_out.
             call_max_out = max_out
+            # The reply's usage counts history that silent-overflow recovery
+            # has since shed.
+            usage_stale = False
             # Retries, overflow rounds (a provider rejection or a silent
             # overflow), one escalated resend and its fallback.
-            for attempt in range(retry_attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 2):
+            for attempt in range(retry_budget.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 2):
                 t0 = time.time()
                 streamed_text["value"] = ""
                 try:
@@ -1994,25 +1950,42 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             ms=int(_elapsed * 1000), finish=finish, tool_calls=len(pending_calls),
                             tokens=_out_tok, tps=_tps, ttft=_ttft, cache=_cache)
                         print(f"{display.CHROME}{_label + ': ' if _label else ''}{_stats}{C.RESET}", flush=True)
-                    model_window = _resolve_context_window(model, provider_id, provider_base_url)
-                    silent = _silent_overflow(usage, model_window)
+                    cut_by_cap = _cut_off_by_cap(incomplete_reason, pending_calls)
+                    # Reply text already on the screen or stdout. Sending the
+                    # request again would print a second reply after it.
+                    shown = not suppress_output and bool(streamed_text["value"])
+                    # A compact.context_window above the catalog's says the
+                    # real window is larger than the catalog knows.
+                    window = max(
+                        _resolve_context_window(model, provider_id, provider_base_url) or 0,
+                        compaction.get_int(active_compact_cfg, "context_window", 0),
+                    ) or None
+                    silent = _silent_overflow(usage, window, cut_by_cap=cut_by_cap)
                     if silent is not None and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS:
                         # The provider took more input than the window holds, so
-                        # it cut the input: shed history and ask again.
+                        # it cut the input: shed history and ask again. A reply
+                        # already shown is kept, and the shed history serves the
+                        # next request.
                         _close_text()
                         overflow_recovered += 1
-                        overflow = compaction.SilentOverflowError(silent, model_window)
+                        overflow = compaction.SilentOverflowError(silent, window)
                         telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
-                                        attempt=attempt, round=overflow_recovered)
+                                        attempt=attempt, round=overflow_recovered, kept_reply=shown)
                         if await _recover_overflow(overflow):
-                            continue
+                            if not shown:
+                                continue
+                            usage_stale = True
+                    prompt_tokens = context_budget.usage_from_provider(usage).prompt_tokens
                     if (
                         not max_output_escalated
-                        and _cut_off_by_cap(incomplete_reason, pending_calls)
+                        and cut_by_cap
+                        and not shown
+                        and model_client.sends_max_output(provider_id)
                         and (escalated := _escalated_max_output(
-                            call_max_out,
+                            call_max_out if call_max_out is not None else _out_tok or None,
                             model_metadata.resolve_max_output(model, provider_id),
                             max_output_escalation,
+                            window - prompt_tokens if window and prompt_tokens else None,
                         )) is not None
                     ):
                         # Cut off by its cap: send the same request once more
@@ -2030,6 +2003,15 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     # Finish any partially streamed text before we retry or abort,
                     # so the next attempt's output starts on its own line.
                     _close_text()
+                    if call_max_out != max_out and not e.is_retryable:
+                        # The provider refused the escalated cap, often as a
+                        # context-length error because prompt plus cap passes
+                        # the window. The configured cap fit before: carry on
+                        # at it, where resume nudges take over.
+                        telemetry.event("max_output_escalation_rejected", model=model,
+                                        error=f"{type(e).__name__}: {e}", escalated_to=call_max_out)
+                        call_max_out = max_out
+                        continue
                     if (
                         compaction.is_context_overflow_error(e)
                         and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS
@@ -2048,27 +2030,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         telemetry.event("retriable_error", model=model,
                                         error=f"{type(e).__name__}: {e}", attempt=attempt)
                         wait = retry_after_seconds(e)
-                        too_long = wait is not None and 0 < retry_max_wait < wait
-                        if transport_retries >= retry_attempts or too_long:
+                        too_long = retry_budget.too_long(wait)
+                        if transport_retries >= retry_budget.attempts or too_long:
                             if too_long:
                                 telemetry.event("retry_after_too_long", model=model,
-                                                retry_after=wait, limit=retry_max_wait)
+                                                retry_after=wait, limit=retry_budget.max_wait)
                             _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                             _end_turn("error")
                             raise
                         delay = wait if wait is not None else _backoff(transport_retries)
-                        stream_transport.say_for_caller(
-                            1 if delay >= 10 else 3,
-                            msgs.RETRY_WAIT.text(n=transport_retries + 1, of=retry_attempts, seconds=delay,
-                                                 failure=stream_transport.describe_failure(e)))
-                        await asyncio.sleep(delay)
                         transport_retries += 1
-                    elif call_max_out != max_out and not compaction.is_context_overflow_error(e):
-                        # The provider refused the escalated cap: carry on at the
-                        # configured one, where resume nudges take over.
-                        telemetry.event("max_output_escalation_rejected", model=model,
-                                        error=f"{type(e).__name__}: {e}", escalated_to=call_max_out)
-                        call_max_out = max_out
+                        retry.announce(transport_retries, retry_budget, delay, e)
+                        await asyncio.sleep(delay)
                     else:
                         telemetry.event("fatal_error", model=model,
                                         error=f"{type(e).__name__}: {e}")
@@ -2172,7 +2145,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             streamed_reasoning.clear()
             durable_side_effects_started = True
             token_state.record_provider_usage(
-                usage,
+                None if usage_stale else usage,
                 message_count=len(messages),
                 messages=messages,
                 system=system,

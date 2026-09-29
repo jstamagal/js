@@ -26,6 +26,7 @@ from . import memory as M
 from . import messages as msgs
 from . import model_client
 from . import model_metadata
+from . import retry
 from . import routing
 from . import settings as _settings
 from . import toolkit as T
@@ -602,11 +603,13 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         configured_headers=getattr(cfg, "provider_headers", None),
         explicit_model=True,
     )
-    idle = float(_settings.knob(getattr(cfg, "settings", None), "runtime.stream_idle_seconds") or 0) or None
+    settings = getattr(cfg, "settings", None)
+    idle = float(_settings.knob(settings, "runtime.stream_idle_seconds") or 0) or None
+    budget = retry.Budget.from_settings(settings)
 
     async def summarize_chunk(head: list[dict], depth: int) -> str:
         try:
-            result = await model_client.stream_model_async(
+            result = await retry.call(lambda: model_client.stream_model_async(
                 model_id=route.model,
                 provider_id=route.provider_id,
                 provider_base_url=route.base_url,
@@ -621,7 +624,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),
                 stream_idle_seconds=idle,
-            )
+            ), budget)
         except ai.ProviderAPIError as exc:
             if not is_context_overflow_error(exc) or depth >= _SUMMARY_SPLIT_DEPTH or len(head) < 2:
                 raise

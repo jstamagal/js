@@ -146,22 +146,30 @@ Provider request retry:
   date), else 1s, 2s, 4s ... up to 16s plus jitter. A wait longer than
   `runtime.retry_max_wait_seconds` (default 120, 0 means no limit) fails the
   request at once. `_open_stream` sets the OpenAI and Anthropic SDK clients'
-  `max_retries` to 0, so these retries are the only ones.
+  `max_retries` to 0, so these retries are the only ones. The turn loop runs
+  them itself, between overflow and max-output recovery; every other model
+  request (compaction summaries, the `/login` test) goes through
+  `retry.call` under the same budget.
 - `runtime.stream_idle_seconds` (default 300, 0 off) is the stream idle
   watchdog. `_stream_async` runs the request under an `asyncio.timeout` whose
   deadline moves forward on every response chunk the transport reads (SSE
   keep-alive comments included) and on every SDK event. The wait for the
   response headers counts too. When it expires the request fails with the
   retryable `StreamIdleError` and the retry budget above takes over.
-  Compaction's summary calls get the same limit.
+  Compaction's summary calls get the same limit and the same retries.
 - Context overflow has three separate recovery rounds, each followed by a new
   request. Recovery clears old tool results, then summarizes if needed. This
   also works after tool execution: only the rejected model request is retried.
 - A reply the provider accepted although its reported input tokens exceed the
-  model's window (`_resolve_context_window`, not the compaction budget) is a
-  silent overflow: the provider cut the input to fit. It spends an overflow
-  round the same way and the request is sent again. The SDK's `input_tokens`
-  already include cache reads.
+  window is a silent overflow: the provider cut the input to fit. So is a
+  reply cut off by its cap with no output and an input filling 99% of the
+  window. The window is the larger of the model's (`_resolve_context_window`)
+  and `compact.context_window`, so a catalog that understates the window can
+  be corrected there. A silent overflow spends an overflow round the same way
+  and the request is sent again. When reply text is already on the screen or
+  stdout, the reply is kept instead and the shed history serves the next
+  request, so no reply is printed twice. The SDK's `input_tokens` already
+  include cache reads.
 - Unrecovered provider errors propagate to the caller.
 
 Max-output recovery. A reply is cut off by its cap when Codex marks it
@@ -171,10 +179,14 @@ run. Then:
 
 1. Once per turn, the same request is sent again with
    `runtime.max_output_escalation` (default 64000) as the cap, held to the
-   model's known output limit. This happens only when that is larger than
-   the cap the cut reply had, so a model already at its limit skips it. The
-   cut reply is discarded. If the provider rejects the larger cap, the
-   request is sent again at the configured cap.
+   model's known output limit and to what the window leaves after the
+   prompt. This happens only when that is larger than the cap the cut reply
+   had, so a model already at its limit, a full window, or Codex (which takes
+   no cap) skips it. It is also skipped when reply text is already on the
+   screen or stdout, since a resend would print it twice. The cut reply is
+   discarded. If the provider rejects the larger cap with a non-retryable
+   error, a context-length error included, the request is sent again at the
+   configured cap without shedding history.
 2. A reply still cut off is recorded, with any truncated tool call dropped,
    followed by a user message marked `resume_nudge` telling the model to
    resume. This repeats up to `runtime.max_output_resumes` times per turn

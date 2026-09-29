@@ -14,7 +14,7 @@ import ai
 import httpx
 import pytest
 
-from js import compaction, model_client, runtime
+from js import compaction, model_client, runtime, settings
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -28,9 +28,9 @@ def offline_metadata(monkeypatch):
     monkeypatch.setattr(runtime, "_backoff", lambda _n: 0)
 
 
-def _config(tmp_path, runtime_settings: dict | None = None, **fields):
+def _config(tmp_path, runtime_settings: dict | None = None, *, window: int = 1_000_000, **fields):
     # A window set for the budget keeps the compaction triggers out of these turns.
-    settings = {"compact": {"context_window": 1_000_000}}
+    settings = {"compact": {"context_window": window}}
     if runtime_settings:
         settings["runtime"] = runtime_settings
     return replace(_cfg(tmp_path, settings), **fields)
@@ -457,7 +457,7 @@ def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatc
     events = _Events()
     messages = _history_with_old_results()
 
-    asyncio.run(_run(_config(tmp_path), messages, events))
+    asyncio.run(_run(_config(tmp_path, window=20_000), messages, events))
 
     assert len(calls) == 2
     assert messages[-1] == {"role": "assistant", "content": "real answer"}
@@ -470,8 +470,184 @@ def test_a_stop_inside_the_window_is_kept(monkeypatch, tmp_path):
     calls = _scripted_model(monkeypatch, [_answer_with_usage("fits", 19_000, cache_read=15_000)])
     messages = _history_with_old_results()
 
-    asyncio.run(_run(_config(tmp_path), messages))
+    asyncio.run(_run(_config(tmp_path, window=20_000), messages))
 
     assert len(calls) == 1
     assert messages[-1] == {"role": "assistant", "content": "fits"}
     assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
+
+
+# --------------------------------------------------------------------------
+# Where recovery must not act
+# --------------------------------------------------------------------------
+
+def test_escalation_rejected_for_context_length_falls_back_without_shedding_history(monkeypatch, tmp_path):
+    # prompt + 64000 passes a 32k window: vLLM and OpenAI word that as a
+    # context-length error. The configured cap fit, so the turn carries on at it.
+    rejected = ai.ProviderBadRequestError(
+        "This model's maximum context length is 32768 tokens. However, you requested 66000 tokens "
+        "(2000 in the messages, 64000 in the completion).", provider="openai")
+    calls = _scripted_model(monkeypatch, [_cut("half"), rejected, _cut("half again"), _done("rest")])
+    events = _Events()
+    messages = _history_with_old_results()
+
+    asyncio.run(_run(_config(tmp_path, max_output_tokens=1000), messages, events))
+
+    assert [c["max_output_tokens"] for c in calls] == [1000, 64000, 1000, 1000]
+    assert messages[-1] == {"role": "assistant", "content": "rest"}
+    assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
+    assert events.named("context_overflow_error") == []
+
+
+def test_escalation_is_held_to_the_room_the_window_leaves(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=15_000, output_tokens=1000))
+    calls = _scripted_model(monkeypatch, [cut, _done("whole")])
+
+    asyncio.run(_run(_config(tmp_path, window=20_000, max_output_tokens=1000),
+                     [{"role": "user", "content": "go"}]))
+
+    assert [c["max_output_tokens"] for c in calls] == [1000, 5000]
+
+
+def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
+    # Anthropic's model_context_window_exceeded arrives as a 'length' finish:
+    # prompt plus output filled the window before the cap did.
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=19_400, output_tokens=600))
+    calls = _scripted_model(monkeypatch, [cut, _done("rest")])
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(_run(_config(tmp_path, window=20_000, max_output_tokens=1000), messages))
+
+    assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
+    assert messages[2]["content"] == runtime.MAX_OUTPUT_RESUME_NUDGE
+
+
+def test_codex_requests_carry_no_output_cap_to_escalate():
+    assert model_client.sends_max_output("openai")
+    assert not model_client.sends_max_output("openai-codex")
+
+
+def _streaming(text: str, result: ModelStreamResult):
+    """A reply that streams `text` through on_text before it returns."""
+    def reply(stub_kwargs):
+        stub_kwargs["on_text"](text)
+        return result
+    return reply
+
+
+def _scripted_streaming_model(monkeypatch, replies):
+    calls: list[dict] = []
+
+    def stub(**kwargs):
+        calls.append(kwargs)
+        return replies[min(len(calls), len(replies)) - 1](kwargs)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
+    return calls
+
+
+def _run_shown(cfg, messages):
+    return runtime.run_turn_async(
+        cfg, "system", messages, runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=cfg.history_file.parent), suppress_output=False,
+    )
+
+
+def test_a_cut_reply_already_printed_is_resumed_not_printed_twice(monkeypatch, tmp_path, capsys):
+    calls = _scripted_streaming_model(monkeypatch, [
+        _streaming("PARTIAL-", _cut("PARTIAL-")),
+        _streaming("REST", _done("REST")),
+    ])
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(_run_shown(_config(tmp_path, max_output_tokens=1000), messages))
+
+    assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
+    assert capsys.readouterr().out.count("PARTIAL-") == 1
+    assert [m["content"] for m in messages] == ["go", "PARTIAL-", runtime.MAX_OUTPUT_RESUME_NUDGE, "REST"]
+
+
+def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    calls = _scripted_streaming_model(monkeypatch, [
+        _streaming("SHOWN", _answer_with_usage("SHOWN", 24_000)),
+    ])
+    messages = _history_with_old_results()
+
+    asyncio.run(_run_shown(_config(tmp_path, window=20_000), messages))
+
+    assert len(calls) == 1
+    assert capsys.readouterr().out.count("SHOWN") == 1
+    assert messages[-1]["content"] == "SHOWN"
+    assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
+
+
+def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tmp_path):
+    # A server that cuts the input to its window leaves no room to answer.
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    filled = replace(_cut(""), usage=ai.types.usage.Usage(input_tokens=19_900, output_tokens=0))
+    calls = _scripted_model(monkeypatch, [filled, _answer_with_usage("real answer", 12_000)])
+    events = _Events()
+    messages = _history_with_old_results()
+
+    asyncio.run(_run(_config(tmp_path, window=20_000, max_output_tokens=1000), messages, events))
+
+    assert len(calls) == 2
+    assert messages[-1] == {"role": "assistant", "content": "real answer"}
+    assert len(events.named("context_overflow_silent")) == 1
+
+
+def test_a_compact_window_above_the_catalog_is_the_window_silent_overflow_uses(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    calls = _scripted_model(monkeypatch, [_answer_with_usage("fits the real window", 24_000)])
+    messages = _history_with_old_results()
+
+    asyncio.run(_run(_config(tmp_path, window=200_000), messages))
+
+    assert len(calls) == 1
+    assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
+
+
+# --------------------------------------------------------------------------
+# Requests outside the turn loop
+# --------------------------------------------------------------------------
+
+def _served_summary(tmp_path, script, runtime_settings=None):
+    async def drive():
+        async with _Server(script) as server:
+            cfg = _config(tmp_path, runtime_settings, provider_id="openai",
+                          provider_api_key="k", provider_base_url=server.url)
+            summary = await asyncio.wait_for(
+                compaction.summarize(cfg, "m", [{"role": "user", "content": "hi"}], "", ""), 30)
+            return server, summary
+
+    return asyncio.run(drive())
+
+
+def test_a_compaction_summary_survives_a_429(tmp_path):
+    server, summary = _served_summary(tmp_path, [_status(429, {"retry-after": "0"}), _answer("the summary")])
+
+    assert summary == "the summary"
+    assert len(server.arrivals) == 2
+
+
+def test_a_compaction_summary_on_a_silent_stream_is_retried(tmp_path):
+    server, summary = _served_summary(
+        tmp_path, [_silent(after_headers=True), _answer("the summary")], {"stream_idle_seconds": 0.3})
+
+    assert summary == "the summary"
+    assert len(server.arrivals) == 2
+
+
+@pytest.mark.parametrize("key", [
+    "runtime.retry_attempts", "runtime.retry_max_wait_seconds", "runtime.stream_idle_seconds",
+    "runtime.max_output_escalation", "runtime.max_output_resumes",
+])
+def test_resilience_knobs_refuse_negative_values(key):
+    spec = settings.spec_for(key)
+    value, error = settings.coerce_value(spec, "-1")
+    assert value is None and error
+    assert settings.coerce_value(spec, "0") == (0, None)

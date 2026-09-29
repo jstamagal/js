@@ -264,7 +264,8 @@ Order:
 
 A reply cut off by this cap is sent again once with
 `runtime.max_output_escalation` tokens (default 64000, never above the model's
-known limit), then gets up to `runtime.max_output_resumes` resume nudges
+known limit or the room the window leaves), unless its text is already
+printed, then gets up to `runtime.max_output_resumes` resume nudges
 (default 3). See the runtime loop in `technical-guide.md`.
 
 For custom providers js first tries the active provider mapped to its underlying
