@@ -33,6 +33,7 @@ from . import model_metadata
 from . import paths
 from . import providers
 from . import settings as _settings
+from . import turn_settings as _turn_settings
 from .retry import backoff as _backoff, retry_after_seconds
 from . import retry
 from . import toolkit as T
@@ -1460,36 +1461,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         if _session_file is not None and Path(_session_file).name not in ("", os.devnull, "null")
         else None
     )
-    active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
-    active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
-    active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
-    active_context.shell_env_allow = getattr(cfg, "shell_env_allow", active_context.shell_env_allow)
-    active_context.browse_timeout_s = getattr(cfg, "browse_timeout_s", active_context.browse_timeout_s)
-    active_context.download_timeout_s = getattr(cfg, "download_timeout_s", active_context.download_timeout_s)
-    active_context.max_download_bytes = getattr(cfg, "max_download_bytes", active_context.max_download_bytes)
-    active_context.max_read_lines = getattr(cfg, "max_read_lines", active_context.max_read_lines)
-    active_context.max_read_bytes = getattr(cfg, "max_read_bytes", active_context.max_read_bytes)
-    active_context.max_tool_result_inline_bytes = getattr(cfg, "max_tool_result_inline_bytes", active_context.max_tool_result_inline_bytes)
-    active_context.max_bash_output_ceiling = getattr(cfg, "max_bash_output_ceiling", active_context.max_bash_output_ceiling)
+    _turn_settings.install(active_context, cfg)
     install_context_window_overrides(cfg)
-    active_context.max_file_bytes = getattr(cfg, "max_file_bytes", active_context.max_file_bytes)
     active_context.model = model
-    active_context.kernel_verbosity = getattr(cfg, "kernel_verbosity", active_context.kernel_verbosity)
-    active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
-    active_context.kernel_wait_seconds = getattr(cfg, "kernel_wait_seconds", active_context.kernel_wait_seconds)
-    active_context.shell_wait_seconds = getattr(cfg, "shell_wait_seconds", active_context.shell_wait_seconds)
-    active_context.max_parallel_tools = getattr(cfg, "max_parallel_tools", active_context.max_parallel_tools)
-    active_context.task_max_depth = getattr(cfg, "task_max_depth", active_context.task_max_depth)
-    active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", active_context.subagent_max_workers)
-    live_settings = getattr(cfg, "settings", None)
-    active_context.user_agent = _settings.knob(live_settings, "tools.user_agent")
-    active_context.shell_program = _settings.knob(live_settings, "shell.program")
-    active_context.jail_bind = tuple(_settings.knob(live_settings, "jail.bind") or ())
-    active_context.terminal_cols = _settings.knob(live_settings, "tools.terminal_cols")
-    active_context.terminal_rows = _settings.knob(live_settings, "tools.terminal_rows")
-    active_context.lsp_servers = _settings.knob(live_settings, "lsp.servers")
-    active_context.lsp_timeout_s = _settings.knob(live_settings, "lsp.timeout_s")
-    active_context.notebook_output_lines = _settings.knob(live_settings, "notebook.output_lines")
     active_context.last_incomplete_reason = None
     active_context.last_output_tokens = 0
     active_context.last_max_output_tokens = max_out
@@ -1922,6 +1896,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             note_skill_loaded(user_skill)
         durable_side_effects_started = False
         overflow_recovered = 0
+        live_settings = getattr(cfg, "settings", None)
         retry_budget = retry.Budget.from_settings(live_settings)
         stream_idle = retry.idle_seconds(live_settings)
         max_output_escalation = int(_settings.knob(live_settings, "runtime.max_output_escalation") or 0)
