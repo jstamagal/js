@@ -241,18 +241,23 @@ In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
 `show [key]` lists every current value or only the requested key. Secret values
 such as `provider.api_key` render as `<set>` once set.
 
-The command runner works slashless: `js/setcmd.py` `_normalize` strips a single
-optional leading `/`, so `set` and `/set` (and `show`/`/show`) dispatch
-identically in the REPL. The same runner backs REPL commands, `jsrc` config
-loading, and `/load`ed runtime scripts, but the accepted verb set differs by
-entry point. `jsrc` lines are the bare `set <key> <value>` form and accept only
-`set`; `apply_config_line` rejects every other verb. Runtime scripts loaded with
-`/load <file>` currently accept `set`, `show`, nested `load`, and `on`, with
-nested script paths resolved relative to the file that contains them. Registered
-event handlers run through that same runtime-script command surface when an
-event is emitted. Handler failures are recorded on the event emission and in
-debug telemetry rather than raised through the model loop; recursive event
-dispatch from inside a handler is skipped.
+`set` also accepts a setting's short name: `model` (`model.id`), `provider`
+(`provider.id`), `baseurl` (`provider.base_url`), and `apikey`
+(`provider.api_key`).
+
+A `jsrc` file is a file of commands; a leading `/` is optional. While config
+loads, the settings layer (`setcmd.apply_config_line`) applies `set` lines and
+short-name lines such as `model X`, so they sit under env and `--extra` in
+precedence and apply in `-p` runs too. It follows `load` lines and applies the
+same lines from the loaded files. When the REPL starts it runs every other
+line (`on`, `alias`, `load`, any command in the table) through the command
+table, in file order; errors name the file and line and do not stop startup.
+A relative `load` path in a `jsrc` resolves against that file's directory.
+`/load <file>` runs every line of a file through the same table. Registered
+event handlers run through it too when an event is emitted. Handler failures
+are recorded on the event emission and in debug telemetry rather than raised
+through the model loop; recursive event dispatch from inside a handler is
+skipped.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is

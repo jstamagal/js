@@ -16,8 +16,9 @@ import shutil
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from . import display as display_mod
 from . import dotenv
 from . import endpoint_uri
 from . import events
+from . import exline
 from . import logins
 from . import memory as M
 from . import model_client
@@ -60,6 +62,7 @@ from .config import (
     _norm_effort,
     derive_session_name,
     from_env,
+    jsrc_paths,
     validate_agent_id,
     vision_enabled_for_model,
 )
@@ -969,49 +972,6 @@ def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
     return eff
 
 
-def _handle_save(state: dict, cfg: Config) -> None:
-    eff = _effective_settings_snapshot(cfg, state)
-    path = _paths.global_config_file()
-    try:
-        count, backup = settings.save_settings_to_jsrc(path, eff)
-    except OSError as exc:
-        print(f"{C.ORANGE}save failed: {type(exc).__name__}: {exc}{C.RESET}")
-        return
-    note = f"  (backed up prior file to {backup.name})" if backup is not None else ""
-    print(f"{C.GREEN}saved {count} knob{'' if count == 1 else 's'} to {path}{C.RESET}{C.GREY}{note}{C.RESET}")
-
-
-def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
-    body = line.strip()
-    if body.startswith("/"):
-        body = body[1:].lstrip()
-    parts = body.split(maxsplit=2)
-    if len(parts) < 2 or parts[0].lower() != "set":
-        return current
-    key = parts[1]
-    unset = key.startswith("-") and len(key) > 1
-    if unset:
-        key = key[1:]
-    if not key.startswith("sampling."):
-        return current
-    field = key.split(".", 1)[1]
-    if field not in Sampling.__dataclass_fields__:
-        return current
-    if unset:
-        # `/set -sampling.x` drops the live override so the field reverts to its
-        # jsrc/provider default instead of lingering at its last value.
-        return replace(current, **{field: None})
-    if len(parts) != 3:
-        return current
-    spec = settings.SPEC_BY_KEY.get(key)
-    if spec is None:
-        return current
-    value, error = settings.coerce_value(spec, parts[2])
-    if error is not None:
-        return current
-    return replace(current, **{field: value})
-
-
 def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
     raw = settings.get_dotted(live_settings, ("sampling",), {})
     return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
@@ -1089,18 +1049,6 @@ def _changed_sampling_key(keys: list[str]) -> bool:
 
 def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
     return "subagents.lock_model" in keys
-
-
-def _event_result_changed_keys(results: list[events.EventHandlerResult]) -> list[str]:
-    return [key for result in results for key in result.changed_keys]
-
-
-def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_sampling_key(result.changed_keys) for result in results)
-
-
-def _event_results_changed_model(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_model_key(result.changed_keys) for result in results)
 
 
 def _emit_repl_event(
@@ -1312,35 +1260,6 @@ BANNER = f"""\
 """
 
 
-HELP_TEXT = f"""\
-{C.MAGENTA}commands:{C.RESET}
-  {C.YELLOW}/help{C.RESET}            show this message
-  {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
-  {C.YELLOW}/set -key{C.RESET}        clear a knob back to its default (e.g. /set -sampling.temperature)
-  {C.YELLOW}/show [key]{C.RESET}      list every knob and its effective value (annotates live overrides)
-  {C.YELLOW}/save{C.RESET}            write the current in-memory settings to the global jsrc
-  {C.YELLOW}/load <file>{C.RESET}     load a slashless ircII-style script file
-  {C.YELLOW}/on [event handler]{C.RESET} list or register an event hook
-  {C.YELLOW}/model <name>{C.RESET}    switch model for this session
-  {C.YELLOW}/model{C.RESET}             open interactive provider/model picker
-  {C.YELLOW}/pick-model{C.RESET}       open interactive provider/model picker
-  {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
-  {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
-  {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
-  {C.YELLOW}/tools{C.RESET}           show each tool's state (eager/lazy/ban) and the entry that decided it
-  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
-  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
-  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
-  {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark (-m model picks the summarizer)
-  {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
-  {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
-  {C.YELLOW}/skill{C.RESET}            list skills (built-in, global, project)
-  {C.YELLOW}/skill <name> [request]{C.RESET} send a skill's instructions (user-only ones too) with your request
-  {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
-  {C.YELLOW}exit{C.RESET}             quit
-"""
-
-
 def _pick_model_into_state(state: dict, cfg: Config) -> None:
     selected = picker.pick_model(
         provider_id=_state_value(state, "provider_id", cfg.provider_id),
@@ -1367,108 +1286,89 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
         print(f"{C.GREEN}selected {selected['provider_id']}:{selected['model']} and saved as default{C.RESET}")
 
 
-def _handle_provider_command(line: str, state: dict, cfg: Config) -> bool:
-    """Handle /provider, /baseurl, /apikey, /login, /logout, /models."""
-    parts = line.split()
-    cmd = parts[0]
-
-    if cmd == "/models":
-        max_models = 50
-        if len(parts) >= 2:
-            try:
-                max_models = int(parts[1])
-            except ValueError:
-                print(f"{C.ORANGE}/models expects an integer limit, got: {parts[1]!r}{C.RESET}")
-                return True
-        provider_id = _state_value(state, "provider_id", cfg.provider_id)
-        provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
-        provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
-        if not provider_id:
-            print(f"{C.ORANGE}no provider set; use /provider <id> first{C.RESET}")
-            return True
+def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
+    max_models = 50
+    if arg:
         try:
-            model_ids = _models_for_provider(provider_id, provider_base_url, provider_api_key)
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}could not list models: {type(e).__name__}: {e}{C.RESET}")
-        else:
-            shown = model_ids[:max_models]
-            for mid in shown:
-                print(f"  {C.CYAN}{mid}{C.RESET}")
-            if len(model_ids) > max_models:
-                print(f"{C.GREY}...and {len(model_ids) - max_models} more{C.RESET}")
-        return True
+            max_models = int(arg.split()[0])
+        except ValueError:
+            return f"/models expects an integer limit, got: {arg.split()[0]!r}"
+    provider_id = _state_value(state, "provider_id", cfg.provider_id)
+    provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
+    provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
+    if not provider_id:
+        return "no provider set; use /provider <id> first"
+    try:
+        model_ids = _models_for_provider(provider_id, provider_base_url, provider_api_key)
+    except Exception as e:  # noqa: BLE001
+        return f"could not list models: {type(e).__name__}: {e}"
+    for mid in model_ids[:max_models]:
+        print(f"  {C.CYAN}{mid}{C.RESET}")
+    if len(model_ids) > max_models:
+        print(f"{C.GREY}...and {len(model_ids) - max_models} more{C.RESET}")
+    return None
 
-    if cmd == "/provider":
-        if len(parts) == 1:
-            cur = _state_value(state, "provider_id", cfg.provider_id)
-            print(f"{C.MAGENTA}current provider:{C.RESET} {cur or '(unset — uses AI Gateway / model prefix)'}")
-            return True
-        _set_provider_state(state, parts[1])
-        print(f"{C.GREEN}provider set to {providers.normalize_provider_id(parts[1]) or parts[1]}{C.RESET}")
-        return True
 
-    if cmd == "/baseurl":
-        if len(parts) == 1:
-            state["provider_base_url"] = None
-            print(f"{C.GREEN}base URL cleared{C.RESET}")
-            return True
-        state["provider_base_url"] = parts[1]
-        print(f"{C.GREEN}base URL set{C.RESET}")
-        return True
+def _cmd_provider(arg: str, state: dict, cfg: Config) -> str | None:
+    if not arg:
+        cur = _state_value(state, "provider_id", cfg.provider_id)
+        print(f"{C.MAGENTA}current provider:{C.RESET} {cur or '(unset — uses AI Gateway / model prefix)'}")
+        return None
+    name = arg.split()[0]
+    _set_provider_state(state, name)
+    print(f"{C.GREEN}provider set to {providers.normalize_provider_id(name) or name}{C.RESET}")
+    return None
 
-    if cmd == "/apikey":
-        if len(parts) == 1:
-            state["provider_api_key"] = None
-            print(f"{C.GREEN}API key cleared{C.RESET}")
-            return True
-        state["provider_api_key"] = parts[1]
-        print(f"{C.GREEN}API key set{C.RESET}")
-        return True
 
-    if cmd == "/login":
-        if len(parts) == 1:
-            print(f"{C.ORANGE}usage: /login <name> [apikey] [baseurl] [provider]{C.RESET}")
-            return True
-        name = parts[1]
-        key = parts[2] if len(parts) > 2 else None
-        url = parts[3] if len(parts) > 3 else None
-        ptype = parts[4] if len(parts) > 4 else None
-        if key is None and url is None and ptype is None:
-            # bare `/login <name>`: load a saved login (or fall back to provider defaults)
-            _set_provider_state(state, name)
-            print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(name) or name}{C.RESET}")
-            return True
-        # explicit creds: build + persist a login under <name>, then activate it.
-        # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
-        prov = providers.get_provider(ptype or name)
-        if ptype is None and prov is None:
-            print(f"{C.ORANGE}/login: '{name}' is not a known provider — name the provider type: "
-                  f"/login {name} <apikey> <baseurl> <provider>{C.RESET}")
-            return True
-        sdk = prov.effective_sdk_provider_id if prov is not None else ptype
-        canonical = providers.normalize_provider_id(name) or name
-        logins.save_login(logins.Login(
-            provider_id=canonical,
-            sdk_provider_id=sdk,
-            provider_base_url=url,
-            provider_api_key=key,
-        ))
-        _apply_saved_login_to_state(state, canonical)
-        print(f"{C.GREEN}login saved + active: {canonical}{C.RESET}")
-        return True
+def _cmd_baseurl(arg: str, state: dict, cfg: Config) -> str | None:
+    state["provider_base_url"] = arg.split()[0] if arg else None
+    print(f"{C.GREEN}base URL {'set' if arg else 'cleared'}{C.RESET}")
+    return None
 
-    if cmd == "/logout":
-        state["provider_id"] = None
-        state["provider_base_url"] = None
-        state["provider_api_key"] = None
-        state["provider_headers"] = {}
-        print(f"{C.GREY}provider credentials cleared for this session{C.RESET}")
-        return True
-    if cmd == "/pick-model":
-        _pick_model_into_state(state, cfg)
-        return True
 
-    return False
+def _cmd_apikey(arg: str, state: dict, cfg: Config) -> str | None:
+    state["provider_api_key"] = arg.split()[0] if arg else None
+    print(f"{C.GREEN}API key {'set' if arg else 'cleared'}{C.RESET}")
+    return None
+
+
+def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
+    parts = arg.split()
+    if not parts:
+        return "usage: /login <name> [apikey] [baseurl] [provider]"
+    name = parts[0]
+    key, url, ptype = (parts[1:] + [None, None, None])[:3]
+    if key is None and url is None and ptype is None:
+        # bare `/login <name>`: load a saved login (or fall back to provider defaults)
+        _set_provider_state(state, name)
+        print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(name) or name}{C.RESET}")
+        return None
+    # explicit creds: build + persist a login under <name>, then activate it.
+    # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
+    prov = providers.get_provider(ptype or name)
+    if ptype is None and prov is None:
+        return (f"/login: '{name}' is not a known provider — name the provider type: "
+                f"/login {name} <apikey> <baseurl> <provider>")
+    sdk = prov.effective_sdk_provider_id if prov is not None else ptype
+    canonical = providers.normalize_provider_id(name) or name
+    logins.save_login(logins.Login(
+        provider_id=canonical,
+        sdk_provider_id=sdk,
+        provider_base_url=url,
+        provider_api_key=key,
+    ))
+    _apply_saved_login_to_state(state, canonical)
+    print(f"{C.GREEN}login saved + active: {canonical}{C.RESET}")
+    return None
+
+
+def _cmd_logout(arg: str, state: dict, cfg: Config) -> str | None:
+    state["provider_id"] = None
+    state["provider_base_url"] = None
+    state["provider_api_key"] = None
+    state["provider_headers"] = {}
+    print(f"{C.GREY}provider credentials cleared for this session{C.RESET}")
+    return None
 
 
 def _force_refresh_model_catalog() -> bool:
@@ -1581,190 +1481,446 @@ def _print_tool_chain(state: dict, cfg: Config) -> None:
         print(row)
 
 
+# --------------------------------------------------------------------------
+# The command table. Every REPL command, rc line, /load line, `on` handler
+# and ex command dispatches through COMMANDS; completion and /help read it.
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Command:
+    """One command: ``run(arg, state, cfg)`` returns an error string or None."""
+
+    run: Callable[[str, dict, Config], str | None]
+    usage: str
+    doc: str
+    complete: str | None = None  # argument completion source (see replcomplete)
+    turn_state: bool = False     # clears/rotates/compacts the live message list
+
+
+_MAX_ALIAS_DEPTH = 16
+
+
+def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Config) -> str | None:
+    """Print a settings verb's output and carry changed keys into live state."""
+    keys = result.changed_keys
+    sampling_keys = [key for key in keys if key.startswith("sampling.")]
+    if sampling_keys:
+        current = state.get("sampling_cli", Sampling())
+        for key in sampling_keys:
+            field = key.split(".", 1)[1]
+            if field in Sampling.__dataclass_fields__:
+                current = replace(current, **{field: settings.get_dotted(state["settings"], ("sampling", field), None)})
+        state["sampling_cli"] = current
+    if _changed_model_key(keys):
+        _sync_model_from_live_settings(state)
+    if _changed_provider_key(keys):
+        _sync_provider_from_live_settings(state, keys)
+    if _changed_lock_subagent_model_key(keys):
+        _sync_tool_registry_from_live_settings(cfg, state)
+    for out in result.lines:
+        print(out)
+    if result.error:
+        return result.error
+    if any(key.startswith(("compact.context_window", "model.context_window")) for key in keys):
+        active = _cfg_for_live_state(cfg, state)
+        runtime.install_context_window_overrides(active)
+        window = compaction.configured_context_window(
+            active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
+        )
+        print(f"ctx={window} model={active.model} (effective for next request)")
+    return None
+
+
+def _show_settings(state: dict, cfg: Config, key: str | None) -> str | None:
+    """Render the values the NEXT turn uses, annotating knobs whose live source
+    bypasses the store."""
+    overlay = _live_settings_overlay_for_state(cfg, state)
+    result = setcmd.show_lines_effective(state["settings"], overlay, key)
+    for out in result.lines:
+        print(out)
+    return result.error
+
+
+def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
+    parts = arg.split(maxsplit=1)
+    if len(parts) < 2 and not (parts and parts[0].startswith("-") and len(parts[0]) > 1):
+        return _show_settings(state, cfg, parts[0] if parts else None)
+    return _apply_settings_result(setcmd.set_command(state["settings"], arg), state, cfg)
+
+
+def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
+    return _show_settings(state, cfg, arg.split()[0] if arg else None)
+
+
+def _cmd_on(arg: str, state: dict, cfg: Config) -> str | None:
+    result = setcmd.on_command(state.setdefault("events", events.EventHooks()), arg)
+    for out in result.lines:
+        print(out)
+    return result.error
+
+
+def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
+    """`alias` lists, `alias name` shows, `alias name command` defines,
+    `alias -name` removes. `$*` in the body is the alias's arguments; a body
+    without `$*` gets them appended."""
+    aliases = state.setdefault("aliases", {})
+    parts = arg.split(maxsplit=1)
+    if not parts:
+        for name, body in aliases.items():
+            print(f"alias {name} {body}")
+        if not aliases:
+            print("(no aliases)")
+        return None
+    name = parts[0].lower().lstrip("/")
+    if name.startswith("-") and len(name) > 1:
+        if aliases.pop(name[1:], None) is None:
+            return f"no alias {name[1:]}"
+        return None
+    if len(parts) == 1:
+        if name not in aliases:
+            return f"no alias {name}"
+        print(f"alias {name} {aliases[name]}")
+        return None
+    if name in COMMANDS:
+        return f"alias {name}: {name} is a command"
+    aliases[name] = parts[1].strip()
+    print(f"alias {name} {aliases[name]}")
+    return None
+
+
+def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
+    """Run each line of a file through the command table, in order. The first
+    error stops the file and names the line."""
+    stack = state.setdefault("load_stack", [])
+    base = stack[-1].parent if stack else Path(getattr(cfg, "project_dir", None) or Path.cwd())
+    path, error = setcmd.load_path(arg, base)
+    if error:
+        return error
+    if len(stack) >= setcmd.MAX_LOAD_DEPTH:
+        return "load nesting too deep"
+    if path in stack:
+        return f"load cycle: {path}"
+    if not path.is_file():
+        return f"script not found: {path}"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as e:
+        return f"failed to read script: {path}: {type(e).__name__}: {e}"
+    stack.append(path)
+    try:
+        for lineno, raw in enumerate(lines, 1):
+            if state.get("rc_replay") and _config_owned(raw):
+                continue
+            error = _run_script_line(raw, state, cfg)
+            if error:
+                return f"{path}:{lineno}: {error}"
+    finally:
+        stack.pop()
+    print(f"loaded {path}")
+    return None
+
+
+def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
+    """Rewrite the global jsrc from everything resident: non-default settings,
+    `on` handlers, aliases."""
+    eff = _effective_settings_snapshot(cfg, state)
+    hooks = state.get("events")
+    extra = setcmd.event_lines(hooks) if hooks is not None else []
+    extra += [f"alias {name} {body}" for name, body in (state.get("aliases") or {}).items()]
+    path = _paths.global_config_file()
+    try:
+        count, backup = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
+    except OSError as exc:
+        return f"save failed: {type(exc).__name__}: {exc}"
+    note = f"  (backed up prior file to {backup.name})" if backup is not None else ""
+    print(f"{C.GREEN}saved {count} line{'' if count == 1 else 's'} to {path}{C.RESET}{C.GREY}{note}{C.RESET}")
+    return None
+
+
+def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
+    if arg:
+        _set_model_via_route(state, cfg, arg)
+    else:
+        _pick_model_into_state(state, cfg)
+    return None
+
+
+def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
+    state["messages"].clear()
+    M.append_mark(cfg.session_file, "session_reset")
+    print(f"{C.GREY}(conversation cleared in-process; jsonl preserved){C.RESET}")
+    return None
+
+
+def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
+    bak = M.wipe(cfg.session_file)
+    state["messages"].clear()
+    if bak:
+        print(f"{C.ORANGE}(memory rotated to {bak.name}){C.RESET}")
+    else:
+        print(f"{C.GREY}(no memory file to rotate){C.RESET}")
+    return None
+
+
+def _cmd_persona(arg: str, state: dict, cfg: Config) -> str | None:
+    text = state["system"]
+    print(text[:2048])
+    if len(text) > 2048:
+        print(f"{C.GREY}...[truncated, {len(text)} bytes total]{C.RESET}")
+    return None
+
+
+def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
+    sup = supervisor.get_current()
+    if sup is None:
+        print(f"{C.GREY}(jobs are unavailable under --blocking){C.RESET}")
+        return None
+    jobs = sup.jobs()
+    if not jobs:
+        print(f"{C.GREY}(no running jobs){C.RESET}")
+    for j in jobs:
+        label = f"  {j.label}" if j.label else ""
+        print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
+    return None
+
+
+def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
+    sup = supervisor.get_current()
+    if sup is None:
+        print(f"{C.GREY}(cancel is unavailable under --blocking){C.RESET}")
+        return None
+    if arg:
+        if not arg.isdigit():
+            return "usage: /cancel [id]  (bare = active turn)"
+        targets = [j for j in sup.jobs() if j.id == int(arg)]
+    else:
+        targets = sup.jobs("turn")
+    if not targets:
+        print(f"{C.GREY}(no matching job to cancel){C.RESET}")
+        return None
+    # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
+    for j in targets:
+        sup.loop.call_soon_threadsafe(sup.cancel, j.id)
+    ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
+    print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
+    return None
+
+
+def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
+    value = arg.strip().lower()
+    if value not in ("on", "off"):
+        return "usage: /compact-auto on|off"
+    return _apply_settings_result(setcmd.apply_set(state["settings"], "compact.auto", value), state, cfg)
+
+
+def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
+    model, focus, ok = _split_compact_model(arg)
+    if not ok:
+        return "usage: /compact [-m model] [focus]"
+    forced = focus == "up to here"
+    if forced:
+        focus = ""
+    try:
+        compact_cfg = _cfg_for_live_state(cfg, state)
+        with stream_transport.net_role("Compacting"):
+            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
+    except Exception as e:  # noqa: BLE001
+        return f"compact failed: {type(e).__name__}: {e}"
+    print(f"{C.GREY}({result}){C.RESET}")
+    return None
+
+
+def _cmd_refresh_model_catalog(arg: str, state: dict, cfg: Config) -> str | None:
+    _force_refresh_model_catalog()
+    return None
+
+
+def _cmd_quit(arg: str, state: dict, cfg: Config) -> str | None:
+    if arg:
+        # Recorded as a user message so the next turn actually sees it. It is
+        # appended to the previous user message rather than added as a second
+        # one: providers with strict role alternation reject back-to-back user
+        # turns, and chat templates that tolerate it silently degrade.
+        reminder = f"<js-reminder>User closed the client with the message: {arg}</js-reminder>"
+        _append_closing_note(cfg, state, reminder)
+    state["running"] = False
+    return None
+
+
+def _cmd_tools(arg: str, state: dict, cfg: Config) -> str | None:
+    _print_tool_chain(state, cfg)
+    return None
+
+
+def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
+    """Bare `/skill` lists the skills. `/skill <name> [request]` typed at the
+    input line never reaches the table: it is a turn (see _handle_command)."""
+    if arg:
+        return "skill <name> [request] is a turn; type it at the input line"
+    _print_skill_catalog()
+    return None
+
+
+def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
+    rows = [(f"/{c.usage}", c.doc) for c in dict.fromkeys(COMMANDS.values())]
+    rows += [(f"/{name}", f"alias: {body}") for name, body in (state.get("aliases") or {}).items()]
+    rows += [("@path/to/file", "attach a file/image to that turn (quote paths with spaces)"), ("exit", "quit")]
+    width = max(len(usage) for usage, _doc in rows)
+    print(f"{C.MAGENTA}commands:{C.RESET}")
+    for usage, doc in rows:
+        print(f"  {C.YELLOW}{usage.ljust(width)}{C.RESET} {doc}")
+    return None
+
+
+_LOAD = Command(_cmd_load, "load <file>", "run each line of a file as a command (also: source)", complete="path")
+
+COMMANDS: dict[str, Command] = {
+    "help": Command(_cmd_help, "help", "show this message"),
+    "set": Command(_cmd_set, "set [key [value]]", "list settings, show one, or change one; set -key clears one",
+                   complete="set"),
+    "show": Command(_cmd_show, "show [key]", "list every setting and its effective value", complete="keys"),
+    "save": Command(_cmd_save, "save", "rewrite the global jsrc from the live settings, handlers and aliases"),
+    **{verb: _LOAD for verb in setcmd.LOAD_VERBS},
+    "on": Command(_cmd_on, "on [[^]event command]", "list or register an event handler", complete="events"),
+    "alias": Command(_cmd_alias, "alias [name [command]]", "list, show or define a command alias; alias -name removes"),
+    "model": Command(_cmd_model, "model [name]", "switch model for this session; bare opens the picker"),
+    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", "open the interactive provider/model picker"),
+    "provider": Command(_cmd_provider, "provider [id]", "show or switch the provider for this session",
+                        complete="names"),
+    "baseurl": Command(_cmd_baseurl, "baseurl [url]", "set the provider base URL for this session (bare clears)"),
+    "apikey": Command(_cmd_apikey, "apikey [key]", "set the provider API key for this session (bare clears)"),
+    "login": Command(_cmd_login, "login <name> [apikey] [baseurl] [provider]", "load or save a provider login",
+                     complete="names"),
+    "logout": Command(_cmd_logout, "logout", "clear provider credentials for this session"),
+    "models": Command(_cmd_models, "models [limit]", "list the provider's models"),
+    "reset": Command(_cmd_reset, "reset", "clear the conversation in-process; the jsonl keeps it", turn_state=True),
+    "wipe": Command(_cmd_wipe, "wipe", "rotate the session file away and clear the conversation", turn_state=True),
+    "persona": Command(_cmd_persona, "persona", "print the system prompt"),
+    "tools": Command(_cmd_tools, "tools", "show each tool's state (eager/lazy/ban) and the entry that decided it"),
+    "skill": Command(_cmd_skill, "skill [name [request]]",
+                     "list skills; with a name, send that skill's instructions (user-only ones too) with the request"),
+    "turns": Command(lambda arg, state, cfg: print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}"),
+                     "turns", "count the messages in context"),
+    "session": Command(lambda arg, state, cfg: print(f"{C.CYAN}{cfg.session_file}{C.RESET}"),
+                       "session", "print the session file path"),
+    "jobs": Command(_cmd_jobs, "jobs", "list running turns/subagents"),
+    "cancel": Command(_cmd_cancel, "cancel [id]", "cancel a job by id, or the active turn"),
+    # The async REPL drains its loop-owned queue before a line reaches the
+    # table; this entry runs everywhere else, where nothing queues.
+    "flush": Command(lambda arg, state, cfg: print(f"{C.GREY}(no queued prompts){C.RESET}"),
+                     "flush", "drop all prompts queued behind the active turn"),
+    "compact": Command(_cmd_compact, "compact [-m model] [focus]", "append a compaction summary mark",
+                       turn_state=True),
+    "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", "toggle auto-compaction"),
+    "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
+                                     "force-refresh the local models.dev catalog now"),
+    "quit": Command(_cmd_quit, "quit [note]", "quit; a note is kept for the next turn"),
+}
+
+
+def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[bool, str | None]:
+    """Dispatch one command line (leading `/` optional) through COMMANDS and
+    aliases. Returns ``(handled, error)``; ``handled`` is False for a verb that
+    is neither."""
+    parsed = setcmd.split_command(line)
+    if parsed is None:
+        return True, None
+    verb, arg = parsed
+    command = COMMANDS.get(verb)
+    if command is None:
+        body = (state.get("aliases") or {}).get(verb)
+        if body is None:
+            return False, None
+        if depth >= _MAX_ALIAS_DEPTH:
+            return True, f"alias {verb}: nesting too deep"
+        expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
+        handled, error = _run_command(expanded, state, cfg, depth + 1)
+        return True, error if handled else f"alias {verb}: unknown command: {expanded.split()[0]}"
+    if command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
+        return True, f"(a turn is running — /{verb} would clobber its context; ^C to cancel it, or wait)"
+    return True, command.run(arg, state, cfg)
+
+
+def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
+    """One line from a file of commands: an unknown verb is an error."""
+    handled, error = _run_command(line, state, cfg)
+    if not handled:
+        return f"unknown command: {setcmd.split_command(line)[0]}"
+    return error
+
+
+QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
-    if line in {"exit", "quit", ":q"}:
+    if line in QUIT_WORDS:
         state["running"] = False
         return True
-    if line == "/quit" or line.startswith("/quit "):
-        note = line[len("/quit "):].strip() if line.startswith("/quit ") else ""
-        if note:
-            # Recorded as a user message so the next turn actually sees it. It is
-            # appended to the previous user message rather than added as a second
-            # one: providers with strict role alternation reject back-to-back user
-            # turns, and chat templates that tolerate it silently degrade.
-            reminder = f"<js-reminder>User closed the client with the message: {note}</js-reminder>"
-            _append_closing_note(cfg, state, reminder)
-        state["running"] = False
-        return True
-    if line == "/help":
-        print(HELP_TEXT)
-        return True
-    if line == "/refresh-model-catalog":
-        _force_refresh_model_catalog()
-        return True
-    if line == "/skill":
-        _print_skill_catalog()
-        return True
-    if line == "/save":
-        _handle_save(state, cfg)
-        return True
-    if setcmd.is_repl_command(line, "/set", "/show", "/load", "/on"):
-        is_display, display_key = setcmd.settings_display_target(line)
-        if is_display:
-            # No-arg / single-key /set and /show render the values the NEXT turn
-            # uses, annotating knobs whose live source bypasses the store.
-            overlay = _live_settings_overlay_for_state(cfg, state)
-            result = setcmd.show_lines_effective(state["settings"], overlay, display_key)
-            for out in result.lines:
-                print(out)
-            if result.error:
-                print(f"{C.ORANGE}{result.error}{C.RESET}")
-            return True
-        context = setcmd.CommandContext(
-            cwd=getattr(cfg, "project_dir", Path.cwd()),
-            events=state.setdefault("events", events.EventHooks()),
-        )
-        result = setcmd.run_repl_command(state["settings"], line, context=context)
-        if result.changed:
-            if setcmd.is_repl_command(line, "/set"):
-                state["sampling_cli"] = _sampling_override_after_set(
-                    line,
-                    state.get("sampling_cli", Sampling()),
-                )
-            elif _changed_sampling_key(result.changed_keys):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _changed_model_key(result.changed_keys):
-                _sync_model_from_live_settings(state)
-            if _changed_provider_key(result.changed_keys):
-                _sync_provider_from_live_settings(state, result.changed_keys)
-            if _changed_lock_subagent_model_key(result.changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
-        for out in result.lines:
-            print(out)
-        if result.error:
-            print(f"{C.ORANGE}{result.error}{C.RESET}")
-        elif any(key.startswith(("compact.context_window", "model.context_window")) for key in result.changed_keys):
-            active = _cfg_for_live_state(cfg, state)
-            runtime.install_context_window_overrides(active)
-            window = compaction.configured_context_window(
-                active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
-            )
-            print(f"ctx={window} model={active.model} (effective for next request)")
-        return True
-    if line.startswith("/model "):
-        model_value = line[len("/model "):].strip()
-        _set_model_via_route(state, cfg, model_value)
-        return True
-    if line == "/model":
-        _pick_model_into_state(state, cfg)
-        return True
-    if line == "/reset":
-        state["messages"].clear()
-        M.append_mark(cfg.session_file, "session_reset")
-        print(f"{C.GREY}(conversation cleared in-process; jsonl preserved){C.RESET}")
-        return True
-    if line == "/wipe":
-        bak = M.wipe(cfg.session_file)
-        state["messages"].clear()
-        if bak:
-            print(f"{C.ORANGE}(memory rotated to {bak.name}){C.RESET}")
-        else:
-            print(f"{C.GREY}(no memory file to rotate){C.RESET}")
-        return True
-    if line == "/persona":
-        text = state["system"]
-        print(text[:2048])
-        if len(text) > 2048:
-            print(f"{C.GREY}...[truncated, {len(text)} bytes total]{C.RESET}")
-        return True
-    if line == "/turns":
-        print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}")
-        return True
-    if line == "/tools":
-        _print_tool_chain(state, cfg)
-        return True
-    if line == "/session":
-        print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
-        return True
-    if line == "/jobs":
-        sup = supervisor.get_current()
-        if sup is None:
-            print(f"{C.GREY}(jobs are unavailable under --blocking){C.RESET}")
-            return True
-        jobs = sup.jobs()
-        if not jobs:
-            print(f"{C.GREY}(no running jobs){C.RESET}")
-            return True
-        for j in jobs:
-            label = f"  {j.label}" if j.label else ""
-            print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
-        return True
-    if line == "/cancel" or line.startswith("/cancel "):
-        sup = supervisor.get_current()
-        if sup is None:
-            print(f"{C.GREY}(cancel is unavailable under --blocking){C.RESET}")
-            return True
-        arg = line[len("/cancel"):].strip()
-        if arg:
-            if not arg.isdigit():
-                print(f"{C.ORANGE}usage: /cancel [id]  (bare = active turn){C.RESET}")
-                return True
-            targets = [j for j in sup.jobs() if j.id == int(arg)]
-        else:
-            targets = sup.jobs("turn")
-        if not targets:
-            print(f"{C.GREY}(no matching job to cancel){C.RESET}")
-            return True
-        # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
-        for j in targets:
-            sup.loop.call_soon_threadsafe(sup.cancel, j.id)
-        ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
-        print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
-        return True
-    if setcmd.is_repl_command(line, "/compact-auto"):
-        arg = line[len("/compact-auto"):].strip().lower()
-        if arg not in ("on", "off"):
-            print(f"{C.ORANGE}usage: /compact-auto on|off{C.RESET}")
-            return True
-        result = setcmd.run_repl_command(state["settings"], f"/set compact.auto {arg}")
-        if result.error:
-            print(f"{C.ORANGE}{result.error}{C.RESET}")
-        else:
-            for out in result.lines:
-                print(out)
-        return True
-    if line == "/compact" or line.startswith("/compact "):
-        model, focus, ok = _split_compact_model(line[len("/compact"):])
-        if not ok:
-            print(f"{C.ORANGE}usage: /compact [-m model] [focus]{C.RESET}")
-            return True
-        forced = focus == "up to here"
-        if forced:
-            focus = ""
-        try:
-            compact_cfg = _cfg_for_live_state(cfg, state)
-            with stream_transport.net_role("Compacting"):
-                result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
-        else:
-            print(f"{C.GREY}({result}){C.RESET}")
-        return True
+    if not line.startswith("/") or _is_skill_invocation(line):
+        return False
+    handled, error = _run_command(line, state, cfg)
+    if error:
+        print(f"{C.ORANGE}{error}{C.RESET}")
+    return handled
 
-    # Provider commands
-    if setcmd.is_repl_command(
-        line,
-        "/provider",
-        "/baseurl",
-        "/apikey",
-        "/login",
-        "/logout",
-        "/models",
-        "/pick-model",
-    ):
-        return _handle_provider_command(line, state, cfg)
-    return False
+
+def _command_completions(state: dict) -> dict[str, str | None]:
+    """Verb -> argument completion source, for every command and alias."""
+    table = {verb: command.complete for verb, command in COMMANDS.items()}
+    table.update({name: None for name in state.get("aliases") or {}})
+    return table
+
+
+def _event_dispatcher(state: dict, cfg: Config):
+    """Run `on` handler text through the command table."""
+
+    def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
+        handled, error = _run_command(hook.handler, state, cfg)
+        if not handled:
+            parsed = setcmd.split_command(hook.handler)
+            error = f"unsupported event handler command: {parsed[0] if parsed else '<blank>'}"
+        return events.EventHandlerResult(hook=hook, error=error)
+
+    return dispatch
+
+
+def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
+    """Run the jsrc lines the settings layer did not apply at config load
+    (`on`, `alias`, `load`, every other command) through the table, in order.
+    A relative `load` resolves against the jsrc's directory. The `set` lines
+    of loaded files were applied at config load, so the replay skips them.
+    Output is dropped; the errors come back for the banner."""
+    errors: list[str] = []
+    stack = state.setdefault("load_stack", [])
+    state["rc_replay"] = True
+    try:
+        for path in paths:
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
+                continue
+            stack.append(path.resolve(strict=False))
+            try:
+                for lineno, raw in enumerate(lines, 1):
+                    if _config_owned(raw):
+                        continue
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        error = _run_script_line(raw, state, cfg)
+                    if error:
+                        errors.append(f"{path}:{lineno}: {error}")
+            finally:
+                stack.pop()
+    finally:
+        state.pop("rc_replay", None)
+    return errors
+
+
+def _config_owned(raw: str) -> bool:
+    """A blank line, a comment, or a line the settings layer applied at
+    config load (jsrc and the files it loads)."""
+    parsed = setcmd.split_command(raw)
+    return parsed is None or setcmd.config_owns(parsed[0])
 
 
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
@@ -2579,16 +2735,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         _persist_turn_messages(cfg, state["messages"])
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
-        cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
-        if _event_results_changed_sampling(cancel_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(cancel_event.results):
-            _sync_model_from_live_settings(state)
-        cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-        if _changed_provider_key(cancel_changed_keys):
-            _sync_provider_from_live_settings(state, cancel_changed_keys)
-        if _changed_lock_subagent_model_key(cancel_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
+        _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
@@ -2659,18 +2806,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
 async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
     """Run ``line`` as one supervised turn and wait for it to end."""
     prompt_text, line_attachments = attach.split_repl_attachments(line)
-    input_event = _emit_repl_event(
+    _emit_repl_event(
         state, telemetry, "input", text=prompt_text, attachments=line_attachments
     )
-    if _event_results_changed_sampling(input_event.results):
-        state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-    if _event_results_changed_model(input_event.results):
-        _sync_model_from_live_settings(state)
-    input_changed_keys = _event_result_changed_keys(input_event.results)
-    if _changed_provider_key(input_changed_keys):
-        _sync_provider_from_live_settings(state, input_changed_keys)
-    if _changed_lock_subagent_model_key(input_changed_keys):
-        _sync_tool_registry_from_live_settings(cfg, state)
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
         prompt_text = _expand_skill_line(prompt_text)
@@ -2740,6 +2878,12 @@ def _print_skill_catalog() -> None:
     print(f"{C.GREY}/skill <name> [request] sends one with your request{C.RESET}")
 
 
+def _is_skill_invocation(line: str) -> bool:
+    """`/skill <name> [request]`: a turn whose user message carries the skill."""
+    words = line.split(maxsplit=1)
+    return len(words) == 2 and words[0] == "/skill"
+
+
 def _expand_skill_line(prompt_text: str) -> str:
     """A `/skill <name> [request]` line becomes the user message carrying that
     skill; SkillInvocationError (a ValueError) names an unknown skill."""
@@ -2755,7 +2899,8 @@ def _is_turn_state_command(line: str) -> bool:
     a turn appends to state["messages"] races the single-writer discipline the turn
     queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
     rollback marks) — refuse until the active turn ends."""
-    return line in ("/reset", "/wipe", "/compact") or line.startswith("/compact ")
+    parsed = setcmd.split_command(line) if line.startswith("/") else None
+    return parsed is not None and parsed[0] in COMMANDS and COMMANDS[parsed[0]].turn_state
 
 
 def _drain_queue(queue: asyncio.Queue) -> int:
@@ -2874,6 +3019,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     def on_eof() -> None:
         state["running"] = False
 
+    async def on_ex(line: str, editor: screen.InputEditor) -> None:
+        await exline.run_ex(
+            line,
+            editor,
+            is_command=lambda verb: verb in COMMANDS or verb in (state.get("aliases") or {}),
+            dispatch=on_line,
+        )
+
     app, scrollback = screen.build_app(
         prompt=f"{C.YELLOW}LO> {C.RESET}",
         history=session.history,
@@ -2883,6 +3036,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_eof=on_eof,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         status_colours=lambda: _status_colours(state),
+        editing_mode=lambda: settings.get_dotted(state["settings"], ("ui", "editing_mode"), "emacs"),
+        on_ex=on_ex,
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
@@ -3457,9 +3612,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
     completer = replcomplete.JsCompleter(
+        commands=lambda: _command_completions(state),
         setting_keys=[spec.key for spec in settings.REGISTRY],
         names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
         spell=replcomplete.hunspell_suggest,
+        bare_words=QUIT_WORDS,
     )
     session = PromptSession(
         history=FileHistory(str(cfg.history_file)),
@@ -3505,13 +3662,6 @@ def main(argv: list[str] | None = None) -> int:
         # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
         settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
     event_hooks = events.EventHooks()
-    event_hooks.set_dispatcher(
-        setcmd.EventCommandDispatcher(
-            settings=live_settings,
-            cwd=getattr(cfg, "project_dir", Path.cwd()),
-            events=event_hooks,
-        )
-    )
     state = {
         "running": True,
         "messages": messages,
@@ -3536,15 +3686,25 @@ def main(argv: list[str] | None = None) -> int:
         "compact_incomplete_consecutive": 0,
         "compact_paused": False,
     }
+    event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
+    rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
+        Path(getattr(cfg, "project_dir", None) or Path.cwd()),
+        ignore_local_config=args.ignore_local,
+        ignore_global_config=args.ignore_global,
+        presets=presets,
+    ))
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state["mcp_host"] = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn (both REPL
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
+    banner = "\n".join([
+        BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
+        *(f"{C.ORANGE}{error}{C.RESET}" for error in rc_errors),
+    ])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
-    banner = BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file)
     if args.blocking:
         print(banner)
     else:
@@ -3582,22 +3742,13 @@ def main(argv: list[str] | None = None) -> int:
             sink.write_user(line)
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
-        input_event = _emit_repl_event(
+        _emit_repl_event(
             state,
             telemetry,
             "input",
             text=prompt_text,
             attachments=line_attachments,
         )
-        if _event_results_changed_sampling(input_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(input_event.results):
-            _sync_model_from_live_settings(state)
-        input_changed_keys = _event_result_changed_keys(input_event.results)
-        if _changed_provider_key(input_changed_keys):
-            _sync_provider_from_live_settings(state, input_changed_keys)
-        if _changed_lock_subagent_model_key(input_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
             prompt_text = _expand_skill_line(prompt_text)
@@ -3664,16 +3815,7 @@ def main(argv: list[str] | None = None) -> int:
             _persist_turn_messages(cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
-            cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
-            if _event_results_changed_sampling(cancel_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(cancel_event.results):
-                _sync_model_from_live_settings(state)
-            cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-            if _changed_provider_key(cancel_changed_keys):
-                _sync_provider_from_live_settings(state, cancel_changed_keys)
-            if _changed_lock_subagent_model_key(cancel_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
+            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             if _turn_has_progress(state["messages"], user_bundle.runtime_message):
                 # Turn did real work (assistant/tool messages beyond the user

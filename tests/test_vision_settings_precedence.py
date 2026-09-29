@@ -34,11 +34,11 @@ def test_live_vision_setting_and_unset_override_environment(monkeypatch):
     assert cfg.vision_enabled is False
     live = deepcopy(cfg.settings)
     state = {"settings": live}
-    assert setcmd.run_repl_command(live, "/set model.vision on").error is None
+    assert setcmd.set_command(live, "model.vision on").error is None
     active = cli._cfg_for_live_state(cfg, state)
     assert active.vision_enabled is True
     assert config.vision_enabled_for_model(active.model, active.settings) is True
-    assert setcmd.run_repl_command(live, "/set -model.vision").error is None
+    assert setcmd.set_command(live, "-model.vision").error is None
     active = cli._cfg_for_live_state(cfg, state)
     assert active.vision_enabled is True
     assert config.vision_enabled_for_model(active.model, active.settings) is True

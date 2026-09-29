@@ -106,8 +106,8 @@ def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
     live = settings.seed_defaults()
     raw = json.dumps(_servers())
 
-    changed = setcmd.run_repl_command(live, f"/set mcp.servers {raw}")
-    shown = setcmd.run_repl_command(live, "/show mcp.servers")
+    changed = setcmd.set_command(live, f"mcp.servers {raw}")
+    shown = setcmd.show_lines(live, "mcp.servers")
     transcript = "\n".join([*changed.lines, *shown.lines])
 
     assert changed.lines == ["mcp.servers = <set>"]
@@ -119,7 +119,7 @@ def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
 def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     live = settings.seed_defaults()
     raw = json.dumps(_servers())
-    result = setcmd.run_repl_command(live, f"/set mcp.servers {raw}")
+    result = setcmd.set_command(live, f"mcp.servers {raw}")
     assert result.error is None
     path = tmp_path / "jsrc"
 
@@ -150,7 +150,7 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
 )
 def test_server_validation_failures_do_not_mutate(value, message):
     live = settings.seed_defaults()
-    result = setcmd.run_repl_command(live, f"/set mcp.servers {json.dumps(value)}")
+    result = setcmd.set_command(live, f"mcp.servers {json.dumps(value)}")
 
     assert result.changed is False
     assert message in result.error
@@ -159,9 +159,9 @@ def test_server_validation_failures_do_not_mutate(value, message):
 
 def test_duplicate_json_server_names_are_rejected():
     live = settings.seed_defaults()
-    result = setcmd.run_repl_command(
+    result = setcmd.set_command(
         live,
-        '/set mcp.servers {"same":{"command":"one"},"same":{"command":"two"}}',
+        'mcp.servers {"same":{"command":"one"},"same":{"command":"two"}}',
     )
     assert result.changed is False
     assert "duplicate object key" in result.error
@@ -179,7 +179,7 @@ def test_duplicate_json_server_names_are_rejected():
 )
 def test_agent_policy_validation_failures(value):
     live = settings.seed_defaults()
-    result = setcmd.run_repl_command(live, f"/set mcp.agents {json.dumps(value)}")
+    result = setcmd.set_command(live, f"mcp.agents {json.dumps(value)}")
     assert result.changed is False
     assert result.error is not None
     assert live["mcp"]["agents"] == {}

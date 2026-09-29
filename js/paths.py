@@ -82,3 +82,8 @@ def model_catalog_db_path() -> Path:
 
 def model_catalog_status_path() -> Path:
     return model_catalog_dir() / "status.json"
+
+
+def notes_dir() -> Path:
+    """Where `:n` notes and `:w` buffer saves go."""
+    return data_dir() / "notes"

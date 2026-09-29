@@ -54,9 +54,9 @@ def test_vision_knob_is_registered_and_settable():
 
     assert settings.SPEC_BY_KEY["model.vision"].type == "bool"
     store: dict = {}
-    assert setcmd.run_repl_command(store, "/set model.vision on").error is None
+    assert setcmd.set_command(store, "model.vision on").error is None
     assert settings.get_dotted(store, ("model", "vision")) is True
-    assert setcmd.run_repl_command(store, "/set -model.vision").error is None
+    assert setcmd.set_command(store, "-model.vision").error is None
     assert settings.get_dotted(store, ("model", "vision")) is None
 
 

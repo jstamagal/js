@@ -4,47 +4,67 @@ from __future__ import annotations
 
 import pytest
 
+from js import cli
 from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
+
+
+def _table():
+    return cli._command_completions({})
 
 
 # ---- command context (first word) ----
 
 def test_command_prefix_match_not_fuzzy():
-    assert "/compact" in command_candidates("/comp")
-    assert "/compact" in command_candidates("comp")        # bare word -> implicit slash
-    assert command_candidates("cpt") == []                 # subsequence must NOT match
+    assert "/compact" in command_candidates("/comp", _table())
+    assert "/compact" in command_candidates("comp", _table())   # bare word -> implicit slash
+    assert command_candidates("cpt", _table()) == []            # subsequence must NOT match
 
 
-def test_slash_lists_slash_commands_only():
-    cands = command_candidates("/")
-    assert "/set" in cands and "/compact" in cands
-    assert "exit" not in cands                              # exit has no leading slash
+def test_every_table_command_completes():
+    assert command_candidates("/", _table()) == sorted("/" + verb for verb in cli.COMMANDS)
 
 
-def test_nonslash_commands_complete():
-    assert command_candidates("ex") == ["exit"]
-    assert "quit" in command_candidates("qu")
-    assert "/load" in command_candidates("lo")
-    assert "/on" in command_candidates("o")
+def test_bare_quit_words_complete():
+    completer = JsCompleter(commands=_table, bare_words=cli.QUIT_WORDS)
+
+    assert completer.candidates("ex")[0] == ["exit"]
+    assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
+    for word in cli.QUIT_WORDS:
+        assert word in completer.candidates(word)[0]
+
+
+def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
+    command = cli.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
+    monkeypatch.setitem(cli.COMMANDS, "frobnicate", command)
+    completer = JsCompleter(commands=lambda: cli._command_completions({}))
+
+    assert completer.candidates("/frob")[0] == ["/frobnicate"]
+
+
+def test_aliases_complete_as_commands():
+    completer = JsCompleter(commands=lambda: cli._command_completions({"aliases": {"ship": "save"}}))
+
+    assert completer.candidates("/sh")[0] == ["/ship", "/show"]
 
 
 def test_shared_prefix_yields_all_for_rotation():
-    cands = command_candidates("/re")
+    cands = command_candidates("/re", _table())
     assert {"/reset", "/refresh-model-catalog"} <= set(cands)
 
 
 def test_compact_prefix_rotates_compact_and_compact_auto():
     # /compac is a prefix of both -> Tab rotates between them
-    assert set(command_candidates("/compac")) == {"/compact", "/compact-auto"}
+    assert set(command_candidates("/compac", _table())) == {"/compact", "/compact-auto"}
 
 
 # ---- routing through JsCompleter.candidates ----
 
-def _completer():
+def _completer(spell=lambda w: ["the"] if w == "teh" else []):
     return JsCompleter(
+        commands=_table,
         setting_keys=["compact.auto", "compact.model", "model.id", "model.reasoning_effort"],
         names=lambda: ["deepseek", "openai", "myvllm"],
-        spell=lambda w: ["the"] if w == "teh" else [],
+        spell=spell,
     )
 
 
@@ -117,13 +137,13 @@ def test_midline_word_routes_to_spell():
 def test_known_command_args_never_reach_spellchecker(cmd):
     # A model id like "qwen" would otherwise get English spelling suggestions
     # ("wen", "Owen", "Gwen", ...) that silently replace it on Tab.
-    always_spell = JsCompleter(spell=lambda _w: ["SHOULD_NOT_APPEAR"])
+    always_spell = _completer(spell=lambda _w: ["SHOULD_NOT_APPEAR"])
     cands, _ = always_spell.candidates(f"{cmd} qwen")
     assert cands == []
 
 
 def test_unknown_command_prose_still_reaches_spellchecker():
-    always_spell = JsCompleter(spell=lambda _w: ["SHOULD_APPEAR"])
+    always_spell = _completer(spell=lambda _w: ["SHOULD_APPEAR"])
     cands, _ = always_spell.candidates("fix teh")
     assert cands == ["SHOULD_APPEAR"]
 

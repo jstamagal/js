@@ -36,10 +36,7 @@ class EventHook:
 @dataclass(frozen=True)
 class EventHandlerResult:
     hook: EventHook
-    lines: list[str] = field(default_factory=list)
     error: str | None = None
-    changed: bool = False
-    changed_keys: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -92,7 +89,8 @@ class EventHooks:
         if not text:
             raise ValueError("on needs a handler")
         hook = EventHook(event=event, handler=text, suppress=suppress)
-        self._hooks[event].append(hook)
+        if hook not in self._hooks[event]:  # the same handler twice would run twice
+            self._hooks[event].append(hook)
         return hook
 
     def handlers_for(self, event: str) -> list[EventHook]:

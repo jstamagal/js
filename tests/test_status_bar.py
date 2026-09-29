@@ -178,11 +178,11 @@ def test_status_style_uses_the_hex_given_and_falls_back_on_garbage():
 
 def test_status_colour_settings_accept_only_hex():
     live: dict = {}
-    assert setcmd.run_repl_command(live, "/set ui.status_bg #000000").error is None
+    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
     assert settings.get_dotted(live, ("ui", "status_bg"), None) == "#000000"
-    assert setcmd.run_repl_command(live, "/set ui.status_fg white").error
-    assert setcmd.run_repl_command(live, "/set ui.net 4").error
-    assert setcmd.run_repl_command(live, "/set ui.net 3").error is None
+    assert setcmd.set_command(live, "ui.status_fg white").error
+    assert setcmd.set_command(live, "ui.net 4").error
+    assert setcmd.set_command(live, "ui.net 3").error is None
 
 
 def test_status_bar_is_truecolor_and_repaints_on_set(monkeypatch):
@@ -210,7 +210,7 @@ def test_status_bar_is_truecolor_and_repaints_on_set(monkeypatch):
     assert captured["color_depth"] == ColorDepth.DEPTH_24_BIT
     style = captured["style"]
     assert style.get_attrs_for_style_str("class:status").bgcolor == screen.STATUS_BG.lstrip("#")
-    setcmd.run_repl_command(live, "/set ui.status_bg #000000")
+    setcmd.set_command(live, "ui.status_bg #000000")
     style.invalidation_hash()
     assert style.get_attrs_for_style_str("class:status").bgcolor == "000000"
 
@@ -266,7 +266,7 @@ def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
 
 def test_status_colour_survives_save_and_load(tmp_path):
     live = settings.seed_defaults()
-    assert setcmd.run_repl_command(live, "/set ui.status_bg #000000").error is None
+    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
     path = tmp_path / "jsrc"
     settings.save_settings_to_jsrc(path, live)
 

@@ -114,6 +114,7 @@ class SettingSpec:
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
     secret: bool = False        # mask the value in `show`
+    aliases: tuple[str, ...] = ()  # short names `set`/`show` accept for ``key``
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -129,7 +130,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- model ---
     SettingSpec("model.id", "str", DEFAULT_MODEL,
                 "Default model id; unprefixed ids route through AI Gateway.",
-                env="JS_MODEL"),
+                env="JS_MODEL", aliases=("model",)),
     SettingSpec("model.max_output_tokens", "int", None,
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
@@ -171,16 +172,19 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Render assistant Markdown on a terminal: finished blocks are "
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
+    SettingSpec("ui.editing_mode", "str", "emacs",
+                "Input line key bindings in the async screen: emacs (Enter sends) or vi "
+                "(multi-line buffer; Esc then `:` opens the ex line, `:x` sends)."),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
-                env="JS_PROVIDER", empty=EMPTY_NONE),
+                env="JS_PROVIDER", empty=EMPTY_NONE, aliases=("provider",)),
     SettingSpec("provider.base_url", "str", None,
                 "Explicit provider base URL; unset = provider default.",
-                env="JS_BASE_URL", empty=EMPTY_NONE),
+                env="JS_BASE_URL", empty=EMPTY_NONE, aliases=("baseurl",)),
     SettingSpec("provider.api_key", "str", None,
                 "Explicit provider API key; unset = env/login default.",
-                env="JS_API_KEY", empty=EMPTY_NONE, secret=True),
+                env="JS_API_KEY", empty=EMPTY_NONE, secret=True, aliases=("apikey",)),
     SettingSpec("provider.extra", "map", {},
                 "Free-form extra params passed through to the provider SDK.",
                 empty=EMPTY_NONE),
@@ -383,6 +387,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
+SPEC_BY_ALIAS: dict[str, SettingSpec] = {alias: spec for spec in REGISTRY for alias in spec.aliases}
+
+
+def spec_for(name: str) -> SettingSpec | None:
+    """The spec a `set`/`show` name refers to: its dotted key or a short alias."""
+    return SPEC_BY_KEY.get(name) or SPEC_BY_ALIAS.get(name)
 KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
 SECTION_ORDER: tuple[str, ...] = (
     "model",
@@ -465,6 +475,10 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return text, None
     if spec.key in {"ui.status_bg", "ui.status_fg"} and not is_hex_colour(text):
         return None, f"expected a #rrggbb colour (got {text!r})"
+    if spec.key == "ui.editing_mode":
+        if text not in ("emacs", "vi"):
+            return None, "expected emacs or vi"
+        return text, None
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
             return None, f"expected a URL starting with http:// or https:// (got {text!r})"
@@ -717,13 +731,31 @@ def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
     from . import setcmd  # lazy: setcmd imports this module
 
     warnings: list[str] = []
-    for path in paths:
-        if not path.exists():
-            continue
-        for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+
+    def apply_file(path: Path, stack: list[Path]) -> None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return
+        stack.append(path)
+        for lineno, raw in enumerate(lines, 1):
+            parsed = setcmd.split_command(raw)
+            if parsed is not None and parsed[0] in setcmd.LOAD_VERBS:
+                # A loaded file's settings sit in the jsrc layer too, resolved
+                # against the containing file. The REPL replay reports a
+                # missing file or a cycle.
+                target, error = setcmd.load_path(parsed[1], path.parent)
+                if error is None and target not in stack and len(stack) < setcmd.MAX_LOAD_DEPTH:
+                    apply_file(target, stack)
+                continue
             result = setcmd.apply_config_line(settings, raw)
             if result.error:
                 warnings.append(f"{path}:{lineno}: {result.error}")
+        stack.pop()
+
+    for path in paths:
+        if path.exists():
+            apply_file(path.resolve(strict=False), [])
     return warnings
 
 
@@ -887,14 +919,17 @@ def save_settings_to_jsrc(
     path: Path,
     settings: dict,
     *,
+    extra_lines: list[str] | None = None,
     stamp: str | None = None,
     source: str = "/save",
 ) -> tuple[int, Path | None]:
-    """Write the non-default knobs in ``settings`` to ``path`` as a jsrc script.
+    """Write the non-default settings in ``settings`` to ``path`` as a jsrc
+    script, followed by ``extra_lines`` (other commands to replay, e.g. `on`
+    and `alias` lines).
 
     An existing file is copied to ``<name>.bak`` beside itself first. Returns
-    ``(knob_count, backup_path_or_None)``."""
-    lines = settings_diff_lines(settings)
+    ``(line_count, backup_path_or_None)``."""
+    lines = [*settings_diff_lines(settings), *(extra_lines or [])]
     backup: Path | None = None
     if path.exists():
         backup = path.with_name(path.name + ".bak")
@@ -905,8 +940,8 @@ def save_settings_to_jsrc(
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = [
         f"# js config — written by {source} on {stamp}.",
-        "# Each non-comment line is a `set <key> <value>` command; only knobs that",
-        "# differ from built-in defaults are listed.",
+        "# Each non-comment line is a command; `set` lines list only settings that",
+        "# differ from built-in defaults.",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)

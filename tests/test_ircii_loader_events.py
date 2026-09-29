@@ -31,37 +31,37 @@ def make_cfg(tmp_path: Path) -> Config:
     )
 
 
-def test_repl_load_applies_slashless_script_lines(tmp_path):
+def make_state() -> dict:
+    return {
+        "messages": [],
+        "system": "sys",
+        "settings": settings.seed_defaults(),
+        "events": events.EventHooks(),
+    }
+
+
+def test_load_applies_slashless_script_lines(tmp_path):
     script = tmp_path / "boot.irc"
     script.write_text(
         "set runtime.trace off\n"
         "set provider.extra.organization ./wiki\n",
         encoding="utf-8",
     )
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
 
-    result = setcmd.run_repl_command(live_settings, "/load boot.irc", context=ctx)
+    assert cli._handle_command("/load boot.irc", state, make_cfg(tmp_path)) is True
 
-    assert result.handled is True
-    assert result.changed is True
-    assert result.error is None
-    assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
-    assert settings.get_dotted(live_settings, ("provider", "extra", "organization")) == "./wiki"
-    assert result.lines[-1] == f"loaded {script}"
+    assert settings.get_dotted(state["settings"], ("runtime", "trace")) is False
+    assert settings.get_dotted(state["settings"], ("provider", "extra", "organization")) == "./wiki"
 
 
 def test_script_load_treats_bare_slash_line_as_noop(tmp_path):
     script = tmp_path / "bare-slash.irc"
     script.write_text("/\nset compact.auto off\n", encoding="utf-8")
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
 
-    result = setcmd.run_repl_command(live_settings, "/load bare-slash.irc", context=ctx)
-
-    assert result.error is None
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
-    assert result.lines == ["compact.auto = off", f"loaded {script}"]
+    assert cli._run_command("/load bare-slash.irc", state, make_cfg(tmp_path)) == (True, None)
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
 
 
 def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
@@ -70,13 +70,11 @@ def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
     (scripts / "inner.irc").write_text("set model.max_output_tokens 123\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc\n", encoding="utf-8")
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
 
-    result = setcmd.run_repl_command(live_settings, f"/load {outer}", context=ctx)
+    cli._handle_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    assert result.error is None
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123
+    assert settings.get_dotted(state["settings"], ("model", "max_output_tokens")) == 123
 
 
 def test_script_load_allows_comment_after_nested_load_path(tmp_path):
@@ -85,124 +83,135 @@ def test_script_load_allows_comment_after_nested_load_path(tmp_path):
     (scripts / "inner.irc").write_text("set compact.auto off\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc # shared event/settings bootstrap\n", encoding="utf-8")
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
 
-    result = setcmd.run_repl_command(live_settings, f"/load {outer}", context=ctx)
+    cli._handle_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    assert result.error is None
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
 
 
-def test_script_load_preserves_partial_nested_load_result_on_error(tmp_path):
+def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     inner = scripts / "inner.irc"
-    inner.write_text("set compact.auto off\nbogus nope\n", encoding="utf-8")
+    inner.write_text("set compact.auto off\nbogus nope\nset model.max_output_tokens 99\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc\n", encoding="utf-8")
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
 
-    result = setcmd.run_repl_command(live_settings, f"/load {outer}", context=ctx)
+    _, error = cli._run_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    assert result.changed is True
-    assert result.changed_keys == ["compact.auto"]
-    assert result.lines == ["compact.auto = off"]
-    assert result.error == f"{outer}:1: {inner}:2: unknown command: bogus"
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    assert f"{outer}:1" in error
+    assert f"{inner}:2" in error
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("model", "max_output_tokens")) is None
+
+
+def test_script_load_refuses_a_cycle(tmp_path):
+    loop = tmp_path / "loop.irc"
+    loop.write_text("set compact.auto off\nload loop.irc\n", encoding="utf-8")
+    state = make_state()
+
+    handled, error = cli._run_command("/load loop.irc", state, make_cfg(tmp_path))
+
+    assert handled is True
+    assert f"{loop}:2" in error
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert state["load_stack"] == []
 
 
 def test_script_load_reports_read_errors_without_raising(tmp_path):
     script = tmp_path / "bad.irc"
     script.write_bytes(b"\xff")
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(cwd=tmp_path, events=events.EventHooks())
+    state = make_state()
+    before = settings.seed_defaults()
 
-    result = setcmd.run_repl_command(live_settings, "/load bad.irc", context=ctx)
+    handled, error = cli._run_command("/load bad.irc", state, make_cfg(tmp_path))
 
-    assert result.handled is True
-    assert result.changed is False
-    assert result.lines == []
-    assert result.error is not None
-    assert result.error.startswith(f"failed to read script: {script}: ")
+    assert handled is True
+    assert str(script) in error
+    assert state["settings"] == before
+
+
+def test_load_runs_every_command_in_the_table(tmp_path, monkeypatch):
+    """A file of commands is not limited to settings verbs: `model`, `provider`,
+    `alias` and `on` lines all dispatch through the command table."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    script = tmp_path / "all.irc"
+    script.write_text(
+        "provider deepseek\n"
+        "model deepseek-chat\n"
+        "alias ca compact-auto $*\n"
+        "ca off\n"
+        "on turn_start set runtime.trace on\n",
+        encoding="utf-8",
+    )
+    state = make_state()
+
+    cli._handle_command("/load all.irc", state, make_cfg(tmp_path))
+
+    assert state["provider_id"] == "deepseek"
+    assert state["model"] == "deepseek-chat"
+    assert state["aliases"] == {"ca": "compact-auto $*"}
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert [hook.handler for hook in state["events"].handlers_for("turn_start")] == ["set runtime.trace on"]
 
 
 def test_on_registers_handlers_against_typed_event_names():
     hooks = events.EventHooks()
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(events=hooks)
 
-    result = setcmd.apply_script_line(live_settings, "on ^tool_call echo denied", context=ctx)
+    result = setcmd.on_command(hooks, "^tool_call echo denied")
 
-    assert result.handled is True
-    assert result.changed is True
     assert result.error is None
-    registered = hooks.handlers_for("tool_call")
-    assert registered == [events.EventHook(event="tool_call", handler="echo denied", suppress=True)]
-    assert result.lines == ["on ^tool_call = echo denied"]
+    assert hooks.handlers_for("tool_call") == [events.EventHook(event="tool_call", handler="echo denied", suppress=True)]
 
 
 def test_on_accepts_listed_equals_form_without_storing_equals():
     hooks = events.EventHooks()
-    live_settings = settings.seed_defaults()
-    ctx = setcmd.CommandContext(events=hooks)
 
-    result = setcmd.apply_script_line(
-        live_settings,
-        "on turn_start = set compact.auto off",
-        context=ctx,
-    )
+    result = setcmd.on_command(hooks, "turn_start = set compact.auto off")
 
     assert result.error is None
     assert hooks.handlers_for("turn_start") == [
         events.EventHook(event="turn_start", handler="set compact.auto off", suppress=False)
     ]
-    assert result.lines == ["on turn_start = set compact.auto off"]
 
 
 def test_on_rejects_unknown_event_without_registering():
     hooks = events.EventHooks()
-    ctx = setcmd.CommandContext(events=hooks)
 
-    result = setcmd.apply_script_line(settings.seed_defaults(), "on nope echo no", context=ctx)
+    result = setcmd.on_command(hooks, "nope echo no")
 
-    assert result.handled is True
     assert result.changed is False
     assert result.error == "unknown event: nope"
-    assert hooks.handlers_for("nope") == []
+    assert hooks.all() == events.EventHooks().all()
 
 
-def test_event_hook_dispatches_setcmd_handler_against_live_settings(tmp_path):
-    hooks = events.EventHooks()
-    live_settings = settings.seed_defaults()
-    hooks.set_dispatcher(
-        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
-    )
+def test_event_hook_dispatches_handler_through_the_command_table(tmp_path):
+    state = make_state()
+    hooks = state["events"]
+    hooks.set_dispatcher(cli._event_dispatcher(state, make_cfg(tmp_path)))
     hooks.add("turn_start", "set compact.auto off")
+    hooks.add("turn_start", "alias hi turns")
 
     emission = hooks.emit("turn_start", model="offline-test-model")
 
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
-    assert emission.dispatch_skipped is False
-    assert len(emission.results) == 1
-    assert emission.results[0].changed is True
-    assert emission.results[0].error is None
-    assert emission.results[0].lines == ["compact.auto = off"]
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert state["aliases"] == {"hi": "turns"}
+    assert [result.error for result in emission.results] == [None, None]
 
 
 def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
-    hooks = events.EventHooks()
-    live_settings = settings.seed_defaults()
-    hooks.set_dispatcher(
-        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
-    )
+    state = make_state()
+    hooks = state["events"]
+    hooks.set_dispatcher(cli._event_dispatcher(state, make_cfg(tmp_path)))
     hooks.add("turn_start", "echo nope")
+    hooks.add("turn_start", "set nope.nope.nope x")
 
     emission = hooks.emit("turn_start")
 
-    assert emission.results[0].error == "unsupported event handler command: echo"
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is True
+    assert all(result.error for result in emission.results)
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
 
 
 def test_event_hook_invalid_dispatch_result_is_captured_without_raising():
@@ -233,7 +242,7 @@ def test_event_hooks_skip_recursive_dispatch():
         nested = hooks.emit("turn_start", nested=True)
         assert nested.dispatch_skipped is True
         assert nested.results == []
-        return events.EventHandlerResult(hook=hook, lines=["ok"])
+        return events.EventHandlerResult(hook=hook, error="ok")
 
     hooks.set_dispatcher(recursive_dispatch)
     hooks.add("turn_start", "set compact.auto off")
@@ -242,7 +251,7 @@ def test_event_hooks_skip_recursive_dispatch():
 
     assert calls == ["turn_start:set compact.auto off"]
     assert emission.dispatch_skipped is False
-    assert emission.results[0].lines == ["ok"]
+    assert emission.results[0].error == "ok"
 
 
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
@@ -268,7 +277,7 @@ def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     ]
 
 
-def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path, capsys):
+def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path):
     script = tmp_path / "agent-error.irc"
     script.write_text("on turn_start echo boot\nbogus nope\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
@@ -280,11 +289,10 @@ def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path, capsys)
         "events": hooks,
     }
 
-    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+    handled, error = cli._run_command(f"/load {script.name}", state, cfg)
 
-    lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "on turn_start = echo boot"
-    assert "unknown command: bogus" in lines[1]
+    assert handled is True
+    assert f"{script}:2" in error
     assert hooks.handlers_for("turn_start") == [
         events.EventHook(event="turn_start", handler="echo boot", suppress=False)
     ]
@@ -306,7 +314,7 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
     assert state["sampling_cli"].temperature == 0.2
 
 
-def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path, capsys):
+def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
     script = tmp_path / "sampling-error.irc"
     script.write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
@@ -318,7 +326,7 @@ def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path, 
         "sampling_cli": cfg.sampling_cli,
     }
 
-    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+    _, error = cli._run_command(f"/load {script.name}", state, cfg)
 
-    assert "unknown command: bogus" in capsys.readouterr().out
+    assert f"{script}:2" in error
     assert state["sampling_cli"].temperature == 0.2

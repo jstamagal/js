@@ -103,10 +103,12 @@ REPL commands:
 /login <id> [url] [key]        shorthand for /provider + /baseurl + /apikey
 /logout                        clear provider/baseurl/apikey for this session
 /models [max]                  list available models from the active provider
-/set [key [val]]              list knobs, show one, or change one
+/set [key [val]]              list settings, show one, or change one
 /show [key]                   list all current config values or one key
-/load <file>                  load a slashless ircII-style runtime script
+/save                         rewrite the global jsrc from the live state
+/load <file>                  run each line of a file as a command (also /source)
 /on [event handler]           list or register event hooks
+/alias [name [command]]       list, show or define a command alias
 /set model.reasoning_effort high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
 /set ui.tools 3                show every tool call and its whole result
@@ -127,16 +129,32 @@ The `/model` picker lists your saved logins, not every possible SDK provider.
 `js --logout <provider>` removes that provider and its cached models from the
 picker.
 
-`/load` reads script files relative to the current project directory; nested
-`load other.irc` lines resolve relative to the script that contains them. The
-foundation verbs are `set`, `show`, `load`, and `on`. `on` stores typed event
-hooks such as `turn_start`, `tool_call`, and `tool_result` against the emitted
-runtime event stream. Handler text is executed through the same command runner:
-slashless `set`, `show`, `load`, and `on` are supported, and a leading `/` is
-tolerated. Handler errors are captured as event results and debug telemetry
-instead of aborting the turn. Nested event dispatch is skipped while a handler is
-already running. The `^` prefix is stored for future suppressive hooks; it does
-not yet suppress the default runtime action.
+Every command lives in one table in `js/cli.py` (`COMMANDS`); `/help` and Tab
+completion read it, so a new entry there is a new command everywhere. The
+leading `/` is required at the input line and optional in files of commands.
+
+`/load <file>` runs each line of the file through that table, in order, so a
+file may hold any command (`model`, `provider`, `alias`, `on`, `set`, ...).
+Paths resolve relative to the current project directory; nested `load
+other.irc` lines resolve relative to the script that contains them. The first
+error stops the file and names the file and line.
+
+`on` stores typed event hooks such as `turn_start`, `tool_call`, and
+`tool_result`. Handler text runs through the same table when the event fires.
+Handler errors are captured as event results and debug telemetry instead of
+aborting the turn. Nested event dispatch is skipped while a handler is already
+running. The `^` prefix is stored for future suppressive hooks; it does not yet
+suppress the default runtime action.
+
+`/alias name command` defines `/name`. `$*` in the command is replaced by the
+alias's arguments; a command without `$*` gets them appended. `/alias -name`
+removes one. An alias cannot take the name of a built-in command.
+
+`/save` rewrites the global jsrc from everything the session holds: settings
+that differ from their defaults, `on` handlers, and aliases. On the next start
+the settings layer applies the `set` lines (and a setting's short name, e.g.
+`model X` is `set model X`) under env and `--extra`; the REPL then runs every
+other jsrc line through the command table.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
@@ -168,6 +186,25 @@ bytes until the first token arrives; at 3 each retry, models.dev catalog
 refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
+
+`/set ui.editing_mode vi` makes the input line a vi buffer (the default is
+`emacs`, where Enter sends). In vi mode typing starts in insert mode, Enter is a
+newline, and Esc then `:` opens the ex line at the bottom:
+
+```text
+:w [file]      write the buffer (default: the notes directory); it stays, unsent
+:x             send the buffer
+:q [note]      quit
+:e [file]      edit the buffer (or file) in $VISUAL/$EDITOR; it comes back unsent
+:r file        insert a file at the cursor
+:n text        append a timestamped note; never sent to the model
+:n             open the notes file in $EDITOR
+:set k v       any js command, without the /
+:nvim          any program on PATH runs on the buffer; it comes back unsent
+```
+
+Notes and `:w` saves live in the platform data `notes/` directory
+(`paths.notes_dir()`).
 
 A line typed while a turn runs is handled by `runtime.steer`:
 
