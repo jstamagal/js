@@ -18,3 +18,5 @@ Rules:
 - The returned text is the skill's procedure, as written by whoever wrote the
   skill.
 - If no local skill matches, the tool returns an error.
+- A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
+  this tool refuses it, and the user loads it with `/skill <name>`.

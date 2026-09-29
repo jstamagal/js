@@ -27,6 +27,9 @@ class SkillMetadata:
     tools: tuple[str, ...]
     source: str
     path: Path
+    # False when the frontmatter sets ``disable-model-invocation: true``: the
+    # skill is absent from the model's catalog and only the user loads it.
+    model_invocable: bool = True
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,11 @@ class SkillCatalog:
     def skills(self) -> tuple[SkillMetadata, ...]:
         return tuple(record.metadata for record in self._records.values())
 
+    @property
+    def model_skills(self) -> tuple[SkillMetadata, ...]:
+        """The skills the model may see and load."""
+        return tuple(skill for skill in self.skills if skill.model_invocable)
+
     def get(self, name: str) -> SkillMetadata | None:
         record = self._records.get(name.casefold())
         return record.metadata if record is not None else None
@@ -118,20 +126,25 @@ class SkillCatalog:
             )
         )
 
-    def load(self, name: str) -> str | None:
+    def load(self, name: str, *, user: bool = False) -> str | None:
         """Load only the instruction body, preserving the original API."""
-        loaded = load_skill(self, name)
+        loaded = load_skill(self, name, user=user)
         return loaded.instructions if loaded is not None else None
 
-    def load_exact(self, name: str, tool_registry: Any = None) -> LoadedSkill | None:
+    def load_exact(
+        self, name: str, tool_registry: Any = None, *, user: bool = False
+    ) -> LoadedSkill | None:
         """Load an exact catalog match and request its declared tool surface."""
-        return load_skill(self, name, tool_registry=tool_registry)
+        return load_skill(self, name, tool_registry=tool_registry, user=user)
 
 
 def load_skill(
-    catalog: SkillCatalog, name: str, tool_registry: Any = None
+    catalog: SkillCatalog, name: str, tool_registry: Any = None, *, user: bool = False
 ) -> LoadedSkill | None:
     """Load one exact skill and activate declared tools when supported.
+
+    ``user`` marks a load the user asked for; without it a skill whose
+    frontmatter disables model invocation is not loaded and None is returned.
 
     Lazy registries advertise the capability with ``activate_tools(names)`` and
     return ``ToolActivationResult``. Plain registries intentionally remain a
@@ -141,6 +154,8 @@ def load_skill(
     if record is None:
         return None
     metadata = record.metadata
+    if not metadata.model_invocable and not user:
+        return None
     text = metadata.path.read_text(encoding="utf-8", errors="replace")
     _, body, _ = _split_frontmatter(metadata.path, text)
     activation = ToolActivationResult()
@@ -155,6 +170,41 @@ def load_skill(
             missing=_ordered_subset(metadata.tools, outcome.missing),
         )
     return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
+
+
+_USER_COMMAND_RE = re.compile(r"/skill(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
+
+
+class SkillInvocationError(ValueError):
+    """A ``/skill`` line that names no skill, or one the catalog lacks."""
+
+
+def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
+    """Turn a ``/skill <name> [request]`` line into the user message that carries it.
+
+    This is the user's path into a skill, so it loads skills whose frontmatter
+    disables model invocation. Returns None when ``text`` is not a ``/skill``
+    line; raises SkillInvocationError when it names no known skill.
+    """
+    match = _USER_COMMAND_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    name, request = match.group(1), (match.group(2) or "").strip()
+    if not name:
+        raise SkillInvocationError("usage: /skill <name> [request]")
+    loaded = load_skill(catalog, name, user=True)
+    if loaded is None:
+        raise SkillInvocationError(f"no skill named {name!r}")
+    metadata = loaded.metadata
+    header = [f"Base directory for this skill: {metadata.path.parent}"]
+    if metadata.tools:
+        header.append(
+            "Tools this skill declares (load them with tool_discovery): "
+            + ", ".join(metadata.tools)
+        )
+    body = loaded.instructions.strip("\n")
+    block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f"\n\n{body}\n</skill>"
+    return f"{block}\n\n{request}" if request else block
 
 
 def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
@@ -237,8 +287,14 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
         description = _derive_description(body, name)
     description = " ".join(description.split())[:_MAX_DESCRIPTION]
     tools = _tools_field(path, manifest)
+    user_only = _bool_field(path, manifest, "disable-model-invocation")
     metadata = SkillMetadata(
-        name=name, description=description, tools=tools, source=source, path=path
+        name=name,
+        description=description,
+        tools=tools,
+        source=source,
+        path=path,
+        model_invocable=not user_only,
     )
     return _SkillRecord(metadata=metadata)
 
@@ -270,6 +326,17 @@ def _string_field(path: Path, manifest: dict[str, Any], field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} frontmatter in {path} must be a string")
     return value.strip()
+
+
+def _bool_field(path: Path, manifest: dict[str, Any], field: str) -> bool:
+    value = manifest.get(field)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+        return value.strip().lower() == "true"
+    raise ValueError(f"{field} frontmatter in {path} must be true or false")
 
 
 def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:

@@ -147,7 +147,7 @@ class TurnToolSurface:
             discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
         )
         self._skills = {
-            f"skill:{skill.name}": skill for skill in self._skill_catalog.skills
+            f"skill:{skill.name}": skill for skill in self._skill_catalog.model_skills
         }
         self._lazy: dict[str, Tool] = {}
         self._sources: dict[str, str] = {}

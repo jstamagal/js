@@ -122,6 +122,9 @@ def plan(
 def skill(name: str, context: ToolContext | None = None) -> str:
     assert context is not None
     catalog = discover_skills(context.cwd)
+    metadata = catalog.get(name)
+    if metadata is not None and not metadata.model_invocable:
+        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with /skill {metadata.name}"
     loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
     if loaded is not None:
         return loaded.render()

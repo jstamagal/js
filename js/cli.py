@@ -49,6 +49,7 @@ from . import tui
 from .promptexpand import expand_prompt
 from . import screen
 from . import setcmd
+from . import skills
 from . import settings
 from . import routing
 from . import sampling as sampling_mod
@@ -1306,6 +1307,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark (-m model picks the summarizer)
   {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
   {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
+  {C.YELLOW}/skill <name> [request]{C.RESET} send a skill's instructions (user-only ones too) with your request
   {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
   {C.YELLOW}exit{C.RESET}             quit
 """
@@ -2577,11 +2579,13 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
                 _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             try:
+                prompt_text = _expand_skill_line(prompt_text)
                 turn_cfg = _cfg_for_live_state(cfg, state)
                 user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
             except ValueError as e:
-                # AttachmentError (a ValueError) or a login-gate routing error from
-                # re-resolving the live model: degrade to one friendly line, keep the REPL.
+                # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
+                # routing error from re-resolving the live model: degrade to one friendly
+                # line, keep the REPL.
                 print(f"{C.ORANGE}error: {e}{C.RESET}")
                 continue
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
@@ -2597,6 +2601,16 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
                 await job.task  # _do_turn persists partial work on cancel; keep looping
         finally:
             queue.task_done()
+
+
+def _expand_skill_line(prompt_text: str) -> str:
+    """A `/skill <name> [request]` line becomes the user message carrying that
+    skill; SkillInvocationError (a ValueError) names an unknown skill."""
+    if not prompt_text.lstrip().startswith("/skill"):
+        return prompt_text
+    catalog = skills.discover_skills(Path.cwd())
+    expanded = skills.expand_user_invocation(catalog, prompt_text)
+    return prompt_text if expanded is None else expanded
 
 
 def _is_turn_state_command(line: str) -> bool:
@@ -3417,11 +3431,13 @@ def main(argv: list[str] | None = None) -> int:
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
+            prompt_text = _expand_skill_line(prompt_text)
             turn_cfg = _cfg_for_live_state(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
         except ValueError as e:
-            # AttachmentError (a ValueError) or a login-gate routing error from
-            # re-resolving the live model: degrade to one friendly line, keep the REPL.
+            # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
+            # routing error from re-resolving the live model: degrade to one friendly
+            # line, keep the REPL.
             print(f"{C.ORANGE}error: {e}{C.RESET}")
             continue
 

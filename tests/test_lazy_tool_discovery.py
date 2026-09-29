@@ -170,6 +170,20 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert forbidden.resolve("browser_probe") is None
 
 
+def test_user_only_skill_is_absent_from_catalog_and_not_loadable(tmp_path):
+    skills = tmp_path / ".js" / "skills"
+    _skill_file(skills, "secret").write_text(
+        "---\ndescription: private\ndisable-model-invocation: true\n---\nuser-only body\n"
+    )
+    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+
+    found = json.loads(surface.discover(kind="skill"))["results"]
+    assert "skill:secret" not in [item["id"] for item in found]
+    loaded = surface.discover(load="skill:secret")
+    assert loaded.startswith("ERROR:")
+    assert "user-only body" not in loaded
+
+
 def test_skill_load_distinguishes_denied_and_missing_requirements(tmp_path):
     skills = tmp_path / ".agents" / "skills"
     skills.mkdir(parents=True)

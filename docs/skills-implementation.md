@@ -10,9 +10,10 @@ reference implementation, not as the target.
 | Stage | Spec | js now |
 |---|---|---|
 | Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. `~/.agents/skills`, `~/.config/js/skills`, `./.agents/skills`, `./.js/skills`, package `js/skills/`. Native wins within a layer, project over global. |
-| Parse | frontmatter `name`, `description`; body kept on disk | Same. `js/skills.py` indexes metadata only; bodies read at activation. |
+| Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools` and `disable-model-invocation`. `js/skills.py` indexes metadata only; bodies read at activation. |
 | **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
-| Activate | dedicated tool or file read; returns body, strips frontmatter | `skill(name)` tool and `tool_discovery load=skill:<name>`. Returns body, activates declared tools. |
+| Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill <name> [request]` in the REPL sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
+| User-only | `disable-model-invocation: true` | Honored. The skill is absent from the `tool_discovery` catalog, `skill` and `load=skill:<name>` refuse it, and `/skill <name>` still loads it. |
 | Protect | exempt skill content from compaction | Not checked in this pass. |
 
 The disclosure gap is why agents never load skills: a skill the model cannot see
@@ -208,7 +209,10 @@ Everything below is disclosure; discovery and activation already exist.
    block is absent and `skill` is not registered; over budget every name is
    still present.
 
-Optional, from Claude Code, if wanted later: `disable-model-invocation`
-frontmatter to hide a skill from the model while keeping it user-invokable;
-`Base directory for this skill:` header in the activation payload so relative
-paths in a skill body resolve.
+`disable-model-invocation: true` is read at parse time: such a skill is
+user-only. It stays out of the model's catalog and the block above, the model
+cannot load it, and the user loads it with `/skill <name>`.
+
+Optional, from Claude Code, if wanted later: the `Base directory for this
+skill:` header in the model's activation payload (the `/skill` path already
+sends it) so relative paths in a skill body resolve.
