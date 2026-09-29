@@ -1811,7 +1811,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         durable_side_effects_started = False
         overflow_recovered = 0
         retry_budget = retry.Budget.from_settings(live_settings)
-        stream_idle = float(_settings.knob(live_settings, "runtime.stream_idle_seconds") or 0) or None
+        stream_idle = retry.idle_seconds(live_settings)
         max_output_escalation = int(_settings.knob(live_settings, "runtime.max_output_escalation") or 0)
         max_output_resumes = int(_settings.knob(live_settings, "runtime.max_output_resumes") or 0)
         max_output_escalated = False

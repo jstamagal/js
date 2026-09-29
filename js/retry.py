@@ -42,6 +42,12 @@ class Budget:
         return wait is not None and 0 < self.max_wait < wait
 
 
+def idle_seconds(settings: dict | None) -> float | None:
+    """runtime.stream_idle_seconds as `stream_model_async` takes it: None for
+    no watchdog."""
+    return float(_settings.knob(settings, "runtime.stream_idle_seconds") or 0) or None
+
+
 def backoff(attempt: int) -> float:
     """Exponential with jitter: 1s, 2s, 4s ... capped."""
     base = min(2 ** attempt, 16)

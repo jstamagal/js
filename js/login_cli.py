@@ -485,6 +485,7 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             reasoning_effort=provider.reasoning_effort,
             on_text=on_text,
             retry_budget=retry.Budget.from_settings(None),
+            stream_idle_seconds=retry.idle_seconds(None),
         )
     except Exception as exc:  # noqa: BLE001
         msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")

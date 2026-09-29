@@ -604,7 +604,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         explicit_model=True,
     )
     settings = getattr(cfg, "settings", None)
-    idle = float(_settings.knob(settings, "runtime.stream_idle_seconds") or 0) or None
+    idle = retry.idle_seconds(settings)
     budget = retry.Budget.from_settings(settings)
 
     async def summarize_chunk(head: list[dict], depth: int) -> str:
