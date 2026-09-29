@@ -22,8 +22,6 @@ CORE_TOOL_NAMES = {
     "fetch",
     "plan",
     "skill",
-    "todo_write",
-    "todo_read",
     "task",
 }
 

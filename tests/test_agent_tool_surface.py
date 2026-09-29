@@ -77,9 +77,8 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
 
     fs_names = set(names(select(["fs_*"])))
     assert fs_names == {"fs_search"}
-    assert "todo_read" not in fs_names
 
-    assert names(select(["todo_*"])) == ["todo_write", "todo_read"]
+    assert names(select(["wiki_*"])) == ["wiki_convert", "wiki_write", "wiki_finish_ingest"]
     assert names(select(["grep"])) == []
     assert names(select(["read", "Read", "fs_read", "unknown", "read"])) == ["read"]
     # prompt-dir agents are selectable by name and reachable via a prefix glob
@@ -95,7 +94,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
         tmp_path,
         (
             "tools:\n"
-            "  - todo_*\n"
+            "  - wiki_*\n"
             "model: primary-model\n"
             "secondary_model: backup-model\n"
             "sampling:\n"
@@ -107,7 +106,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("todo_*",)
+    assert spec.tool_selectors == ("wiki_*",)
     assert spec.model == "primary-model"
     assert spec.secondary_model == "backup-model"
     assert spec.sampling == {"temperature": 0.2}
@@ -117,7 +116,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
 def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
     prompts = write_prompt_dir(
         tmp_path,
-        "tools:\n  - todo_read\n",
+        "tools:\n  - plan\n",
         ("01.md", "BODY\n"),
     )
     (prompts / "00-tools.md").write_text(
@@ -127,7 +126,7 @@ def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("todo_read",)
+    assert spec.tool_selectors == ("plan",)
     assert spec.system == "BODY\n"
     assert capsys.readouterr().err == ""
 
@@ -183,7 +182,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
 
     (repo_root / "myagent").mkdir()
     (repo_root / "myagent" / "00-tools.yaml").write_text(
-        "tools:\n  - todo_*\nmodel: repo-model\n", encoding="utf-8"
+        "tools:\n  - wiki_*\nmodel: repo-model\n", encoding="utf-8"
     )
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
 
@@ -198,7 +197,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     )
 
     assert spec.system == "PROJECT PROMPT\n"
-    assert spec.tool_selectors == ("todo_*",)
+    assert spec.tool_selectors == ("wiki_*",)
     assert spec.model == "repo-model"
 
 
@@ -213,7 +212,7 @@ def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(
     project_root.mkdir()
 
     (repo_root / "myagent").mkdir()
-    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - todo_*\n", encoding="utf-8")
+    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - wiki_*\n", encoding="utf-8")
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
 
     (project_root / "myagent").mkdir()
@@ -256,7 +255,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
 
 
 def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
-    registry = select(["todo_read"])
+    registry = select(["plan"])
     (tmp_path / "note.txt").write_text("unselected tool must not read this", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 

@@ -176,7 +176,7 @@ def test_metachar_selector_is_treated_as_glob(capsys):
 
 
 def test_good_exact_and_glob_selectors_still_resolve(capsys):
-    names = [tool.name for tool in select(["read", "todo_*"]).tools]
+    names = [tool.name for tool in select(["read", "wiki_*"]).tools]
     assert "read" in names
-    assert "todo_write" in names and "todo_read" in names
+    assert "wiki_write" in names and "wiki_convert" in names
     assert capsys.readouterr().err == ""

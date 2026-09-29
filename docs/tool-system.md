@@ -30,7 +30,6 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 - file hashes
 - undo snapshots
 - search result cache
-- todos
 
 `call_tool()` filters unknown args, coerces values based on schema type, injects
 `context` when the handler accepts it, and calls the handler.
@@ -57,14 +56,14 @@ Prompt frontmatter selects tools:
 tools:
   - read
   - fs_search
-  - todo_*
+  - wiki_*
   - task
 ```
 
 Selectors:
 
 - exact name: `read`
-- glob: `todo_*`
+- glob: `wiki_*`
 - full registry: `*`
 
 No selected tools means no tools are exposed.
@@ -104,8 +103,6 @@ shell
 fetch
 plan
 skill
-todo_write
-todo_read
 task
 ```
 

@@ -52,23 +52,6 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
     assert props["edits"]["items"]["additionalProperties"] is False
 
 
-def test_todo_item_contract_requires_content_and_defaults_status(tmp_path):
-    tool = build_default_registry().resolve("todo_write")
-    item = tool.openai_spec()["function"]["parameters"]["properties"]["todos"]["items"]
-
-    assert item["required"] == ["content"]
-    assert item["properties"]["content"]["minLength"] == 1
-    assert "pattern" not in item["properties"]["content"]  # llama.cpp grammar path chokes on regex patterns; todo_write validates in code
-    assert item["properties"]["status"]["default"] == "pending"
-    context = ToolContext(cwd=tmp_path)
-    call_tool(
-        tool,
-        {"todos": [{"content": "model contract"}]},
-        context,
-    )
-    assert context.todos["model contract"].status == "pending"
-
-
 def test_closed_sets_and_numeric_bounds_match_handler_contracts():
     specs = _specs(
         "serper_search",

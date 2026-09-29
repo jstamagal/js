@@ -44,7 +44,7 @@ persists each completed turn.
 | `js/toolkit/registry.py` | default registry assembly and selector matching |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/process_net.py` | shell and fetch tools |
-| `js/toolkit/meta.py` | todo/plan/skill/task and generated agent tools |
+| `js/toolkit/meta.py` | plan/skill/task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
 ## Prompt Loading
@@ -60,7 +60,7 @@ Example:
 tools:
   - read
   - fs_search
-  - todo_*
+  - wiki_*
   - task
 ---
 
@@ -100,13 +100,12 @@ prompt directory whose name collides with an existing tool is skipped.
 - file hashes
 - undo snapshots
 - search cache
-- todos
 
 `run_turn()` hydrates the active context from `Config` each turn for output caps,
 fetch timeout, agent id, selected registry, and vision mode.
 
 Child task contexts copy limits and cwd from the parent but start with fresh
-read sets, snapshots, todos, and search cache.
+read sets, snapshots, and search cache.
 
 ## Runtime Loop
 
@@ -252,8 +251,7 @@ surface is the contract:
 ```text
 browse browser_probe commit defaultagent docs_search exa_search fetch
 fs_search patch plan read remove serper_search shell skill task
-tavily_search terminal_session terminal_snapshot todo_read todo_write
-undo wiki_convert wiki_finish_ingest wiki_write write
+tavily_search terminal_session terminal_snapshot undo wiki_convert wiki_finish_ingest wiki_write write
 ```
 
 `multi_patch`, `sem_search`, `followup` and the `artifact` suite were removed

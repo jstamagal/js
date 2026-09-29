@@ -318,7 +318,7 @@ tools:
 System prompt body.
 ```
 
-Selectors can be exact tool names, glob patterns such as `todo_*`, or `*` for
+Selectors can be exact tool names, glob patterns such as `wiki_*`, or `*` for
 the whole registry. No selected tools means the model gets no tools.
 
 Current prompt dirs:

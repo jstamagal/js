@@ -7,7 +7,6 @@ tools:
   - undo
   - shell
   - fetch
-  - todo_*
   - plan
   - skill
   - task

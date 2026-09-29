@@ -3,7 +3,7 @@
 The runtime depends on this module, not on individual tool implementations.
 Tools are small Python objects with an OpenAI-compatible schema and a handler
 that receives a shared ToolContext. The context carries per-session state used
-for read-before-write checks, undo snapshots, todos, and search deduplication.
+for read-before-write checks, undo snapshots, and search deduplication.
 """
 
 from __future__ import annotations
@@ -241,12 +241,6 @@ class Tool:
 
 
 @dataclass
-class Todo:
-    content: str
-    status: str
-
-
-@dataclass
 class ToolContext:
     """Mutable state shared across tool calls in a js process."""
 
@@ -280,7 +274,6 @@ class ToolContext:
     snapshot_files: dict[Path, list[Path | None]] = field(default_factory=dict, repr=False)
     snapshot_store: Path | None = field(default=None, repr=False)
     search_cache: dict[str, str] = field(default_factory=dict)
-    todos: dict[str, Todo] = field(default_factory=dict)
     terminal_sessions: dict[str, Any] = field(default_factory=dict)
     last_prompt_tokens: int = 0
     last_cached_tokens: int = 0

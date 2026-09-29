@@ -107,7 +107,6 @@ Child contexts do not inherit:
 - file hashes
 - undo snapshots
 - search cache
-- todos
 
 ## Wiki Agents And Built-In Artifact Mode
 
