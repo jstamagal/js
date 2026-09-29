@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, jail, persona, runtime, settings
+from js import cli, jail, paths, persona, runtime, settings
 from js.toolkit import ToolContext, call_tool, kernel as kmod, process_net, terminal
 from js.toolkit.registry import build_default_registry
 
@@ -212,6 +212,20 @@ def test_jail_bind_shows_paths_read_only_unless_rw(jailed, tmp_path):
     assert code == 0
     assert (extra / "new").exists()
     assert not tool("write", jailed, path=str(extra / "w.txt"), content="x").startswith("ERROR")
+
+
+@needs_bwrap
+def test_spilled_tool_results_stay_readable(jailed):
+    spill_dir = paths.tool_results_dir()
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    spill = spill_dir / "result-1.txt"
+    spill.write_text("spilled-result\n")
+
+    code, result = run_shell(f"wc -c {spill}", jailed)
+
+    assert code == 0
+    assert "spilled-result" in tool("read", jailed, path=str(spill))
+    assert tool("write", jailed, path=str(spill), content="x", overwrite=True).startswith("ERROR:")
 
 
 def test_jail_bind_setting_refuses_a_relative_path():
