@@ -14,7 +14,7 @@ set -euo pipefail
 #   arm  <name>  <base-url>  <model>  <key>  <effort>
 #
 # <base-url>  a real url, OR the word  login  to let js route it itself from
-#             ~/.config/js/logins.toml and provider env keys. With  login  the
+#             ~/.js/logins/logins.toml and provider env keys. With  login  the
 #             model is written the way js wants it, provider/model, and the key
 #             column is ignored -- write  none  there.
 #
@@ -143,11 +143,15 @@ fi
 # Throwaway HOME with only the agent profile in it. The jail blocks the real
 # one outright; this gives js somewhere legitimate to look.
 SBHOME="$OUT/home"
-mkdir -p "$SBHOME/.config/js" "$WORK/.tmp"
-# The whole js config, not just the agent. jsrc and models-cache.json are what
+mkdir -p "$SBHOME/.js" "$WORK/.tmp"
+# The whole js config, not just the agent: the config part of ~/.js, without
+# sessions, state, logs or work. jsrc and logins/models-cache.json are what
 # make `openrouter/foo` resolve to a provider at all; without them routing falls
 # back to the bare ai-sdk gateway and every turn dies not-logged-in.
-cp -r ~/.config/js/. "$SBHOME/.config/js/"
+for entry in jsrc .env JS.md tools.yaml agents skills toolbox logins; do
+  [ -e ~/.js/"$entry" ] || [ -L ~/.js/"$entry" ] || continue
+  cp -r ~/.js/"$entry" "$SBHOME/.js/"
+done
 
 # Absolute path: ~/.local/bin is not inside the jail, only the uv tool dir is.
 "$HERE/sandbox.sh" "$WORK" "$SBHOME" \
