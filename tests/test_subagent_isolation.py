@@ -474,7 +474,8 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
 
     actual = task(["hello"], agent_id="workerx", session_id="child-session", context=ToolContext(cwd=tmp_path))
 
-    session_file = tmp_path / ".js" / "sessions" / "workerx" / "child-session.jsonl"
+    # A subagent run is filed in the folder named after its parent session (auto.jsonl).
+    session_file = tmp_path / ".js" / "sessions" / "defaultagent" / "auto" / "child-session.jsonl"
     assert "AGENTX_DONE" in actual
     assert set(seen["tools"]) == {"plan", "tool_discovery"}
     assert "WORKERX SYSTEM" in str(seen["system"])
@@ -526,7 +527,7 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     first = task(["first"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
     second = task(["second"], agent_id="worker", session_id="resume-me", context=ToolContext(cwd=tmp_path))
 
-    session_file = tmp_path / ".js" / "sessions" / "worker" / "resume-me.jsonl"
+    session_file = tmp_path / ".js" / "sessions" / "defaultagent" / "auto" / "resume-me.jsonl"
     assert "TURN_1" in first
     assert "TURN_2" in second
     assert len(seen_tools) == 2

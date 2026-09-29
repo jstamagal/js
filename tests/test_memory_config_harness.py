@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from js import memory, settings
+from js import memory, paths, settings
 from js.config import derive_session_name, from_env, resolve_session_file
 
 
@@ -159,12 +159,11 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
 
     actual = from_env(save_session=False)
 
-    expected_agent_dir = tmp_path / ".js" / "sessions" / "agent_one"
     expected_state_dir = tmp_path / ".js" / "state" / "agent_one"
     assert actual.agent_id == "agent_one"
-    assert actual.agent_dir == expected_agent_dir
+    assert actual.agent_dir == expected_state_dir
     assert actual.session_file == Path(os.devnull)
-    assert actual.history_file == expected_agent_dir / ".history"
+    assert actual.history_file == expected_state_dir / "history"
     assert actual.prompts_dir.name == "agent_one"
     assert actual.model == "custom-model"
     assert actual.provider_id == "openai"
@@ -186,7 +185,8 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.inline_code_timeout_s == 77
     assert actual.vision_enabled is False
     # save_session=False means no session file, no latest.json.
-    assert not (expected_agent_dir / "latest.json").exists()
+    assert not (expected_state_dir / "latest.json").exists()
+    assert not (tmp_path / ".js" / "sessions").exists()
     # JS_DEBUG writes under state/, separate from append-only sessions.
     assert actual.debug_log == expected_state_dir / "debug.log"
 
@@ -225,11 +225,11 @@ def test_named_session_creation_respects_save_flag_and_updates_latest(monkeypatc
     actual = from_env(session="batch/slice01", save_session=True)
     latest = json.loads((actual.agent_dir / "latest.json").read_text(encoding="utf-8"))
 
-    assert actual.session_file == actual.agent_dir / "batch" / "slice01.jsonl"
+    assert actual.session_file == actual.sessions_dir / "batch" / "slice01.jsonl"
     assert actual.session_file.is_file()
     assert latest == {
         "session_file": str(actual.session_file),
-        "session_name": "batch/slice01.jsonl",
+        "session_name": "batch/slice01",
     }
 
 
@@ -301,14 +301,22 @@ def test_resolve_session_file_rejects_relative_traversal_even_when_target_exists
     assert outside.read_text(encoding="utf-8") == ""
 
 
-def test_resolve_session_file_only_resumes_existing_absolute_path_inside_agent(tmp_path):
-    sessions_dir = tmp_path / "sessions" / "agent"
+def test_resolve_session_file_only_resumes_existing_absolute_path_inside_the_sessions_tree(tmp_path):
+    sessions_dir = paths.sessions_root() / "-work"
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "existing.jsonl"
     existing.write_text("history\n", encoding="utf-8")
+    elsewhere = paths.sessions_root() / "-other" / "there.jsonl"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text("there\n", encoding="utf-8")
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text("outside\n", encoding="utf-8")
 
     assert resolve_session_file(sessions_dir, str(existing), create=True) == existing
     assert existing.read_text(encoding="utf-8") == "history\n"
+    assert resolve_session_file(sessions_dir, str(elsewhere), create=True) == elsewhere
+    with pytest.raises(ValueError):
+        resolve_session_file(sessions_dir, str(outside), create=True)
 
     missing = sessions_dir / "missing.jsonl"
     with pytest.raises(ValueError):
@@ -328,7 +336,7 @@ def test_generated_sessions_remain_unique_and_latest_tracks_each(monkeypatch, tm
     assert first.session_file.is_file()
     assert second.session_file.is_file()
     assert latest["session_file"] == str(second.session_file)
-    assert latest["session_name"] == second.session_file.name
+    assert latest["session_name"] == second.session_file.stem
 
 
 def test_derived_session_names_are_stable_safe_and_isolated(tmp_path):

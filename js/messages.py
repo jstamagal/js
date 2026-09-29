@@ -259,6 +259,11 @@ HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with sp
 HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
 SESSION_PATH = Message("{path}", banner=False)
+SESSION_TITLED = Message("Session titled: {title}")
+SESSION_TITLE = Message("{title}", banner=False)
+SESSION_UNTITLED = Message("This session has no title. /name <text> gives it one.")
+SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.", WARN)
+SESSION_PICKER_NOT_BUILT = Message("The session picker is not built yet. Name a session: --session NAME.", WARN)
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
@@ -290,6 +295,7 @@ CMD_SKILL = Message(
     "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
 CMD_TURNS = Message("Count the messages in context.")
 CMD_SESSION = Message("Print the session file path.")
+CMD_NAME = Message("Pin a title on this session, or print the one it has.")
 CMD_JOBS = Message("List running turns and subagents.")
 CMD_CANCEL = Message("Cancel a job by id, or the active turn.")
 CMD_FLUSH = Message("Drop all prompts queued behind the active turn.")
@@ -349,7 +355,7 @@ OPT_LOGOUT = Message("Remove a saved provider login.")
 OPT_PROMPT = Message("Run one prompt and print the final answer. Reads stdin when the value is omitted or '-'.")
 OPT_FILE = Message("Attach a file or image to a one-shot prompt. Repeatable. '-' reads stdin bytes.")
 OPT_AGENT = Message(
-    "Internal agent id. Sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>.")
+    "Internal agent id. Sessions live in ~/.js/sessions/<start dir>, runtime state in ~/.js/state/<agent>.")
 OPT_MODEL = Message("Override the configured or env model for this session or prompt.")
 OPT_URL = Message(
     "Reach an endpoint with no saved login in one string: model[:api-key][[shape]][[effort]]@url. "
@@ -369,7 +375,8 @@ OPT_DEBUG_FILE = Message(
     "Also write the full byte-honest request trace to PATH: unclipped system prompt, full tool-schema JSON "
     "with descriptions, the messages sent each call, and per-call timings. The clean final answer still "
     "prints to stdout. runtime.debug_autolog always writes the same trace under logs/<agent>/<session>.log.")
-OPT_SESSION = Message("Create or resume a named session under ~/.js/sessions/<agent>.")
+OPT_SESSION = Message(
+    "Create or resume a named session: this directory's folder first, then every folder under ~/.js/sessions.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
 OPT_NO_SAVE = Message(
     "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
@@ -716,6 +723,7 @@ AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives"
 
 SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
 SESSION_NOT_RESERVED = Message("No free session name in {folder}")
+SESSION_BRANCH_PAST_END = Message("{path} has {messages} messages, not {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
     "History may be incomplete.", WARN)

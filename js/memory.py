@@ -1,5 +1,9 @@
 """JSONL conversation persistence. Lock-protected, fsync-after-write,
-version-tagged. Loader ignores records it doesn't understand."""
+version-tagged. Loader ignores records it doesn't understand.
+
+An assistant message record carries a `stamp`: the model, provider and
+reasoning level it was written under. Every write brings the session's `.txt`
+transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from . import messages as msgs
+from . import session_text
 
 SCHEMA_VERSION = 1
 
@@ -24,6 +29,7 @@ class Record:
     version: int = SCHEMA_VERSION
     message: dict | None = None     # set when kind == "message"
     marker: str | None = None       # set when kind == "mark"
+    stamp: dict | None = None       # set on an assistant message: model, provider, reasoning
 
     def to_jsonline(self) -> str:
         return json.dumps(
@@ -42,6 +48,7 @@ class Record:
             version=SCHEMA_VERSION,
             message=d.get("message"),
             marker=d.get("marker"),
+            stamp=d.get("stamp") if isinstance(d.get("stamp"), dict) else None,
         )
 
 
@@ -225,19 +232,32 @@ def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> lis
     return messages if preserve_reasoning else _strip_orphan_reasoning(messages)
 
 
-def _append(memory_file: Path, rec: Record) -> None:
+def _append(memory_file: Path, rec: Record, *, refresh: bool = True) -> None:
     with _open_locked(memory_file, "a") as f:
         f.write(rec.to_jsonline() + "\n")
         f.flush()
         os.fsync(f.fileno())
+    if refresh:
+        session_text.refresh(memory_file)
 
 
-def append_message(memory_file: Path, message: dict) -> None:
-    _append(memory_file, Record(kind="message", ts=time.time(), message=message))
+def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
+    """The stamp an assistant message is written under."""
+    return {"model": model, "provider": provider, "reasoning": reasoning}
 
 
-def persist_messages(memory_file: Path, messages: list[dict]) -> None:
-    """Append the live suffix, retaining replaced records in the journal."""
+def _message_record(message: dict, stamp: dict | None) -> Record:
+    return Record(kind="message", ts=time.time(), message=message,
+                  stamp=stamp if stamp is not None and message.get("role") == "assistant" else None)
+
+
+def append_message(memory_file: Path, message: dict, stamp: dict | None = None) -> None:
+    _append(memory_file, _message_record(message, stamp))
+
+
+def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
+    """Append the live suffix, retaining replaced records in the journal.
+    Each appended assistant message carries `stamp`."""
     persisted = load_messages(memory_file)
     comparable = _strip_orphan_reasoning(messages)
     common = 0
@@ -246,9 +266,11 @@ def persist_messages(memory_file: Path, messages: list[dict]) -> None:
             break
         common += 1
     if common < len(persisted):
-        append_mark(memory_file, f"rollback_to:{common}")
+        _append(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"), refresh=False)
     for message in messages[common:]:
-        append_message(memory_file, message)
+        _append(memory_file, _message_record(message, stamp), refresh=False)
+    if common < len(persisted) or messages[common:]:
+        session_text.refresh(memory_file)
 
 
 def append_mark(memory_file: Path, marker: str) -> None:
@@ -349,6 +371,7 @@ def wipe(memory_file: Path) -> Path | None:
                 break
             idx += 1
     memory_file.rename(bak)
+    session_text.forget(memory_file)
     return bak
 
 

@@ -150,15 +150,14 @@ def find(session: str, relative: Path, current: Path) -> Path | None:
     return _one(session, [path for folder in others for path in _tails(folder, tail)])
 
 
-def display_name(session_file: Path) -> str:
+def display_name(session_file: Path, root: Path | None = None) -> str:
     """The name `--session` takes for this file: its path under its folder, no suffix."""
-    root = paths.sessions_root()
     try:
-        relative = session_file.relative_to(root)
+        relative = Path(session_file).relative_to(paths.sessions_root() if root is None else root)
     except ValueError:
         return str(session_file)
     parts = relative.with_suffix("").parts
-    return "/".join(parts[1:]) if len(parts) > 1 and is_folder_name(parts[0]) else "/".join(parts)
+    return "/".join(parts[1:] if len(parts) > 1 else parts)
 
 
 def write_latest(agent_state_dir: Path, session_file: Path) -> None:

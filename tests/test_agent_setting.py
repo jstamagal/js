@@ -14,6 +14,8 @@ import pytest
 
 from js import cli, runtime, settings
 from js.config import derive_session_name, from_env
+from js import session_store
+from js.session_catalog import first_metadata
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
 from repl_driver import LineSession
@@ -117,7 +119,7 @@ def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, j
     monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["first run"]))
     assert cli.main(["--blocking", *argv]) == 0
     [first] = _sessions(tmp_path)
-    assert first.parent.name == expected
+    assert first_metadata(first)["agent"] == expected
     resumed: list = []
 
     def record(cfg, system, messages, *a, **k):
@@ -141,7 +143,8 @@ def test_session_key_derives_from_the_resolved_agent(monkeypatch, tmp_path, js_a
 
     [session] = _sessions(tmp_path)
     expected_file = (
-        tmp_path / "home" / ".js" / "sessions" / expected / f"{derive_session_name(expected, project, 'job-7')}.jsonl"
+        tmp_path / "home" / ".js" / "sessions" / session_store.slug(project) / "derived"
+        / f"{derive_session_name(expected, project, 'job-7').removeprefix('derived/')}.jsonl"
     )
     assert session == expected_file
     assert [m["content"] for m in load_messages(session)] == ["hello", "OK"]
