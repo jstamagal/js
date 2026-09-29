@@ -73,7 +73,9 @@ beside the prompt picks model, reasoning and tool surface, resolved against
 `.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
-guard; preserve it. Deep dives belong in `docs/technical-guide.md`.
+guard; preserve it. Project instructions come from the start directory only
+(`AGENTS.md`, `AGENTS.local.md`): js never walks up to parent directories, so
+`~/js` never reads `~/AGENTS.md`. Deep dives belong in `docs/technical-guide.md`.
 
 Anything settable is a registered setting (`js/settings.py`). `/set` with no
 argument dumps every settable setting, `/set <key> <value>` sets one, and

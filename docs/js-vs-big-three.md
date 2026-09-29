@@ -40,7 +40,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Cost accounting | no | yes | tokens only | yes |
 | One config grammar (file = REPL) | yes | no | no | no |
 | Prompt-time code directives | yes | no | no | no |
-| Project memory walks up the tree | no | yes | yes | yes |
+| Project memory walks up the tree | no, by design | yes | yes | yes |
 | Plugins | no | yes | yes | yes |
 | Remappable keys | no | yes | yes | yes |
 
@@ -105,7 +105,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Sessions are filed per agent, and the model is recorded only at start.** Resume can come back on the wrong model. Both are fixed by the design in `docs/sessions-and-home-design.md` and are being built now (js-1g1.2).
 
-**`AGENTS.md` is read only from the current directory** (`config.py:628`). Run js from `repo/sub/` and the repo's instructions are silently lost. The other three walk up the tree, and Codex caps the total at 32 KiB.
+**`AGENTS.md` is read only from the start directory.** Kept on purpose: js never walks up, so `~/js` never reads `~/AGENTS.md`. The other three walk up; Codex even reads `/AGENTS.md`. Not a gap.
 
 **Two REPL loops (async and `--blocking`).** Every input feature has to land twice, or it goes missing in one of them. None of the others keeps a second loop.
 
@@ -148,7 +148,6 @@ pi retries once. Codex does not recover inside a normal turn.
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | resume path |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | resume path |
-| Walk `AGENTS.md` up to a root marker, byte cap | Codex `agents_md.rs` | `config.py:628` |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | beside `alias` |
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | `screen.py` |
