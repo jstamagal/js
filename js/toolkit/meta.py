@@ -172,7 +172,6 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         parent_cfg,
         agent_id=agent,
         agent_dir=agent_dir,
-        history_file=agent_dir / "history",
         sessions_dir=sessions_dir,
         session_file=session_file,
         prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),

@@ -163,7 +163,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.agent_id == "agent_one"
     assert actual.agent_dir == expected_state_dir
     assert actual.session_file == Path(os.devnull)
-    assert actual.history_file == expected_state_dir / "history"
+    assert actual.history_file == tmp_path / ".js" / "state" / "history.jsonl"
     assert actual.prompts_dir.name == "agent_one"
     assert actual.model == "custom-model"
     assert actual.provider_id == "openai"

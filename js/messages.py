@@ -763,6 +763,15 @@ BUFFER_WRITTEN = Message("Buffer written to {path}. Not sent.")
 EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}", GRAVE)
 EX_FAILED = Message(":{verb}: {error}", GRAVE)
 
+# --- The keys file -----------------------------------------------------------
+
+KEYS_BAD_KEY = Message("not a key name: {key!r}. Key names are like c-r, escape, enter, pageup, f5, x")
+KEYS_BIND_USAGE = Message("bind needs a key and an action: bind KEY... ACTION")
+KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
+KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
+KEYS_UNKNOWN_VERB = Message("unknown command {verb!r}: expected bind or unbind")
+KEYS_UNREADABLE = Message("{path} not read: {error}")
+
 # --- Agents, tools, skills, settings at load time ----------------------------
 
 TOOLSTATS_NO_SESSION = Message("toolstats: no session found.", GRAVE)

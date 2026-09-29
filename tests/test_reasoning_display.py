@@ -140,7 +140,8 @@ def test_scrollback_collapse_restores_reasoning_without_losing_other_output(leve
     assert block.text == THOUGHT
 
 
-def test_ctrl_r_keeps_input_intact_and_restores_reasoning():
+def test_the_reasoning_toggle_key_keeps_input_intact_and_restores_reasoning():
+    # reasoning_toggle is Ctrl-O by default; Ctrl-R is history_search.
     from prompt_toolkit.application import create_app_session
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -173,7 +174,7 @@ def test_ctrl_r_keeps_input_intact_and_restores_reasoning():
                 assert THOUGHT not in transcript.strip_ansi(scroll.buffer.text)
                 for visible in (True, False):
                     toggled.clear()
-                    pipe.send_bytes(b"\x12")
+                    pipe.send_bytes(b"\x0f")
                     await asyncio.wait_for(toggled.wait(), 2)
                     assert (THOUGHT in transcript.strip_ansi(scroll.buffer.text)) is visible
                     assert app.current_buffer.text == "unfinished input"

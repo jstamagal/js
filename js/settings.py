@@ -119,8 +119,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- ui ---
     SettingSpec("ui.reasoning", "int",
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
-                "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
-                "async screen. Display only; session reasoning is always retained."),
+                "3 leave visible with token counts. The reasoning_toggle key, Ctrl-O "
+                "unless keys.file moves it, folds and unfolds it in the async screen. "
+                "Display only; session reasoning is always retained."),
     SettingSpec("ui.net", "int",
                 "Network display in the async screen: 0 nothing, 1 failures, 2 also "
                 "Connecting/Connected lines and a response byte counter on the status "
@@ -151,6 +152,28 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Command that prints the clipboard image. Unset = `wl-paste --type "
                 "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
                 "under X11.",
+                empty=EMPTY_NONE),
+    # --- history ---
+    SettingSpec("history.file", "str",
+                "Prompt history: every line sent at a REPL prompt, one JSON object per "
+                "line with ts, cwd, session, agent and text, shared by every js run. "
+                "Unset = ~/.js/state/history.jsonl. Read when the REPL starts.",
+                empty=EMPTY_NONE),
+    SettingSpec("history.cwd_first", "bool",
+                "Up offers the prompts typed in the current directory first, newest "
+                "first, then the rest; off, every prompt in time order. The "
+                "history_search key, Ctrl-R, searches all of them either way. Read "
+                "when the REPL starts.", empty=EMPTY_OFF),
+    SettingSpec("history.max_entries", "int",
+                "Newest prompts loaded from history.file for Up and Ctrl-R. Read when "
+                "the REPL starts."),
+    # --- keys ---
+    SettingSpec("keys.file", "str",
+                "Key bindings file: `bind KEY... ACTION` and `unbind KEY...` lines over "
+                "the defaults; a bad line is one error at startup and is skipped. "
+                "Unset = ~/.js/keys. Actions: submit, history_search, ex_open, ex_run, "
+                "ex_cancel, interrupt, eof, suspend, reasoning_toggle, redraw, "
+                "scroll_up, scroll_down, complete. Read when the REPL starts.",
                 empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str",
@@ -511,6 +534,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
             "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
+            "history.max_entries",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None

@@ -28,6 +28,14 @@ set ui.editing_mode emacs
 set ui.paste_image_key c-v
 set -ui.paste_image_command
 
+# --- history ---
+set -history.file
+set history.cwd_first on
+set history.max_entries 10000
+
+# --- keys ---
+set -keys.file
+
 # --- provider ---
 set -provider.id
 set -provider.base_url

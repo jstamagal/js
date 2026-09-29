@@ -269,11 +269,12 @@ project.
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
+  keys                   # key bindings (keys.file), read at REPL start
   state/
+    history.jsonl        # every prompt sent at a REPL prompt (history.file)
     <agent_id>/debug.log
     <agent_id>/undo/
     <agent_id>/latest.json   # the agent's latest session, for --last
-    <agent_id>/history       # REPL input history
     kernel/<run>/        # kernel.log and rich-output images
     tool-results/        # oversized results, spilled whole
     commit-backups/
