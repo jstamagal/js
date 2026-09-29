@@ -502,6 +502,22 @@ A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
 the tool refuses it and the user loads it with `/skill <name>` in the REPL.
 The built-in skills in `js/skills/` are the lowest layer.
 
+A skill whose frontmatter sets `paths:` (a list of globs, or one string of
+comma-separated globs) is path-scoped. Globs may be unquoted (`paths: *.rs`,
+`- *.rs`), and `{a,b}` braces expand (`src/*.{ts,tsx}`). The first time `read`,
+`patch` or `write` succeeds on a file that matches, the tool result starts with
+one `<js-reminder>` that names the skill, its description and the
+`tool_discovery {"load":"skill:<name>"}` call. It goes first so a result spilled
+past `limits.max_tool_result_inline_bytes` or clipped still shows it. Each skill
+is offered once per session: the record lives in the session's tool-surface
+mark, so it survives later turns, compaction and resume, and a `/reset` clears
+it. A skill already loaded, through `tool_discovery`, the `skill` tool or the
+user's `/skill`, is not offered. Globs match the path relative to the working directory,
+as in `.gitignore`: a pattern without a `/` matches a name at any depth
+(`*.rs`), a pattern with one is anchored (`src/**/*.ts`), a directory pattern
+matches everything under it, and files outside the working directory match
+nothing. `paths: ['**']` scopes nothing and is ignored.
+
 Parameters:
 
 - `name`
@@ -708,7 +724,7 @@ surface has lazy native tools, skills, or configured MCP servers.
 
 Parameters:
 
-- `query`: intent or words to search with token matching and ranked partial matches. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
+- `query`: intent or words to search. Entries rank by BM25: the name (split at `_` and camelCase, plus a few intent words for native tools) counts double, added to the id, source, full description and the schema's property names and descriptions. Plurals fold to their singular; stop words carry no weight. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
 - `offset`: continue the same query and filters at `next_offset` when `truncated` is true. Each page has at most 40 entries and reports `total`; very large identifiers are omitted with an explicit count rather than shortened into invalid load ids.
 - `kind`: optional `native`, `skill`, or `mcp` filter. Use `mcp` to connect all
   eligible configured servers and fetch their catalogs.
@@ -720,6 +736,9 @@ MCP server tools are model-facing as `<normalized_server>__<normalized_tool>`.
 Their full remote schemas are absent until discovery connects the server and a
 later `load` call loads that exact catalog id. The schema is emitted on the next
 model call, never retroactively in the batch which loaded it.
+
+A call to a tool that is in the catalog but not loaded returns an `ERROR` that
+names the exact load call, such as `tool_discovery {"load":"native:shell"}`.
 
 The canonical resource and prompt controls are:
 

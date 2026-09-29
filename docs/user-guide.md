@@ -426,7 +426,7 @@ see `<dir>`, and it puts the tools in a jail:
   home, `/run/user`, network filesystems (NFS and the like), and any other
   mount that shows your home are empty. The `PATH` directories under them or
   under the host `/tmp` are bound back read-only, so the toolchains on `PATH`
-  run. `/tmp` and `~/.js/tmp`
+  run, and so is the interpreter the kernel starts. `/tmp` and `~/.js/tmp`
   are directories private to this js process, shared by its commands and
   removed when it exits. The network stays on. The command's environment is
   `limits.shell_env_allow`, so provider keys are not in it.

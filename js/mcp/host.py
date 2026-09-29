@@ -14,7 +14,7 @@ from typing import Any
 from .. import settings as _settings
 from ..mcp_config import MCPConfiguration, MCPServer
 from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
-from ..toolkit.discovery import ranked_entries, search_tokens
+from ..toolkit.discovery import ranked_entries, schema_search_text, search_tokens
 from .client import MCPClient
 from .transports import StdioTransport, StreamableHTTPTransport
 
@@ -460,7 +460,10 @@ class MCPHost:
             ))
         for public, (server_name, _remote, raw) in self.remote_tools.items():
             description = str(raw.get("description") or raw.get("title") or "MCP tool")[:240]
-            entries.append(CatalogEntry(f"mcp:{public}", public, description, "mcp", server_name))
+            entries.append(CatalogEntry(
+                f"mcp:{public}", public, description, "mcp", server_name,
+                search_text=f"{raw.get('description') or ''} {schema_search_text(raw.get('inputSchema'))}",
+            ))
         result = []
         for entry in sorted(entries, key=lambda item: item.id):
             if source and entry.source.casefold() != source.casefold():

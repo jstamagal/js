@@ -16,6 +16,11 @@ names the offset to continue from. A tool result too large to show inline is
 saved to a file; its notice names the path and the `range` that continues it.
 When js runs with `-C DIR`, a path outside DIR and the paths the operator bound
 is refused with one ERROR line.
+{{#if skill tool_discovery}}
+The first call that touches a file a skill's `paths:` names starts its result
+with a `<js-reminder>` offering that skill, once per session. The reminder is
+not file content.
+{{/if}}
 {{#if fs_search}}
 Find files and search contents with `fs_search`. This reads a known path.
 {{/if}}

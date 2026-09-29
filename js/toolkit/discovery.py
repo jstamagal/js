@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
@@ -71,46 +73,127 @@ _STOP_WORDS = frozenset({
 })
 
 
-def search_tokens(text: str) -> set[str]:
-    """Split punctuation and underscores, never matching kill inside skill.
+def _stem(term: str) -> str:
+    """Fold a simple plural to its singular: issues→issue, searches→search."""
+    if len(term) > 4 and term.endswith("ies"):
+        return term[:-3] + "y"
+    if len(term) > 4 and term.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return term[:-2]
+    if len(term) > 3 and term.endswith("s") and not term.endswith("ss"):
+        return term[:-1]
+    return term
 
-    Simple plurals fold to their singular so a query word reaches the plural
-    form a description uses.
+
+def tokenize(text: str) -> list[str]:
+    """Stemmed terms of ``text`` in order, stop words dropped.
+
+    Splits at camelCase boundaries, underscores and punctuation, so ``kill``
+    never matches inside ``skill`` and ``browserProbe`` reads as two words.
+    A camelCase word also stays whole after its parts, so ``GitHub`` matches
+    ``github``.
     """
-    tokens = set(re.findall(r"[^\W_]+", str(text).casefold()))
-    for token in tuple(tokens):
-        if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-            tokens.add(token[:-1])
-            if token.endswith("es"):
-                tokens.add(token[:-2])
-    return tokens
+    words: list[str] = []
+    for word in re.findall(r"[^\W_]+", str(text)):
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", word)
+        spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+        parts = spaced.casefold().split()
+        words += parts if len(parts) == 1 else [*parts, word.casefold()]
+    return [_stem(token) for token in words if token not in _STOP_WORDS]
+
+
+def search_tokens(text: str) -> set[str]:
+    """The distinct terms of ``text``."""
+    return set(tokenize(text))
 
 
 def query_terms(query: str) -> set[str]:
-    """Query tokens that carry intent; stop words and single letters carry none."""
-    return {
-        token for token in search_tokens(query)
-        if len(token) > 1 and token not in _STOP_WORDS
-    }
+    """Query terms that carry intent; stop words and single letters carry none."""
+    return {token for token in search_tokens(query) if len(token) > 1}
+
+
+def schema_search_text(schema: Any) -> str:
+    """Property names and descriptions of a JSON schema, recursively."""
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if isinstance(node.get("description"), str):
+            parts.append(node["description"])
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for name, child in properties.items():
+                parts.append(str(name))
+                walk(child)
+        walk(node.get("items"))
+        for key in ("anyOf", "oneOf", "allOf"):
+            variants = node.get(key)
+            if isinstance(variants, list):
+                for variant in variants:
+                    walk(variant)
+
+    walk(schema)
+    return " ".join(part for part in parts if part.strip())
+
+
+# Okapi BM25 parameters, the values Codex and pi use.
+_BM25_K1 = 1.2
+_BM25_B = 0.75
+# A name match outweighs the same word in a long description: the name field
+# scores separately and counts double.
+_NAME_WEIGHT = 2.0
+
+
+def _name_field(item: CatalogEntry) -> list[str]:
+    intent = _NATIVE_INTENTS.get(item.name, "") if item.kind == "native" else ""
+    return tokenize(f"{item.name} {intent}")
+
+
+def _body_field(item: CatalogEntry) -> list[str]:
+    return tokenize(f"{item.id} {item.source} {item.description} {item.search_text}")
+
+
+def _bm25(fields: list[list[str]], terms: list[str]) -> list[float]:
+    """Okapi BM25 score of each document in one field for ``terms``."""
+    counts = [Counter(field) for field in fields]
+    lengths = [len(field) for field in fields]
+    average = sum(lengths) / len(fields) or 1.0
+    scores = []
+    for count, length in zip(counts, lengths):
+        norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * length / average)
+        score = 0.0
+        for term in terms:
+            if count[term]:
+                df = sum(1 for other in counts if term in other)
+                idf = math.log(1 + (len(fields) - df + 0.5) / (df + 0.5))
+                score += idf * count[term] * (_BM25_K1 + 1) / (count[term] + norm)
+        scores.append(score)
+    return scores
 
 
 def ranked_entries(entries: Iterable[CatalogEntry], query: str) -> list[CatalogEntry]:
-    terms = query_terms(query)
+    """Entries matching ``query``, best score first, ties by id.
+
+    The score is BM25 over the name (split on ``_`` and camelCase, plus the
+    native intent words), weighted double, added to BM25 over the id, source,
+    description and schema text. An empty query returns every entry by id.
+    """
+    items = list(entries)
+    if not str(query).strip():
+        return sorted(items, key=lambda item: item.id)
+    terms = sorted(query_terms(query))
     # A query of nothing but stop words asks for nothing; return no matches
     # rather than the whole catalog.
-    if str(query).strip() and not terms:
+    if not terms or not items:
         return []
-    ranked = []
-    for item in entries:
-        names = search_tokens(item.name)
-        intent = search_tokens(_NATIVE_INTENTS.get(item.name, "")) if item.kind == "native" else set()
-        metadata = search_tokens(f"{item.id} {item.description} {item.source}")
-        matched = terms & (names | intent | metadata)
-        if terms and not matched:
-            continue
-        score = (len(matched), len(terms & names), len(terms & intent))
-        ranked.append((score, item))
-    return [item for _, item in sorted(ranked, key=lambda pair: (tuple(-n for n in pair[0]), pair[1].id))]
+    names = _bm25([_name_field(item) for item in items], terms)
+    bodies = _bm25([_body_field(item) for item in items], terms)
+    ranked = [
+        (_NAME_WEIGHT * name + body, item)
+        for name, body, item in zip(names, bodies, items)
+        if name + body > 0
+    ]
+    return [item for _, item in sorted(ranked, key=lambda pair: (-pair[0], pair[1].id))]
 
 
 def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str], offset: int = 0) -> str:
@@ -118,7 +201,7 @@ def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str]
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         return "ERROR: offset must be a non-negative integer"
     matches = ranked_entries(entries, query)
-    searching = bool(search_tokens(query))
+    searching = bool(str(query).strip())
     cap = 8192 if searching else 4096
     result: dict[str, Any] = {"results": [], "total": len(matches), "truncated": False}
     cursor = min(offset, len(matches))

@@ -95,7 +95,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **`task` blocks the parent until every child finishes.** Done in js-1g1.17. `task(background=true)` returns a handle at once, poll, wait and kill work as they do for shell handles, and a result the model has not read is named in a `<js-reminder>` on the next user message. A foreground call still blocks.
 
-**Lazy loading costs a round trip, and its ranking is weak.** "Do not load and call that tool in the same response." Discovery ranks by token overlap (`discovery.py:97`), while all three others use BM25. Claude Code expands tool references inline, within the same response.
+**Lazy loading costs a round trip.** "Do not load and call that tool in the same response." Claude Code expands tool references inline, within the same response. The ranking is fixed in js-1g1.16: discovery now uses BM25 over the split name, the description and the schema, like the other three, and a call to an unloaded tool names the exact load call.
 
 **`patch` had no fuzzy fallback.** Done in js-1g1.15: a smart quote the model typed as `"` no longer costs a turn.
 
@@ -137,14 +137,14 @@ pi retries once. Codex does not recover inside a normal turn.
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
-| BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | `discovery.ranked_entries` |
+| BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | done in js-1g1.16: `discovery.ranked_entries`, `CatalogEntry.search_text` |
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ToolContext.shown_read`, kept only while the earlier result is in history |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `_stamp_without_login`, `_note_model_switch` |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, `_CUT_OFF_NOTICE` |
-| Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
+| Path-scoped rules and skills | Claude Code `claudemd.ts:250` | skills done in js-1g1.24: `paths:` frontmatter, `TurnToolSurface.offer_path_skills`; rules still missing |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | done in js-1g1.23: `prompt_commands.py`, `~/.js/commands/NAME.md` |
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
 | Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |

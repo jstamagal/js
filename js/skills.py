@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
@@ -34,6 +35,35 @@ class SkillMetadata:
     # False when the frontmatter sets ``disable-model-invocation: true``: the
     # skill is absent from the model's catalog and only the user loads it.
     model_invocable: bool = True
+    # Frontmatter ``paths:`` globs, relative to the session's working
+    # directory. The first read, patch or write of a matching file offers the
+    # skill to the model once per session.
+    paths: tuple[str, ...] = ()
+
+    def matches_path(self, relative: str) -> bool:
+        """Whether a path relative to the working directory matches ``paths``.
+
+        A pattern without a ``/`` (a trailing one aside) matches a file or
+        directory name at any depth, so ``*.rs`` matches ``src/main.rs``. A
+        pattern with a ``/`` is anchored at the working directory; ``**`` spans directories. A pattern
+        that names a directory matches everything under it.
+        """
+        parts = PurePosixPath(relative).parts
+        if not parts or parts[0] in {"..", "/"}:
+            return False
+        for raw in self.paths:
+            anchored = "/" in raw.strip().rstrip("/")
+            pattern = raw.strip().removeprefix("/").removesuffix("/**").rstrip("/")
+            if not pattern:
+                continue
+            if not anchored:
+                if any(fnmatchcase(part, pattern) for part in parts):
+                    return True
+                continue
+            for end in range(1, len(parts) + 1):
+                if _glob_match(parts[:end], tuple(pattern.split("/"))):
+                    return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -171,10 +201,25 @@ def load_skill(
             denied=_ordered_subset(metadata.tools, outcome.denied),
             missing=_ordered_subset(metadata.tools, outcome.missing),
         )
+    note_loaded = getattr(tool_registry, "note_skill_loaded", None)
+    if callable(note_loaded):
+        note_loaded(metadata.name)
     return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
 
 
 _USER_COMMAND_RE = re.compile(r"/skill(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
+_USER_SKILL_BLOCK_RE = re.compile(r'<skill name="([^"]+)">\n')
+
+
+def user_invoked_skill(content: Any) -> str | None:
+    """The skill a ``/skill`` user message carries, from the block
+    ``expand_user_invocation`` puts at its start; None for any other message."""
+    if isinstance(content, list):
+        content = next((part.get("text") for part in content if isinstance(part, dict) and "text" in part), None)
+    if not isinstance(content, str):
+        return None
+    match = _USER_SKILL_BLOCK_RE.match(content)
+    return match.group(1) if match else None
 
 
 class SkillInvocationError(ValueError):
@@ -207,6 +252,15 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
     body = loaded.instructions.strip("\n")
     block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f"\n\n{body}\n</skill>"
     return f"{block}\n\n{request}" if request else block
+
+
+def _glob_match(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    """Match path components against pattern components; ``**`` spans any number."""
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_glob_match(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
+    return bool(parts) and fnmatchcase(parts[0], pattern[0]) and _glob_match(parts[1:], pattern[1:])
 
 
 def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
@@ -292,6 +346,7 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
         source=source,
         path=path,
         model_invocable=not user_only,
+        paths=_paths_field(manifest),
     )
     return _SkillRecord(metadata=metadata)
 
@@ -308,12 +363,51 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
     try:
         manifest = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML frontmatter: {_yaml_problem(exc)}") from exc
+        # An unquoted glob such as `paths: *.rs` reads as a YAML alias; a
+        # second parse quotes the paths globs.
+        try:
+            manifest = yaml.safe_load(_quote_path_globs(yaml_text))
+        except yaml.YAMLError:
+            raise ValueError(f"invalid YAML frontmatter: {_yaml_problem(exc)}") from exc
     if manifest is None:
         manifest = {}
     if not isinstance(manifest, dict):
         raise ValueError("frontmatter must be a mapping")
     return manifest, text[end:], end
+
+
+_YAML_SPECIAL = re.compile(r"[{}\[\]*&#!|>%@`]|: ")
+_PATHS_LINE = re.compile(r"^(paths:[ \t]*)(.*?)[ \t]*$")
+_ITEM_LINE = re.compile(r"^([ \t]*-[ \t]+)(.+?)[ \t]*$")
+
+
+def _quote_path_globs(yaml_text: str) -> str:
+    """``yaml_text`` with each unquoted glob of the ``paths:`` field (its
+    inline value, or the ``- item`` lines under it) that holds a YAML
+    indicator character written as a double-quoted string, as Claude Code
+    reads it."""
+
+    def quoted(lead: str, value: str) -> str:
+        if (len(value) > 1 and value[0] in "'\"" and value[-1] == value[0]) or not _YAML_SPECIAL.search(value):
+            return f"{lead}{value}"
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'{lead}"{escaped}"'
+
+    lines = []
+    in_paths = False
+    for line in yaml_text.split("\n"):
+        paths_line = _PATHS_LINE.match(line)
+        item = _ITEM_LINE.match(line) if in_paths else None
+        if paths_line is not None:
+            lead, value = paths_line.groups()
+            in_paths = not value
+            line = quoted(lead, value) if value else line
+        elif item is not None:
+            line = quoted(*item.groups())
+        elif line.strip():
+            in_paths = False
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _yaml_problem(exc: yaml.YAMLError) -> str:
@@ -370,6 +464,55 @@ def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
         seen.add(tool)
         tools.append(tool)
     return tuple(tools)
+
+
+def _paths_field(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """``paths:`` as a list of globs, or one string of comma-separated globs."""
+    value = manifest.get("paths")
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("paths frontmatter must be a list of glob strings")
+    patterns = tuple(dict.fromkeys(
+        expanded for item in value for part in _split_outside_braces(item)
+        for expanded in _expand_braces(part)
+    ))
+    # A match-all pattern would offer the skill on the first file touched; it
+    # scopes nothing, so the skill is left unscoped.
+    if all(pattern.strip("/") == "**" for pattern in patterns):
+        return ()
+    return patterns
+
+
+def _split_outside_braces(text: str) -> list[str]:
+    """``text`` split at the commas outside ``{}``, each part stripped, empty
+    parts dropped."""
+    parts, current, depth = [], "", 0
+    for char in text:
+        if char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        depth += {"{": 1, "}": -1}.get(char, 0)
+        current += char
+    parts.append(current)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    """``pattern`` with its first ``{a,b}`` group expanded, recursively:
+    ``src/*.{ts,tsx}`` gives ``src/*.ts`` and ``src/*.tsx``."""
+    match = re.search(r"\{([^{}]*)\}", pattern)
+    if match is None:
+        return [pattern]
+    head, tail = pattern[:match.start()], pattern[match.end():]
+    return [
+        expanded
+        for option in match.group(1).split(",")
+        for expanded in _expand_braces(f"{head}{option}{tail}")
+    ]
 
 
 def _validate_name(name: str) -> None:

@@ -351,13 +351,12 @@ class Jail:
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
         # The host /tmp is replaced by the private one, so a path under it is
-        # as unreachable as one in a hidden tree. The host /tmp itself is never
-        # bound back: it would cover the private /tmp.
-        host_tmp = Path("/tmp")
+        # as unreachable as one in a hidden tree and is bound back. A replaced
+        # root itself on PATH is not bound back: it would cover its replacement.
+        replaced = [*hidden, Path("/tmp")]
         implicit = [b for b in implicit
-                    if not covered(b.path)
-                    and (any(_under(b.path, h) for h in hidden)
-                         or (b.path != host_tmp and _under(b.path, host_tmp)))]
+                    if any(_under(b.path, h) and b.path != h for h in replaced)
+                    and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
         for bind in binds:
