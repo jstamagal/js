@@ -283,6 +283,76 @@ def test_budget_summarizes_instead_of_clearing_while_the_cache_is_warm(monkeypat
     assert not any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
+def _current_turn_tool_heavy_history(n: int = 30, body: int = 2000) -> list[dict]:
+    """One turn whose own tool results are over budget; nothing before it."""
+    messages = _tool_heavy_history(n, body)
+    messages[0] = {"role": "user", "content": "go"}
+    return messages[:-1]
+
+
+@pytest.mark.parametrize("history", [_tool_heavy_history, _current_turn_tool_heavy_history])
+def test_paused_summaries_still_clear_while_the_cache_is_warm(monkeypatch, tmp_path, history):
+    cfg = _config(tmp_path, _SMALL_WINDOW)
+    context = ToolContext(cwd=tmp_path)
+    context.last_request_at = time.time() - 30
+    context.summary_failures = 3
+    summaries = []
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    async def summary(*args, **kwargs):
+        summaries.append(args)
+        return "summary"
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    monkeypatch.setattr(compaction, "summarize", summary)
+    messages = history()
+    _turn(cfg, messages, context)
+    assert summaries == []
+    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+
+
+def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, tmp_path):
+    cfg = _config(tmp_path, _SMALL_WINDOW)
+    context = ToolContext(cwd=tmp_path)
+    context.last_request_at = time.time() - 30
+    summaries = []
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    async def summary(*args, **kwargs):
+        summaries.append(args)
+        return "summary"
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    monkeypatch.setattr(compaction, "summarize", summary)
+    messages = _current_turn_tool_heavy_history()
+    _turn(cfg, messages, context)
+    assert summaries == []
+    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+
+
+def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
+    cfg = _config(tmp_path, _SMALL_WINDOW)
+    context = ToolContext(cwd=tmp_path)
+    attempts = []
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    async def failing_summary(*args, **kwargs):
+        attempts.append(args)
+        raise RuntimeError("summarizer down")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    _turn(cfg, _over_budget_history(), context)
+    assert len(attempts) == 1
+    assert context.summary_failures == 1
+
+
 def test_cache_ttl_is_the_setting(tmp_path):
     context = ToolContext(cwd=tmp_path)
     context.last_request_at = 1000.0
@@ -335,6 +405,29 @@ def test_note_response_ignores_drops_under_the_token_floor(tmp_path):
     context = ToolContext(cwd=tmp_path)
     compaction.note_response(context, model_key="p/m", cache_read=1_000, now=0.0)
     assert compaction.note_response(context, model_key="p/m", cache_read=100, now=1.0) is None
+
+
+def test_a_response_without_usage_keeps_the_baseline(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    compaction.note_response(context, model_key="p/m", cache_read=100_000, now=0.0)
+    assert compaction.note_response(context, model_key="p/m", cache_read=None, now=1.0) is None
+    assert context.last_request_at == 1.0
+    assert compaction.note_response(context, model_key="p/m", cache_read=100_000, now=2.0) is None
+
+
+@pytest.mark.parametrize("command", ["/reset", "/wipe"])
+def test_clearing_the_history_is_not_a_cache_break(monkeypatch, tmp_path, command):
+    from js import cli
+    from js.config import from_env
+    from repl_driver import repl_state
+
+    context = ToolContext(cwd=tmp_path)
+    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    state, _spec = repl_state(cfg)
+    compaction.note_response(context, model_key="p/m", cache_read=100_000, now=0.0)
+    cli._handle_command(command, state, cfg)
+    assert compaction.note_response(context, model_key="p/m", cache_read=0, now=1.0) is None
 
 
 def _cached_turns(monkeypatch, tmp_path, cache_reads):

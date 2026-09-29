@@ -139,7 +139,8 @@ response `compaction.note_response` compares its cache-read tokens with the
 previous response of the same conversation and model; a drop of more than 5%
 and at least 2000 tokens prints one cache-break line at level 2. A compaction or
 tool-result clearing resets that baseline, because the drop it causes is
-expected. The channel
+expected; so do `/reset` and `/wipe`. A response without usage keeps the
+baseline. The channel
 prints only while the async REPL has installed a sink; elsewhere every hook is
 a no-op, and the models.dev refresh lines print to stderr as before.
 
@@ -362,19 +363,23 @@ recorded as SKIPPED; any following summarization has its own attempt ID.
 
 ### Compaction commit and replay
 
-In-turn budget recovery clears old tool results first (`compact.clear_keep_recent`
-starts the retained-result count), then summarizes older history. Clearing
-rewrites the middle of the history and so busts the prompt cache; it runs only
-when the last request is at least `compact.cache_ttl_seconds` old (default 300,
-0 = always) or the provider has already refused the request. While the cache is
-warm the budget goes straight to a summary. If the active
-turn itself is too large, its older work can be summarized while retaining a
-paired assistant/tool tail.
+In-turn budget recovery clears old tool results (`compact.clear_keep_recent`
+starts the retained-result count), summarizes the history before the current
+user message, and, if the active turn itself is too large, summarizes its older
+work while retaining a paired assistant/tool tail. Empty prefixes and
+summary-only prefixes are not summarized. The order depends on the prompt cache.
+When the last request is at least `compact.cache_ttl_seconds` old (default 300,
+0 = always), or the provider has already refused the request, clearing runs
+first. While the cache is warm, the summary of earlier turns runs first, and
+clearing runs only if that summary did not bring the request under budget.
+Clearing always runs before the current turn is summarized, because that summary
+rewrites the whole history too.
 
 `compact.max_summary_failures` (default 3) automatic summaries that fail in a
 row pause automatic compaction, in-turn and between turns, and print one line
-saying so. Tool-result clearing still runs. A successful summary, such as a
-manual `/compact`, resets the count and resumes it. Empty prefixes and summary-only prefixes are skipped.
+saying so. One budget check makes at most one failed summary attempt. While
+paused, tool-result clearing still runs, warm cache or not. A successful
+summary, such as a manual `/compact`, resets the count and resumes it.
 Both trigger paths use current provider-anchored input plus generated output;
 output-only usage falls back to estimation. Small windows share the same capped
 reserve and buffer calculation.

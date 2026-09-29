@@ -1698,6 +1698,7 @@ def _cmd_name(arg: str, state: dict, cfg: Config) -> str | None:
 
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
+    compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     M.append_mark(cfg.session_file, "session_reset")
     msgs.say(msgs.RESET_DONE)
     return None
@@ -1706,6 +1707,7 @@ def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     state["messages"].clear()
+    compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     if bak:
         msgs.say(msgs.WIPE_ROTATED, path=bak.name)
     else:

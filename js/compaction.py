@@ -357,12 +357,16 @@ def cache_expired(cfg: Config, context: Any, *, now: float | None = None) -> boo
     return (time.time() if now is None else now) - last >= ttl
 
 
-def note_response(context: Any, *, model_key: str, cache_read: int, now: float) -> str | None:
+def note_response(context: Any, *, model_key: str, cache_read: int | None, now: float) -> str | None:
     """Record a finished main-conversation response on ``context``.
 
     Returns the cache-break line when this response read noticeably less from
     the cache than the previous comparable one: same model, no history rewrite
-    in between. Otherwise None."""
+    in between. Otherwise None. A response without usage (``cache_read`` None)
+    records only the request time."""
+    if cache_read is None:
+        context.last_request_at = now
+        return None
     previous = getattr(context, "cache_read_baseline", None)
     comparable = previous is not None and getattr(context, "cache_read_model", "") == model_key
     last = getattr(context, "last_request_at", None)

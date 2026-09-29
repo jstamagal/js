@@ -346,8 +346,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "A successful /compact resumes it."),
     SettingSpec("compact.cache_ttl_seconds", "int",
                 "Prompt-cache lifetime. An over-budget request clears old tool results "
-                "only when the last request is at least this old; before that it "
-                "summarizes. 0 = clear whenever the budget trips."),
+                "first when the last request is at least this old; before that it "
+                "summarizes earlier turns first. 0 = always clear first."),
     SettingSpec("compact.pre_hook", "str",
                 "Optional shell command whose stdout guides compaction.",
                 empty=EMPTY_NONE),
