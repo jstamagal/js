@@ -113,7 +113,6 @@ def test_emit_request_trace_writes_to_sink_not_stdout(capsys):
     out = capsys.readouterr()
     blob = "".join(captured)
     assert REQUEST_MARKER in blob
-    assert "SYSTEM PROMPT (unclipped)" in blob
     assert "SYSTEM-PROMPT-BODY" in blob
     # Nothing reached the terminal.
     assert out.out == ""

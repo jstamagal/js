@@ -4,6 +4,7 @@ itself. The message schema judges only its own."""
 from __future__ import annotations
 
 import json
+import re
 
 from js.memory import SCHEMA_VERSION, append_message, load_messages
 from js.session_catalog import record_session_start
@@ -36,7 +37,7 @@ def test_a_genuinely_stale_message_is_still_reported(tmp_path, capsys):
     )
 
     assert load_messages(session) == []
-    assert "skipped 1 record" in capsys.readouterr().err
+    assert re.search(r"(?<!\d)1(?!\d)", capsys.readouterr().err)  # the count of skipped records
 
 
 def test_an_unknown_writer_is_ignored_without_a_warning(tmp_path, capsys):

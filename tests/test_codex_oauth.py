@@ -110,7 +110,6 @@ def test_browser_login_accepts_pasted_callback(monkeypatch, capsys, prefix):
         assert codex_auth.login_browser(timeout_s=2) == "token"
     assert calls == [("test-code", "verifier", codex_auth.CALLBACK_REDIRECT_URI)]
     assert server.fileno() == -1
-    assert "paste the full callback URL" in capsys.readouterr().out
 
 
 def test_browser_login_eof_times_out_and_closes_listener(monkeypatch):

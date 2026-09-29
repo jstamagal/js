@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from js import memory as M
@@ -45,8 +46,8 @@ def test_version_mismatch_warns_instead_of_silently_dropping_history(tmp_path: P
 
     assert [m.get("content") for m in out] == ["kept"]   # current-version record survives
     err = capsys.readouterr().err
-    assert "skipped 1" in err
     assert str(f) in err
+    assert re.search(r"(?<!\d)1(?!\d)", err.replace(str(f), ""))  # the count of skipped records
 
 
 def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):

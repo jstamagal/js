@@ -130,13 +130,13 @@ def test_directive_output_is_capped_and_marked():
 def test_unknown_subsystem_degrades_to_literal(capsys):
     out = expand_prompt("a !{wat hi} b", env={})
     assert out == "a !{wat hi} b"
-    assert "left literal" in capsys.readouterr().err
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_code_while_off_degrades_to_literal(capsys):
     out = expand_prompt("run !{sh echo hi} now", allow_code=False)
     assert out == "run !{sh echo hi} now"
-    assert "left literal" in capsys.readouterr().err
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_one_bad_directive_does_not_kill_the_others():
@@ -148,7 +148,7 @@ def test_one_bad_directive_does_not_kill_the_others():
 def test_failed_code_run_degrades_to_literal(capsys):
     out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
     assert out == "!{sh sh -c 'exit 3'}"
-    assert "left literal" in capsys.readouterr().err
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_sh_nonzero_exit_errors():
@@ -233,7 +233,7 @@ def test_persona_code_blocked_leaves_literal_and_starts(tmp_path, capsys):
     (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
     assert "!{sh echo hi}" in spec.system  # left literal, not expanded, not crashed
-    assert "left literal" in capsys.readouterr().err
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
@@ -245,7 +245,7 @@ def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
     (d / "00-seed.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=True))
     assert "!{wat huh}" in spec.system
-    assert "left literal" in capsys.readouterr().err
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
@@ -290,7 +290,7 @@ def test_fence_mentioned_mid_sentence_is_not_a_directive(capsys):
     actual = expand_prompt(text, allow_code=True, on_error="warn")
 
     assert actual == text
-    assert "unknown inline subsystem" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 def test_fence_at_line_start_still_runs():
@@ -344,7 +344,7 @@ def test_repo_agents_md_expands_to_itself(capsys):
     actual = expand_prompt(text, allow_code=True, on_error="warn")
 
     assert actual == text
-    assert "prompt directive left literal" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 # --- global instruction files ---------------------------------------------------

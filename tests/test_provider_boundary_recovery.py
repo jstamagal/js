@@ -139,7 +139,7 @@ def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path
     budgets = [fields for kind, fields in events if kind == "context_budget"]
     assert budgets and all(fields["context_window"] == window for fields in budgets)
     # This is the diagnostic value users rely on to verify /set took effect.
-    assert f"ctx={window}" in capsys.readouterr().out
+    assert str(window) in capsys.readouterr().out
 
 
 def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):

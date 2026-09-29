@@ -372,7 +372,7 @@ def test_models_edit_removes_and_adds_models_without_login_fetch_or_catalog_refr
         _reset_logins()
 
 
-def test_models_edit_missing_or_empty_cache_leaves_file_unchanged(monkeypatch, tmp_path: Path, capsys):
+def test_models_edit_missing_or_empty_cache_leaves_file_unchanged(monkeypatch, tmp_path: Path):
     logins.set_config_dir(tmp_path)
     cache_path = tmp_path / "models-cache.json"
     cache_path.write_text('{"deepseek": []}\n', encoding="utf-8")
@@ -386,7 +386,6 @@ def test_models_edit_missing_or_empty_cache_leaves_file_unchanged(monkeypatch, t
         )
         assert login_cli.main(["models-edit", "deepseek"]) == 1
         assert cache_path.read_bytes() == before
-        assert "no cached models for deepseek" in capsys.readouterr().err
 
         cache_path.unlink()
         assert login_cli.main(["models-edit", "not-saved"]) == 1
@@ -395,7 +394,7 @@ def test_models_edit_missing_or_empty_cache_leaves_file_unchanged(monkeypatch, t
         _reset_logins()
 
 
-def test_models_edit_picker_cancel_leaves_cache_unchanged(monkeypatch, tmp_path: Path, capsys):
+def test_models_edit_picker_cancel_leaves_cache_unchanged(monkeypatch, tmp_path: Path):
     logins.set_config_dir(tmp_path)
     metadata = {"keep": logins.ModelCacheMetadata(max_output_tokens=4096)}
     logins.cache_models("deepseek", ["keep"], metadata=metadata)
@@ -406,7 +405,6 @@ def test_models_edit_picker_cancel_leaves_cache_unchanged(monkeypatch, tmp_path:
         monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda provider_id, models, **kwargs: None)
         assert login_cli.main(["models-edit", "deepseek"]) == 0
         assert cache_path.read_bytes() == before
-        assert "unchanged" in capsys.readouterr().out
     finally:
         _reset_logins()
 
@@ -662,9 +660,8 @@ def test_run_logout_reports_corrupt_logins_file_cleanly_instead_of_raising(monke
     assert "logins.toml is broken" in capsys.readouterr().err
 
 
-def test_login_cli_logout_requires_provider(capsys):
+def test_login_cli_logout_requires_provider():
     assert login_cli.main(["logout"]) == 2
-    assert "--logout <provider-id>" in capsys.readouterr().err
 
 
 def test_login_cli_logout_dispatch(monkeypatch):

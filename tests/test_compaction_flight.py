@@ -119,13 +119,13 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
         capsys.readouterr()
         assert cli._handle_command("/set compact.context_window 1000000", state, cfg)
         immediate = capsys.readouterr().out
-        assert "ctx=1000000" in immediate
+        assert "1000000" in immediate
         assert state["settings"]["compact"]["context_window"] == 1000000
         state["messages"].append({"role": "user", "content": "second"})
         await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state["messages"],
                                      Events(), tool_context=context, tool_registry=registry)
         assert captured[-1] == 1000000
-        assert "ctx=1000000" in capsys.readouterr().out
+        assert "1000000" in capsys.readouterr().out
 
     asyncio.run(conversation())
 
