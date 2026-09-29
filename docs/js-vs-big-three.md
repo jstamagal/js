@@ -103,7 +103,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **`patch` has no fuzzy fallback.** A smart quote the model pasted costs a turn in js and nothing in the other three.
 
-**Sessions are filed per agent, and the model is recorded only at start.** Resume can come back on the wrong model. Both are fixed by the design in `docs/sessions-and-home-design.md` and are being built now (js-1g1.2).
+**Sessions were filed per agent, and the model was recorded only at start.** Done in js-1g1.2: sessions are filed by start directory and every reply carries a model stamp. Resume comes back on the stamped model; an explicit `-m` or a stamp with no login changes that (js-1g1.21).
 
 **`AGENTS.md` is read only from the start directory.** Kept on purpose: js never walks up, so `~/js` never reads `~/AGENTS.md`. The other three walk up; Codex even reads `/AGENTS.md`. Not a gap.
 
@@ -188,6 +188,6 @@ Hot spots over 441 commits in two months:
 2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget.**
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
-5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.
+5. **Record ids plus the model stamp** (done in js-1g1.2), then the picker.
 6. **stream-json output for `-p`.**
 7. **Architecture #1 (settings projection) and #4 (delete the shims, done in js-1g1.25).**

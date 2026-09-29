@@ -430,6 +430,11 @@ Two notes ride on the next user message as a `<js-reminder>`:
   stream, a max-output stop). Trailing `<js-reminder>` and
   `<compaction-summary>` user messages that js wrote itself are passed over.
 
+"Newest reply" means the newest one in the replayed history: a reply that a
+rollback, `/reset` or compaction dropped does not count. In the REPL, a turn
+that is dropped before the model made any progress puts its queued notes (the
+cut-off note, `/cd`, `/add`, `/drop`) back, and the next message carries them.
+
 Generated session ids can be resumed from the `*** Continue:` hint. Driver
 integrations that have a stable caller key can instead derive an opaque name
 from agent + resolved working directory + caller key; repeated runs get the same

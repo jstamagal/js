@@ -245,3 +245,99 @@ def test_a_resume_after_a_finished_turn_carries_no_note(monkeypatch):
     turns = _repl(monkeypatch, ["--session", "done"], ["next"])
 
     assert turns.users == ["next"]
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt, RuntimeError])
+def test_a_repl_cut_off_note_survives_a_first_turn_that_was_discarded(monkeypatch, failure):
+    path = _session("cut", CUT_OFF_ENDINGS["tool result"])
+    users: list = []
+
+    def turn(cfg, system, messages, *a, **k):
+        users.append(messages[-1]["content"])
+        if len(users) == 1:
+            raise failure("stopped before any progress")
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["go on", "again", "more"]))
+    monkeypatch.setattr(cli.runtime, "run_turn", turn)
+    assert cli.main(["--blocking", "--session", "cut"]) == 0
+
+    assert users[1:] == [f"again\n\n{cli._CUT_OFF_NOTICE}", "more"]
+    assert f"again\n\n{cli._CUT_OFF_NOTICE}" in [m.get("content") for m in load_messages(path)]
+
+
+# --- the stamp the model-switch note compares with ------------------------------------
+
+
+def _reply(text: str) -> dict:
+    return {"role": "assistant", "content": text}
+
+
+def test_the_reply_stamp_is_the_newest_stamped_reply(tmp_path):
+    path = tmp_path / "s.jsonl"
+    M.append_message(path, {"role": "user", "content": "q"})
+    M.append_message(path, _reply("a"), stamp=M.stamp_for("x", "p", None))
+    M.append_message(path, {"role": "user", "content": "q2"})
+    # A reply larger than one read block still parses whole.
+    M.append_message(path, _reply("b" * 200_000), stamp=M.stamp_for("y", "p", None))
+    M.append_message(path, _reply("unstamped"))
+    M.append_mark(path, "turn_interrupted")
+
+    assert M.last_reply_stamp(path)["model"] == "y"
+
+
+def test_a_rolled_back_reply_does_not_decide_the_stamp(tmp_path):
+    path = tmp_path / "s.jsonl"
+    kept = [{"role": "user", "content": "q"}, _reply("a")]
+    M.append_message(path, kept[0])
+    M.append_message(path, kept[1], stamp=M.stamp_for("x", "p", None))
+    M.append_message(path, {"role": "user", "content": "q2"})
+    M.append_message(path, _reply("b"), stamp=M.stamp_for("y", "p", None))
+
+    M.persist_messages(path, kept)
+
+    assert M.last_reply_stamp(path)["model"] == "x"
+
+
+def test_a_reset_session_has_no_reply_stamp(tmp_path):
+    path = tmp_path / "s.jsonl"
+    M.append_message(path, _reply("a"), stamp=M.stamp_for("x", "p", None))
+    M.append_mark(path, "session_reset")
+
+    assert M.last_reply_stamp(path) is None
+    assert M.last_reply_stamp(tmp_path / "missing.jsonl") is None
+
+
+def test_an_async_repl_note_survives_a_turn_that_was_discarded(monkeypatch, tmp_path):
+    import asyncio
+
+    from js import supervisor
+    from repl_driver import run_async
+
+    target = tmp_path / "work" / "sub"
+    target.mkdir()
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)
+    users: list = []
+    first_turn_started = asyncio.Event()
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        first_turn_started.set()
+        users.append(messages[-1]["content"])
+        if len(users) == 1:
+            raise RuntimeError("stopped before any progress")
+        messages.append({"role": "assistant", "content": "ok"})
+
+    async def script(on_line):
+        await on_line(f"/cd {target}")
+        await on_line("one")
+        await first_turn_started.wait()
+        for job in supervisor.get_current().jobs("turn"):
+            await job.task
+        await on_line("two")
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    run_async(monkeypatch, from_env(), script)
+
+    note = cli._CD_NOTICE.format(path=target.resolve())
+    assert users == [f"one\n\n{note}", f"two\n\n{note}"]

@@ -341,9 +341,11 @@ def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
     """The --model value that puts a resumed session back on its stamped model,
     or None when the configuration already resolves to it.
 
-    The stamped provider rides as a prefix only where routing takes the prefix
-    as the provider: it parses as a known provider, and it is the configured
-    one or has a saved login. Otherwise the model id goes alone."""
+    A stamp whose provider is neither the configured one nor logged in gives
+    None: the session continues on the configured model. The stamped provider
+    rides as a prefix when it parses as a known provider and is the configured
+    one or has a saved login. A stamp without a provider, or one whose prefix
+    does not parse, gives the model id alone."""
     model = stamp.get("model")
     if not isinstance(model, str) or not model:
         return None
@@ -1944,11 +1946,21 @@ def _queue_note(state: dict, note: str) -> None:
     state.setdefault("pending_notes", []).append(note)
 
 
-def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
-    """``bundle`` carrying the reminders queued since the last user message."""
-    for note in state.pop("pending_notes", None) or ():
+def _take_pending_notes(state: dict) -> list[str]:
+    """The reminders queued since the last user message, removed from the queue."""
+    return list(state.pop("pending_notes", None) or ())
+
+
+def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:
+    for note in notes:
         bundle = attach.with_note(bundle, note)
     return bundle
+
+
+def _requeue_notes(state: dict, notes) -> None:
+    """Put ``notes`` back in front of the queue: the turn that carried them was discarded."""
+    if notes:
+        state["pending_notes"] = [*notes, *(state.get("pending_notes") or ())]
 
 
 def _set_working_dir(path: Path) -> None:
@@ -2969,7 +2981,7 @@ def _restore_history_forms(messages: list[dict], user_bundle, steered: list, bef
 
 
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                   steer=None, steered=()) -> None:
+                   steer=None, steered=(), notes=()) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
@@ -2979,6 +2991,8 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
 
     ``steer`` hands the runtime lines typed during the turn; ``steered`` holds
     the bundles it has handed over, so their history forms are persisted.
+    ``notes`` are the queued reminders ``user_bundle`` carries; a discarded
+    turn puts them back in the queue.
     """
     try:
         before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
@@ -3034,6 +3048,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             print()
             msgs.say(msgs.TURN_ABORTED)
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except Exception as e:  # noqa: BLE001
@@ -3043,6 +3058,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             _persist_turn_messages(turn_cfg, state["messages"])
         else:
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _requeue_notes(state, notes)
         M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
 
 
@@ -3110,7 +3126,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         return
     user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
     user_bundle = _note_model_switch(turn_cfg, user_bundle)
-    user_bundle = _with_pending_notes(state, user_bundle)
+    notes = _take_pending_notes(state)
+    user_bundle = _with_notes(user_bundle, notes)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
@@ -3149,7 +3166,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
 
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                 steer=take_steer, steered=steered),
+                 steer=take_steer, steered=steered, notes=notes),
         kind="turn",
         label=prompt_text[:40],
     )
@@ -3480,7 +3497,8 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
 
         user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
         user_bundle = _note_model_switch(turn_cfg, user_bundle)
-        user_bundle = _with_pending_notes(state, user_bundle)
+        notes = _take_pending_notes(state)
+        user_bundle = _with_notes(user_bundle, notes)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)
@@ -3560,6 +3578,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 print()
                 msgs.say(msgs.TURN_ABORTED)
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _requeue_notes(state, notes)
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             msgs.say(msgs.FAILED, error=_error_text(e))
@@ -3569,6 +3588,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 _persist_turn_messages(turn_cfg, state["messages"])
             else:
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
     mcp_loop.run(_close_session_mcp_host(state))
     model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
