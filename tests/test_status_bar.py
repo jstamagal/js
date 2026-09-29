@@ -262,3 +262,14 @@ def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
     line = cli._status_bar_line(cfg, {"settings": {}}, turn_active, 60)
     assert len(line) == 60
     assert "01234567" in line
+
+
+def test_status_colour_survives_save_and_load(tmp_path):
+    live = settings.seed_defaults()
+    assert setcmd.run_repl_command(live, "/set ui.status_bg #000000").error is None
+    path = tmp_path / "jsrc"
+    settings.save_settings_to_jsrc(path, live)
+
+    reloaded = settings.seed_defaults()
+    assert settings.load_jsrc_files([path], reloaded) == []
+    assert settings.get_dotted(reloaded, ("ui", "status_bg"), None) == "#000000"
