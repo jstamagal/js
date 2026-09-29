@@ -260,3 +260,47 @@ def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, capsys
     assert "ban" in rows["fetch"].split() and '*:ban' in rows["fetch"]
     assert "tag:code_editor" in rows["fetch"]
     assert "lazy" in rows["docs_search"].split()
+
+
+def _run_shell_rm(monkeypatch, tmp_path, registry) -> tuple[Path, list[str]]:
+    victim = tmp_path / "x"
+    victim.mkdir()
+    replies = iter([_tool_call("shell", {"command": f"rm -rf {victim}"}), _stop("done")])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
+    messages = [{"role": "user", "content": "clean up"}]
+    runtime.run_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+                     tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+                     trace_override=False)
+    return victim, _tool_results(messages)
+
+
+def test_banned_shell_argument_is_refused_before_it_runs(monkeypatch, tmp_path, offline_model):
+    policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
+    policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
+    registry = build_default_registry().select(["shell:eager"])
+
+    victim, results = _run_shell_rm(monkeypatch, tmp_path, registry)
+
+    assert victim.is_dir()
+    assert len(results) == 1
+    refusal = results[0].splitlines()[0]
+    assert refusal.startswith("ERROR") and "rm -rf" in refusal
+
+
+def test_the_same_shell_call_runs_without_a_ban(monkeypatch, tmp_path, offline_model):
+    registry = build_default_registry().select(["shell:eager"], config=policy.ToolsConfig())
+
+    victim, results = _run_shell_rm(monkeypatch, tmp_path, registry)
+
+    assert not victim.exists()
+    assert not results[0].startswith("ERROR")
+
+
+def test_ban_patterns_match_substrings_and_whole_string_globs():
+    bans = {"shell": ("git reset --hard",), "fetch": ("*://www.pornhub.com/*",)}
+
+    assert policy.argument_refusal("shell", {"command": "cd x && GIT RESET --HARD HEAD"}, bans)
+    assert policy.argument_refusal("shell", {"command": "git reset --soft HEAD"}, bans) is None
+    assert policy.argument_refusal("fetch", {"url": "https://www.pornhub.com/x"}, bans)
+    assert policy.argument_refusal("fetch", {"url": "https://example.com/?q=www.pornhub.com/"}, bans) is None
+    assert policy.argument_refusal("read", {"file_path": "git reset --hard"}, bans) is None

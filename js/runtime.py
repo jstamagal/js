@@ -153,6 +153,7 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
         arg_chunks=list(pc.arg_chunks),
         validation_error=pc.validation_error,
         unavailable=pc.unavailable,
+        refused=pc.refused,
     )
 
 
@@ -309,6 +310,8 @@ class _PendingToolCall:
     arg_chunks: list[str] = field(default_factory=list)
     validation_error: str | None = None
     unavailable: bool = False
+    # A tools.yaml argument ban matched; validation_error is the ERROR line.
+    refused: bool = False
 
     def arguments(self) -> str:
         return "".join(self.arg_chunks)
@@ -383,6 +386,11 @@ def _normalize_tool_call_batch(
                 validator_type(schema).validate(arguments)
             except (jsonschema_exceptions.SchemaError, jsonschema_exceptions.ValidationError) as exc:
                 validation_error = " ".join(exc.message.split())
+        refused = False
+        if validation_error is None and tool is not None:
+            refusal = registry.argument_refusal(tool.name, arguments)
+            if refusal is not None:
+                validation_error, refused = refusal, True
         if validation_error is not None:
             invalid += 1
 
@@ -396,6 +404,7 @@ def _normalize_tool_call_batch(
                 arg_chunks=[canonical_args],
                 validation_error=validation_error,
                 unavailable=tool is None,
+                refused=refused,
             )
         )
 
@@ -898,7 +907,7 @@ def _dispatch_tool_calls(
         started = time.time()
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
-        result = pc.validation_error if pc.unavailable else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
+        result = pc.validation_error if pc.unavailable or pc.refused else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
         recorded = _cap_result(result, cap_bytes)
         if not pc.unavailable:
             recorded = error_tracker.record(pc.name, recorded)
