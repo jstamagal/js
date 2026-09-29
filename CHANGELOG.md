@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Sessions filed by start directory, with a readable `.txt` (`js-1g1.2`).**
+  Sessions live in `~/.js/sessions/<start-dir>/` (the path with `/` and `_` as
+  `-`) under names like `2026-09-29T0802-6d65`; subagent runs sit in a folder
+  named after their parent session. A `.txt` beside every `.jsonl` is kept in
+  step with it: a fixed five-line header, one numbered line per message, tool
+  rows as label + command + exit and size, no tool output. Every assistant
+  message is stamped with its model, provider and reasoning level, and a resume
+  continues on the last stamp. Each start records its mode (`repl`, `-p`,
+  `pipe`, `subagent`, `commit`) and command line; a branch records its parent
+  and message; `/name` pins a title. `--session NAME` resumes from any
+  directory (its own folder first, then all; a name in two folders is refused),
+  and a unique tail of a generated name resumes it. A bare `--session` is kept
+  for the picker. `latest.json` and the REPL history moved to
+  `~/.js/state/<agent>/`. The home migration files old sessions the same way.
+
+- **The home migration converts agents and keeps links (`js-1g1.1`).** Moved
+  agents become `agent.yaml` in the same step, and tools entries that match no
+  tool are dropped and printed per agent; `just migrate-agents` does the same
+  and also prunes existing `agent.yaml` files. A moved relative symlink is
+  rewritten to reach what it reached before. Every start creates each
+  directory of the `~/.js` layout.
+
 - **`~/.js` is the one home (`js-l7e.1`).** Config, logins, sessions, state,
   logs, the models.dev cache, notes, plans, probes and js's scratch all live
   under `~/.js/`; `js/paths.py` is the only module that names a location. On
