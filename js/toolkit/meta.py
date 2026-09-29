@@ -46,6 +46,9 @@ _INHERITED_FIELDS = (
     "max_parallel_tools",
     "shell_program",
     "jail_bind",
+    "lsp_servers",
+    "lsp_timeout_s",
+    "notebook_output_lines",
     "model",
 )
 

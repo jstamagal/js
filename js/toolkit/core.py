@@ -389,6 +389,9 @@ class ToolContext:
     shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
     max_parallel_tools: int = _knob("runtime.max_parallel_tools")  # read-only calls of one batch run at once
     jail_bind: tuple[str, ...] = field(default_factory=lambda: tuple(_settings.default_value("jail.bind")))
+    lsp_servers: list = _knob("lsp.servers")  # language servers the lsp tool may start
+    lsp_timeout_s: int = _knob("lsp.timeout_s")  # seconds an lsp call waits on its server
+    notebook_output_lines: int = _knob("notebook.output_lines")  # lines per cell output in a notebook read
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)

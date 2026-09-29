@@ -482,6 +482,12 @@ def fs_read(
         return f"ERROR: no such file: {target}"
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
+    if target.suffix.lower() == ".ipynb" and not ranged and not byte_ranged:
+        from . import notebook
+
+        view = notebook.read_view(target, context)
+        if view is not None:
+            return view
 
     try:
         size = target.stat().st_size

@@ -1386,6 +1386,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.jail_bind = tuple(_settings.knob(live_settings, "jail.bind") or ())
     active_context.terminal_cols = _settings.knob(live_settings, "tools.terminal_cols")
     active_context.terminal_rows = _settings.knob(live_settings, "tools.terminal_rows")
+    active_context.lsp_servers = _settings.knob(live_settings, "lsp.servers")
+    active_context.lsp_timeout_s = _settings.knob(live_settings, "lsp.timeout_s")
+    active_context.notebook_output_lines = _settings.knob(live_settings, "notebook.output_lines")
     active_context.last_incomplete_reason = None
     active_context.last_output_tokens = 0
     active_context.last_max_output_tokens = max_out
