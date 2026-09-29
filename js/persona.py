@@ -32,6 +32,11 @@ class PromptSpec:
             object.__setattr__(self, "source", self.system)
 
 
+def _with_system(spec: PromptSpec, system: str) -> PromptSpec:
+    """`spec` with new unexpanded prompt text; `source` is that same text."""
+    return replace(spec, system=system, source=system)
+
+
 @dataclass(frozen=True)
 class Benchmark:
     """One clean-slate benchmark turn from a NN-benchmark.md file."""
@@ -244,12 +249,12 @@ def load_agent_prompt_spec(
         # zero tools and default model/sampling.
         manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
         if manifest_dir is not None and manifest_dir != prompt_dir:
-            spec = replace(load_prompt_spec(manifest_dir), system=spec.system)
+            spec = _with_system(load_prompt_spec(manifest_dir), spec.system)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
     system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return replace(spec, system=system)
+    return _with_system(spec, system)
 
 def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     """One agent.yaml as a PromptSpec with an empty system prompt."""
@@ -295,7 +300,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
         body = path.read_text(encoding="utf-8").rstrip()
         if body:
             parts.append(body)
-    return replace(spec, system="\n\n".join(parts) + "\n")
+    return _with_system(spec, "\n\n".join(parts) + "\n")
 
 
 
@@ -321,7 +326,7 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
         spec = load_prompt_spec(cfg.prompts_dir)
         agents_parts = _existing_text_parts(list(getattr(cfg, "agents_files", ())))
         if agents_parts:
-            spec = replace(spec, system="\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+            spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
