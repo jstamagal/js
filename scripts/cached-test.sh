@@ -5,7 +5,7 @@
 # spending 40 seconds re-learning the same answer. `just test --force` reruns.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
-cache_dir=.git/js-test-cache
+cache_dir="$(git rev-parse --absolute-git-dir)/js-test-cache"
 mkdir -p "$cache_dir"
 
 force=0

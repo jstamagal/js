@@ -1313,8 +1313,9 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
     }
     _mem.append_message(cfg.session_file, history_record)
 
-    # Reload — this is the canonical "build the next convo" path in production
-    # (see cli.py: messages = M.load_messages(cfg.session_file) at every turn).
+    # Reload through load_messages, the tool-call-only reasoning projection.
+    # cli.py replays through M.load_replay_messages, and
+    # model_client.history_to_ai_messages applies the transport's replay policy.
     reloaded = _mem.load_messages(cfg.session_file)
     # (1) the JSONL line on disk has reasoning_content
     raw = cfg.session_file.read_text(encoding="utf-8").splitlines()

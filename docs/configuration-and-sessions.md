@@ -386,7 +386,7 @@ job-id fields for catalogs and integrations; it is not conversation context and
 the message loader ignores it. Adjacent hidden liveness sidecars track open
 processes without rewriting the append-only conversation file.
 
-`load_messages()` ignores:
+`load_replay_messages()` (and `load_messages()`, which reads through it) ignores:
 
 - malformed JSON lines
 - unknown versions

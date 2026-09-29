@@ -148,8 +148,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.reasoning", "int", 2,
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
                 "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
-                "async screen. Display only; session reasoning is always retained.",
-                env="JS_UI_REASONING"),
+                "async screen. Display only; session reasoning is always retained."),
     SettingSpec("ui.editing_mode", "str", "emacs",
                 "Input line key bindings in the async screen: emacs (Enter sends) or vi "
                 "(multi-line buffer; Esc then `:` opens the ex line, `:x` sends)."),
@@ -378,6 +377,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "tools",
     "mcp",
     "sampling",
+    "ui",
 )
 
 
