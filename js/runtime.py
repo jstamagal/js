@@ -271,18 +271,8 @@ def _resolve_context_window(
 
 
 # --------------------------------------------------------------------------
-# Error taxonomy
+# Max-output recovery
 # --------------------------------------------------------------------------
-
-# Retry only ``ai.ProviderAPIError`` where ``exc.is_retryable`` is true.
-# All other provider errors are fatal and abort the turn.
-
-
-def _is_retriable(exc: BaseException) -> bool:
-    if isinstance(exc, ai.ProviderAPIError):
-        return bool(exc.is_retryable)
-    return False
-
 
 # Sent as a user message after a reply cut off by its output-token cap.
 MAX_OUTPUT_RESUME_NUDGE = (
