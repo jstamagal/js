@@ -5,7 +5,7 @@ chat, one-shot prompts, pipe workflows, local tools, parallel
 subagents, wiki agents, and commit-agent
 workflows through the Vercel AI Python SDK (`ai-python`).
 This repo is for a power user, not a product team. The design bias is low
-friction with lots of knobs: direct shell access, explicit sessions, prompt
+friction with lots of settings: direct shell access, explicit sessions, prompt
 directories as agents, rich model-facing tool descriptions, and no compatibility
 aliases kept around just to make old prompts happy.
 
@@ -71,7 +71,7 @@ spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 ## Config And Model Defaults
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
 applied at startup. Files layer lowest-to-highest as `js/jsrc` (shipped in the
-package: one line per knob, the built-in defaults), `~/.js/jsrc`,
+package: one line per setting, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
 CLI `--extra key=value` overrides env. js creates no `~/.js/jsrc`; `/save`
 writes it. `js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
@@ -79,7 +79,7 @@ writes it. `js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
 `set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
-`ai-python` when no explicit provider config is set. Tune any knob live with
+`ai-python` when no explicit provider config is set. Tune any setting live with
 `/set <key> <value>` (and list them with `/show`); convert a legacy
 `config.toml` once with `js --migrate-config`. Files of commands run
 with `/load <file>`; any REPL command works there without the `/`, including

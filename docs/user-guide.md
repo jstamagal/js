@@ -209,7 +209,7 @@ A line typed while a turn runs is handled by `runtime.steer`:
 
 - `now` (default): the line joins the running turn. It reaches the model as a
   user message at the next tool boundary, after the tool results and before
-  the next model call, and `(→ steered)` marks the spot. Several lines typed
+  the next model call, and `*** Steered.` marks the spot. Several lines typed
   before the boundary go in together, in order. If the turn makes no further
   tool call, the lines go in as one message right after it ends.
 - `batch`: the lines wait for the turn to end and then go in as ONE message.
@@ -246,7 +246,7 @@ js -p "write a short repo summary"
 
 One-shot mode appends the user prompt to a new unique session by default, runs
 one turn, prints the final assistant message, persists new messages, and prints
-a `Continue:` command. A driven agent should keep that default across correction
+a `*** Continue:` command. A driven agent should keep that default across correction
 rounds so it can resume instead of paying to re-read the repository and prior
 context on every invocation.
 
@@ -267,10 +267,10 @@ js --migrate-config
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
 file and keeps stdout clean. They are mutually exclusive.
 
-`-q` / `--quiet` suppresses the `Continue: ...` resume hint that one-shot mode
+`-q` / `--quiet` suppresses the `*** Continue: ...` resume hint that one-shot mode
 prints after a saved turn. The session is still written; only the hint is
 silenced. `-n` / `--no-save` is different: it makes the run disposable, leaves
-stdout answer-only, and prints exactly `session not saved; resume unavailable`
+stdout answer-only, and prints `*** Session not saved. Resume unavailable.`
 to stderr after a headless prompt or pipe run. Agent drivers should treat that
 warning as a signal that the next correction round cannot resume and must
 re-read context.
@@ -452,4 +452,4 @@ Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes
 that one compaction with the named summarizer instead of `compact.model`.
 Automatic cache-aware compaction is controlled by `set compact.auto` and the
-`set compact.*` knobs in `~/.js/jsrc` or project `.js/jsrc`.
+`set compact.*` settings in `~/.js/jsrc` or project `.js/jsrc`.

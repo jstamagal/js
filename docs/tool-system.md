@@ -256,7 +256,7 @@ Edit operations snapshot prior state for `undo`:
 - `path`
 - `glob`
 - output modes: `files_with_matches`, `content`, `count`
-- context line knobs: `-A`, `-B`, `-C`
+- context line options: `-A`, `-B`, `-C`
 - line numbers: `-n`
 - case-insensitive: `-i`
 - file type/extension

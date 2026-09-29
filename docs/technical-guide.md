@@ -39,6 +39,7 @@ persists each completed turn.
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
+| `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
@@ -254,6 +255,19 @@ The CLI prompt mode catches runtime exceptions and returns exit code `1`.
 The REPL catches runtime exceptions and keeps the REPL alive. Completed tool
 work and partial replies are persisted; an unstarted prompt is discarded using
 its current position, including after compaction has shifted the history.
+
+## Operator Messages
+
+Every line js prints for the operator is a named `Message` in
+`js/messages.py`; code passes the values for its holes (`msgs.say(msgs.MODEL_SET,
+model=m)`, `msgs.warn(...)` for stderr, `.text()` for an error string returned
+to a caller). A banner entry prints behind the `BANNER` slot (`***` today); no
+template spells the slot. Severity is colour, never a word: `WARN` paints the
+holes light yellow, `GRAVE` light red, and a message with no holes is painted
+whole. Tool results, tool descriptions and prompts are the model's text and
+stay where they are; so does the commit helper's output, which the commit agent
+reads. `tests/test_messages.py` fails on a `print` in `js/` that carries the
+slot, `error:`, `warning:`, `js:`, `knob` or `(no `.
 
 ## Backward Compatibility Policy
 

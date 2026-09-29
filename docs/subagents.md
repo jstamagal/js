@@ -144,8 +144,8 @@ Not implemented:
 - polling child status
 - stopping a running child
 - listing active children
-- per-task timeout knob
-- max-worker knob
+- per-task timeout setting
+- max-worker setting
 - model-facing per-task model override
 - model-facing per-task endpoint override
 

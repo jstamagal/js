@@ -330,7 +330,7 @@ Parameters:
 - `keys`: comma-separated named keys or literal text for `send`.
 - `cwd`: working directory for `start`.
 - `wait_ms`: redraw collection delay, default `700`.
-- `cols`, `rows`: terminal dimensions; unset, the `tools.terminal_cols` and `tools.terminal_rows` knobs.
+- `cols`, `rows`: terminal dimensions; unset, the `tools.terminal_cols` and `tools.terminal_rows` settings.
 
 Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
 and F1 through F12. Results include the rendered screen, cursor, changed-line
@@ -566,7 +566,7 @@ kernel.render_max_lines <n>` (default 24) caps each rendered section so a
 4000-line cell cannot scroll the screen away; the hidden count is always shown.
 
 Verbosity governs the terminal render only. The model always receives the full,
-identically-shaped result — a display knob that could silently delete the
+identically-shaped result — a display setting that could silently delete the
 `NAMESPACE` line would break the property the whole tool rests on.
 
 ## Wiki Tools
