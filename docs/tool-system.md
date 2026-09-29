@@ -103,6 +103,11 @@ REPL prints every tool with its state and the entry that decided it.
 `tool_discovery` is published only when the surface has lazy tools, skills,
 or MCP servers. Its native catalog is exactly the agent's lazy set.
 
+`skills:` (in `agent.yaml` and `tools.yaml`) is validated as `family:name` or
+`family:*` and stored on the prompt spec. It does not filter the skill
+catalog yet: js skills have no family grouping, so every discovered skill is
+listed regardless of `skills:`.
+
 An entry that is not `noun:modifier`, an unknown tag, or a tag cycle fails
 the agent load with one line. An exact noun that names no tool prints one
 `matched no tool; ignoring` line naming the entry.

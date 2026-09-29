@@ -20,7 +20,7 @@ agent's surface.
       code_editor: ["*:ban", read:eager]
     ban:                  # argument patterns refused before dispatch
       shell: ["rm -rf"]
-    skills: [...]         # parsed and validated
+    skills: [...]         # validated; does not filter the skill catalog yet
 
 Intrinsic tags are computed from tool properties: `tag:read_only` matches
 every tool whose `read_only` is true. An intrinsic tag takes an optional
@@ -251,9 +251,11 @@ def select(
     *,
     agent_id: str | None = None,
     where: str = "",
+    warn: bool = True,
 ) -> Selection:
     rules = expand(entries, config, where or (f"agent {agent_id!r}" if agent_id else "tools"))
-    warn_unmatched(tools, rules, agent_id)
+    if warn:
+        warn_unmatched(tools, rules, agent_id)
     decisions = resolve(tools, rules)
     return Selection(
         eager=frozenset(d.tool.name for d in decisions if d.modifier == "eager"),

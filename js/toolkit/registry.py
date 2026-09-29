@@ -72,11 +72,14 @@ class ToolRegistry:
         entries: Iterable[str] | None,
         agent_id: str | None = None,
         config: policy.ToolsConfig | None = None,
+        *,
+        warn: bool = True,
     ) -> ToolRegistry:
         """The agent's surface: the tools its `noun:modifier` chain makes
-        eager or lazy, with tools.yaml's tags and argument bans applied."""
+        eager or lazy, with tools.yaml's tags and argument bans applied.
+        `warn` prints the one-line notice for entries that match no tool."""
         config = config if config is not None else policy.load_tools_config()
-        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id)
+        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn)
         selected = tuple(tool for tool in self.tools if tool.name in chosen.eager | chosen.lazy)
         known_names = self.known_names or frozenset(self.by_name)
         return replace(

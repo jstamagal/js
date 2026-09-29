@@ -775,8 +775,14 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
 
 
 def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
+    """Rebuild the live registry. The agent load already printed the
+    unmatched-entry notices; a tools.yaml that no longer resolves keeps the
+    current registry and prints one line."""
     selectors = state.get("tool_selectors", ())
-    state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors)
+    try:
+        state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
+    except tool_policy.ToolPolicyError as exc:
+        print(f"{C.ORANGE}{exc}; keeping the current tool surface{C.RESET}")
 
 
 def _state_value(state: dict, key: str, default):

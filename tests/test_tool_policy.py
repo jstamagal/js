@@ -313,3 +313,21 @@ def test_an_agent_naming_a_removed_tool_gets_one_line_naming_it(capsys):
     assert set(registry.by_name) == {"read"}
     err = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
     assert len(err) == 1 and "todo_write" in err[0]
+
+
+def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path, capsys):
+    path = policy.tools_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(SPEC_TOOLS_YAML, encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    state = {"tool_selectors": ("tag:code_hacker", "todo_write:eager"), "settings": {}}
+    cli._sync_tool_registry_from_live_settings(cfg, state)
+    before = state["tool_registry"]
+    assert "shell" in before.by_name
+    assert capsys.readouterr().err == ""
+
+    path.write_text("tags:\n  code_hacker:\n    - tag:code_hacker\n", encoding="utf-8")
+    cli._sync_tool_registry_from_live_settings(cfg, state)
+
+    assert state["tool_registry"] is before
+    assert len([line for line in capsys.readouterr().out.splitlines() if line.strip()]) == 1
