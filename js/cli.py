@@ -45,7 +45,6 @@ from . import runtime
 from . import stats
 from . import paths as _paths
 from . import transcript as transcript_mod
-from . import tui
 from .promptexpand import expand_prompt
 from . import screen
 from . import setcmd
@@ -2922,7 +2921,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
     parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
-    parser.add_argument("--tui", action="store_true", help="run the interactive REPL as a Textual cockpit; renders assistant Markdown in-pane")
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
                              "May be repeated. Wins over env and all config files.")
@@ -3126,9 +3124,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.files and selected_modes:
         print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
         return 2
-    if args.tui and not sys.stdin.isatty():
-        print(f"{C.ORANGE}error: --tui requires an interactive terminal{C.RESET}", file=sys.stderr)
-        return 2
 
     if args.bench:
         if selected_modes or args.agent:
@@ -3169,7 +3164,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
         return 2
 
-    if args.prompt is not None or (not sys.stdin.isatty() and not args.tui):
+    if args.prompt is not None or not sys.stdin.isatty():
         os.environ["JS_MODE"] = "headless"
         stdin_attachment = None
         if "-" in args.files:
@@ -3347,31 +3342,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state["mcp_host"] = _session_mcp_host(cfg, telemetry)
-    # Attach the debug autolog sink before the first turn (all three REPL
+    # Attach the debug autolog sink before the first turn (both REPL
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
-
-    if args.tui:
-        with _transcript_stdio(telemetry):
-            print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
-        deps = tui.TuiDeps(
-            handle_command=_handle_command,
-            is_turn_state_command=_is_turn_state_command,
-            cfg_for_live_state=_cfg_for_live_state,
-            append_turn=_append_turn,
-            maybe_auto_compact=_maybe_auto_compact,
-            sync_telemetry_from_live_settings=_sync_telemetry_from_live_settings,
-            sync_sampling_from_live_settings=_sampling_override_from_live_settings,
-            sync_model_from_live_settings=_sync_model_from_live_settings,
-            sync_provider_from_live_settings=_sync_provider_from_live_settings,
-            sync_tool_registry_from_live_settings=_sync_tool_registry_from_live_settings,
-            event_results_changed_sampling=_event_results_changed_sampling,
-            event_results_changed_model=_event_results_changed_model,
-            event_result_changed_keys=_event_result_changed_keys,
-            changed_provider_key=_changed_provider_key,
-            changed_lock_subagent_model_key=_changed_lock_subagent_model_key,
-        )
-        return tui.run_tui_repl(cfg, state, telemetry, prompt_spec, deps)
 
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)

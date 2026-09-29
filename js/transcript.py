@@ -9,15 +9,11 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
-import io
 import re
 import threading
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-
-from rich.console import Console
-from rich.text import Text
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -25,31 +21,6 @@ _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
-
-
-def render_plain(obj: object) -> str:
-    """Best-effort plain text for a Rich/Textual renderable."""
-    if isinstance(obj, Text):
-        return obj.plain
-    if isinstance(obj, str):
-        buf = io.StringIO()
-        Console(
-            file=buf,
-            force_terminal=False,
-            color_system=None,
-            width=10_000,
-            highlight=False,
-        ).print(obj, markup=True, highlight=False, end="")
-        return strip_ansi(buf.getvalue())
-    buf = io.StringIO()
-    Console(
-        file=buf,
-        force_terminal=False,
-        color_system=None,
-        width=10_000,
-        highlight=False,
-    ).print(obj, highlight=False, end="")
-    return strip_ansi(buf.getvalue())
 
 
 class TranscriptLogSink:

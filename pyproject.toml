@@ -23,10 +23,8 @@ dependencies = [
     "prompt_toolkit>=3.0",
     "pyte>=0.8.2",
     "PyYAML>=6.0",
-    # direct import in transcript.py, tui.py, and toolkit/kernel.py. was riding
-    # in transitively on textual; declared now because three modules import it.
+    # direct import in toolkit/kernel.py.
     "rich>=13.0",
-    "textual>=0.85",
     "tomli_w>=1.0",
     "platformdirs>=4.0",
     "jsonschema==4.25.1",
