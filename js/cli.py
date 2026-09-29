@@ -132,6 +132,10 @@ def _registry_for(cfg) -> object:
 
 _BOOL_WORDS_ON = {"on", "true", "yes", "1"}
 _BOOL_WORDS_OFF = {"off", "false", "no", "0"}
+_PROMPT_CHANGED_NOTICE = (
+    "<js-reminder>The agent prompt files changed on disk. "
+    "This session keeps the prompt it started with.</js-reminder>"
+)
 
 
 def _parse_bool(raw: str) -> bool | None:
@@ -3365,9 +3369,10 @@ def main(argv: list[str] | None = None) -> int:
     # A session sends the system prompt it was born with, byte for byte, for its
     # whole life. Rebuilding it per launch puts a fresh clock and load average in
     # front of an append-only history and breaks the shared prefix at byte zero.
-    # Genuine drift is reported to the model as a message at the end instead.
+    # A change to the prompt files on disk is reported to the model as a message
+    # at the end instead. The change is judged on the files before directive
+    # expansion, since expanded output such as a clock differs on every launch.
     recorded_system = M.load_system_prompt(cfg.session_file)
-    system_drifted = recorded_system is not None and recorded_system != system
     if recorded_system is not None:
         system = recorded_system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
@@ -3402,23 +3407,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{C.ORANGE}(empty session — nothing to resume: {cfg.session_file}){C.RESET}")
     _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
+    prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
     if recorded_system is None:
         M.append_system_prompt(cfg.session_file, system)
-    elif system_drifted:
-        # The prompt on disk changed since this session started. The frozen one is
-        # still what gets sent; the model is told what moved rather than having the
-        # change appear silently in front of its history.
-        notice = {
-            "role": "user",
-            "content": (
-                "<js-reminder>The agent prompt files changed since this session started. "
-                "The original system prompt is still in effect for this conversation; "
-                "restart in a new session to pick up the new one.</js-reminder>"
-            ),
-        }
+    elif prompt_changed:
+        # The prompt on disk differs from the one the previous launch saw. The
+        # recorded one is still what gets sent; the model is told once, at the
+        # launch that first sees the change.
+        notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
         messages.append(notice)
         _append_turn(cfg, notice)
-        print(f"{C.GREY}(agent prompt changed on disk — keeping this session's original){C.RESET}")
+        print("*** Agent prompt changed on disk. Session keeps the one it started with.")
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:

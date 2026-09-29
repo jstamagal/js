@@ -399,7 +399,21 @@ The writer uses `fcntl` locks and `fsync` on append.
 when a turn is aborted or a runtime exception happens after the user message was
 already appended.
 
-`compaction:{...}` marks rebuild loaded context as one `<compaction-summary>` user message plus a safe tail. Other marks are ignored by the loader but remain in JSONL as audit notes.
+`compaction:{...}` marks rebuild loaded context as one `<compaction-summary>` user message plus a safe tail.
+
+`system:{...}` records the system prompt a session was born with. Every launch
+of that session sends those bytes, so a resumed request shares its prefix with
+the one that built the conversation.
+
+`prompt_seen:<hash>` is appended at every REPL launch, after `session_start`. The
+hash covers the agent prompt files before directive expansion, so output such
+as a clock does not count as a change. When the hash differs from the previous
+launch's mark, the REPL appends one `<js-reminder>` user message saying the
+prompt files changed on disk and the session keeps its original prompt. A
+session with no earlier `prompt_seen:` mark gets no notice.
+
+The message loader ignores `system:`, `prompt_seen:` and every other mark; they
+remain in JSONL as audit notes.
 
 ## Wipe And Backups
 

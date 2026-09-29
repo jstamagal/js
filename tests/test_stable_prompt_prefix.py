@@ -89,16 +89,26 @@ def test_a_resumed_session_sends_the_prompt_it_started_with(monkeypatch, tmp_pat
     assert second[0] == first[0]
 
 
+def _notices(session_file):
+    return [
+        m for m in load_messages(session_file)
+        if m.get("role") == "user" and str(m.get("content", "")).startswith("<js-reminder>")
+    ]
+
+
 def test_prompt_drift_is_reported_as_a_message_not_a_new_prefix(monkeypatch, tmp_path):
     _agent_prompt(tmp_path, "ORIGINAL PROMPT\n")
     _repl(monkeypatch, tmp_path, [], lines=["one"])
     session_file = _only_session(tmp_path)
 
+    assert _notices(session_file) == []
+
     _agent_prompt(tmp_path, "REBUILT PROMPT\n")
     _repl(monkeypatch, tmp_path, ["--session", session_file.stem])
+    assert len(_notices(session_file)) == 1
 
-    contents = [m.get("content") for m in load_messages(session_file) if m.get("role") == "user"]
-    assert any("prompt files changed" in str(c) for c in contents)
+    _repl(monkeypatch, tmp_path, ["--session", session_file.stem])
+    assert len(_notices(session_file)) == 1
 
 
 def test_an_unchanged_prompt_reports_no_drift(monkeypatch, tmp_path):
@@ -108,5 +118,39 @@ def test_an_unchanged_prompt_reports_no_drift(monkeypatch, tmp_path):
 
     _repl(monkeypatch, tmp_path, ["--session", session_file.stem])
 
-    contents = [m.get("content") for m in load_messages(session_file) if m.get("role") == "user"]
-    assert not any("prompt files changed" in str(c) for c in contents)
+    assert _notices(session_file) == []
+
+
+def test_expanded_output_that_differs_per_launch_is_not_a_prompt_change(monkeypatch, tmp_path):
+    # A directive such as a clock expands differently on every launch while the
+    # prompt files stay the same.
+    _agent_prompt(tmp_path, "PROMPT AT {{JS_TEST_CLOCK}}\n")
+    monkeypatch.setenv("JS_TEST_CLOCK", "10:00")
+    first = _repl(monkeypatch, tmp_path, [], lines=["one"])
+    session_file = _only_session(tmp_path)
+
+    monkeypatch.setenv("JS_TEST_CLOCK", "10:05")
+    second = _repl(monkeypatch, tmp_path, ["--session", session_file.stem], lines=["two"])
+
+    assert "10:00" in first[0]
+    assert second[0] == first[0]
+    assert _notices(session_file) == []
+
+
+def test_prompt_change_is_reported_once_across_resumes(tmp_path):
+    session = tmp_path / "session.jsonl"
+
+    # Birth: the recorded prompt is the on-disk prompt.
+    assert memory.last_prompt_seen(session) is None
+    assert memory.record_prompt_seen(session, "PROMPT ONE") is False
+
+    # The prompt files change, then the session resumes.
+    assert memory.record_prompt_seen(session, "PROMPT TWO") is True
+
+    # Resumed again with no further edit.
+    assert memory.record_prompt_seen(session, "PROMPT TWO") is False
+    assert memory.last_prompt_seen(session) == memory.prompt_fingerprint("PROMPT TWO")
+
+
+def test_the_prompt_change_notice_does_not_ask_for_a_restart():
+    assert "restart" not in cli._PROMPT_CHANGED_NOTICE.lower()

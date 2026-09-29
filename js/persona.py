@@ -22,6 +22,13 @@ class PromptSpec:
     secondary_model: str = ""    # backup model — reserved for a future (non-config) selection flag
     reasoning_effort: str | None = None  # child thinking default; None inherits parent/provider default
     max_output_tokens: int | None = None  # agent-default per-call cap from 00-tools.yaml; None = provider/metadata default
+    # The assembled prompt files before directive expansion. `system` is what the
+    # model is sent; for a spec that was never expanded the two are equal.
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source:
+            object.__setattr__(self, "source", self.system)
 
 
 @dataclass(frozen=True)
@@ -398,7 +405,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     )
     if system == spec.system:
         return spec
-    return PromptSpec(system=system, tool_selectors=spec.tool_selectors, sampling=spec.sampling, model=spec.model, secondary_model=spec.secondary_model, reasoning_effort=spec.reasoning_effort, max_output_tokens=spec.max_output_tokens)
+    return replace(spec, system=system, source=spec.source)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system

@@ -58,6 +58,7 @@ class FakeResponse:
         ("<blockquote>A</blockquote><p>B</p>", "A\nB"),
         ("<dl><dt>A</dt><dd>B</dd></dl>", "A\nB"),
         ("A<br>B", "A\nB"),
+        ("<title>Example Domain</title><h1>Example Domain</h1>", "Example Domain\nExample Domain"),
     ],
 )
 def test_html_block_siblings_keep_their_boundary(html, expected):
