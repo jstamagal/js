@@ -38,6 +38,8 @@ _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
 # Upper bound on ToolContext.known_content; the oldest entries go first.
 _KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
+# A tool result that carries an image: prefix, host path, mime, text stub.
+_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
 # The id of the tool call running in this thread or task. Read coverage is
@@ -389,6 +391,9 @@ class ToolContext:
     shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
     max_parallel_tools: int = _knob("runtime.max_parallel_tools")  # read-only calls of one batch run at once
     jail_bind: tuple[str, ...] = field(default_factory=lambda: tuple(_settings.default_value("jail.bind")))
+    lsp_servers: list = _knob("lsp.servers")  # language servers the lsp tool may start
+    lsp_timeout_s: int = _knob("lsp.timeout_s")  # seconds an lsp call waits on its server
+    notebook_output_lines: int = _knob("notebook.output_lines")  # lines per cell output in a notebook read
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
@@ -902,18 +907,32 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     try:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
-        return f"ERROR: {exc}"
+        return _jail.Refusal(f"ERROR: {exc}")
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
-        return f"{result}\n{rendered}"
-    return result
+        result = f"{result}\n{rendered}"
+    return _as_jail_shows(result)
+
+
+def _as_jail_shows(result: Any) -> Any:
+    """``result`` with host paths into the jail's /tmp and ~/.js/tmp named as
+    the jail shows them. The path field of an image marker stays the host
+    path: the model client reads the image from it."""
+    if _jail.active() is None or not isinstance(result, str) or isinstance(result, _jail.Refusal):
+        return result
+    if result.startswith(_IMAGE_RESULT_PREFIX):
+        prefix, host, rest = (result.split("\t", 2) + ["", ""])[:3]
+        shown = f"{prefix}\t{host}\t{_jail.shown(rest)}"
+    else:
+        shown = _jail.shown(result)
+    return result if shown == result else shown
 
 
 async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Invoke either a native sync handler or a cancelable async handler."""
     result = call_tool(tool, args, context)
-    return await result if inspect.isawaitable(result) else result
+    return _as_jail_shows(await result) if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:

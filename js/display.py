@@ -384,6 +384,42 @@ def metrics_line(name: str, output: ToolOutput, *, shown: ToolOutput | None = No
     )
 
 
+# The argument that tells one call of a tool from another on its one-line
+# trace: the first of these that the call carries. A tool not named here is
+# told apart by its path, when it has one.
+_KEY_ARGS: dict[str, tuple[str, ...]] = {
+    "fs_search": ("pattern",),
+    "ast_search": ("pattern",),
+    "shell": ("command",),
+    "terminal_session": ("command",),
+    "kernel": ("code",),
+    "toolbox": ("source",),
+    "fetch": ("url",),
+    "browse": ("url",),
+}
+_PATH_ARGS = ("file_path", "path")
+_KEY_ARG_MIN = 16
+
+
+def key_argument(name: str, args: dict | None, room: int) -> str:
+    """The call's key argument on one line of at most `room` cells: a path
+    keeps its tail, anything else its head; "" when the call has none."""
+    if not isinstance(args, dict):
+        return ""
+    keys = _KEY_ARGS.get(name, _PATH_ARGS)
+    value = next((args[key] for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
+    if value is None:
+        return ""
+    lines = clean(value).strip().split("\n")
+    text = lines[0].strip()
+    more = "…" if len(lines) > 1 else ""
+    if len(text) + len(more) <= room:
+        return text + more
+    if keys is _PATH_ARGS:
+        return "…" + text[-(room - 1):]
+    return text[:room - 1] + "…"
+
+
 def _single_line(value: Any) -> str:
     if isinstance(value, str):
         text = value
@@ -498,7 +534,10 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
     output = tool_output(name, result)
     head = CHROME_ERROR if output.is_error or output.exit_code else CHROME
     if level == 1:
-        return f"{head}{TOOL_MARKER} {metrics_line(name, output)}{C.RESET}\n"
+        room = width - len(TOOL_MARKER) - len(metrics_line(name, output)) - 3
+        about = key_argument(name, args, max(room, _KEY_ARG_MIN))
+        label = f"{name} {about}" if about else name
+        return f"{head}{TOOL_MARKER} {metrics_line(label, output)}{C.RESET}\n"
     out: list[str] = []
     if level == 2:
         clip = max(20, width - 1)
@@ -519,4 +558,63 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
         for line, err in output.lines:
             out.append(f"{STDERR}{line}{C.RESET}\n" if err else f"{line}\n")
     out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
+    return "".join(out)
+
+
+# --------------------------------------------------------------------------
+# A resumed session's last exchanges
+# --------------------------------------------------------------------------
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return "" if content is None else str(content)
+    return "\n".join(
+        part["text"] for part in content
+        if isinstance(part, dict) and isinstance(part.get("text"), str)
+    )
+
+
+def _call_args(call: dict) -> tuple[str, dict]:
+    function = call.get("function") or {}
+    raw = function.get("arguments")
+    try:
+        args = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        args = None
+    return str(function.get("name") or "?"), args if isinstance(args, dict) else {}
+
+
+def render_exchanges(messages: list[dict], count: int, *, prompt: str, width: int,
+                     level: int, preview: int, markdown: bool = True) -> str:
+    """The last `count` exchanges of `messages` as a turn prints them: the
+    user's line behind `prompt`, each tool exchange at `ui.tools` `level`, the
+    answer as Markdown at `width` (plain text when `markdown` is off). An
+    exchange starts at a user message that was not steered into a turn."""
+    starts = [i for i, message in enumerate(messages)
+              if message.get("role") == "user" and not message.get("steered")]
+    if count <= 0 or not starts:
+        return ""
+    tail = messages[starts[-min(count, len(starts))]:]
+    results = {message.get("tool_call_id"): message for message in tail if message.get("role") == "tool"}
+    out: list[str] = []
+    for message in tail:
+        role = message.get("role")
+        text = clean(_content_text(message.get("content"))).strip("\n")
+        if role == "user":
+            out.append(f"{prompt}{text}\n")
+        elif role == "assistant":
+            if text.strip():
+                out.append(render_markdown(text, width) if markdown else text + "\n")
+            for call in message.get("tool_calls") or []:
+                name, args = _call_args(call)
+                out.append(render_tool_call(name, args, level, preview=preview, width=width))
+                result = results.get(call.get("id"))
+                if result is not None:
+                    out.append(render_tool_result(
+                        name, _content_text(result.get("content")), level,
+                        preview=preview, width=width, args=args,
+                    ))
     return "".join(out)

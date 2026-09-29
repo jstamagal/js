@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from js import cli, jail, paths, persona, runtime, settings
-from js.toolkit import ToolContext, call_tool, kernel as kmod, process_net, terminal
+from js.toolkit import ToolContext, call_tool, fs, kernel as kmod, process_net, terminal
 from js.toolkit.registry import build_default_registry
 
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
@@ -232,6 +232,96 @@ def test_tmp_is_private_and_shared_with_the_file_tools(jailed):
     assert not tool("write", jailed, path="/tmp/from-tool.txt", content="from-tool\n").startswith("ERROR")
     code, result = run_shell("cat /tmp/from-tool.txt", jailed)
     assert "from-tool" in result
+
+
+@needs_bwrap
+def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
+    """A /tmp path absent from the jail's private /tmp is outside the jail; the
+    refusal names the path the model gave and carries no retry count."""
+    host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
+    try:
+        (host_dir / "x.txt").write_text("host-only\n")
+        calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+
+        records = runtime._dispatch_tool_calls(
+            calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+            build_default_registry(), jailed,
+        )
+
+        result = records[0][2]
+        assert result.startswith("ERROR:")
+        assert "outside the jail" in result
+        assert str(jail.active().private) not in result
+        assert "<retry>" not in result
+        assert "host-only" not in result
+    finally:
+        shutil.rmtree(host_dir, ignore_errors=True)
+
+
+
+@needs_bwrap
+def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
+    """Under -C every fs tool result names /tmp and ~/.js/tmp paths as the
+    model gave them, in success and in error."""
+    private = str(jail.active().private)
+    name = f"js-jail-names-{os.getpid()}-{time.monotonic_ns()}"
+    tmp_file = f"/tmp/{name}/a.txt"
+    js_tmp_file = f"~/.js/tmp/{name}.txt"
+    results = [
+        tool("write", jailed, path=tmp_file, content="alpha\nbeta\n"),
+        tool("write", jailed, path=tmp_file, content="again\n"),
+        tool("read", jailed, path=tmp_file),
+        tool("patch", jailed, path=tmp_file, old_string="beta", new_string="gamma"),
+        tool("patch", jailed, path=tmp_file, old_string="absent", new_string="x"),
+        tool("fs_search", jailed, pattern="gamma", path=f"/tmp/{name}"),
+        tool("fs_search", jailed, pattern="gamma", path="/tmp", output_mode="content"),
+        tool("write", jailed, path=f"/tmp/{name}/b.py", content="f(1)\n"),
+        tool("ast_search", jailed, pattern="f($A)", path=f"/tmp/{name}", lang="python"),
+        tool("write", jailed, path=js_tmp_file, content="delta\n"),
+        tool("read", jailed, path=js_tmp_file),
+        tool("remove", jailed, path=tmp_file, permanent=True),
+        tool("undo", jailed, path=tmp_file),
+        tool("remove", jailed, path=js_tmp_file, permanent=True),
+        tool("remove", jailed, path=js_tmp_file, permanent=True),
+    ]
+
+    for result in results:
+        assert private not in result
+    assert f"/tmp/{name}/a.txt" in results[0]
+    assert "gamma" in results[5] + results[6] and f"/tmp/{name}/a.txt" in results[6]
+    if fs._ast_grep_binary() is not None:
+        assert f"/tmp/{name}/b.py" in results[8]
+    assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[9]
+    for error in (results[1], results[4], results[14]):
+        assert error.startswith("ERROR")
+
+
+@needs_bwrap
+def test_an_image_read_under_the_jail_tmp_keeps_the_host_path_for_the_model_client(jailed):
+    """The image marker's path field is what the model client reads the image
+    from, so it stays the host path; the stub the model sees does not."""
+    private = str(jail.active().private)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    image = jail.active().tmp / f"js-jail-img-{os.getpid()}.png"
+    image.write_bytes(png)
+    jailed.vision_enabled = True
+
+    result = tool("read", jailed, path=f"/tmp/{image.name}")
+
+    _prefix, host, _mime, stub = result.split("\t", 3)
+    assert Path(host).read_bytes() == png
+    assert private not in stub
+    assert f"/tmp/{image.name}" in stub
+
+
+def test_a_jail_refusal_gets_no_retry_count_and_other_errors_do():
+    tracker = runtime.ToolErrorTracker()
+
+    refused = tracker.record("read", jail.Refusal("ERROR: /x is outside the jail"))
+    failed = tracker.record("read", "ERROR: no such file: /y")
+
+    assert "<retry>" not in refused
+    assert "<retry>" in failed
 
 
 @needs_bwrap

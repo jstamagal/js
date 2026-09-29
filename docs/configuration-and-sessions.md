@@ -123,7 +123,7 @@ name, which wins when both are set. Default values are the lines in `js/jsrc`.
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
 | `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
 | `JS_DEBUG` | `runtime.debug` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs. |
+| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs (on stderr in one-shot mode). |
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
@@ -269,11 +269,12 @@ project.
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
+  keys                   # key bindings (keys.file), read at REPL start
   state/
+    history.jsonl        # every prompt sent at a REPL prompt (history.file)
     <agent_id>/debug.log
     <agent_id>/undo/
     <agent_id>/latest.json   # the agent's latest session, for --last
-    <agent_id>/history       # REPL input history
     kernel/<run>/        # kernel.log and rich-output images
     tool-results/        # oversized results, spilled whole
     commit-backups/
@@ -411,7 +412,8 @@ last stamp (see below) unless the run names them with `--model` or
 `--reasoning`. `--last` resumes the agent's most recently started session,
 wherever it is filed.
 
-Generated session ids can be resumed from the `*** Continue:` hint. Driver
+Generated session ids can be resumed from the `*** Continue:` hint, which a
+one-shot run prints on stderr. Driver
 integrations that have a stable caller key can instead derive an opaque name
 from agent + resolved working directory + caller key; repeated runs get the same
 `derived/<sha256>` session while different agents, directories, or keys remain
@@ -419,7 +421,8 @@ isolated.
 
 `--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints
 `*** Session not saved. Resume unavailable.` once on stderr after the run while
-keeping stdout answer-only. It does not warn in the interactive REPL. This is an
+keeping stdout answer-only. It does not warn in the interactive REPL, where
+`--no-save` reads a session named with `--session` and writes nothing. This is an
 expensive throwaway choice because the next run cannot resume and must re-read
 context.
 
@@ -434,7 +437,10 @@ does not hit it. The children of an unsaved run are not saved either.
 
 `js --session` (no name) or `/session [query]` in the REPL lists every session,
 newest first, across every directory and agent. `•` marks sessions started in
-the current directory; branches sit under the session they came from.
+the current directory; branches sit under the session they came from. A
+session started with `--session NAME` shows NAME in the last column, before
+its tags. `js --list` prints every session file as a table, newest first,
+with local times.
 
 | key | does |
 |---|---|
@@ -443,7 +449,7 @@ the current directory; branches sit under the session they came from.
 | `/` | type a search query; Enter keeps it, Esc clears it |
 | `b` | the message list: Enter branches at the highlighted message, `r` resumes at the end, Esc goes back |
 | `i` | the file path, model stamps, estimated token count and branch parent |
-| `a` | also show the hidden kinds (below), marked in the tags column |
+| `a` | also show the hidden kinds (below), marked in the last column |
 | Esc | clear the query, or close |
 
 Hidden until `a`: **empty** sessions (nothing came back), **quick** ones (one
@@ -529,6 +535,11 @@ first. A start or title record's `parent` is the message or mark it follows,
 and no record names it as its parent. A `usage` record is placed the same way.
 Replay reads the file in order and does not use ids.
 
+A record's `ts` is when its message happened. The operator's message is written
+when the turn starts; the rest of a turn is written when the turn ends, and
+each of those records still carries its own time: an assistant message when
+the model's response finished, a tool result when the tool finished.
+
 Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record
@@ -542,8 +553,11 @@ liveness sidecars track open processes without rewriting the append-only
 conversation file.
 
 Every assistant message record carries a `stamp`: the model, provider and
-reasoning level it was written under. Resume uses the last stamp (or the last
-start record's model, whichever came later).
+reasoning level it was written under. `/model` appends a `model_switch` record
+whose `stamp` is the model it switched to and whose `previous` is the one it
+left, in the same shape. Resume uses whichever came last: an assistant stamp, a
+`model_switch` stamp, or a start record's model (the `-m` of that start, else
+the configured model).
 
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
 newest title is the session's name in `--list --json`.

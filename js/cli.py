@@ -25,7 +25,6 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
@@ -50,10 +49,13 @@ from . import runtime
 from . import stats
 from . import home as _home
 from . import jail as _jail
+from . import keys as keys_mod
 from . import paths as _paths
+from . import prompt_history
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
 from . import screen
+from . import session_query
 from . import setcmd
 from . import skills
 from . import settings
@@ -81,6 +83,7 @@ from .session_catalog import (
     branch_session,
     catalog_sessions,
     last_stamp,
+    record_model_switch,
     record_session_start,
     session_title,
 )
@@ -126,28 +129,37 @@ _PROMPT_CHANGED_NOTICE = (
 )
 
 
-# Keyed by the mode the session continues in.
-_MODE_SWITCH_NOTICES = {
-    "repl": (
-        "<js-reminder>This conversation started as a one-shot run and now continues "
-        "in interactive chat. The human is here and can answer.</js-reminder>"
-    ),
-    "-p": (
-        "<js-reminder>This conversation started in interactive chat and now continues "
-        "as a one-shot run. The human is not here and cannot answer.</js-reminder>"
-    ),
+_MODE_PLACES = {"repl": "in interactive chat", "-p": "as a one-shot run"}
+_MODE_PRESENCE = {
+    "repl": "The human is here and can answer.",
+    "-p": "The human is not here and cannot answer.",
 }
+
+
+def _mode_switch_notice(started: str, previous: str, now: str) -> str:
+    """The reminder for a turn in mode ``now`` after a turn in ``previous``, in
+    a session whose first turn ran in ``started``."""
+    if started == now:
+        course = (f"started {_MODE_PLACES[started]}, moved {_MODE_PLACES[previous]}, "
+                  f"and now continues {_MODE_PLACES[now]} again")
+    else:
+        course = f"started {_MODE_PLACES[started]} and now continues {_MODE_PLACES[now]}"
+    return f"<js-reminder>This conversation {course}. {_MODE_PRESENCE[now]}</js-reminder>"
 
 
 def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) -> attach.UserMessageBundle:
     """Record that this turn runs in ``mode`` ("repl" or "-p"). When the last
     turn ran in the other mode, this turn's user message carries the
-    mode-switch reminder."""
+    mode-switch reminder, which names the mode of the session's first turn."""
     if cfg.session_file == Path(os.devnull):
         return bundle
-    if M.record_turn_mode(cfg.session_file, mode) is None:
+    previous = M.record_turn_mode(cfg.session_file, mode)
+    if previous is None:
         return bundle
-    return attach.with_note(bundle, _MODE_SWITCH_NOTICES[mode])
+    started = M.first_turn_mode(cfg.session_file)
+    if started not in _MODE_PLACES:
+        started = previous
+    return attach.with_note(bundle, _mode_switch_notice(started, previous, mode))
 
 
 def _parse_bool(raw: str) -> bool | None:
@@ -397,13 +409,16 @@ def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
 
 
 def _print_session_list(*, json_lines: bool) -> int:
-    records = catalog_sessions(_paths.sessions_root())
+    """Every session, newest first; the table shows times in local time as the
+    picker does."""
+    records = sorted(catalog_sessions(_paths.sessions_root()), key=lambda record: -record["mtime"])
     if json_lines:
         for record in records:
             print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
         return 0
 
     headings = tuple(msgs.LIST_HEADINGS.text().split())
+    now = time.time()
     rows = []
     for record in records:
         identity = record["caller_key"]
@@ -413,7 +428,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             (
                 record["agent"] or "-",
                 record["name"],
-                datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
+                session_query.when_text(record["mtime"], now),
                 str(record["size"]),
                 str(record["user_turns"]),
                 (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).text(),
@@ -1267,7 +1282,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["model_source"] = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
         state["model"] = model_value
-        msgs.say(msgs.MODEL_SET, model=_provider_qualified(configured_provider_id, model_value))
+        msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(configured_provider_id, model_value))
         return
 
     route = routing.resolve_model_route(
@@ -1286,12 +1301,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["provider_base_url"] = route.base_url
     state["provider_api_key"] = route.api_key
     state["provider_headers"] = dict(route.headers)
-    msgs.say(msgs.MODEL_SET, model=_provider_qualified(route.provider_id, route.model))
-
-
-def _provider_qualified(provider_id: str | None, model: str) -> str:
-    """`provider:model` as the model lines print it; the bare model without a provider."""
-    return f"{provider_id}:{model}" if provider_id else model
+    msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(route.provider_id, route.model))
 
 
 def _pick_model_into_state(state: dict, cfg: Config) -> None:
@@ -1314,7 +1324,7 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["model_source"] = None  # the pick was persisted into the store
 
     _saved_path, save_error = _persist_default_model_id(default_model_id)
-    chosen = f"{selected['provider_id']}:{selected['model']}"
+    chosen = default_model_id
     if save_error:
         msgs.say(msgs.MODEL_NOT_SAVED_AS_DEFAULT, model=chosen, error=save_error)
     else:
@@ -1676,11 +1686,25 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _live_stamp(cfg: Config, state: dict) -> dict:
+    """The stamp a turn started now would write."""
+    active = _cfg_for_active_model(cfg, state)
+    live_settings = state.get("settings")
+    reasoning = _live_reasoning_effort_setting(live_settings if isinstance(live_settings, dict) else {},
+                                               active.reasoning_effort)
+    return M.stamp_for(active.model, active.provider_id, reasoning)
+
+
 def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
+    previous = _live_stamp(cfg, state)
     if arg:
         _set_model_via_route(state, cfg, arg)
     else:
         _pick_model_into_state(state, cfg)
+    stamp = _live_stamp(cfg, state)
+    if stamp != previous and cfg.session_file != Path(os.devnull):
+        # A resume comes back on the switched-to model before any turn ran on it.
+        record_model_switch(cfg.session_file, stamp=stamp, previous=previous)
     return None
 
 
@@ -2142,6 +2166,18 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
 
 QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
 
+# Orders the async REPL's live-state writes against turn starts. A command holds
+# it for its whole run on its executor thread; a turn takes its cfg snapshot under
+# it, also off the loop thread (_live_cfg_snapshot), so a command that waits on the
+# loop (a modal picker) never deadlocks it and a slow command never stalls input.
+_LIVE_STATE_LOCK = threading.Lock()
+
+
+def _live_cfg_snapshot(cfg: Config, state: dict) -> Config:
+    """The turn cfg from live state, never from a half-applied command."""
+    with _LIVE_STATE_LOCK:
+        return _cfg_for_live_state(cfg, state)
+
 
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
@@ -2150,7 +2186,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if not line.startswith("/") or _is_skill_invocation(line):
         return False
-    handled, error = _run_command(line, state, cfg)
+    with _LIVE_STATE_LOCK:
+        handled, error = _run_command(line, state, cfg)
     if isinstance(error, msgs.Said):
         msgs.say_said(error)
     elif error:
@@ -2324,6 +2361,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         cfg,
         caller_key=caller_key,
         announce_generated=announce_generated and save,
+        model=model,
     )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
@@ -2430,18 +2468,28 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     with stdout_ctx:
                         runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
             else:
-                # Plain and --debug-file: the terminal stays clean during the turn
-                # (only the final answer is reprinted below). The log captures the
-                # streamed answer plus, for --debug-file, the concise trace lines;
-                # the full request trace lands there via telemetry.trace_sink.
+                # Plain and --debug-file: stdout carries only the final answer,
+                # reprinted below. The log captures the streamed answer plus, for
+                # --debug-file, the concise trace lines; the full request trace
+                # lands there via telemetry.trace_sink. With runtime.trace on, the
+                # concise trace also shows on stderr as the model runs.
                 capture = trace_sink if trace_sink is not None else io.StringIO()
+                trace = bool(getattr(cfg, "trace", False))
                 visible_transcript = telemetry.transcript_log
+                visible_display = telemetry.display_factory
                 telemetry.transcript_log = None
+                if trace:
+                    answer_sink = capture
+                    telemetry.display_factory = (
+                        lambda markdown: display_mod.Display.for_stream(answer_sink, markdown=markdown))
+                    capture = _StdoutTee(sys.stderr, trace_sink) if trace_sink is not None else sys.stderr
                 try:
                     with contextlib.redirect_stdout(capture):
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
+                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=trace or bool(debug_file),
+                                         tool_context=tool_context, **turn_kwargs)
                 finally:
                     telemetry.transcript_log = visible_transcript
+                    telemetry.display_factory = visible_display
         except (KeyboardInterrupt, asyncio.CancelledError):
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.TURN_INTERRUPTED)
@@ -2505,7 +2553,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         if model:
                             cont += f" --model {shlex.quote(model)}"
                         cont += f" --session {hint}"
-                        msgs.say(msgs.CONTINUE_HINT, command=cont)
+                        msgs.warn(msgs.CONTINUE_HINT, command=cont)
             return 0
 
     with _transcript_stdio(telemetry):
@@ -3198,7 +3246,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
         prompt_text = _expand_skill_line(prompt_text)
-        turn_cfg = _cfg_for_live_state(cfg, state)
+        turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
@@ -3315,10 +3363,9 @@ def _status_colours(state: dict) -> str:
 
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
     """The REPL status bar from live state: what is running, on what, how full."""
-    live = state.get("settings") or {}
     context = runtime.T.STOCK_CONTEXT
-    provider = _provider_from_live_settings(live)[0] or state.get("provider_id") or cfg.provider_id
-    model = _model_from_live_settings(live) or state.get("model") or cfg.model
+    provider = state.get("provider_id") or cfg.provider_id
+    model = state.get("model") or cfg.model
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
         model = model[len(provider) + 1:]
     prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
@@ -3343,6 +3390,18 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
         session_short=screen.session_short(cfg.session_file),
         cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
         cost=usage_mod.status_text(usage_mod.totals(cfg.session_file)),
+    )
+
+
+def _resume_view(state: dict, width: int) -> str:
+    """The last `ui.resume_exchanges` exchanges of the session, drawn at `width`."""
+    live = state.get("settings") or {}
+    count = settings.knob(live, "ui.resume_exchanges")
+    return display_mod.render_exchanges(
+        state["messages"], count if isinstance(count, int) else 0,
+        prompt=f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}", width=width,
+        level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
+        markdown=display_mod.markdown_enabled(live),
     )
 
 
@@ -3384,7 +3443,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if handled:
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             if not state["running"]:
-                app.exit()
+                await close()
             return
         if sup.turn_active() and _steer_mode(state) == "now":
             # The turn writes it to the transcript where the model receives it.
@@ -3399,7 +3458,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     def on_interrupt() -> None:
         # ^C cancels the active turn AND drops anything queued behind it —
         # otherwise the queue keeps draining prompts the operator meant to
-        # abort. The drain-on-quit path (EOF) stays intact.
+        # abort.
         if sup.turn_active():
             n = sup.cancel_kind("turn")
             msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
@@ -3407,8 +3466,34 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if flushed:
             msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
 
-    def on_eof() -> None:
+    async def wind_down() -> None:
+        # Cancels the running turn, and any turn the consumer starts from a
+        # line it took before the queue emptied, and waits for them to end.
+        drop_pending()
+        joined = loop.create_task(queue.join())
+        while not joined.done() and not consumer.done():
+            sup.cancel_kind("turn")
+            await asyncio.wait({joined}, timeout=0.05)
+        joined.cancel()
+
+    closing: list[asyncio.Future] = []
+
+    async def close_screen() -> None:
+        on_interrupt()
+        await wind_down()
+        app.exit()
+
+    def close() -> asyncio.Future:
+        # exit and EOF cancel a running turn as ^C does. The screen closes
+        # once it has ended, so everything the turn prints lands in the
+        # scrollback.
+        if not closing:
+            closing.append(asyncio.ensure_future(close_screen()))
+        return closing[0]
+
+    def on_eof() -> asyncio.Future:
         state["running"] = False
+        return close()
 
     async def on_ex(line: str, editor: screen.InputEditor) -> None:
         await exline.run_ex(
@@ -3430,6 +3515,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
         key_bindings=clipimage.key_bindings(lambda: state["settings"]),
+        keymap=state.get("keymap"),
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
@@ -3442,25 +3528,28 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     ticker = loop.create_task(screen.tick(app, sup.turn_active))
     try:
         with screen.capture_stdio(loop, scrollback, app):
-            stream_transport.install_sink(stream_transport.NetSink(
-                level=lambda: _live_ui_int(state, "net"),
-                emit=lambda line: print(line, flush=True),
-            ))
-            if banner:
-                print(banner)
-            await app.run_async()
+            try:
+                stream_transport.install_sink(stream_transport.NetSink(
+                    level=lambda: _live_ui_int(state, "net"),
+                    emit=lambda line: print(line, flush=True),
+                ))
+                if banner:
+                    print(banner)
+                print(_resume_view(state, screen.ScreenLive(loop, scrollback, app).width()), end="")
+                await app.run_async()
+            finally:
+                # Whatever still runs ends while stdout is the scrollback, so
+                # nothing reaches the terminal after the screen has closed.
+                await wind_down()
+                for task in closing:
+                    with contextlib.suppress(Exception):
+                        await task
     finally:
         stream_transport.install_sink(None)
         ticker.cancel()
         telemetry.reasoning_factory = previous_reasoning_factory
         telemetry.display_factory = previous_display_factory
         supervisor.set_current(None)
-        # Graceful quit (EOF / exit): let queued and in-flight turns finish
-        # before teardown so submitted work isn't silently dropped. To abandon a
-        # long turn, cancel it with ^C first, then quit.
-        if not consumer.done() and (sup.turn_active() or not queue.empty()):
-            with contextlib.suppress(Exception):
-                await queue.join()
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await consumer
@@ -3468,6 +3557,13 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             job.task.cancel()
         await _close_session_mcp_host(state)
     return 0
+
+
+def _prompt_origin(cfg: Config) -> prompt_history.Origin:
+    """Where a prompt typed now is recorded as typed: the working directory,
+    the session's `--session` name, the agent."""
+    session = "" if cfg.session_file == Path(os.devnull) else session_store.display_name(cfg.session_file)
+    return prompt_history.Origin(cwd=os.getcwd(), session=session, agent=cfg.agent_id)
 
 
 def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
@@ -4187,7 +4283,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     try:
         cfg = _cfg_from_env_compat(
             args.session,
-            save_session=True,
+            save_session=not args.no_save,
             extras=args.extras,
             agent_id=cli_agent,
             ignore_local_config=args.ignore_local,
@@ -4198,6 +4294,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         msgs.warn(msgs.FAILED, error=e)
         return 2
 
+    # Startup notices go out with the banner, which the screen shows before
+    # its prompt.
+    notices: list[str] = []
     # Resuming with no --model comes back on the model of the session's last
     # stamp, not the config default; with no --reasoning, on its reasoning
     # level. An explicit flag still wins. A stamp that matches what config
@@ -4209,7 +4308,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         remembered_model = _resume_model_spec(resumed, cfg)
         if remembered_model:
             args.model = remembered_model
-            msgs.say(msgs.RESUMED_MODEL, model=remembered_model)
+            notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=remembered_model))
     resumed_reasoning = _resume_reasoning(resumed, cfg) if resumed is not None and args.reasoning is None else None
 
     try:
@@ -4236,7 +4335,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         msgs.warn(msgs.FAILED, error=e)
         return 2
 
-    cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
+    keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
         commands=lambda: _command_completions(state),
         setting_keys=[spec.key for spec in settings.REGISTRY],
@@ -4245,7 +4344,15 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         bare_words=QUIT_WORDS,
     )
     session = PromptSession(
-        history=FileHistory(str(cfg.history_file)),
+        history=prompt_history.PromptHistory(
+            cfg.history_file,
+            lambda: _prompt_origin(cfg),
+            cwd_first=bool(settings.knob(cfg.settings, "history.cwd_first")),
+            limit=settings.knob(cfg.settings, "history.max_entries"),
+            state_root=_paths.state_root(),
+        ),
+        key_bindings=keys_mod.prompt_bindings(keymap),
+        search_ignore_case=True,
         completer=completer,
         complete_while_typing=False,  # Tab-triggered, never auto-pops
         complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
@@ -4255,11 +4362,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     messages = M.load_replay_messages(cfg.session_file)
     _restore_workspace(cfg)
     if messages:
-        msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
+        notices.append(msgs.line_for(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message")))
     elif args.session is not None:
         # Asked for a specific session and got nothing. Silence here reads as a
         # successful resume, so an empty one has to say so.
-        msgs.say(msgs.EMPTY_SESSION, path=cfg.session_file)
+        notices.append(msgs.line_for(msgs.EMPTY_SESSION, path=cfg.session_file))
+    if args.no_save:
+        # -n with --session reads the named session and writes nothing back.
+        cfg = replace(cfg, session_file=Path(os.devnull))
     _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
     prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
@@ -4272,7 +4382,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
         messages.append(notice)
         _append_turn(cfg, notice)
-        msgs.say(msgs.PROMPT_CHANGED)
+        notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
@@ -4298,6 +4408,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         live_settings=live_settings,
         tool_registry=active_registry,
     )
+    state["keymap"] = keymap
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.ignore_local,
@@ -4312,7 +4423,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 
     banner = "\n".join([
         msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
-        *(msgs.FAILED.line(error=error) for error in rc_errors),
+        *notices,
+        *(msgs.FAILED.line(error=error) for error in [*rc_errors, *key_errors]),
     ])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
@@ -4326,6 +4438,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         _queue_switch(state, blocking=False)
         return code
     print(banner)
+    print(_resume_view(state, display_mod.terminal_width() - 1), end="")
     try:
         _blocking_repl(cfg, state, telemetry, session, prompt_spec)
     finally:

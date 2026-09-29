@@ -7,6 +7,7 @@ from datetime import datetime
 
 import pytest
 
+from js import paths
 from js import session_query as Q
 
 HOME = "/home/op"
@@ -124,6 +125,20 @@ def test_a_nested_branch_row_names_its_branch_point_and_keeps_the_count_columns(
     nested = Q.session_line(items[1], now=NOW, home=HOME)
     assert "#0031" in nested
     assert top.index("41") == nested.index("12")
+
+
+def test_a_named_session_row_shows_its_name_and_a_generated_one_does_not():
+    folder = paths.sessions_root() / "-home-op-js"
+    named = _session(str(folder / "modelswap.jsonl"))
+    generated = _session(str(folder / "2026-09-29T0800-6d65.jsonl"))
+    subagent = _session(str(folder / "modelswap" / "task-1790000000-ab12.jsonl"))
+
+    named_row = Q.session_line(Q.Item(named), now=NOW, home=HOME)
+    generated_row = Q.session_line(Q.Item(generated), now=NOW, home=HOME)
+
+    assert "modelswap" in named_row
+    assert "modelswap" not in generated_row and "6d65" not in generated_row
+    assert (named.name, generated.name, subagent.name) == ("modelswap", None, None)
 
 
 def test_a_hidden_kind_is_marked_in_the_tags_column():

@@ -119,8 +119,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- ui ---
     SettingSpec("ui.reasoning", "int",
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
-                "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
-                "async screen. Display only; session reasoning is always retained."),
+                "3 leave visible with token counts. The reasoning_toggle key, Ctrl-O "
+                "unless keys.file moves it, folds and unfolds it in the async screen. "
+                "Display only; session reasoning is always retained."),
     SettingSpec("ui.net", "int",
                 "Network display in the async screen: 0 nothing, 1 failures, 2 also "
                 "Connecting/Connected lines and a response byte counter on the status "
@@ -140,6 +141,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Render assistant Markdown on a terminal: finished blocks are "
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
+    SettingSpec("ui.resume_exchanges", "int",
+                "Exchanges of a resumed session the REPL shows before its prompt, "
+                "drawn as a turn draws them. 0 shows none."),
     SettingSpec("ui.editing_mode", "str",
                 "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
                 "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),
@@ -151,6 +155,28 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Command that prints the clipboard image. Unset = `wl-paste --type "
                 "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
                 "under X11.",
+                empty=EMPTY_NONE),
+    # --- history ---
+    SettingSpec("history.file", "str",
+                "Prompt history: every line sent at a REPL prompt, one JSON object per "
+                "line with ts, cwd, session, agent and text, shared by every js run. "
+                "Unset = ~/.js/state/history.jsonl. Read when the REPL starts.",
+                empty=EMPTY_NONE),
+    SettingSpec("history.cwd_first", "bool",
+                "Up offers the prompts typed in the current directory first, newest "
+                "first, then the rest; off, every prompt in time order. The "
+                "history_search key, Ctrl-R, searches all of them either way. Read "
+                "when the REPL starts.", empty=EMPTY_OFF),
+    SettingSpec("history.max_entries", "int",
+                "Newest prompts loaded from history.file for Up and Ctrl-R. Read when "
+                "the REPL starts."),
+    # --- keys ---
+    SettingSpec("keys.file", "str",
+                "Key bindings file: `bind KEY... ACTION` and `unbind KEY...` lines over "
+                "the defaults; a bad line is one error at startup and is skipped. "
+                "Unset = ~/.js/keys. Actions: submit, history_search, ex_open, ex_run, "
+                "ex_cancel, interrupt, eof, suspend, reasoning_toggle, redraw, "
+                "scroll_up, scroll_down, complete. Read when the REPL starts.",
                 empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str",
@@ -368,6 +394,20 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Columns of a terminal_session started without cols."),
     SettingSpec("tools.terminal_rows", "int",
                 "Rows of a terminal_session started without rows."),
+    # --- lsp ---
+    SettingSpec("lsp.servers", "json",
+                "Language servers the `lsp` tool may start: a JSON list of "
+                "{name, command, extensions, roots}. For a file, the first entry "
+                "whose extensions hold its extension and whose command[0] is on "
+                "PATH is used. roots are the files that mark a workspace root; "
+                "without one, the nearest directory holding .git is the root."),
+    SettingSpec("lsp.timeout_s", "int",
+                "Seconds an `lsp` call waits for its language server: to start, "
+                "to answer a request, or to publish diagnostics."),
+    # --- notebook ---
+    SettingSpec("notebook.output_lines", "int",
+                "Lines of each cell output a `read` of an .ipynb shows; the rest "
+                "is counted. 0 shows only what kind each output is."),
     # --- mcp ---
     SettingSpec("mcp.servers", "json",
                 "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
@@ -511,6 +551,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
             "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
+            "history.max_entries", "lsp.timeout_s",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None

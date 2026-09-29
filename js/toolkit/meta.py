@@ -46,6 +46,9 @@ _INHERITED_FIELDS = (
     "max_parallel_tools",
     "shell_program",
     "jail_bind",
+    "lsp_servers",
+    "lsp_timeout_s",
+    "notebook_output_lines",
     "model",
 )
 
@@ -172,7 +175,6 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         parent_cfg,
         agent_id=agent,
         agent_dir=agent_dir,
-        history_file=agent_dir / "history",
         sessions_dir=sessions_dir,
         session_file=session_file,
         prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
@@ -275,7 +277,7 @@ async def _run_one_task_async(
         record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                              mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
-    messages.append({"role": "user", "content": prompt})
+    messages.append(M.note_time({"role": "user", "content": prompt}))
     try:
         await run_turn_async(
             cfg,

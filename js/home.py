@@ -22,7 +22,9 @@ resolves. Each filed session is rewritten once to give every record an id
 and a parent, the format js writes today (`js.session_store`). A session
 without an agent in its metadata then gets a start record naming the old
 folder's agent, and each filed session gets its `.txt`. The
-old folder's `.history` and `latest.json` go to ~/.js/state/<agent>/.
+old folder's `.history` and `latest.json` go to ~/.js/state/<agent>/; the
+prompt history folds that history file into its own when it next loads
+(`js.prompt_history`).
 
 Every move is a rename of one entry, so a directory lands whole or not at
 all. A symlink is moved as the link; the walk never descends through one.

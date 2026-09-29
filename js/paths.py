@@ -7,11 +7,12 @@ skills, toolbox) stay with the project and are not named here.
 whole structure is always there:
 
     ~/.js/
-      jsrc  JS.md  tools.yaml  tags.yaml     files; not created, only read
+      jsrc  JS.md  tools.yaml  tags.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, filed by the directory it started in
-      state/         undo store, kernel output, spilled results, commit backups
+      state/         prompt history, undo store, kernel output, spilled results,
+                     commit backups
       logs/          logs, transcripts
       cache/         models.dev catalog, env probe cache, session search index
       work/          agent keepers; `:n` notes
@@ -108,6 +109,16 @@ def tool_results_dir() -> Path:
 
 def commit_backups_dir() -> Path:
     return state_root() / "commit-backups"
+
+
+def prompt_history_file() -> Path:
+    """Every prompt sent at a REPL prompt, from every run (`js.prompt_history`)."""
+    return state_root() / "history.jsonl"
+
+
+def keys_file() -> Path:
+    """The key bindings file (`js.keys`)."""
+    return home() / "keys"
 
 
 def home_migration_marker() -> Path:

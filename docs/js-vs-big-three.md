@@ -42,7 +42,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Prompt-time code directives | yes | no | no | no |
 | Project memory walks up the tree | no, by design | yes | yes | yes |
 | Plugins | no | yes | yes | yes |
-| Remappable keys | no | yes | yes | yes |
+| Remappable keys | yes | yes | yes | yes |
 
 ## Bets that paid off
 
@@ -165,8 +165,6 @@ pi retries once. Codex does not recover inside a normal turn.
 - **Programmatic tool calling** (code mode). js already has the kernel, so this is the cheapest of the four to add.
 - **Push notifications.** Shell and kernel jobs are pull-only, and there's no stall watchdog.
 - **Worktree isolation for `task` workers.** They share one tree.
-- **LSP diagnostics and a notebook-cell edit tool.**
-- **Remappable keys and cross-session prompt history** with Ctrl-R search.
 - **Provider fallback, a stream idle watchdog,** and detection of silent overflow (a provider that truncates without an error).
 - **Automatic memory.** Possibly already covered by the wiki pipeline, which is not wired into sessions.
 

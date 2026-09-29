@@ -549,11 +549,13 @@ def from_env(
     mcp = mcp_config.resolve(js_root_settings, agent_id)
 
     # Sessions are filed by the directory js started in; what belongs to the
-    # agent across directories (its latest session, the REPL input history)
-    # lives in its state dir.
+    # agent across directories (its latest session) lives in its state dir.
+    # The REPL's prompt history is one file for every agent.
     sessions_dir = _session_store.folder_for(project_dir)
     state_dir = _paths.state_root() / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
+    history_setting = _settings.knob(js_root_settings, "history.file")
+    history_file = Path(history_setting).expanduser() if history_setting else _paths.prompt_history_file()
 
     session_name = session if session is not None else env.get("JS_SESSION")
     if session_name is not None:
@@ -596,7 +598,7 @@ def from_env(
         trace=trace,
         sessions_dir=sessions_dir,
         session_file=session_file,
-        history_file=state_dir / "history",
+        history_file=history_file,
         prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
