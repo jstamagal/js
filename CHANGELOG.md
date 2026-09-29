@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **The session picker and session search (`js-1g1.4`, `js-1g1.5`).** A bare
+  `js --session` or `/session [query]` in the REPL lists every session newest
+  first across directories and agents, branches nested under their parent,
+  `•` on the current directory's. `v` cycles flat / by dir / by agent, `b`
+  lists messages (Enter branches there, `r` resumes), `i` shows the path,
+  model stamps, token estimate and branch parent. Empty, quick, subagent and
+  commit runs are hidden until `a`. Enter resumes in the session's own
+  directory and agent on its last-stamped model; from the REPL js starts again
+  in it. `/` searches: turn counts, dates, `agent:`, `dir:` shell globs,
+  `mode:`, `model:`, `tag:`, and words ranked with BM25 over an FTS5 index in
+  `~/.js/cache/sessions.sqlite` that every session write updates. `/session`
+  no longer prints the file path; `i` shows it.
+
 - **Sessions filed by start directory, with a readable `.txt` (`js-1g1.2`).**
   Sessions live in `~/.js/sessions/<start-dir>/` (the path with `/` and `_` as
   `-`) under names like `2026-09-29T0802-6d65`; subagent runs sit in a folder
@@ -17,8 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `pipe`, `subagent`, `commit`) and command line; a branch records its parent
   and message; `/name` pins a title. `--session NAME` resumes from any
   directory (its own folder first, then all; a name in two folders is refused),
-  and a unique tail of a generated name resumes it. A bare `--session` is kept
-  for the picker. `latest.json` and the REPL history moved to
+  and a unique tail of a generated name resumes it. `latest.json` and the REPL history moved to
   `~/.js/state/<agent>/`. The home migration files old sessions the same way.
 
 - **The home migration converts agents and keeps links (`js-1g1.1`).** Moved

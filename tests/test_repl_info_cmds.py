@@ -89,14 +89,3 @@ def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, ca
     assert handled is True
     out = capsys.readouterr().out
     assert out == "B" * 2048 + "\n"
-
-
-def test_session_command_prints_session_file_path(tmp_path, capsys):
-    # /session prints cfg.session_file.
-    cfg = make_cfg(tmp_path)
-    state = {"messages": []}
-
-    handled = cli._handle_command("/session", state, cfg)
-
-    assert handled is True
-    assert str(cfg.session_file) in capsys.readouterr().out
