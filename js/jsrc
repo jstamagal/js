@@ -26,6 +26,14 @@ set ui.tools_preview_lines 12
 set ui.markdown on
 set ui.editing_mode emacs
 
+# --- history ---
+set -history.file
+set history.cwd_first on
+set history.max_entries 10000
+
+# --- keys ---
+set -keys.file
+
 # --- provider ---
 set -provider.id
 set -provider.base_url

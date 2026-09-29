@@ -24,7 +24,6 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
@@ -49,7 +48,9 @@ from . import runtime
 from . import stats
 from . import home as _home
 from . import jail as _jail
+from . import keys as keys_mod
 from . import paths as _paths
+from . import prompt_history
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
 from . import screen
@@ -3245,6 +3246,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         status_colours=lambda: _status_colours(state),
         editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
+        keymap=state.get("keymap"),
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
@@ -3283,6 +3285,13 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             job.task.cancel()
         await _close_session_mcp_host(state)
     return 0
+
+
+def _prompt_origin(cfg: Config) -> prompt_history.Origin:
+    """Where a prompt typed now is recorded as typed: the working directory,
+    the session's `--session` name, the agent."""
+    session = "" if cfg.session_file == Path(os.devnull) else session_store.display_name(cfg.session_file)
+    return prompt_history.Origin(cwd=os.getcwd(), session=session, agent=cfg.agent_id)
 
 
 def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
@@ -4003,7 +4012,7 @@ def main(argv: list[str] | None = None) -> int:
         msgs.warn(msgs.FAILED, error=e)
         return 2
 
-    cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
+    keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
         commands=lambda: _command_completions(state),
         setting_keys=[spec.key for spec in settings.REGISTRY],
@@ -4012,7 +4021,15 @@ def main(argv: list[str] | None = None) -> int:
         bare_words=QUIT_WORDS,
     )
     session = PromptSession(
-        history=FileHistory(str(cfg.history_file)),
+        history=prompt_history.PromptHistory(
+            cfg.history_file,
+            lambda: _prompt_origin(cfg),
+            cwd_first=bool(settings.knob(cfg.settings, "history.cwd_first")),
+            limit=settings.knob(cfg.settings, "history.max_entries"),
+            state_root=_paths.state_root(),
+        ),
+        key_bindings=keys_mod.prompt_bindings(keymap),
+        search_ignore_case=True,
         completer=completer,
         complete_while_typing=False,  # Tab-triggered, never auto-pops
         complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
@@ -4065,6 +4082,7 @@ def main(argv: list[str] | None = None) -> int:
         live_settings=live_settings,
         tool_registry=active_registry,
     )
+    state["keymap"] = keymap
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.ignore_local,
@@ -4079,7 +4097,7 @@ def main(argv: list[str] | None = None) -> int:
 
     banner = "\n".join([
         msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
-        *(msgs.FAILED.line(error=error) for error in rc_errors),
+        *(msgs.FAILED.line(error=error) for error in [*rc_errors, *key_errors]),
     ])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
