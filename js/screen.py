@@ -32,7 +32,7 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import keys
+from . import keys, pastes
 from . import messages as msgs
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
@@ -511,7 +511,9 @@ def build_app(
     opens the ex line, whose text goes to ``on_ex``. ``keymap`` names the keys
     of each action (`js.keys`); None is the defaults. The history_search key
     opens a reverse incremental search over ``history``. ``key_bindings`` are
-    added after the screen's own and win a shared key."""
+    added after the screen's own and win a shared key. A sent line's paste
+    markers (`js.pastes`) are expanded before ``on_line`` gets it; the
+    scrollback echoes the line as typed."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         history=history,
@@ -530,7 +532,7 @@ def build_app(
         input_buffer.reset()
         if line.strip():
             scrollback.append(f"{prompt}{line}\n")
-        await on_line(line.strip())
+        await on_line(pastes.expand(line).strip())
 
     editor = InputEditor(input_buffer, submit)
 

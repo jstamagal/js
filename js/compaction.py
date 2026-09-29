@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -696,7 +697,11 @@ async def compact_now(
     flight_data: dict | None = None,
     tail_tokens: int | None = None,
     context: Any = None,
+    emit: Callable[..., Any] | None = None,
 ) -> str:
+    """Summarize ``messages`` before the kept tail, in place. ``emit(event,
+    **payload)`` hears pre_compact when the summary is about to be written and
+    post_compact once it replaced the history."""
     flight = CompactionFlight(
         cfg, system, messages, trigger=trigger or {"phase": "manual"},
         forced=forced, focus=focus, preserve_from=preserve_from, details=flight_data,
@@ -726,6 +731,10 @@ async def compact_now(
             return result
         compact_model = model or get_model(cfg)
         flight.notice("start", f"model={compact_model} trigger={trigger or 'manual'} messages={original_len}")
+        phase = (trigger or {}).get("phase", "manual")
+        if emit is not None:
+            emit("pre_compact", phase=phase, forced=forced, focus=focus, model=compact_model,
+                 messages=original_len, keep_from=keep_from)
         guidance = _run_pre_hook(cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
@@ -759,6 +768,9 @@ async def compact_now(
             tracker.reset()
         result = msgs.COMPACTED.said(keep_from=keep_from, total=original_len, model=compact_model)
         flight.finish("success", system, messages, result=result, keep_from=keep_from)
+        if emit is not None:
+            emit("post_compact", phase=phase, forced=forced, model=compact_model,
+                 messages=len(messages), summarized=keep_from)
         return result
     except BaseException as exc:
         phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
@@ -782,6 +794,7 @@ def compact_now_sync(
     flight_data: dict | None = None,
     context: Any = None,
     loop_runner: asyncio.Runner | None = None,
+    emit: Callable[..., Any] | None = None,
 ) -> str:
     """Sync wrapper over :func:`compact_now` for callers off the event loop.
 
@@ -790,7 +803,7 @@ def compact_now_sync(
     coro = compact_now(
         cfg, system, messages, focus=focus, forced=forced, model=model,
         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-        context=context,
+        context=context, emit=emit,
     )
     if loop_runner is not None:
         return loop_runner.run(coro)
@@ -824,8 +837,10 @@ async def maybe_auto_compact_async(
     system: str,
     messages: list[dict],
     resolve_window: Any,
+    emit: Callable[..., Any] | None = None,
 ) -> AutoCompactOutcome:
-    """Run the between-turn trigger, compacting if it fires.
+    """Run the between-turn trigger, compacting if it fires. ``emit`` goes to
+    compact_now.
 
     ``resolve_window`` is a zero-arg callable returning the model's context
     window (or None); it is invoked at most once and only when the configured
@@ -865,7 +880,7 @@ async def maybe_auto_compact_async(
         ac.notified = True
     out.forced = fullness >= force_at
     out.result = await compact_now(
-        cfg, system, messages, forced=out.forced, context=context,
+        cfg, system, messages, forced=out.forced, context=context, emit=emit,
         trigger={"phase": "between-turn", "context_tokens": prompt_tokens,
                  "context_window": context_window, "effective_input_limit": effective_window},
         flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": getattr(context, "last_prompt_tokens", None),

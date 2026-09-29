@@ -27,7 +27,7 @@ def test_every_table_command_completes():
 def test_bare_quit_words_complete():
     completer = JsCompleter(commands=_table, bare_words=cli.QUIT_WORDS)
 
-    assert completer.candidates("ex")[0] == ["exit"]
+    assert "exit" in completer.candidates("ex")[0]
     assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
     for word in cli.QUIT_WORDS:
         assert word in completer.candidates(word)[0]

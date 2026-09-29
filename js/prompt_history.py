@@ -30,6 +30,8 @@ from pathlib import Path
 
 from prompt_toolkit.history import History
 
+from . import pastes
+
 
 
 @dataclass(frozen=True)
@@ -186,9 +188,11 @@ class PromptHistory(History):
 
     def store_string(self, string: str) -> None:
         # A prompt is sent whether or not its history line could be written.
+        # The file keeps what was sent: a collapsed paste is written out whole.
         if not string.strip():
             return
         origin = self._origin()
         with contextlib.suppress(OSError):
-                append_entry(self.path, Entry(ts=round(time.time(), 3), cwd=origin.cwd,
-                                          session=origin.session, agent=origin.agent, text=string))
+            append_entry(self.path, Entry(ts=round(time.time(), 3), cwd=origin.cwd,
+                                          session=origin.session, agent=origin.agent,
+                                          text=pastes.expand(string)))

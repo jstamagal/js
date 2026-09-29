@@ -255,6 +255,7 @@ SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the inpu
 HELP_HEADING = Message("Commands:", banner=False)
 HELP_ROW = Message("  {usage} {doc}", banner=False)
 HELP_ALIAS = Message("Alias: {body}")
+HELP_PROMPT_COMMAND = Message("Command file {path}: {description}")
 HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with spaces.")
 HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
@@ -320,6 +321,16 @@ CMD_CD = Message(
     "or a bound path.")
 CMD_ADD = Message("Under -C, show PATH in the jail: read-only, or read-write with :rw.")
 CMD_DROP = Message("Under -C, stop showing a path added with /add.")
+CMD_EXEC = Message(
+    "Run a shell command; its stdout goes to the model with the next message. In an "
+    "`on` handler it reads the event as JSON on stdin, and exit status 2 refuses a tool_call.")
+
+# --- /exec -------------------------------------------------------------------
+EXEC_QUEUED = Message("exec: {lines} queued for the next message.")
+EXEC_NO_OUTPUT = Message("exec: no output.")
+EXEC_EXITED = Message("exec: {command} exited {status}: {detail}", WARN)
+EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.", WARN)
+EXEC_FAILED = Message("exec: {command} did not start: {error}", WARN)
 
 # --- js --help ----------------------------------------------------------------
 

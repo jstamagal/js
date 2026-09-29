@@ -1406,9 +1406,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.context_budget_state = token_state
     active_context.vision_enabled = active_context.config.vision_enabled
 
-    def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
+    def _emit_event(event: str, **payload: Any) -> Any:
+        """Emit ``event``; the emission, or None when this turn has no hooks."""
         if event_hooks is None:
-            return []
+            return None
         emission = event_hooks.emit(event, **payload)
         for result in emission.results:
             if result.error:
@@ -1418,7 +1419,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     handler=result.hook.handler,
                     error=result.error,
                 )
-        return emission.hooks
+        return emission
 
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
@@ -1682,7 +1683,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     result = await compaction.compact_now(
                         active_compact_cfg, system, messages, focus=focus, forced=True,
                         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                        tail_tokens=tail_tokens, context=active_context,
+                        tail_tokens=tail_tokens, context=active_context, emit=_emit_event,
                     )
             except Exception as exc:  # noqa: BLE001
                 msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
@@ -2044,13 +2045,19 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
             # turn; messages — persisted and replayed on every future turn — carries the
             # dehydrated stub so base64 is billed once.
-            for pc in pending_calls:
-                _emit_event(
+            for index, pc in enumerate(pending_calls):
+                emission = _emit_event(
                     "tool_call",
                     id=pc.id,
                     name=_canonical_tool_call_name(pc.name, active_registry),
                     arguments=_canonical_tool_args(pc.arguments()),
                 )
+                refusal = event_mod.refusal_of(emission)
+                if refusal and pc.validation_error is None:
+                    # An `on tool_call` handler refused it: the call never runs
+                    # and the model reads the refusal as its result.
+                    pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+                    telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
             # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
             # thread so the shared loop stays free while they execute. Fan-out (task /
             # named-agent) calls are awaited ON the loop instead, so a parent turn

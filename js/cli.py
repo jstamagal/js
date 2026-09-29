@@ -24,6 +24,7 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.key_binding import merge_key_bindings
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
@@ -35,12 +36,14 @@ from . import dotenv
 from . import endpoint_uri
 from . import events
 from . import exline
+from . import hookexec
 from . import logins
 from . import memory as M
 from . import messages as msgs
 from . import model_client
 from . import model_metadata
 from . import persona as P
+from . import pastes
 from . import picker
 from . import providers
 from . import replcomplete
@@ -50,6 +53,7 @@ from . import home as _home
 from . import jail as _jail
 from . import keys as keys_mod
 from . import paths as _paths
+from . import prompt_commands
 from . import prompt_history
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
@@ -1124,6 +1128,24 @@ def _emit_repl_event(
     return emission
 
 
+def _hook_emitter(state: dict):
+    """``emit(event, **payload)`` into the state's `on` handlers; None without any."""
+    hook_table = state.get("events")
+    return None if hook_table is None else hook_table.emit
+
+
+def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
+    """session_start or session_end for the REPL session ``state`` runs."""
+    _emit_repl_event(
+        state, telemetry, event,
+        session=str(cfg.session_file),
+        agent=cfg.agent_id,
+        model=state.get("model"),
+        cwd=str(runtime.T.STOCK_CONTEXT.cwd),
+        messages=len(state.get("messages") or []),
+    )
+
+
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
     provider_id = providers.normalize_provider_id(provider_name) or provider_name
     login = logins.load_logins().get(provider_id)
@@ -1155,6 +1177,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
                 lambda: runtime._resolve_context_window(
                     active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
                 ),
+                emit=_hook_emitter(state),
             )
     finally:
         turn_status.compacting = False
@@ -1859,7 +1882,8 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
     try:
         compact_cfg = _cfg_for_live_state(cfg, state)
         with stream_transport.net_role("Compacting"):
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
+            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
+                                                 focus=focus, forced=forced, emit=_hook_emitter(state))
     except Exception as e:  # noqa: BLE001
         return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
     msgs.say(msgs.COMPACTION_DONE, result=result)
@@ -1900,12 +1924,70 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
     rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
+    rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.text(path=command.path, description=command.description))
+             for name, command in prompt_commands.discover(Path.cwd()).items()
+             if name not in COMMANDS and name not in (state.get("aliases") or {})]
     rows += [("@path/to/file", msgs.HELP_ATTACH.text()), ("exit", msgs.HELP_EXIT.text())]
     width = max(len(usage) for usage, _doc in rows)
     msgs.say(msgs.HELP_HEADING)
     for usage, doc in rows:
         msgs.say(msgs.HELP_ROW, usage=usage.ljust(width), doc=doc)
     return None
+
+
+def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
+    """Run ``arg`` in the shell and queue its stdout for the next user message.
+    Run by an `on` handler, the command reads the event as JSON on stdin with
+    JS_EVENT naming it, and exit status 2 under tool_call refuses the call."""
+    command = arg.strip()
+    if not command:
+        return msgs.USAGE.said(usage="/exec <command>")
+    call = events.current_call()
+    live = state.get("settings")
+    timeout = int(settings.knob(live, "events.exec_timeout_s"))
+    env = dict(os.environ)
+    stdin_text = ""
+    if call is not None:
+        env["JS_EVENT"] = call.emission.event
+        stdin_text = hookexec.event_json(call)
+    try:
+        outcome = hookexec.run(
+            command,
+            cwd=str(runtime.T.STOCK_CONTEXT.cwd),
+            timeout=timeout,
+            cap=int(settings.knob(live, "events.exec_output_bytes") or 0),
+            stdin_text=stdin_text,
+            env=env,
+        )
+    except OSError as e:
+        failure = msgs.EXEC_FAILED.said(command=command, error=e)
+    else:
+        if outcome.returncode is None:
+            failure = msgs.EXEC_TIMED_OUT.said(command=command, seconds=timeout)
+        elif (call is not None and outcome.returncode == hookexec.REFUSE_STATUS
+              and call.emission.event in events.REFUSABLE_EVENTS):
+            call.refusal = hookexec.refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+            return None
+        elif outcome.returncode != 0:
+            detail = next((line.strip() for line in (outcome.stderr or outcome.stdout).splitlines()
+                           if line.strip()), "")
+            failure = msgs.EXEC_EXITED.said(command=command, status=outcome.returncode, detail=detail)
+        else:
+            note = hookexec.reminder(outcome.stdout)
+            if note is not None:
+                _queue_note(state, note)
+            if call is None:
+                # Typed at the prompt: show what the model will read.
+                if note is None:
+                    msgs.say(msgs.EXEC_NO_OUTPUT)
+                else:
+                    print(outcome.stdout.rstrip("\n"))
+                    msgs.say(msgs.EXEC_QUEUED, lines=msgs.plural(len(outcome.stdout.strip().splitlines()), "line"))
+            return None
+    if call is not None:
+        # An `on` handler's errors otherwise reach only the debug log.
+        msgs.say_said(failure)
+    return failure
 
 
 # /cd, /add and /drop: where the session works. Each change queues one
@@ -2078,6 +2160,7 @@ COMMANDS: dict[str, Command] = {
     "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
     "add": Command(_cmd_add, "add <path>[:rw]", msgs.CMD_ADD, complete="path"),
     "drop": Command(_cmd_drop, "drop <path>", msgs.CMD_DROP, complete="path", turn_state=True),
+    "exec": Command(_cmd_exec, "exec <command>", msgs.CMD_EXEC, complete="path"),
 }
 
 
@@ -2132,7 +2215,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
 
 def _command_completions(state: dict) -> dict[str, str | None]:
     """Verb -> argument completion source, for every command and alias."""
-    table = {verb: command.complete for verb, command in COMMANDS.items()}
+    table: dict[str, str | None] = {name: None for name in prompt_commands.discover(Path.cwd())}
+    table.update({verb: command.complete for verb, command in COMMANDS.items()})
     table.update({name: None for name in state.get("aliases") or {}})
     return table
 
@@ -3176,9 +3260,15 @@ def _is_skill_invocation(line: str) -> bool:
 
 def _expand_skill_line(prompt_text: str) -> str:
     """A `/skill <name> [request]` line becomes the user message carrying that
-    skill; SkillInvocationError (a ValueError) names an unknown skill."""
-    if not prompt_text.lstrip().startswith("/skill"):
+    skill; SkillInvocationError (a ValueError) names an unknown skill. A
+    `/NAME args` line naming a markdown command (`js.prompt_commands`) becomes
+    that command's text with the arguments filled in."""
+    words = prompt_text.split(maxsplit=1)
+    if not words or not words[0].startswith("/"):
         return prompt_text
+    if words[0] != "/skill":
+        expanded = prompt_commands.expand(prompt_text, prompt_commands.discover(Path.cwd()))
+        return prompt_text if expanded is None else expanded
     catalog = skills.discover_skills(Path.cwd())
     expanded = skills.expand_user_invocation(catalog, prompt_text)
     return prompt_text if expanded is None else expanded
@@ -3330,7 +3420,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         status_colours=lambda: _status_colours(state),
         editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
-        key_bindings=clipimage.key_bindings(lambda: state["settings"]),
+        key_bindings=merge_key_bindings([
+            clipimage.key_bindings(lambda: state["settings"]),
+            pastes.key_bindings(lambda: state["settings"]),
+        ]),
         keymap=state.get("keymap"),
     )
     previous_reasoning_factory = telemetry.reasoning_factory
@@ -3350,6 +3443,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             ))
             if banner:
                 print(banner)
+            _emit_session_event(state, telemetry, cfg, "session_start")
             await app.run_async()
     finally:
         stream_transport.install_sink(None)
@@ -3368,6 +3462,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             await consumer
         for job in sup.jobs():  # backstop: cancel any straggler
             job.task.cancel()
+        _emit_session_event(state, telemetry, cfg, "session_end")
         await _close_session_mcp_host(state)
     return 0
 
@@ -3431,10 +3526,14 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
     mcp_loop = asyncio.Runner()
     interrupt_armed = False
-    session.key_bindings = clipimage.key_bindings(lambda: state["settings"])
+    session.key_bindings = merge_key_bindings([
+        clipimage.key_bindings(lambda: state["settings"]),
+        pastes.key_bindings(lambda: state["settings"]),
+    ])
+    _emit_session_event(state, telemetry, cfg, "session_start")
     while state["running"]:
         try:
-            line = session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}")).strip()
+            line = pastes.expand(session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"))).strip()
             interrupt_armed = False
         except KeyboardInterrupt:
             # One stray ^C at the prompt should not end a session that took real
@@ -3568,6 +3667,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             else:
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
+    _emit_session_event(state, telemetry, cfg, "session_end")
     mcp_loop.run(_close_session_mcp_host(state))
     model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
     mcp_loop.close()

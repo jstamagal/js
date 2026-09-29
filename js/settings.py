@@ -148,6 +148,14 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Key that pastes the clipboard image into the input line as [image #N]; "
                 "the image is sent with the line like an @path image. prompt_toolkit "
                 "key names, space-separated: c-v, escape v. Unset binds no key."),
+    SettingSpec("ui.paste_collapse_lines", "int",
+                "A bracketed paste of more lines than this shows in the input line "
+                "as one [paste #N +X lines] marker; the line sends the full text. "
+                "0 = no line limit."),
+    SettingSpec("ui.paste_collapse_chars", "int",
+                "A bracketed paste of more characters than this shows as one "
+                "[paste #N X chars] marker; the line sends the full text. 0 = no "
+                "character limit. Both 0 never collapses a paste."),
     SettingSpec("ui.paste_image_command", "str",
                 "Command that prints the clipboard image. Unset = `wl-paste --type "
                 "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
@@ -319,6 +327,14 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "prompt files and inject their stdout. This runs arbitrary code from "
                 "prompt files; opt out with --im-a-pussy or set this off.",
                 env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
+    # --- events ---
+    SettingSpec("events.exec_timeout_s", "int",
+                "Seconds an `exec` command, typed or run by an `on` handler, may run "
+                "before its process group is killed. A handler's command holds up "
+                "the event that ran it for that long."),
+    SettingSpec("events.exec_output_bytes", "int",
+                "Bytes of an `exec` command's stdout and stderr kept; the stdout "
+                "reaches the model as a js-reminder on the next message. 0 keeps all."),
     # --- compact ---
     SettingSpec("compact.auto", "bool",
                 "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
