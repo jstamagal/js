@@ -322,6 +322,25 @@ The tool output includes:
 
 ANSI is stripped unless `keep_ansi=true`.
 
+Stdout and stderr together get a budget: `limits.max_bash_output_bytes`, or
+less when the result would otherwise pass `limits.max_tool_result_inline_bytes`.
+A stream under half the budget is shown whole and the other gets the rest.
+A stream past its share shows its head and its tail, with a marker between
+them naming the byte range left out, the total, and the file holding the
+whole stream.
+
+The file is written by the reader thread, not from the clipped text. Each
+stream keeps its first and last `max_bash_output_bytes / 2` bytes in memory;
+once it passes `max_bash_output_bytes`, every byte from the first goes to
+`<state>/tool-results/shell-<handle>-<random>-stdout.log` (or `-stderr.log`)
+as it arrives, ANSI and all. A stream cut only by the inline limit has its
+file written when the result is cut. `read` with a `start_byte` range reaches
+any byte of it.
+
+A command still running when the call returns hands back a handle. Each poll
+or wait reports the output since the last report, cut the same way, with
+byte offsets that count from the start of the stream.
+
 ## Wiki Tools
 
 Wiki tools live in the default registry even when the active prompt does not

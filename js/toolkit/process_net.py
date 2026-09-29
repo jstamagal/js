@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import threading
@@ -26,7 +27,6 @@ from ..capped_process import (
     CappedProcess,
     CappedProcessResult,
     start_capped,
-    truncation_marker,
 )
 from ..tool_binaries import (
     ARIA2_EXECUTABLE,
@@ -123,6 +123,12 @@ def _register_job(job: _ShellJob) -> None:
             _JOBS.pop(stale.id, None)
 
 
+def _spill_prefix(job_id: str) -> Path:
+    """Where a job's streams go whole once they pass the cap. Job ids restart
+    at 1 in every js process, so the name carries a random part too."""
+    return paths.tool_results_dir() / f"shell-{job_id}-{secrets.token_hex(4)}"
+
+
 def _next_job_id() -> str:
     global _JOB_SEQ
     with _JOBS_LOCK:
@@ -184,28 +190,75 @@ def _clean(raw: bytes, keep_ansi: bool) -> str:
     return text if keep_ansi else _ANSI_RE.sub("", text)
 
 
-def _job_new_output(job: _ShellJob) -> tuple[str, str]:
-    """Output produced since the last time this job was reported."""
-    out, err = job.process.snapshot()
-    seen_out, seen_err = job.delivered
-    job.delivered = (len(out), len(err))
-    return _clean(out[seen_out:], job.keep_ansi), _clean(err[seen_err:], job.keep_ansi)
+# Bytes held back from the output budget for the lines around the output: the
+# header, the stream labels, and one omission marker per stream.
+_RESULT_OVERHEAD = 1024
+
+
+def _output_budget(job: _ShellJob, context: Any, header: str) -> tuple[int, str]:
+    """Bytes of stdout and stderr together that one result shows, and the
+    setting that set it. The result has to fit the inline limit, or the runtime
+    would spill it again and the preview would lose the tail."""
+    budget, knob = job.cap, f"limits.max_bash_output_bytes ({job.cap})"
+    inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
+    if inline > 0:
+        room = max(0, inline - len(header.encode("utf-8")) - _RESULT_OVERHEAD)
+        if room < budget:
+            budget, knob = room, f"limits.max_tool_result_inline_bytes ({inline})"
+    return budget, knob
+
+
+def _split_budget(sizes: tuple[int, int], budget: int) -> tuple[int, int]:
+    """Share ``budget`` between two streams: a stream under half keeps all of
+    it and the other gets the rest."""
+    out, err = sizes
+    if out + err <= budget:
+        return out, err
+    half = budget // 2
+    if out <= half:
+        return out, budget - out
+    if err <= half:
+        return budget - err, err
+    return half, budget - half
+
+
+def _render_stream(name: str, excerpt, keep_ansi: bool, knob: str) -> str:
+    if excerpt.omitted is None:
+        return _clean(excerpt.head, keep_ansi)
+    first, stop = excerpt.omitted
+    where = (f"the whole {name} is at {excerpt.path} — read it on with range "
+             f"{json.dumps({'start_byte': first})}" if excerpt.path is not None
+             else f"the whole {name} could not be saved")
+    marker = (f"[truncated: {knob} reached; {name} bytes {first}-{stop} of {excerpt.total} "
+              f"({stop - first} bytes) are not shown; {where}]")
+    head = _clean(excerpt.head, keep_ansi)
+    tail = _clean(excerpt.tail, keep_ansi)
+    head = f"{head}\n" if head and not head.endswith("\n") else head
+    return f"{head}{marker}\n{tail}" if tail else f"{head}{marker}"
+
+
+def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) -> tuple[str, str]:
+    """stdout and stderr to report, from the last reported byte when
+    ``since_last``, else from the start. Past the budget each shows its head
+    and tail with a marker naming the bytes between them and the file holding
+    the whole stream."""
+    streams = (job.process.stream("stdout"), job.process.stream("stderr"))
+    totals = tuple(stream.total for stream in streams)
+    starts = job.delivered if since_last else (0, 0)
+    budget, knob = _output_budget(job, context, header)
+    shares = _split_budget((totals[0] - starts[0], totals[1] - starts[1]), budget)
+    job.delivered = totals
+    return tuple(  # type: ignore[return-value]
+        _render_stream(name, stream.excerpt(start, share), job.keep_ansi, knob)
+        for name, stream, start, share in zip(("stdout", "stderr"), streams, starts, shares)
+    )
 
 
 def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,
-                     allowed: set[str], safe_env: dict[str, str], *, since_last: bool) -> str:
-    if since_last:
-        stdout, stderr = _job_new_output(job)
-    else:
-        stdout = _clean(result.stdout, job.keep_ansi)
-        stderr = _clean(result.stderr, job.keep_ansi)
-        job.delivered = (len(result.stdout), len(result.stderr))
-    marker = truncation_marker(job.cap)
-    if result.stdout_truncated:
-        stdout = f"{stdout}\n{marker}" if stdout else marker
-    if result.stderr_truncated:
-        stderr = f"{stderr}\n{marker}" if stderr else marker
-    parts = [f"shell={job.shell_path}", f"exit={result.returncode}"]
+                     allowed: set[str], safe_env: dict[str, str], context: Any, *,
+                     since_last: bool, preface: str = "") -> str:
+    parts = [preface] if preface else []
+    parts += [f"shell={job.shell_path}", f"exit={result.returncode}"]
     if description:
         parts.append(f"description={description}")
     filtered = _filtered_references(job.command, allowed)
@@ -217,6 +270,7 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
             f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
             "names not allowed by limits.shell_env_allow or the env parameter are unset"
         )
+    stdout, stderr = _job_output(job, context, "\n".join(parts), since_last=since_last)
     if stdout:
         parts.append(f"--- stdout ---\n{stdout}")
     if stderr:
@@ -226,14 +280,15 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
     return "\n".join(parts)
 
 
-def _render_running(job: _ShellJob, waited: float) -> str:
-    stdout, stderr = _job_new_output(job)
-    parts = [
+def _render_running(job: _ShellJob, waited: float, context: Any) -> str:
+    head = (
         f"command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). "
         f"It keeps running. Poll it with action=\"poll\", handle=\"{job.id}\" for new output, "
         f"action=\"wait\", handle=\"{job.id}\", timeout=N to block for it, "
-        f"or action=\"kill\", handle=\"{job.id}\" to stop it.",
-    ]
+        f"or action=\"kill\", handle=\"{job.id}\" to stop it."
+    )
+    stdout, stderr = _job_output(job, context, head, since_last=True)
+    parts = [head]
     if stdout:
         parts.append(f"--- stdout so far ---\n{stdout}")
     if stderr:
@@ -287,6 +342,7 @@ def shell(
     # A command can create/edit/delete anything, so memoized fs_search results are
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
+    job_id = _next_job_id()
     try:
         argv = jail.wrap(_shell_argv(shell_path, command), context, cwd=workdir,
                          env=safe_env, extra_ro=(Path(shell_path),))
@@ -295,10 +351,11 @@ def shell(
             cwd=str(workdir),
             env=safe_env,
             cap=cap,
+            spill_prefix=_spill_prefix(job_id),
         )
     except OSError as exc:
         return f"ERROR: {exc}"
-    job = _ShellJob(_next_job_id(), command, process, shell_path, keep_ansi, cap)
+    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap)
     job.allowed, job.safe_env = allowed, safe_env
     _register_job(job)
     with _blocking_on(context, job):
@@ -308,8 +365,8 @@ def shell(
         # test run finishing on its own beats one killed at an arbitrary
         # deadline, and the model gets a handle to come back to it instead of
         # the operator sitting through the wait.
-        return _render_running(job, process.elapsed())
-    return _render_finished(job, result, description, allowed, safe_env, since_last=False)
+        return _render_running(job, process.elapsed(), context)
+    return _render_finished(job, result, description, allowed, safe_env, context, since_last=False)
 
 
 def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None,
@@ -320,17 +377,16 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
     if action == "kill":
         was_running = job.running()
         result = job.process.kill()
-        if not was_running:
-            return f"handle {job.id} had already exited\n" + _render_finished(
-                job, result, description, job.allowed, job.safe_env, since_last=True)
-        return f"killed handle {job.id} after {job.process.elapsed():.0f}s\n" + _render_finished(
-            job, result, description, job.allowed, job.safe_env, since_last=True)
+        preface = (f"killed handle {job.id} after {job.process.elapsed():.0f}s" if was_running
+                   else f"handle {job.id} had already exited")
+        return _render_finished(job, result, description, job.allowed, job.safe_env, context,
+                                since_last=True, preface=preface)
     wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     with _blocking_on(context, job):
         result = job.process.wait(wait_s)
     if result is None:
-        return _render_running(job, job.process.elapsed())
-    return _render_finished(job, result, description, job.allowed, job.safe_env, since_last=True)
+        return _render_running(job, job.process.elapsed(), context)
+    return _render_finished(job, result, description, job.allowed, job.safe_env, context, since_last=True)
 
 
 def _html_to_text(raw: str, base_url: str) -> str:

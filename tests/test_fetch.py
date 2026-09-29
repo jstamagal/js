@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from js.capped_process import _StreamCapture
 from js.toolkit import ToolContext
 from js.toolkit import fs, process_net
 
@@ -328,6 +329,10 @@ def test_shell_uses_configured_environment_allowlist_and_explains_failure(
         def running(self): return False
         def elapsed(self): return 0.0
         def snapshot(self): return b"", b"token lookup failed"
+        def stream(self, name):
+            capture = _StreamCapture(4096)
+            capture.feed(b"token lookup failed" if name == "stderr" else b"")
+            return capture
         def wait(self, timeout):
             return process_net.CappedProcessResult(returncode=7, stdout=b"", stderr=b"token lookup failed")
 

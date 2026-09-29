@@ -25,7 +25,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 |---|---|---|---|---|
 | Read-only tool calls run in parallel | yes, readers-writer, up to 8 ✔ | yes, up to 10 | yes, RwLock | yes |
 | Retry honours `Retry-After` | no, 2 attempts ✔ | yes, 10 | yes | yes |
-| Shell output past the cap | **head kept, tail lost** ✔ | whole stream to file | head + tail | tail + spill file |
+| Shell output past the cap | head + tail, raw stream to file (js-1g1.26) | whole stream to file | head + tail | tail + spill file |
 | Stale-edit guard | per line range, returns recovery diff | per-file mtime | none | none |
 | `patch` result shows the diff | yes | no | no | no |
 | Fuzzy match on edit | no (nearest-line hint) | quote styles | 4 looser passes | NFKC + quotes |
@@ -80,7 +80,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 ## Where bucking the norm looks wrong
 
-**Shell output keeps the head and throws away the tail.** ✔ `_StreamCapture.feed` stops keeping bytes at the cap (`capped_process.py:64`). The cap is 150 kB, and the spill afterwards works from the already-clipped text. The compiler error at the end of a long build log is gone for good. The other three keep the tail or the whole stream.
+**Shell output keeps the head and throws away the tail.** Done in js-1g1.26. `_StreamCapture` now keeps the head and the tail, and the reader writes the raw stream to a file once it passes the cap. The result shows both ends and names the byte range left out and the file, which `read` reaches with `start_byte`. Background job polls work the same way.
 
 **Retry gives up after two attempts and ignores `Retry-After`.** ✔ The check is `transport_retries == 2` (`runtime.py:1816`), and "retry-after" appears nowhere in js. A 429 with a 30-second `Retry-After` kills a turn in about 3 seconds. Claude Code retries 10 times, and all three honour the header.
 
@@ -135,7 +135,7 @@ pi retries once. Codex does not recover inside a normal turn.
 |---|---|---|
 | Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
 | Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | `runtime.py:1813`, `_backoff` |
-| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | `capped_process._StreamCapture` |
+| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | `runtime.py:1948` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | `compaction.py:567`, `runtime.py:1599` |
@@ -186,7 +186,7 @@ Hot spots over 441 commits in two months:
 
 ## Priorities
 
-1. **Shell head+tail with a raw spill.** It's cheap, and today js silently loses the one line that matters.
+1. **Shell head+tail with a raw spill** (done in js-1g1.26).
 2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget.**
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.

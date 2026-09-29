@@ -96,7 +96,7 @@ def test_clipped_output_still_reports_truncation(tmp_path):
     )
     result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
     assert "exit=0" in result
-    assert "[truncated: limits.max_bash_output_bytes (32) reached]" in result
+    assert "[truncated: limits.max_bash_output_bytes (32) reached;" in result
     assert "x" * 33 not in result
 
 
