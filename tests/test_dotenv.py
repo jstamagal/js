@@ -13,7 +13,7 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     `candidate_files` climbs to the filesystem root, so a real `.env` in /tmp or
     the operator's home would otherwise bleed into these assertions.
     """
-    monkeypatch.setattr(dotenv._paths, "config_dir", lambda: tmp_path / "no-such-config")
+    monkeypatch.setattr(dotenv._paths, "global_env_file", lambda: tmp_path / "no-such-config" / ".env")
     real = dotenv.candidate_files
 
     def bounded(cwd: Path | None = None) -> list[Path]:
@@ -91,7 +91,7 @@ def test_global_config_env_is_the_lowest_precedence_file(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / ".env").write_text("TAVILY_API_KEY=global\nEXA_API_KEY=global-only\n")
-    monkeypatch.setattr(dotenv._paths, "config_dir", lambda: config_dir)
+    monkeypatch.setattr(dotenv._paths, "global_env_file", lambda: config_dir / ".env")
     project = tmp_path / "project"
     project.mkdir()
     (project / ".env").write_text("TAVILY_API_KEY=project\n")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 
 
-from js import cli
+from js import cli, paths
 
 
 def _git(repo, *args):
@@ -146,7 +146,7 @@ def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeyp
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
     assert cli._run_commit(str(repo), save=False) == 0
 
-    backups = data_home / "js" / "commit-backups"
+    backups = paths.commit_backups_dir()
     snaps = sorted(backups.iterdir())
     assert len(snaps) == 1
     snap = snaps[0]
@@ -164,14 +164,14 @@ def test_run_commit_makes_no_snapshot_on_clean_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
     assert cli._run_commit(str(repo), save=False) == 0
 
-    backups = data_home / "js" / "commit-backups"
+    backups = paths.commit_backups_dir()
     assert not backups.exists() or not any(backups.iterdir())
 
 
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    backups = data_home / "js" / "commit-backups"
+    backups = paths.commit_backups_dir()
     backups.mkdir(parents=True)
     # Twelve older snapshots already on disk (names sort before any current UTC stamp).
     for i in range(12):
