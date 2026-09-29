@@ -46,6 +46,36 @@ Images return either a vision-disabled text stub or an internal image marker
 that the runtime expands for vision models. PDFs use `pdftotext`. Both are
 refused when the file exceeds `limits.max_file_bytes`.
 
+A notebook (`.ipynb`) read without a range shows its cells: index, id (the
+nbformat `id`, or `cell-N` by position before nbformat 4.5), type, execution
+count and source, then each output summarised. A stream or `text/plain`
+output shows at most `notebook.output_lines` lines; other MIME types show only
+their size; an error shows `ename: evalue`. That read records the file's hash
+for `notebook_edit` and `write`, but no line coverage: a `patch` of the raw
+JSON needs a ranged read, which returns the raw JSON. A `.ipynb` that is not a
+notebook is read as text.
+
+### `notebook_edit`
+
+Changes one cell of a notebook by id.
+
+Parameters:
+
+- `file_path`
+- `cell_id`: the cell to replace or delete, or to insert after; an insert
+  without one goes to the top.
+- `new_source`: the cell's whole new source; not used by `delete`.
+- `cell_type`: `code`, `markdown` or `raw`; required by `insert`, and on
+  `replace` it changes the cell's type.
+- `edit_mode`: `replace` (default), `insert` or `delete`.
+
+It needs a prior `read` of the notebook, and the file's hash must still match
+that read. A replaced code cell gets empty outputs and a null execution count.
+An inserted cell gets a new 8-hex id when the notebook is nbformat 4.5 or
+later. The JSON keeps its key order, indent and line endings. The notebook is
+snapshotted for `undo`, and after the edit the new hash counts as read, so
+edits in a row need no second read.
+
 ### `write`
 
 Creates or overwrites a whole file.
@@ -181,6 +211,44 @@ Search output uses absolute path headings and the same anchored source lines as
 shared search cache, and refuses match sets larger than `max_results`. Search
 results mark the matches omitted past `max_results`, and an ast-grep parse
 warning about the pattern is reported above the result.
+
+### `lsp`
+
+Asks a language server about one file. Lazy in the default agent.
+
+Parameters:
+
+- `operation`: `diagnostics`, `definition`, `references` or `hover`.
+- `file_path`
+- `line`: 1-based; used by every operation but `diagnostics`.
+- `character`: 1-based column on that line, or instead
+- `symbol`: text on that line; the position is its first occurrence.
+
+`lsp.servers` lists the servers: `{name, command, extensions, roots}`. The
+first entry that serves the file's extension and whose `command[0]` is on PATH
+is used; by default basedpyright, then pyright, for Python, rust-analyzer,
+gopls and typescript-language-server. A file no entry serves, or whose servers
+are all missing, returns one ERROR line naming them.
+
+The workspace root is the nearest directory holding one of the entry's
+`roots` files, else the nearest holding `.git`, else the working directory
+when it holds the file, else the file's directory. The operator's home and `/`
+are never a root. One server runs per entry, root and jail for the life of the
+process.
+
+Each call sends the file's content from disk: `didOpen` the first time, then
+`didChange` (whole text) and `didSave` when it changed. Other files the server
+has open are resent when they changed, and closed when they are gone.
+`diagnostics` waits for the server to publish for the new version, then
+0.3 s more for later publishes; an unchanged file returns the last ones at
+once. Nothing within `lsp.timeout_s` returns a line saying so, not an empty
+list. Positions are converted between code point columns and LSP's UTF-16
+offsets both ways.
+
+Under `-C` the server runs in the jail with the allowlisted environment
+(`limits.shell_env_allow`); the command's directory and the symlinks it
+resolves through are bound back. A server that needs more (its runtime, a
+toolchain) gets it through `jail.bind`.
 
 ## Process And Network
 

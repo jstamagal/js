@@ -359,6 +359,20 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Columns of a terminal_session started without cols."),
     SettingSpec("tools.terminal_rows", "int",
                 "Rows of a terminal_session started without rows."),
+    # --- lsp ---
+    SettingSpec("lsp.servers", "json",
+                "Language servers the `lsp` tool may start: a JSON list of "
+                "{name, command, extensions, roots}. For a file, the first entry "
+                "whose extensions hold its extension and whose command[0] is on "
+                "PATH is used. roots are the files that mark a workspace root; "
+                "without one, the nearest directory holding .git is the root."),
+    SettingSpec("lsp.timeout_s", "int",
+                "Seconds an `lsp` call waits for its language server: to start, "
+                "to answer a request, or to publish diagnostics."),
+    # --- notebook ---
+    SettingSpec("notebook.output_lines", "int",
+                "Lines of each cell output a `read` of an .ipynb shows; the rest "
+                "is counted. 0 shows only what kind each output is."),
     # --- mcp ---
     SettingSpec("mcp.servers", "json",
                 "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
@@ -482,7 +496,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
-            "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
+            "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools", "lsp.timeout_s",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None

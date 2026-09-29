@@ -108,6 +108,13 @@ set tools.user_agent js-agent/0.1
 set tools.terminal_cols 64
 set tools.terminal_rows 36
 
+# --- lsp ---
+set lsp.servers [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
+set lsp.timeout_s 30
+
+# --- notebook ---
+set notebook.output_lines 10
+
 # --- mcp ---
 set mcp.servers {}
 set mcp.agents {}
