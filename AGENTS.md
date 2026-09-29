@@ -8,7 +8,7 @@ to this file — one set of instructions, every agent reads the same thing.
 A personal terminal LLM harness in Python: one owner, one machine, no
 customers, no production, no other developers. Interactive chat, one-shot
 `-p`, pipe workflows, parallel subagents, wiki agents, commit-agent — built on
-the Vercel AI Python SDK (`ai`). Bias: low friction, many knobs. When the
+the Vercel AI Python SDK (`ai`). Bias: low friction, many settings. When the
 owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 
 ## Workflow
@@ -75,8 +75,8 @@ compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
 guard; preserve it. Deep dives belong in `docs/technical-guide.md`.
 
-Anything settable is a registered knob (`js/settings.py`). `/set` with no
-argument dumps every settable knob, `/set <key> <value>` sets one, and
+Anything settable is a registered setting (`js/settings.py`). `/set` with no
+argument dumps every settable setting, `/set <key> <value>` sets one, and
 `/save` rewrites jsrc from the full live state, no confirmation. A setting
 reachable only through an env var or a hardcoded default is not finished.
 
