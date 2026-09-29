@@ -99,8 +99,15 @@ typographic spaces as a space. The replacement is applied over the original
 text. Every line of `old_string` that `new_string` keeps is written back from
 the file, byte for byte, and within a changed line the characters the edit kept
 come from the file too, so a smart quote the model typed as `"` stays a smart
-quote. The result says the match was normalised. A normalised match whose
-replacement would leave the file as it is is refused.
+quote. A kept character stays ASCII where the edit inserts the same ASCII
+character beside it, so an en dash lengthened to `--` becomes `--`. Whitespace
+at the end of `old_string`, or a first line of only whitespace, takes in up to
+as much whitespace from the file as it holds, so an `old_string` that ends with
+the next line's indentation leaves that line as it was. The result says the
+match was normalised. A normalised match whose replacement would leave the file
+as it is is refused. With `replace_all`, the fallback runs only when there is
+no exact occurrence: one exact occurrence means only exact occurrences are
+replaced, and the result's count shows how many.
 
 Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals

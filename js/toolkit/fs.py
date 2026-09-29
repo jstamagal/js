@@ -892,18 +892,33 @@ def _fuzzy_view(text: str) -> tuple[str, list[int]]:
 
 def _keep_untouched_chars(original: str, old: str, new: str) -> str:
     """*new*, one line, with the characters it keeps from *old* taken from
-    *original*, the file's line that *old* matched."""
+    *original*, the file's line that *old* matched. A kept character the file
+    writes in a non-ASCII form stays in its ASCII form where the edit inserts
+    that same ASCII character right beside it, so lengthening an en dash to
+    ``--`` gives ``--``."""
     orig_body, orig_trailing, orig_ending = _line_parts(original)
     old_body, old_trailing, old_ending = _line_parts(old)
     new_body, new_trailing, new_ending = _line_parts(new)
     if len(orig_body) != len(old_body):
         return new
-    body = [
-        orig_body[i1:i2] if tag == "equal" else new_body[j1:j2]
-        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
-            None, old_body, new_body, autojunk=False
-        ).get_opcodes()
-    ]
+    opcodes = difflib.SequenceMatcher(None, old_body, new_body, autojunk=False).get_opcodes()
+    body: list[str] = []
+    for index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
+        if tag != "equal":
+            body.append(new_body[j1:j2])
+            continue
+        kept = list(orig_body[i1:i2])
+        before = new_body[opcodes[index - 1][3]:opcodes[index - 1][4]] if index else ""
+        after = new_body[opcodes[index + 1][3]:opcodes[index + 1][4]] if index + 1 < len(opcodes) else ""
+        position = i1
+        while position < i2 and orig_body[position] != old_body[position] and before.endswith(old_body[position]):
+            kept[position - i1] = old_body[position]
+            position += 1
+        position = i2 - 1
+        while position >= i1 and orig_body[position] != old_body[position] and after.startswith(old_body[position]):
+            kept[position - i1] = old_body[position]
+            position -= 1
+        body.append("".join(kept))
     trailing = orig_trailing if old_trailing == new_trailing else new_trailing
     ending = orig_ending if old_ending == new_ending else new_ending
     return "".join(body) + trailing + ending
@@ -916,6 +931,10 @@ def _keep_untouched(original: str, old: str, new: str) -> str:
     orig_lines = original.splitlines(keepends=True)
     old_lines = old.splitlines(keepends=True)
     new_lines = new.splitlines(keepends=True)
+    if len(orig_lines) == len(old_lines) - 1:
+        # The whitespace-only last line of *old* matched no whitespace in the
+        # file, so the match ends at the line ending before it.
+        orig_lines.append("")
     if len(orig_lines) != len(old_lines):
         return new
     out: list[str] = []
@@ -936,6 +955,39 @@ def _keep_untouched(original: str, old: str, new: str) -> str:
     return "".join(out)
 
 
+def _widen_over_whitespace(
+    text: str, old: str, positions: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Fuzzy match spans in *text* grown over the whitespace _fuzzy_view drops
+    from *old*: the end over up to as many whitespace characters as *old*'s
+    last line ends with, when that line has no line ending, and the start back
+    over up to as many as *old*'s first line holds, when that line is only
+    whitespace. A span never grows into its neighbour."""
+    lines = old.splitlines(keepends=True)
+    first_body, first_trailing, first_ending = _line_parts(lines[0])
+    last_body, last_trailing, last_ending = _line_parts(lines[-1])
+    back = len(first_trailing) if first_ending and not first_body else 0
+    forward = 0 if last_ending else len(last_trailing)
+
+    def blank(char: str) -> bool:
+        return char.isspace() and char not in "\r\n"
+
+    widened: list[tuple[int, int]] = []
+    for index, (start, end) in enumerate(positions):
+        floor = widened[-1][1] if widened else 0
+        ceiling = positions[index + 1][0] if index + 1 < len(positions) else len(text)
+        for _ in range(back):
+            if start <= floor or not blank(text[start - 1]):
+                break
+            start -= 1
+        for _ in range(forward):
+            if end >= ceiling or not blank(text[end]):
+                break
+            end += 1
+        widened.append((start, end))
+    return widened
+
+
 def _apply_edit(
     text: str,
     old: str,
@@ -953,8 +1005,9 @@ def _apply_edit(
     text as it stands *now*, so a later edit sees an earlier one's result.
 
     When ``old`` is not in the text exactly, it is matched in _fuzzy_view of
-    both, and the replacement keeps the file's own bytes wherever the edit left
-    ``old`` as it was (_keep_untouched)."""
+    both, each match grows over the whitespace that view dropped from ``old``
+    (_widen_over_whitespace), and the replacement keeps the file's own bytes
+    wherever the edit left ``old`` as it was (_keep_untouched)."""
     line_ending = _detect_line_ending(text)
     if any(char in text or char in new for char in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
         return f"ERROR: {label}unsupported line separator; patch requires LF, CRLF, or CR lines"
@@ -989,6 +1042,8 @@ def _apply_edit(
         if not replace_all:
             break
     fuzzy = origin is not None
+    if fuzzy:
+        positions = _widen_over_whitespace(text, old_norm, positions)
     replacements = [
         _keep_untouched(text[start:end], old_norm, new_norm) if fuzzy else new_norm
         for start, end in positions

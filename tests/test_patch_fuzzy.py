@@ -163,3 +163,69 @@ def test_undo_restores_the_bytes_before_a_fuzzy_patch(tmp_path):
     assert fs.undo("f.txt", context=context).startswith("restored ")
 
     assert target.read_bytes() == body.encode()
+
+
+def test_a_whitespace_only_last_line_keeps_the_next_line_as_it_was(tmp_path):
+    # old_string ends with the next line's indentation, which the fuzzy view
+    # reads as trailing whitespace.
+    body = "def f():\n    s = “a”\n    return s\n"
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string='    s = "a"\n    ', new_string='    s = "b"\n    ',
+                      context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == "def f():\n    s = “b”\n    return s\n".encode()
+
+
+def test_a_whitespace_only_last_line_with_no_indentation_after_it(tmp_path):
+    body = "x = “a”\ny = 1\n"
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string='x = "a"\n  ', new_string='x = "b"\n  ',
+                      context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == "x = “b”\ny = 1\n".encode()
+
+
+def test_a_whitespace_only_last_line_that_the_edit_changes(tmp_path):
+    body = "if x:\n    s = “a”\n        return s\n"
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string='    s = "a"\n        ', new_string='    s = "a"\n    ',
+                      context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == "if x:\n    s = “a”\n    return s\n".encode()
+
+
+def test_a_mid_line_match_that_changes_its_trailing_whitespace(tmp_path):
+    body = "a = “x”  # note\n"
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string='a = "x"  ', new_string='a = "y" ', context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == "a = “y” # note\n".encode()
+
+
+def test_lengthening_a_unicode_dash_writes_the_new_dashes(tmp_path):
+    body = "a – b\n"
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string="a - b", new_string="a -- b", context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == b"a -- b\n"
+
+
+def test_replace_all_with_an_exact_occurrence_replaces_only_exact_ones(tmp_path):
+    body = 's = "a"\nt = “a”\n'
+    target, context = _read(tmp_path, body)
+
+    result = fs.patch(file_path="f.txt", old_string='"a"', new_string='"b"', replace_all=True,
+                      context=context)
+
+    assert result.startswith("patched "), result
+    assert target.read_bytes() == 's = "b"\nt = “a”\n'.encode()

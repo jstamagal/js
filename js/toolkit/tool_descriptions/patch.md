@@ -13,7 +13,8 @@ surface has no read tool, so edits will be refused.
 `old_string` must match exactly once unless `replace_all` is set. When it is
 not in the file exactly, it is matched again with smart quotes, Unicode dashes,
 no-break spaces and trailing whitespace read as plain ASCII; the file keeps its
-own characters wherever your edit left `old_string` unchanged. Pass `edits`
+own characters wherever your edit left `old_string` unchanged. With
+`replace_all`, this fallback runs only when there is no exact occurrence. Pass `edits`
 for several replacements in one call: they apply in order, each seeing the
 previous result, and all are validated before anything is written, so a failed
 call leaves the file untouched and names the offending edit.
