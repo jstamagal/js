@@ -137,15 +137,16 @@ def _blocking_on(context: ToolContext | None, job: _ShellJob):
 def interrupt_inflight(context: Any) -> int:
     """Kill the commands a shell call on ``context`` is blocked waiting on.
 
-    The runtime calls this when the turn running that call is cancelled. The
-    worker thread cannot be cancelled; killing the process tree makes its wait
-    return, so the turn ends now instead of at the call's wait deadline.
-    Returns how many jobs were killed.
+    The runtime calls this on the event loop when the turn running that call
+    is cancelled. The worker thread cannot be cancelled; killing the process
+    tree makes its wait return, so the turn ends now instead of at the call's
+    wait deadline. It only signals: the worker collects the output.
+    Returns how many jobs were signalled.
     """
     with _JOBS_LOCK:
         jobs = list(_BLOCKING.get(id(context), ()))
     for job in jobs:
-        job.process.kill()
+        job.process.send_kill()
     return len(jobs)
 
 

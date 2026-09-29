@@ -70,15 +70,19 @@ class _StreamCapture:
             return bytes(self._kept), self._truncated
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill the child and, on POSIX, its whole process group (grandchildren
+def _signal_tree(proc: subprocess.Popen) -> None:
+    """SIGKILL the child and, on POSIX, its whole process group (grandchildren
     spawned into the session would otherwise survive a timeout kill and keep
-    the box busy)."""
+    the box busy). Returns without waiting for them to die."""
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):
         proc.kill()
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    _signal_tree(proc)
     proc.wait()
 
 
@@ -149,6 +153,11 @@ class CappedProcess:
         except subprocess.TimeoutExpired:
             return None
         return self._collect(rc)
+
+    def send_kill(self) -> None:
+        """Kill the whole tree without waiting; a blocked ``wait`` then returns."""
+        if self._result is None:
+            _signal_tree(self.proc)
 
     def kill(self) -> CappedProcessResult:
         """Kill the whole tree and return what was captured before it died."""
