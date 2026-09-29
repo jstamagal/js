@@ -191,6 +191,23 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "ex_cancel, interrupt, eof, suspend, reasoning_toggle, redraw, "
                 "scroll_up, scroll_down, complete. Read when the REPL starts.",
                 empty=EMPTY_NONE),
+    # --- tags ---
+    SettingSpec("tags.file", "str",
+                "Session tag list: one `name: description` line per tag. Unset = "
+                "~/.js/tags.yaml. No file, or no TYPESAFE_API_KEY, means no tagging. "
+                "Editing the list retags every shown session at the next session end.",
+                empty=EMPTY_NONE),
+    SettingSpec("tags.threshold", "float",
+                "Lowest Jev score, 0 to 1, a tag needs to be kept on a session."),
+    SettingSpec("tags.max", "int",
+                "Most tags a session keeps, highest score first."),
+    SettingSpec("tags.messages", "int",
+                "How many of a session's last operator and model messages Jev reads "
+                "to tag it. Tool output is never sent."),
+    SettingSpec("tags.message_chars", "int",
+                "Longest text sent per message when tagging; longer messages are cut."),
+    SettingSpec("tags.model", "str",
+                "TypeSafe model that judges session tags."),
     # --- provider ---
     SettingSpec("provider.id", "str",
                 "Explicit js provider id, e.g. deepseek, openai-codex, ollama.",
@@ -611,7 +628,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if spec.key in {
             "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
             "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
-            "history.max_entries", "lsp.timeout_s",
+            "history.max_entries", "lsp.timeout_s", "tags.max", "tags.messages", "tags.message_chars",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None
@@ -624,6 +641,8 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
         if spec.key == "mcp.request_timeout_s" and number <= 0:
             return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
+        if spec.key == "tags.threshold" and not 0 <= number <= 1:
+            return None, msgs.EXPECTED_PROBABILITY.text()
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"mcp.servers", "mcp.agents"}:

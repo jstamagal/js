@@ -853,6 +853,7 @@ EXPECTED_NONNEGATIVE_INTEGER = Message("expected an integer >= 0")
 EXPECTED_NUMBER = Message("expected a number")
 EXPECTED_NONNEGATIVE_NUMBER = Message("expected a number >= 0")
 EXPECTED_POSITIVE_NUMBER = Message("expected a number > 0")
+EXPECTED_PROBABILITY = Message("expected a number from 0 to 1")
 EXPECTED_JSON = Message("expected a JSON value")
 EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
@@ -1014,6 +1015,12 @@ SESSIONS_ALREADY_HERE = Message("Already in that session.")
 SESSIONS_SWITCHING = Message("Switching to session {name} in {dir}")
 SESSIONS_DIR_GONE = Message("The session's directory {dir} is gone. Resuming in {cwd}.", WARN)
 SESSIONS_BRANCHED = Message("Branched {parent} at {point} into {name}")
+
+# Session tags (js.session_tags). The sweep runs detached; these are the lines
+# it appends to ~/.js/logs/tags.log.
+TAGS_FILE_UNREADABLE = Message("{path}: tag list not read: {error}", banner=False)
+TAGS_FILE_SHAPE = Message("{path}: expected one `name: description` line per tag", banner=False)
+TAGS_LOG_FAILED = Message("{when} {session}: tagging stopped: {error}", banner=False)
 
 # --- The commit helper ---------------------------------------------------------
 

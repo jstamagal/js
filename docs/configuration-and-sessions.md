@@ -259,6 +259,7 @@ project.
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
   tools.yaml
+  tags.yaml              # the session tag list (tags.file)
   agents/<agent_id>/     # global agent prompts
   skills/
   toolbox/
@@ -281,7 +282,10 @@ project.
   logs/
     <agent_id>/          # debug autolog, compaction flights
     transcript/<agent_id>/
+    tags.log             # why a tag sweep stopped
   cache/modelsdotdev/
+  cache/sessions.sqlite  # the picker's catalog and search index
+  cache/tags.lock        # held by the running tag sweep
   work/                  # what the agent must not lose; notes/ holds :n and :w
   tmp/                   # js scratch; entries a day old are removed at start
   plans/                 # the plan tool
@@ -513,6 +517,42 @@ entry. On open, a file whose size or mtime differs from its entry is read
 again, an entry whose file is gone is dropped, and a missing or unreadable
 index is built again from the sessions.
 
+### Tags
+
+Sessions are tagged by TypeSafe's Jev from the operator's tag list,
+`~/.js/tags.yaml` (`tags.file`), one line per tag, its name and a short
+description:
+
+```yaml
+js: the js harness itself, its code, config, tools and sessions
+nfs / mounts: NFS exports, mounts, automount, stale handles
+gpu / vram: GPUs, VRAM, drivers, CUDA
+```
+
+js does not create the file. Tags describe subjects; an activity such as
+"something broke" or "coding" fits nearly every session and tags nothing.
+
+A session is judged in one request: the state is its last `tags.messages`
+(10) operator and model messages, including the text the model wrote
+alongside its tool calls, each cut to `tags.message_chars` (2000). Tool output
+is not sent. Every tag is one Noul question ("is this one of the main
+subjects"); tags scoring at least `tags.threshold` (0.6) are kept, highest
+first, at most `tags.max` (3). `tags.model` (`jev-latest`) names the model.
+
+When a js run releases its sessions, and when `/session` opens the picker, js
+starts a detached sweep (`python -m js.session_tags`). It tags every shown
+session (not empty, quick, subagent or script-started) that no other process
+has open and whose newest tags record is missing, was judged against a
+different tag list, or is older than its last message. So a session is tagged
+when it ends, a resumed session is tagged again when it ends again, and
+editing `tags.yaml` retags every session. One sweep runs at a time. A failed
+request stops the sweep with one line in `~/.js/logs/tags.log`; the next
+sweep carries on.
+
+With no `TYPESAFE_API_KEY` (from the environment or `~/.js/.env`), or no tag
+list file, no sweep starts and nothing is printed. The text of the messages
+above is sent to api.typesafe.ai.
+
 ## The `.txt` Transcript
 
 Every write to a session's `.jsonl` brings the `.txt` beside it up to date:
@@ -522,7 +562,7 @@ agent: defaultagent   dir: /home/me/js   mode: repl
 models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
 started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
 branched-from: -
-tags: -
+tags: js · linux admin
 
 #0001 08:02 you  APE
 #0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
@@ -536,7 +576,8 @@ message that calls tools is not a line of its own: its text labels each call,
 and each tool result is a line with the tool, that label, the first line of the
 call and the result's exit code and size. Tool output is only in the `.jsonl`,
 at the same message number. A message a rollback took back out of the
-conversation is not shown; compaction removes nothing from the `.txt`.
+conversation is not shown; compaction removes nothing from the `.txt`. The
+`tags:` line shows the session's newest tags record, `-` before it has one.
 
 ## JSONL Record Shape
 
@@ -548,6 +589,7 @@ The memory file is append-only JSONL. Records have:
 {"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
 {"id":"5e6f7a80","parent":"c2d81e5a","kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
 {"id":"91aa02bc","parent":"5e6f7a80","kind":"title","ts":1781190004.0,"title":"parser fix"}
+{"id":"7c3e5b20","parent":"5e6f7a80","kind":"tags","version":1,"ts":1781190900.0,"tags":["js"],"scores":{"js":0.93,"banter":0.02},"list":"4f1c0e9a27d3b6e1","through":14}
 {"id":"0d4e7b19","parent":"5e6f7a80","kind":"usage","version":1,"ts":1781190005.0,"call":{"model":"m","provider":"p","input_tokens":8120,"output_tokens":41,"cache_read_tokens":6000,"cache_write_tokens":0,"reasoning_tokens":0,"cost":0.0031},"totals":{"calls":3,"...":"...","by_model":{}}}
 ```
 
@@ -555,7 +597,10 @@ Every record starts with an `id`, eight hex digits unique within the file, and
 a `parent`. Message and mark records form the conversation path: each one's
 `parent` is the id of the message or mark before it in the file, `null` for the
 first. A start or title record's `parent` is the message or mark it follows,
-and no record names it as its parent. A `usage` record is placed the same way.
+and no record names it as its parent. `usage` and `tags` records are placed
+the same way. A `tags` record holds the kept tags, every tag's score, the
+digest of the tag list it was judged against (`list`) and the session's
+message count then (`through`); its `ts` is not the session's activity.
 Replay reads the file in order and does not use ids.
 
 A record's `ts` is when its message happened. The operator's message is written
@@ -567,8 +612,9 @@ Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record
 names its `parent_session` file. A branch is a new file holding the parent's
-records up to the message it split at, ids kept, except the `usage` records,
-so its usage totals start at zero; its start record's
+records up to the message it split at, ids kept, except the `usage` and
+`tags` records, so its usage totals start at zero and it is tagged on its
+own; its start record's
 `branched_from` names the parent session file and the `id` of that message,
 and the `.txt` shows the message's number. The start record is not
 conversation context and the message loader ignores it. Adjacent hidden
