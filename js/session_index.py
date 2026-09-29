@@ -32,7 +32,8 @@ _MARK_CLOSE = "\x02"
 _TOKENIZER = "porter unicode61 remove_diacritics 2"
 
 _lock = threading.RLock()
-_connections: dict[tuple[int, str], sqlite3.Connection] = {}
+# This process's open connection: (pid, index path, connection).
+_current: tuple[int, str, sqlite3.Connection] | None = None
 
 
 def db_path() -> Path:
@@ -71,24 +72,39 @@ def _open(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _remove(path: Path) -> None:
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
 def _connection() -> sqlite3.Connection:
     """This process's connection to the index, created or rebuilt as needed."""
+    global _current
     path = db_path()
     key = (os.getpid(), str(path))
-    connection = _connections.get(key)
-    if connection is not None and path.exists():
-        return connection
-    if connection is not None:
-        connection.close()
+    if _current is not None and _current[:2] == key and path.exists():
+        return _current[2]
+    if _current is not None and _current[0] == key[0]:
+        _current[2].close()
+    _current = None
     try:
         connection = _open(path)
     except sqlite3.DatabaseError:
         # Unreadable: it is derived, so it is built again.
-        for suffix in ("", "-journal", "-wal", "-shm"):
-            Path(f"{path}{suffix}").unlink(missing_ok=True)
+        _remove(path)
         connection = _open(path)
-    _connections[key] = connection
+    _current = (*key, connection)
     return connection
+
+
+def reset() -> None:
+    """Close and delete the index; the next use builds it again."""
+    global _current
+    with _lock:
+        if _current is not None and _current[0] == os.getpid():
+            _current[2].close()
+        _current = None
+        _remove(db_path())
 
 
 def _file_key(session_file: Path) -> str:
@@ -160,7 +176,15 @@ def catalog(root: Path | None = None) -> list[dict[str, Any]]:
     """Every session under `root` (the sessions folder by default), each as its
     stored summary plus `path` and `mtime`. A file whose size or mtime differs
     from what is stored is parsed and stored again first; an entry whose file
-    is gone is dropped."""
+    is gone is dropped. An index that turns out unreadable is built again."""
+    try:
+        return _catalog(root)
+    except sqlite3.DatabaseError:
+        reset()
+        return _catalog(root)
+
+
+def _catalog(root: Path | None) -> list[dict[str, Any]]:
     root = Path(paths.sessions_root() if root is None else root)
     prefix = _file_key(root).rstrip("/") + "/"
     with _lock:
