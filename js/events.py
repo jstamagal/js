@@ -181,3 +181,20 @@ class EventHooks:
 
     def all(self) -> dict[str, list[EventHook]]:
         return {event: list(hooks) for event, hooks in self._hooks.items() if hooks}
+
+
+class RefusableOnly:
+    """The part of an `on` table a subagent's turn answers to: the handlers of
+    the refusable events, so a tool_call guard vets a subagent's calls as it
+    vets the parent's. Every other event emits to no handler."""
+
+    def __init__(self, hooks: EventHooks | RefusableOnly) -> None:
+        self._hooks = hooks
+
+    def emit(self, event: str, **payload) -> EventEmission:
+        name = normalize_event_name(event)
+        if name is None:
+            raise ValueError(f"unknown event: {event}")
+        if name in REFUSABLE_EVENTS:
+            return self._hooks.emit(name, **payload)
+        return EventEmission(event=name, payload=dict(payload), hooks=[])

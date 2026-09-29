@@ -75,8 +75,28 @@ def _load(path: Path) -> PromptCommand | None:
     return PromptCommand(name=path.stem, path=path, description=description.strip(), body=body)
 
 
+# Parsed command files by path, with the (mtime_ns, size) they were parsed at.
+# Tab completion calls discover on every keypress it completes.
+_parsed: dict[Path, tuple[tuple[int, int], PromptCommand | None]] = {}
+
+
+def _load_cached(path: Path) -> PromptCommand | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _parsed.get(path)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    command = _load(path)
+    _parsed[path] = (stamp, command)
+    return command
+
+
 def discover(project_dir: Path) -> dict[str, PromptCommand]:
-    """Every command by name. A project command shadows a global one."""
+    """Every command by name. A project command shadows a global one. A file
+    is read again only when its mtime or size changed."""
     found: dict[str, PromptCommand] = {}
     for root in command_dirs(project_dir):
         try:
@@ -86,7 +106,7 @@ def discover(project_dir: Path) -> dict[str, PromptCommand]:
         for path in entries:
             if path.suffix != ".md" or not _NAME.match(path.stem) or not path.is_file():
                 continue
-            command = _load(path)
+            command = _load_cached(path)
             if command is not None:
                 found[command.name] = command
     return found

@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 
 import pytest
 
-from js import attach, cli, compaction, events, runtime, settings
+from js import attach, cli, compaction, events, hookexec, runtime, settings
 from js.memory import load_messages
 from js.toolkit import Tool, ToolContext, ToolRegistry
-from test_runtime_offline_integration import model_text_result, model_tool_call_result, offline_config
+from test_runtime_offline_integration import _budget_config, model_text_result, model_tool_call_result, offline_config
 
 SESSION = "hooks"
 
@@ -136,6 +137,28 @@ def test_exit_2_outside_tool_call_is_a_failure_not_a_refusal(tmp_path):
     assert emission.results[0].error is not None
 
 
+def test_timeout_0_is_no_limit(tmp_path):
+    outcome = hookexec.run("sleep 0.3; echo late", cwd=str(tmp_path), timeout=0, cap=0)
+
+    assert (outcome.returncode, outcome.stdout) == (0, "late\n")
+
+
+def test_a_background_child_does_not_hold_the_command_open(tmp_path):
+    started = time.monotonic()
+    outcome = hookexec.run("sleep 5 & echo started", cwd=str(tmp_path), timeout=4, cap=0)
+
+    assert (outcome.returncode, outcome.stdout) == (0, "started\n")
+    assert time.monotonic() - started < 2
+
+
+def test_the_timeout_holds_when_a_descendant_leaves_the_group(tmp_path):
+    started = time.monotonic()
+    outcome = hookexec.run("setsid sleep 5 & sleep 5", cwd=str(tmp_path), timeout=1, cap=0)
+
+    assert outcome.returncode is None
+    assert time.monotonic() - started < 3
+
+
 # --- tool_call refusal -----------------------------------------------------------
 
 
@@ -198,6 +221,82 @@ def test_tool_call_handler_exit_0_lets_the_call_run(tmp_path):
 
     assert ran == ["hi"]
     assert results[0]["content"] == "echoed hi"
+
+
+def test_a_tool_call_guard_vets_a_subagents_calls(monkeypatch, tmp_path):
+    from js.toolkit.registry import build_default_registry
+    from test_subagent_isolation import _fake_stream_result, _fake_tool_result, make_cfg
+    from tool_loading import after_loading
+
+    monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
+    worker = tmp_path / "prompts" / "worker"
+    worker.mkdir(parents=True)
+    (worker / "agent.yaml").write_text("tools:\n  - write:lazy\n", encoding="utf-8")
+    (worker / "01-body.md").write_text("WORKER\n", encoding="utf-8")
+
+    def from_env_stub(*, save_session: bool = True):
+        cfg = make_cfg(tmp_path, "defaultagent", worker.parent / "defaultagent")
+        cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+        return cfg
+
+    import js.config as config
+
+    monkeypatch.setattr(config, "from_env", from_env_stub)
+    state, cfg = _state(tmp_path)
+    seen = tmp_path / "seen.log"
+    guard = tmp_path / "guard.sh"
+    guard.write_text(
+        "payload=$(cat)\n"
+        f"printf '%s\\n' \"$payload\" >> {seen}\n"
+        'case "$payload" in *\'"name": "write"\'*) echo "no writes" >&2; exit 2;; esac\n',
+        encoding="utf-8",
+    )
+    _on(state, cfg, f"tool_call exec sh {guard}")
+    _on(state, cfg, "turn_start exec printf turn-started")
+    target = tmp_path / "out.txt"
+    child_results: list[str] = []
+
+    def stub(**kwargs):
+        last = kwargs["messages"][-1]
+        tool = getattr(last.parts[0], "tool_name", None)
+        # Right after tool loading, the turn still answers its first prompt.
+        asked = next(m for m in kwargs["messages"] if m.role == "user") if tool == "tool_discovery" else last
+        text = "".join(getattr(part, "text", "") or "" for part in asked.parts) if asked.role == "user" else ""
+        if text == "root":
+            return _fake_tool_result("task", json.dumps({"tasks": ["write it"], "agent_id": "worker"}), "p")
+        if text == "write it":
+            return _fake_tool_result("write", json.dumps({"file_path": str(target), "content": "x\n"}), "c")
+        if tool == "write":
+            child_results.append(last.parts[0].get_model_input())
+            return _fake_stream_result("CHILD_DONE")
+        return _fake_stream_result("PARENT_DONE")
+
+    child = after_loading(stub, "write")
+
+    def stream(**kwargs):
+        # The worker's surface has no task tool; the parent's does.
+        is_parent = any(tool.name == "task" for tool in kwargs.get("tools") or ())
+        return stub(**kwargs) if is_parent else child(**kwargs)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    registry = build_default_registry(prompts_root=worker.parent)
+    parent_cfg = make_cfg(tmp_path, "parent", worker.parent / "defaultagent")
+    messages = [{"role": "user", "content": "root"}]
+    state["pending_notes"] = []
+
+    runtime.run_turn(parent_cfg, "SYS", messages, runtime.Telemetry(None), trace_override=False,
+                     tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+                     suppress_output=True, event_hooks=state["events"])
+
+    assert not target.exists()
+    assert child_results and child_results[0].splitlines()[0] == "ERROR: no writes"
+    names = [json.loads(line)["name"] for line in seen.read_text(encoding="utf-8").splitlines()]
+    assert "task" in names and "write" in names
+    # The subagent's turn fires only tool_call: turn_start ran once, for the parent.
+    assert state["pending_notes"] == ["<js-reminder>turn-started</js-reminder>"]
+    assert messages[-1]["content"] == "PARENT_DONE"
 
 
 # --- pre_compact / post_compact ------------------------------------------------
@@ -275,6 +374,47 @@ def test_between_turn_auto_compaction_runs_the_compact_handlers(tmp_path, summar
     cli._maybe_auto_compact(cfg, state)
 
     assert state["pending_notes"] == ["<js-reminder>compacted</js-reminder>"]
+
+
+def test_mid_turn_compaction_runs_the_compact_handlers(monkeypatch, tmp_path):
+    heard: list[str] = []
+    hooks = events.EventHooks(lambda hook, emission: heard.append(emission.event)
+                              or events.EventHandlerResult(hook=hook))
+    hooks.add("pre_compact", "exec true")
+    hooks.add("post_compact", "exec true")
+    registry = ToolRegistry(
+        tools=(Tool(name="bigtool", description="big", handler=lambda context=None: "Z" * 2000, params={}),),
+        aliases={},
+    )
+
+    async def summarize(*_args, **_kwargs):
+        return "Summary before active tool turn"
+
+    replies = iter([model_tool_call_result("bigtool", ["{}"], call_id="call_big"), model_text_result("DONE")])
+
+    def stream(**_kwargs):
+        reply = next(replies)
+        if reply.tool_calls:
+            from dataclasses import replace
+
+            import ai
+
+            reply = replace(reply, usage=ai.types.usage.Usage(input_tokens=500, output_tokens=10))
+        return reply
+
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    messages = [
+        {"role": "user", "content": "old context " * 150},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "current tool turn"},
+    ]
+
+    runtime.run_turn(_budget_config(tmp_path, context_window=800), "system", messages, runtime.Telemetry(None),
+                     trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+                     suppress_output=True, event_hooks=hooks)
+
+    assert heard == ["pre_compact", "post_compact"]
 
 
 # --- session_start / session_end in both REPLs ------------------------------------

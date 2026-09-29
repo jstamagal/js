@@ -91,6 +91,24 @@ def test_expand_names_only_known_commands(dirs, tmp_path):
     assert pc.expand("review x", found) is None
 
 
+def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path, monkeypatch):
+    global_dir, _ = dirs
+    command = global_dir / "review.md"
+    command.write_text("Review $1\n", encoding="utf-8")
+    loads: list[str] = []
+    real_load = pc._load
+    monkeypatch.setattr(pc, "_load", lambda path: loads.append(path.name) or real_load(path))
+
+    pc.discover(tmp_path / "project")
+    pc.discover(tmp_path / "project")
+    assert loads == ["review.md"]
+
+    command.write_text("Review $1 closely\n", encoding="utf-8")
+    found = pc.discover(tmp_path / "project")
+    assert found["review"].body.strip() == "Review $1 closely"
+    assert loads == ["review.md", "review.md"]
+
+
 # --- completion and help -----------------------------------------------------------
 
 

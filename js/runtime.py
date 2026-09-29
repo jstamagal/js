@@ -1285,7 +1285,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              provider_api_key_override: str | None = None,
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
-             event_hooks: event_mod.EventHooks | None = None,
+             event_hooks: event_mod.EventHooks | event_mod.RefusableOnly | None = None,
              mcp_host: Any = None,
              steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
@@ -1405,6 +1405,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         token_state.chars_per_token = chars_per_token
     active_context.context_budget_state = token_state
     active_context.vision_enabled = active_context.config.vision_enabled
+
+    if event_hooks is not None:
+        # Subagents started through this context answer to its tool_call guards.
+        active_context.tool_call_hooks = event_hooks
 
     def _emit_event(event: str, **payload: Any) -> Any:
         """Emit ``event``; the emission, or None when this turn has no hooks."""

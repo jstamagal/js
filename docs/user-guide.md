@@ -176,12 +176,17 @@ on tool_call exec ~/bin/js-guard
 
 A `tool_call` handler whose command exits 2 refuses the call: the call never
 runs, and the model reads the first line of the command's stderr (else of its
-stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Any other
-status, or running past `events.exec_timeout_s` seconds (30; the process group
-is killed), prints one `exec:` line and queues nothing. A handler's command
-holds up the event that ran it until it exits. `events.exec_output_bytes`
-caps what is kept of each stream. What a handler queues during a turn reaches
-the model with the next user message.
+stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Subagents'
+tool calls go through the same `tool_call` handlers; a subagent's turn fires
+no other event. Any other status, or running past `events.exec_timeout_s`
+seconds (30, 0 for no limit; the process group is killed), prints one `exec:`
+line and queues nothing. A handler's command holds up the event that ran it
+until the shell exits; what it starts in the background (`cmd &`) keeps
+running, and its output is read for a moment after the shell exits and then
+dropped. `events.exec_output_bytes` caps what is kept of each stream. What a
+handler queues during a turn reaches the model with the next user message.
+`exec` commands are the operator's, not the model's: under `-C` they run on
+the host, outside the jail, with js's own environment.
 
 `/alias name command` defines `/name`. `$*` in the command is replaced by the
 alias's arguments; a command without `$*` gets them appended. `/alias -name`
@@ -408,6 +413,8 @@ see `<dir>`, and it puts the tools in a jail:
   refuse a path outside `<dir>` and the bound paths with one `ERROR` line. A
   path under `/tmp` or `~/.js/tmp` names the file the jailed commands see there.
 - Subagents run in the same jail.
+- `exec` commands (typed, or run by an `on` handler) are not tools: they run
+  on the host with js's environment.
 - The `jail.bind` setting shows more paths: a JSON list of `"path"`
   (read-only) or `"path:rw"` entries. The default binds `~/.gitconfig`,
   `~/.config/git`, `~/.local/share/uv` and `~/.cache/uv:rw`, so git and uv

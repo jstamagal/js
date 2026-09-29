@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 
+from prompt_toolkit.enums import DEFAULT_BUFFER
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 
@@ -60,12 +61,15 @@ def expand(line: str) -> str:
 
 
 def insert(buffer, data: str, settings: Mapping | None) -> None:
-    """Insert pasted ``data`` at the cursor: the marker for a large paste, the
-    text itself otherwise."""
+    """Insert pasted ``data`` at the cursor: the marker for a large paste into
+    the input line (the buffer named DEFAULT_BUFFER), the text itself
+    otherwise. The ex line and the history search never expand markers."""
     text = normalize(data)
     line_limit = int(_settings.knob(settings, "ui.paste_collapse_lines") or 0)
     char_limit = int(_settings.knob(settings, "ui.paste_collapse_chars") or 0)
-    buffer.insert_text(keep(text, line_limit) if collapses(text, line_limit, char_limit) else text)
+    if buffer.name == DEFAULT_BUFFER and collapses(text, line_limit, char_limit):
+        text = keep(text, line_limit)
+    buffer.insert_text(text)
 
 
 def key_bindings(get_settings: Callable[[], Mapping | None]) -> KeyBindings:

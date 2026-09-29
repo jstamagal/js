@@ -115,3 +115,42 @@ def test_history_file_keeps_the_full_paste(tmp_path):
 
     [record] = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert record["text"] == f"look {text}"
+
+
+def test_a_large_paste_into_the_ex_line_goes_in_as_text():
+    ex: list[str] = []
+
+    async def on_ex(text: str, editor: screen.InputEditor) -> None:
+        ex.append(text)
+
+    async def main() -> None:
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+            app, _scrollback = screen.build_app(
+                prompt="> ", history=InMemoryHistory(), completer=None,
+                on_line=lambda line: asyncio.sleep(0), on_interrupt=lambda: None, on_eof=lambda: None,
+                editing_mode=lambda: "vi", on_ex=on_ex,
+                key_bindings=pastes.key_bindings(lambda: None),
+            )
+            task = asyncio.ensure_future(app.run_async())
+            for chunk in ("\x1b", ":echo ", START + "y" * 1500 + END, "\r"):
+                await asyncio.sleep(0.05)
+                pipe.send_text(chunk)
+            await asyncio.sleep(0.2)
+            app.exit()
+            await task
+
+    asyncio.run(main())
+
+    assert ex == ["echo " + "y" * 1500]
+
+
+def test_only_the_input_line_collapses_a_paste():
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.enums import DEFAULT_BUFFER, SEARCH_BUFFER
+
+    text = "\n".join(f"line {i}" for i in range(20))
+    for name, collapsed in ((DEFAULT_BUFFER, True), (SEARCH_BUFFER, False), ("", False)):
+        buffer = Buffer(name=name, multiline=True)
+        pastes.insert(buffer, text, None)
+        assert (buffer.text != text) == collapsed, name
+        assert pastes.expand(buffer.text) == text

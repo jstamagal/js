@@ -393,6 +393,9 @@ class ToolContext:
     lsp_timeout_s: int = _knob("lsp.timeout_s")  # seconds an lsp call waits on its server
     notebook_output_lines: int = _knob("notebook.output_lines")  # lines per cell output in a notebook read
     kernel_session: Any = None            # the live IPython kernel, one per process
+    # The `on` table whose tool_call handlers vet the calls of subagents started
+    # through this context; set by the turn that runs with it.
+    tool_call_hooks: Any = field(default=None, repr=False)
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
     read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)

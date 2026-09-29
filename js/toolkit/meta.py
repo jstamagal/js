@@ -11,6 +11,7 @@ from typing import Any
 from .. import paths
 from .. import session_store
 from .. import settings as _settings
+from ..events import RefusableOnly
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
@@ -277,6 +278,7 @@ async def _run_one_task_async(
                              mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
     messages.append({"role": "user", "content": prompt})
+    parent_hooks = getattr(parent_context, "tool_call_hooks", None)
     try:
         await run_turn_async(
             cfg,
@@ -288,6 +290,7 @@ async def _run_one_task_async(
             tool_context=child_context,
             suppress_output=True,
             sampling=sampling,
+            event_hooks=None if parent_hooks is None else RefusableOnly(parent_hooks),
         )
     except Exception as exc:  # noqa: BLE001
         return f"ERROR {type(exc).__name__}: {exc}"

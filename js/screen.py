@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
-from prompt_toolkit.enums import EditingMode
+from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
 from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
@@ -516,6 +516,7 @@ def build_app(
     scrollback echoes the line as typed."""
     scrollback = Scrollback()
     input_buffer = Buffer(
+        name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
         completer=completer,
         complete_while_typing=False,

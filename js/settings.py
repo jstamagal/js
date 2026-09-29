@@ -330,8 +330,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- events ---
     SettingSpec("events.exec_timeout_s", "int",
                 "Seconds an `exec` command, typed or run by an `on` handler, may run "
-                "before its process group is killed. A handler's command holds up "
-                "the event that ran it for that long."),
+                "before its process group is killed; 0 is no limit. A handler's "
+                "command holds up the event that ran it for that long."),
     SettingSpec("events.exec_output_bytes", "int",
                 "Bytes of an `exec` command's stdout and stderr kept; the stdout "
                 "reaches the model as a js-reminder on the next message. 0 keeps all."),
