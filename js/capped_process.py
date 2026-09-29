@@ -66,6 +66,11 @@ def _utf8_start(buf: bytes | bytearray) -> int:
     return min(3, len(buf))
 
 
+# An excerpt's head ends, and its tail starts, at a line break when one is
+# within this many bytes of the cut.
+_LINE_SNAP = 256
+
+
 @dataclass(frozen=True)
 class Excerpt:
     """What of one stream's range fits a budget: the head, the tail, and the
@@ -216,7 +221,7 @@ class _StreamCapture:
     def excerpt(self, start: int, budget: int) -> Excerpt:
         """Bytes ``start`` to the end of the stream, cut to ``budget``: half
         from the front of the range, half from its end, split on UTF-8
-        character boundaries."""
+        character boundaries, and on a line break near the cut."""
         total = self.total
         start = max(0, min(start, total))
         budget = max(0, int(budget))
@@ -226,8 +231,12 @@ class _StreamCapture:
         head_n = budget // 2
         head = self.read(start, start + head_n)
         head = head[:_utf8_end(head)]
+        cut = head.rfind(b"\n", max(0, len(head) - _LINE_SNAP))
+        head = head[:cut + 1] if cut >= 0 else head
         tail = self.read(total - (budget - head_n), total)
         tail = tail[_utf8_start(tail):]
+        cut = tail.find(b"\n", 0, _LINE_SNAP)
+        tail = tail[cut + 1:] if 0 <= cut < len(tail) - 1 else tail
         return Excerpt(head, tail, (start + len(head), total - len(tail)), total, path)
 
 
