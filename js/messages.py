@@ -196,8 +196,8 @@ CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {
 # --- Model and provider ------------------------------------------------------
 
 MODEL_SET = Message("Model: {model}")
-DEFAULT_MODEL_SAVED = Message("Default model: {model}")
-DEFAULT_MODEL_NOT_SAVED = Message("Model: {model}. Not saved as default: {error}", GRAVE)
+MODEL_SAVED_AS_DEFAULT = Message("Default model: {model}")
+MODEL_NOT_SAVED_AS_DEFAULT = Message("Model: {model}. Not saved as default: {error}", GRAVE)
 MODELS_LIMIT_NOT_A_NUMBER = Message("/models: {value!r} is not a number.")
 NO_PROVIDER = Message("No provider set. Use /provider <id> first.")
 MODELS_NOT_LISTED = Message("Models not listed: {error}", GRAVE)
@@ -578,7 +578,7 @@ CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}", WARN)
 
 # --- Login -------------------------------------------------------------------
 
-DEFAULT_VALUE = Message("default")
+BUILTIN_VALUE = Message("default")
 NONE_VALUE = Message("none")
 PICKER_NO_MATCHES = Message("No matches.")
 PICKER_SELECTED = Message("{selected}/{total} selected")

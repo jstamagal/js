@@ -566,7 +566,7 @@ def _provider_details(login: Login, model_count: int) -> list[str]:
     provider = providers.get_provider(login.provider_id)
     return [
         f"{login.provider_id} — {provider.display_name if provider else login.provider_id} [saved]",
-        msgs.LOGIN_DETAIL_BASE_URL.text(url=login.provider_base_url or msgs.DEFAULT_VALUE.text()),
+        msgs.LOGIN_DETAIL_BASE_URL.text(url=login.provider_base_url or msgs.BUILTIN_VALUE.text()),
         msgs.LOGIN_DETAIL_KEY.text(key=_mask(login.provider_api_key) if login.provider_api_key else msgs.NONE_VALUE.text()),
         msgs.LOGIN_DETAIL_CACHED.text(models=msgs.plural(model_count, "cached model")),
         msgs.LOGIN_DETAIL_HEADERS.text(

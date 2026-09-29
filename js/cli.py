@@ -1230,9 +1230,9 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     _saved_path, save_error = _persist_default_model_id(default_model_id)
     chosen = f"{selected['provider_id']}:{selected['model']}"
     if save_error:
-        msgs.say(msgs.DEFAULT_MODEL_NOT_SAVED, model=chosen, error=save_error)
+        msgs.say(msgs.MODEL_NOT_SAVED_AS_DEFAULT, model=chosen, error=save_error)
     else:
-        msgs.say(msgs.DEFAULT_MODEL_SAVED, model=chosen)
+        msgs.say(msgs.MODEL_SAVED_AS_DEFAULT, model=chosen)
 
 
 def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
