@@ -941,6 +941,7 @@ async def stream_model_async(
     reasoning_effort: str | None,
     on_text: Callable[[str], None],
     on_reasoning: Callable[[str], None] | None = None,
+    thinking_budget: int | None = None,
     provider_headers: dict[str, str] | None = None,
     provider_extra: dict[str, Any] | None = None,
     sampling: Sampling | None = None,
@@ -1018,15 +1019,21 @@ async def stream_model_async(
         # setting as thinking: adaptive plus an effort on the models that take
         # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
         # provider.extra wins.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens)
+        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
+        own_thinking = "thinking" not in extra_body
         if plan is not None:
             if plan.thinking is not None:
                 extra_body.setdefault("thinking", plan.thinking)
             if plan.effort is not None:
                 reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
-            if plan.max_tokens is not None:
+            if plan.max_tokens is not None and own_thinking:
                 output_max_tokens = plan.max_tokens
         thinking = extra_body.get("thinking")
+        extra_budget = thinking.get("budget_tokens") if isinstance(thinking, dict) and not own_thinking else None
+        if isinstance(extra_budget, int) and max_output_tokens is None:
+            # A budget from provider.extra on a model with no known output cap:
+            # max_tokens has to sit above it.
+            output_max_tokens = extra_budget + reasoning.ANTHROPIC_UNKNOWN_CAP_ANSWER
         if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
             # Budget thinking takes no temperature or top_k: Anthropic answers
             # either with a 400.

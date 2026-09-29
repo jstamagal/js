@@ -14,6 +14,7 @@ set model.id deepseek/deepseek-v4-flash
 set -model.max_output_tokens
 set -model.context_window
 set -model.reasoning_effort
+set -model.thinking_budget
 set -model.vision
 
 # --- ui ---

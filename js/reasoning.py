@@ -152,8 +152,12 @@ def _anthropic_rejects_disabled(name: str) -> bool:
 
 
 def anthropic_thinking(model_name: str, effort: str | None,
-                       max_output_tokens: int | None) -> AnthropicThinking | None:
-    """The thinking fields for ``effort`` on this model, or None to send none."""
+                       max_output_tokens: int | None,
+                       budget: int | None = None) -> AnthropicThinking | None:
+    """The thinking fields for ``effort`` on this model, or None to send none.
+
+    ``budget`` (``model.thinking_budget``) replaces the effort's budget on the
+    models that take one."""
     if effort is None or effort not in _RANK:
         return None
     name = model_name.lower()
@@ -171,7 +175,7 @@ def anthropic_thinking(model_name: str, effort: str | None,
         )
     if effort == "none":
         return None
-    budget = ANTHROPIC_THINKING_BUDGETS[effort]
+    budget = max(budget, ANTHROPIC_MIN_BUDGET) if budget else ANTHROPIC_THINKING_BUDGETS[effort]
     if max_output_tokens is None:
         max_tokens = budget + ANTHROPIC_UNKNOWN_CAP_ANSWER
     else:

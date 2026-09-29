@@ -233,6 +233,15 @@ def test_thinking_in_provider_extra_wins(monkeypatch):
     assert body["thinking"] == mine
 
 
+def test_a_budget_in_provider_extra_gets_max_tokens_above_it_when_the_cap_is_unknown(monkeypatch):
+    mine = {"type": "enabled", "budget_tokens": 40000}
+    body = _send(monkeypatch, provider="minimax", base="https://api.minimax.io/anthropic/v1",
+                 model="MiniMax-M2", effort="high", max_out=None, extra={"thinking": mine})
+
+    assert body["thinking"] == mine
+    assert body["max_tokens"] > 40000
+
+
 def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
     sampling = Sampling(temperature=0.2, top_k=40)
     body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
@@ -562,3 +571,15 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
     memory.persist_messages(session, messages)
 
     assert memory.load_replay_messages(session) == messages
+
+
+
+def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
+    cfg, wire, context = claude
+    tuned = from_env(agent_id="thinking", session="thinking",
+                     extras=["model.thinking_budget=4000", "provider.id=anthropic", "model.id=claude-sonnet-4-5"])
+    assert tuned.thinking_budget == 4000
+    _turn(replace(cfg, thinking_budget=tuned.thinking_budget), [{"role": "user", "content": "first"}], context)
+
+    assert wire.bodies[0]["thinking"] == {"type": "enabled", "budget_tokens": 4000}
+    assert wire.bodies[0]["max_tokens"] == 32000

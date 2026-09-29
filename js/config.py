@@ -168,6 +168,7 @@ class Config:
     explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
     vision_enabled: bool = False
     model_context_window: int | None = None  # explicit window for this model; None = server/metadata resolved
+    thinking_budget: int | None = None  # Anthropic-wire budget_tokens; None = derived from reasoning_effort
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -498,6 +499,7 @@ def from_env(
 
     max_output_tokens = _numeric_setting(js_root_settings, ("model", "max_output_tokens"), None)
     model_context_window = _numeric_setting(js_root_settings, ("model", "context_window"), None)
+    thinking_budget = _numeric_setting(js_root_settings, ("model", "thinking_budget"), None)
     max_tool_iterations = _int_knob(js_root_settings, "limits.max_tool_iterations")
     max_tool_calls_per_message = _int_knob(js_root_settings, "limits.max_tool_calls_per_message")
     max_bash_output_bytes = _int_knob(js_root_settings, "limits.max_bash_output_bytes")
@@ -582,6 +584,7 @@ def from_env(
         reasoning_effort=_norm_effort(reasoning_effort),
         max_output_tokens=max_output_tokens,
         model_context_window=model_context_window,
+        thinking_budget=thinking_budget,
         max_tool_iterations=max_tool_iterations,
         max_tool_calls_per_message=max_tool_calls_per_message,
         max_bash_output_bytes=max_bash_output_bytes,

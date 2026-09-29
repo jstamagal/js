@@ -176,13 +176,16 @@ takes the effort as thinking (`js/reasoning.py`):
   4.6). `off` sends `thinking: {"type": "disabled"}`; on the models that always
   think (Fable, Mythos, Claude 5.5 and later) it sends effort `low` instead.
 - Every other model gets `thinking: {"type": "enabled", "budget_tokens": N}`:
-  minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000. The
+  minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000.
+  `model.thinking_budget` replaces that number for every effort. The
   budget leaves 1024 tokens of `max_tokens` for the answer; with no known output
   cap, `max_tokens` is the budget plus 8192. `off` sends no thinking. With a
   budget, js sends no `sampling.temperature` or `sampling.top_k`: Anthropic
   rejects either alongside budget thinking.
 
-A `thinking` object in `provider.extra` replaces the one js builds.
+A `thinking` object in `provider.extra` replaces the one js builds. When it
+carries a `budget_tokens` and the model's output cap is unknown, `max_tokens`
+is that budget plus 8192.
 
 Session replay retains archived reasoning. OpenAI chat-completions transports
 (including llama.cpp) replay reasoning on every assistant message, including
