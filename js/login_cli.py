@@ -11,7 +11,7 @@ from dataclasses import replace
 
 import ai
 
-from . import codex_auth, model_client, providers, xai_auth
+from . import codex_auth, model_client, providers, retry, xai_auth
 from . import messages as msgs
 from .logins import (
     Login,
@@ -484,6 +484,8 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             max_output_tokens=None,
             reasoning_effort=provider.reasoning_effort,
             on_text=on_text,
+            retry_budget=retry.Budget.from_settings(None),
+            stream_idle_seconds=retry.idle_seconds(None),
         )
     except Exception as exc:  # noqa: BLE001
         msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")

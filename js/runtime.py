@@ -15,7 +15,6 @@ import os
 import sys
 import threading
 from pathlib import Path
-import random
 import time
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
@@ -36,6 +35,8 @@ from . import model_metadata
 from . import paths
 from . import providers
 from . import settings as _settings
+from .retry import backoff as _backoff, retry_after_seconds
+from . import retry
 from . import toolkit as T
 from . import tool_args
 from . import routing
@@ -277,10 +278,43 @@ def _is_retriable(exc: BaseException) -> bool:
     return False
 
 
-def _backoff(attempt: int) -> float:
-    """Exponential with jitter: 1s, 2s, 4s ... capped."""
-    base = min(2 ** attempt, 16)
-    return base + random.uniform(0, 1)
+def _escalated_max_output(cut_at: int | None, ceiling: int | None, escalation: int,
+                          room: int | None) -> int | None:
+    """The larger output cap for resending a cut-off reply, or None when there
+    is none. `escalation` is held to the model's known output ceiling and to
+    `room`, what the window has left after the prompt; it must exceed
+    `cut_at`, the cap the reply was cut at."""
+    if escalation <= 0:
+        return None
+    target = escalation if ceiling is None else min(escalation, ceiling)
+    if room is not None:
+        target = min(target, room)
+    if target <= 0 or (cut_at is not None and target <= cut_at):
+        return None
+    return target
+
+
+def _silent_overflow(usage: Any, context_window: int | None, *, cut_by_cap: bool) -> int | None:
+    """The prompt tokens of a reply whose input the provider cut to fit its
+    window without an error, else None. Two signs: prompt tokens over the
+    window, or a reply cut by its cap with no output and a prompt filling 99%
+    of the window. The SDK's input_tokens already counts cache reads."""
+    if not context_window or context_window <= 0 or usage is None:
+        return None
+    reported = context_budget.usage_from_provider(usage)
+    prompt = reported.prompt_tokens
+    if prompt > context_window:
+        return prompt
+    if cut_by_cap and not reported.output_tokens and prompt >= context_window * 0.99:
+        return prompt
+    return None
+
+
+# Sent as a user message after a reply cut off by its output-token cap.
+MAX_OUTPUT_RESUME_NUDGE = (
+    "Output token limit hit. Resume directly, no apology, no recap of what you were doing. "
+    "Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
+)
 
 
 # --------------------------------------------------------------------------
@@ -472,6 +506,16 @@ def _assistant_message_with_tool_calls(
 
 def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) -> bool:
     return any(not tool_args.is_json_object(pc.arguments()) for pc in pending_calls)
+
+
+def _cut_off_by_cap(incomplete_reason: str | None, pending_calls: list[_PendingToolCall]) -> bool:
+    """A reply stopped by its output-token cap with nothing runnable: no tool
+    call, or one whose arguments the cut left unfinished."""
+    return (
+        bool(incomplete_reason)
+        and compaction.is_max_output_incomplete(incomplete_reason)
+        and (not pending_calls or _incomplete_has_dangling_tool_args(pending_calls))
+    )
 
 
 def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
@@ -1282,10 +1326,11 @@ async def _dispatch_batch(
 # --------------------------------------------------------------------------
 
 def _last_user_message_index(messages: list[dict]) -> int | None:
-    """Index of the message that opened the current turn. A steered message
-    joined a turn already running, so it does not open one."""
+    """Index of the message that opened the current turn. A steered message or
+    a resume nudge joined a turn already running, so it does not open one."""
     for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx].get("role") == "user" and not messages[idx].get("steered"):
+        message = messages[idx]
+        if message.get("role") == "user" and not message.get("steered") and not message.get("resume_nudge"):
             return idx
     return None
 
@@ -1798,6 +1843,34 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             telemetry.event("context_compaction_skipped", phase=phase, reason="tail_fills_budget")
         return changed
 
+    async def _recover_overflow(error: BaseException) -> bool:
+        """Shed history after the provider said, or showed, that the request
+        overflowed: clear old tool results, else summarize. True when the
+        history changed and the request is worth sending again."""
+        nonlocal ai_convo
+        action, _cleared, _reclaimed = compaction.recover_overflow(
+            messages, overflow_recovered, cfg=active_compact_cfg,
+            system=system, error=error,
+            flight_data={"context_window": _budget_context_window(),
+                         "max_output_tokens": max_out,
+                         "usage_anchor": vars(token_state).get("_anchor"),
+                         "tools": active_registry.openai_specs(),
+                         "ai_messages": ai_convo},
+        )
+        if action == "cleared":
+            token_state.reset()
+            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
+            _trace_req["sent"] = 0
+            _trace_req["schemas"] = True
+            active_context.compacted_during_turn = True
+            compaction.history_rewritten(active_context)
+            return True
+        return await _maybe_compact_request_for_budget(
+            phase="overflow_recovery",
+            specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
+            force=True,
+        )
+
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
@@ -1812,6 +1885,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_registry.on_change = save_surface
         durable_side_effects_started = False
         overflow_recovered = 0
+        retry_budget = retry.Budget.from_settings(live_settings)
+        stream_idle = retry.idle_seconds(live_settings)
+        max_output_escalation = int(_settings.knob(live_settings, "runtime.max_output_escalation") or 0)
+        max_output_resumes = int(_settings.knob(live_settings, "runtime.max_output_resumes") or 0)
+        max_output_escalated = False
+        resumes_sent = 0
         for iteration in range(cfg.max_tool_iterations):
             # --- One model call with retry on retriable transport errors ---
             text = ""
@@ -1824,8 +1903,17 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             incomplete_reason: str | None = None
             budget_checked = False
             transport_retries = 0
-            for attempt in range(3 + compaction.MAX_OVERFLOW_ROUNDS):
+            # The cap this call runs under: max_out, or the escalated cap for
+            # the one resend of a reply cut off by max_out.
+            call_max_out = max_out
+            # The reply's usage counts history that silent-overflow recovery
+            # has since shed.
+            usage_stale = False
+            # Retries, overflow rounds (a provider rejection or a silent
+            # overflow), one escalated resend and its fallback.
+            for attempt in range(retry_budget.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 2):
                 t0 = time.time()
+                streamed_text["value"] = ""
                 try:
                     if mcp_host is not None:
                         await mcp_host.before_model_call()
@@ -1853,7 +1941,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         provider_api_key=provider_api_key,
                         messages=ai_convo,
                         tools=ai_tools,
-                        max_output_tokens=max_out,
+                        max_output_tokens=call_max_out,
                         reasoning_effort=effort,
                         on_text=_emit_text,
                         on_reasoning=_emit_reasoning,
@@ -1865,6 +1953,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         trace_request_schemas=_trace_req["schemas"],
                         trace_request_from=_trace_req["sent"],
                         cache_key=_cache_key,
+                        stream_idle_seconds=stream_idle,
                     )
                     if _trace_sink is not None:
                         _trace_req["sent"] = len(ai_convo)
@@ -1896,7 +1985,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
                     active_context.last_incomplete_reason = incomplete_reason
-                    active_context.last_max_output_tokens = max_out
+                    active_context.last_max_output_tokens = call_max_out
                     _cache_break = compaction.note_response(
                         active_context, model_key=f"{provider_id}/{model}",
                         cache_read=active_context.last_cached_tokens if usage else None, now=time.time(),
@@ -1944,11 +2033,68 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             ms=int(_elapsed * 1000), finish=finish, tool_calls=len(pending_calls),
                             tokens=_out_tok, tps=_tps, ttft=_ttft, cache=_cache)
                         print(f"{display.CHROME}{_label + ': ' if _label else ''}{_stats}{C.RESET}", flush=True)
+                    cut_by_cap = _cut_off_by_cap(incomplete_reason, pending_calls)
+                    # Reply text already on the screen or stdout. Sending the
+                    # request again would print a second reply after it.
+                    shown = not suppress_output and bool(streamed_text["value"])
+                    # A compact.context_window above the catalog's says the
+                    # real window is larger than the catalog knows.
+                    window = max(
+                        _resolve_context_window(model, provider_id, provider_base_url) or 0,
+                        compaction.get_int(active_compact_cfg, "context_window", 0),
+                    ) or None
+                    silent = _silent_overflow(usage, window, cut_by_cap=cut_by_cap)
+                    if silent is not None and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS:
+                        # The provider took more input than the window holds, so
+                        # it cut the input: shed history and ask again. A reply
+                        # already shown is kept, and the shed history serves the
+                        # next request.
+                        _close_text()
+                        overflow_recovered += 1
+                        overflow = compaction.SilentOverflowError(silent, window)
+                        telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
+                                        attempt=attempt, round=overflow_recovered, kept_reply=shown)
+                        if await _recover_overflow(overflow):
+                            if not shown:
+                                continue
+                            usage_stale = True
+                    prompt_tokens = context_budget.usage_from_provider(usage).prompt_tokens
+                    if (
+                        not max_output_escalated
+                        and cut_by_cap
+                        and not shown
+                        and model_client.sends_max_output(provider_id)
+                        and (escalated := _escalated_max_output(
+                            call_max_out if call_max_out is not None else _out_tok or None,
+                            model_metadata.resolve_max_output(model, provider_id),
+                            max_output_escalation,
+                            window - prompt_tokens if window and prompt_tokens else None,
+                        )) is not None
+                    ):
+                        # Cut off by its cap: send the same request once more
+                        # with room to finish, before any resume nudge.
+                        _close_text()
+                        max_output_escalated = True
+                        telemetry.event("max_output_escalated", model=model,
+                                        max_output_tokens=call_max_out, escalated_to=escalated)
+                        stream_transport.say_for_caller(
+                            2, msgs.MAX_OUTPUT_ESCALATED.text(before=call_max_out or "default", after=escalated))
+                        call_max_out = escalated
+                        continue
                     break
                 except ai.ProviderAPIError as e:
                     # Finish any partially streamed text before we retry or abort,
                     # so the next attempt's output starts on its own line.
                     _close_text()
+                    if call_max_out != max_out and not e.is_retryable:
+                        # The provider refused the escalated cap, often as a
+                        # context-length error because prompt plus cap passes
+                        # the window. The configured cap fit before: carry on
+                        # at it, where resume nudges take over.
+                        telemetry.event("max_output_escalation_rejected", model=model,
+                                        error=f"{type(e).__name__}: {e}", escalated_to=call_max_out)
+                        call_max_out = max_out
+                        continue
                     if (
                         compaction.is_context_overflow_error(e)
                         and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS
@@ -1961,42 +2107,24 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             attempt=attempt,
                             round=overflow_recovered,
                         )
-                        # Overflow recovery records old tool-result clearing before retrying.
-                        action, cleared, reclaimed = compaction.recover_overflow(
-                            messages, overflow_recovered, cfg=active_compact_cfg,
-                            system=system, error=e,
-                            flight_data={"context_window": _budget_context_window(),
-                                         "max_output_tokens": max_out,
-                                         "usage_anchor": vars(token_state).get("_anchor"),
-                                         "tools": active_registry.openai_specs(),
-                                         "ai_messages": ai_convo},
-                        )
-                        if action == "cleared":
-                            token_state.reset()
-                            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
-                            _trace_req["sent"] = 0
-                            _trace_req["schemas"] = True
-                            active_context.compacted_during_turn = True
-                            compaction.history_rewritten(active_context)
-                            continue
-                        compacted = await _maybe_compact_request_for_budget(
-                            phase="overflow_recovery",
-                            specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
-                            force=True,
-                        )
-                        if compacted:
+                        if await _recover_overflow(e):
                             continue
                     if e.is_retryable:
                         telemetry.event("retriable_error", model=model,
                                         error=f"{type(e).__name__}: {e}", attempt=attempt)
-                        if transport_retries == 2:
+                        wait = retry_after_seconds(e)
+                        too_long = retry_budget.too_long(wait)
+                        if transport_retries >= retry_budget.attempts or too_long:
+                            if too_long:
+                                telemetry.event("retry_after_too_long", model=model,
+                                                retry_after=wait, limit=retry_budget.max_wait)
                             _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                             _end_turn("error")
                             raise
-                        stream_transport.say_for_caller(3, f"Retry {transport_retries + 1}: "
-                                                           f"{stream_transport.describe_failure(e)}")
-                        await asyncio.sleep(_backoff(transport_retries))
+                        delay = wait if wait is not None else _backoff(transport_retries)
                         transport_retries += 1
+                        retry.announce(transport_retries, retry_budget, delay, e)
+                        await asyncio.sleep(delay)
                     else:
                         telemetry.event("fatal_error", model=model,
                                         error=f"{type(e).__name__}: {e}")
@@ -2100,7 +2228,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             streamed_reasoning.clear()
             durable_side_effects_started = True
             token_state.record_provider_usage(
-                usage,
+                None if usage_stale else usage,
                 message_count=len(messages),
                 messages=messages,
                 system=system,
@@ -2118,10 +2246,28 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 if incomplete_reason:
                     payload["incomplete_reason"] = incomplete_reason
                 _emit_event("response", **payload)
-            if incomplete_reason and not suppress_output:
+            resuming = (
+                not pending_calls
+                and resumes_sent < max_output_resumes
+                and iteration + 1 < cfg.max_tool_iterations
+                and _cut_off_by_cap(incomplete_reason, pending_calls)
+            )
+            if incomplete_reason and not suppress_output and not resuming:
                 msgs.warn(msgs.RESPONSE_INCOMPLETE, reason=incomplete_reason)
 
             if not pending_calls:
+                if resuming:
+                    # Keep the partial reply and ask the model to carry on
+                    # from where the cap cut it.
+                    resumes_sent += 1
+                    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
+                    messages.append(nudge)
+                    ai_convo.extend(model_client.history_to_ai_messages("", [nudge], provider_id=provider_id))
+                    telemetry.event("max_output_resume", model=model, n=resumes_sent,
+                                    incomplete_reason=incomplete_reason)
+                    if not suppress_output:
+                        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=resumes_sent, limit=max_output_resumes)
+                    continue
                 if incomplete_reason:
                     _end_turn("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
                 else:

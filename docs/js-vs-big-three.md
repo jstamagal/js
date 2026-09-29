@@ -24,7 +24,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | capability | js | Claude Code | Codex | pi |
 |---|---|---|---|---|
 | Read-only tool calls run in parallel | yes, readers-writer, up to 8 ✔ | yes, up to 10 | yes, RwLock | yes |
-| Retry honours `Retry-After` | no, 2 attempts ✔ | yes, 10 | yes | yes |
+| Retry honours `Retry-After` | yes, 10, a setting (js-1g1.13) | yes, 10 | yes | yes |
 | Shell output past the cap | head + tail, raw stream to file (js-1g1.26) | whole stream to file | head + tail | tail + spill file |
 | Stale-edit guard | per line range, returns recovery diff | per-file mtime | none | none |
 | `patch` result shows the diff | yes | no | no | no |
@@ -83,11 +83,11 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Shell output keeps the head and throws away the tail.** Done in js-1g1.26. `_StreamCapture` now keeps the head and the tail, and the reader writes the raw stream to a file once it passes the cap. The result shows both ends and names the byte range left out and the file, which `read` reaches with `start_byte`. Background job polls work the same way.
 
-**Retry gives up after two attempts and ignores `Retry-After`.** ✔ The check is `transport_retries == 2` (`runtime.py:1816`), and "retry-after" appears nowhere in js. A 429 with a 30-second `Retry-After` kills a turn in about 3 seconds. Claude Code retries 10 times, and all three honour the header.
+**Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `runtime.retry_attempts` (default 10), and a wait over `runtime.retry_max_wait_seconds` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
 
 **A direct Anthropic provider gets no thinking.** ✔ `steers_via_effort` covers only Codex, OpenAI-SDK and implicit gateway endpoints (`model_client.py:912`). The comment promises a "budget (below)", but that budget exists only for DeepSeek. A Claude model on the direct API runs with thinking off whatever `reasoning` says.
 
-**A turn cut off by max output tokens just ends.** It drops the dangling calls and tells the user to retry (`runtime.py:1844-1858`). Claude Code escalates to 64k and then sends up to 3 resume nudges. pi fails the calls and keeps looping.
+**A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `runtime.max_output_escalation` (64k, held to the model's limit), then up to `runtime.max_output_resumes` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
 
 **Compaction summaries are cold.** The summary request is a fresh one-message prompt, so it reads nothing from the main thread's cache. Claude Code forks the summary call so it shares the main thread's cache prefix. The rest of this gap is done in js-1g1.14: the history goes as plain text with tool results clipped to 2000 chars, a second compaction updates the previous summary, and 3 failed summaries in a row pause automatic compaction.
 
@@ -130,9 +130,9 @@ pi retries once. Codex does not recover inside a normal turn.
 | mechanism | from | js change |
 |---|---|---|
 | Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
-| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | `runtime.py:1813`, `_backoff` |
+| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `runtime.retry_attempts` |
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
-| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | `runtime.py:1948` |
+| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `runtime.max_output_escalation`, `runtime.max_output_resumes` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
@@ -161,7 +161,7 @@ pi retries once. Codex does not recover inside a normal turn.
 - **Programmatic tool calling** (code mode). js already has the kernel, so this is the cheapest of the four to add.
 - **Push notifications.** Shell and kernel jobs are pull-only, and there's no stall watchdog.
 - **Worktree isolation for `task` workers.** They share one tree.
-- **Provider fallback, a stream idle watchdog,** and detection of silent overflow (a provider that truncates without an error).
+- **Provider fallback.** The stream idle watchdog (`runtime.stream_idle_seconds`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.
 - **Automatic memory.** Possibly already covered by the wiki pipeline, which is not wired into sessions.
 
 ## Architecture review (js alone)
@@ -182,7 +182,7 @@ Hot spots over 441 commits in two months:
 
 1. **Shell head+tail with a raw spill** (done in js-1g1.26).
 2. **Parallel read-only tool calls** (done in js-1g1.11).
-3. **`Retry-After` plus a real retry budget.**
+3. **`Retry-After` plus a real retry budget** (done in js-1g1.13).
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
 5. **Record ids plus the model stamp** (done in js-1g1.2), then the picker.
 6. **stream-json output for `-p`** (done in js-1g1.18).

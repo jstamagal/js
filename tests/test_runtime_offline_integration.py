@@ -285,7 +285,8 @@ def test_incomplete_truncated_tool_call_is_not_persisted_or_dispatched(monkeypat
         return model_incomplete_tool_call_result("write", truncated_args)
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
-    cfg = offline_config(tmp_path)
+    # No resend and no resume nudge: this pins what the cut reply itself records.
+    cfg = offline_config(tmp_path, settings={"runtime": {"max_output_escalation": 0, "max_output_resumes": 0}})
     messages = [{"role": "user", "content": "write a synthetic file"}]
 
     runtime.run_turn(

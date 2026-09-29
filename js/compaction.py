@@ -29,6 +29,7 @@ from . import memory as M
 from . import messages as msgs
 from . import model_client
 from . import model_metadata
+from . import retry
 from . import routing
 from . import settings as _settings
 from . import toolkit as T
@@ -177,6 +178,19 @@ def is_context_overflow_error(exc: BaseException) -> bool:
     if "413" in haystack:
         return True
     return any(needle in haystack for needle in _CONTEXT_OVERFLOW_NEEDLES)
+
+
+class SilentOverflowError(ai.ProviderAPIError):
+    """A reply the provider accepted although its prompt exceeded the context
+    window: the provider cut the input to fit without an error."""
+
+    def __init__(self, prompt_tokens: int, context_window: int | None) -> None:
+        super().__init__(
+            f"provider reported {prompt_tokens} input tokens, over the {context_window}-token context window",
+            code="silent_context_overflow", is_retryable=False,
+        )
+        self.prompt_tokens = prompt_tokens
+        self.context_window = context_window
 
 
 # How many rounds of recovery a single turn may attempt after the provider
@@ -757,12 +771,15 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
     )
     previous, rest = _split_previous_summary(list(messages))
     tool_result_chars = get_nonnegative_int(cfg, "summary_tool_result_chars")
+    settings = getattr(cfg, "settings", None)
+    idle = retry.idle_seconds(settings)
+    budget = retry.Budget.from_settings(settings)
 
     async def summarize_chunk(head: list[dict], depth: int, previous: str) -> str:
         prompt = _summary_prompt(serialize_conversation(head, tool_result_chars=tool_result_chars),
                                  previous, focus, guidance, tool_result_chars=tool_result_chars)
         try:
-            result = await model_client.stream_model_async(
+            result = await retry.call(lambda: model_client.stream_model_async(
                 model_id=route.model,
                 provider_id=route.provider_id,
                 provider_base_url=route.base_url,
@@ -776,7 +793,8 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_extra=routing.provider_extra_params(cfg),
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),
-            )
+                stream_idle_seconds=idle,
+            ), budget)
         except ai.ProviderAPIError as exc:
             if not is_context_overflow_error(exc) or depth >= _SUMMARY_SPLIT_DEPTH or len(head) < 2:
                 raise

@@ -82,6 +82,11 @@ set jail.bind ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/u
 set runtime.debug off
 set runtime.trace on
 set runtime.max_parallel_tools 8
+set runtime.retry_attempts 10
+set runtime.retry_max_wait_seconds 120
+set runtime.stream_idle_seconds 300
+set runtime.max_output_escalation 64000
+set runtime.max_output_resumes 3
 set runtime.steer now
 set runtime.debug_autolog on
 set -runtime.debug_autolog_dir
