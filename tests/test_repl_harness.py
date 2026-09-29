@@ -911,6 +911,25 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
         logins.set_config_dir(None)
 
 
+def test_model_command_prints_the_model_as_provider_slash_model(monkeypatch, tmp_path, capsys):
+    from js import logins
+    from js import messages as msgs
+    from repl_driver import run_async
+
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    logins.set_config_dir(tmp_path / "login-store")
+    logins.save_login(logins.Login(provider_id="ollama", provider_base_url="http://ollama.test/v1",
+                                   provider_api_key="ollama"))
+    try:
+        run_async(monkeypatch, cfg, ["/model ollama/gemma4:e2b"])
+    finally:
+        logins.set_config_dir(None)
+
+    assert msgs.MODEL_SET.line(colour=False, model="ollama/gemma4:e2b") in capsys.readouterr().out
+
+
 def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
     """Ruling C: `/model vendor/model` may switch direct ONLY when that vendor is
     a saved login. With no login and a pinned gateway, the REPL agrees with the

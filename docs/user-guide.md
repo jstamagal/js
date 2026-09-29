@@ -310,7 +310,8 @@ js --migrate-config
 ```
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
-file and keeps stdout clean. They are mutually exclusive.
+file and keeps stdout clean. They are mutually exclusive. With `runtime.trace`
+on, a plain one-shot run shows the trace on stderr and keeps stdout answer-only.
 
 `-q` / `--quiet` suppresses the `*** Continue: ...` resume hint that one-shot mode
 prints after a saved turn. The session is still written; only the hint is

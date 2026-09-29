@@ -12,6 +12,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -360,6 +361,24 @@ def record_turn_mode(memory_file: Path, mode: str) -> str | None:
     return previous
 
 
+def first_turn_mode(memory_file: Path) -> str | None:
+    """The mode the session's first turn ran in: the oldest `turn_mode:` mark,
+    or None when no turn has recorded one."""
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                marker = record.get("marker") if isinstance(record, dict) else None
+                if isinstance(marker, str) and marker.startswith(_TURN_MODE_MARK):
+                    return marker[len(_TURN_MODE_MARK):] or None
+    except OSError:
+        return None
+    return None
+
+
 _WORKSPACE_MARK = "workspace:"
 
 
@@ -394,7 +413,7 @@ def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, f
 
 def wipe(memory_file: Path) -> Path | None:
     """Rotate the memory file to a .bak suffix. Returns the .bak path or None."""
-    if not memory_file.exists():
+    if memory_file == Path(os.devnull) or not memory_file.exists():
         return None
     bak = memory_file.with_suffix(memory_file.suffix + ".bak")
     if bak.exists():
