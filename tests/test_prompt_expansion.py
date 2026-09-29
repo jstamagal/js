@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -358,3 +359,27 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "home", lambda: tmp_path)
 
     assert [p.name for p in paths.global_instruction_files()] == ["JS.md", "JS.local.md"]
+
+
+# --- the stock agent's environment block -----------------------------------------
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
+def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatch, capsys):
+    """The stock 02-env.md finds envctx through JS_ROOT, which js sets, so it
+    runs with a HOME that holds no copy of js."""
+    from js import persona
+
+    js_root = Path(persona.__file__).resolve().parents[1]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("JS_ROOT", str(tmp_path / "stale"))
+    monkeypatch.chdir(tmp_path)
+    text = (js_root / "prompts" / "defaultagent" / "02-env.md").read_text(encoding="utf-8")
+    spec = persona.PromptSpec(system=text, tool_selectors=())
+    cfg = type("Cfg", (), {"settings": {"shell": {"program": "sh"}}, "allow_inline_code": True})()
+
+    expanded = persona._expand_spec(spec, cfg)
+
+    assert "envctx.c" not in expanded.system
+    assert any(line.startswith("user=") for line in expanded.system.splitlines())
+    assert capsys.readouterr().err == ""
+    assert Path(os.environ["JS_ROOT"]) == js_root
