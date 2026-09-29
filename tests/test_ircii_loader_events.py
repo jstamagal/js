@@ -55,14 +55,12 @@ def test_load_applies_slashless_script_lines(tmp_path):
     assert settings.get_dotted(state["settings"], ("provider", "extra", "organization")) == "./wiki"
 
 
-def test_script_load_treats_bare_slash_line_as_noop(tmp_path, capsys):
+def test_script_load_treats_bare_slash_line_as_noop(tmp_path):
     script = tmp_path / "bare-slash.irc"
     script.write_text("/\nset compact.auto off\n", encoding="utf-8")
     state = make_state()
 
-    cli._handle_command("/load bare-slash.irc", state, make_cfg(tmp_path))
-
-    assert "unknown command" not in capsys.readouterr().out
+    assert cli._run_command("/load bare-slash.irc", state, make_cfg(tmp_path)) == (True, None)
     assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
 
 
@@ -92,7 +90,7 @@ def test_script_load_allows_comment_after_nested_load_path(tmp_path):
     assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
 
 
-def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tmp_path, capsys):
+def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     inner = scripts / "inner.irc"
@@ -101,35 +99,37 @@ def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tm
     outer.write_text("load inner.irc\n", encoding="utf-8")
     state = make_state()
 
-    cli._handle_command(f"/load {outer}", state, make_cfg(tmp_path))
+    _, error = cli._run_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    out = capsys.readouterr().out
-    assert f"{outer}:1" in out
-    assert f"{inner}:2" in out
+    assert f"{outer}:1" in error
+    assert f"{inner}:2" in error
     assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
     assert settings.get_dotted(state["settings"], ("model", "max_output_tokens")) is None
 
 
-def test_script_load_refuses_a_cycle(tmp_path, capsys):
+def test_script_load_refuses_a_cycle(tmp_path):
     loop = tmp_path / "loop.irc"
     loop.write_text("set compact.auto off\nload loop.irc\n", encoding="utf-8")
     state = make_state()
 
-    assert cli._handle_command("/load loop.irc", state, make_cfg(tmp_path)) is True
+    handled, error = cli._run_command("/load loop.irc", state, make_cfg(tmp_path))
 
-    assert "cycle" in capsys.readouterr().out
+    assert handled is True
+    assert f"{loop}:2" in error
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
     assert state["load_stack"] == []
 
 
-def test_script_load_reports_read_errors_without_raising(tmp_path, capsys):
+def test_script_load_reports_read_errors_without_raising(tmp_path):
     script = tmp_path / "bad.irc"
     script.write_bytes(b"\xff")
     state = make_state()
     before = settings.seed_defaults()
 
-    assert cli._handle_command("/load bad.irc", state, make_cfg(tmp_path)) is True
+    handled, error = cli._run_command("/load bad.irc", state, make_cfg(tmp_path))
 
-    assert str(script) in capsys.readouterr().out
+    assert handled is True
+    assert str(script) in error
     assert state["settings"] == before
 
 
@@ -277,7 +277,7 @@ def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     ]
 
 
-def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path, capsys):
+def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path):
     script = tmp_path / "agent-error.irc"
     script.write_text("on turn_start echo boot\nbogus nope\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
@@ -289,11 +289,10 @@ def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path, capsys)
         "events": hooks,
     }
 
-    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+    handled, error = cli._run_command(f"/load {script.name}", state, cfg)
 
-    lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "on turn_start = echo boot"
-    assert "unknown command: bogus" in lines[1]
+    assert handled is True
+    assert f"{script}:2" in error
     assert hooks.handlers_for("turn_start") == [
         events.EventHook(event="turn_start", handler="echo boot", suppress=False)
     ]
@@ -315,7 +314,7 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
     assert state["sampling_cli"].temperature == 0.2
 
 
-def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path, capsys):
+def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
     script = tmp_path / "sampling-error.irc"
     script.write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
@@ -327,7 +326,7 @@ def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path, 
         "sampling_cli": cfg.sampling_cli,
     }
 
-    assert cli._handle_command(f"/load {script.name}", state, cfg) is True
+    _, error = cli._run_command(f"/load {script.name}", state, cfg)
 
-    assert "unknown command: bogus" in capsys.readouterr().out
+    assert f"{script}:2" in error
     assert state["sampling_cli"].temperature == 0.2

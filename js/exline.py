@@ -98,7 +98,7 @@ async def run_ex(
                 notes.parent.mkdir(parents=True, exist_ok=True)
                 notes.touch()
                 await editor.run([*editor_argv(), str(notes)])
-        elif is_command(verb):
+        elif is_command(verb.lower()):
             await dispatch(f"/{verb} {arg}".rstrip())
         elif shutil.which(verb):
             await edit_buffer(editor, [verb, *shlex.split(arg)])

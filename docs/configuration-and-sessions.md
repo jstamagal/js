@@ -245,9 +245,11 @@ such as `provider.api_key` render as `<set>` once set.
 A `jsrc` file is a file of commands; a leading `/` is optional. While config
 loads, the settings layer (`setcmd.apply_config_line`) applies `set` lines and
 short-name lines such as `model X`, so they sit under env and `--extra` in
-precedence and apply in `-p` runs too. When the REPL starts it runs every other
+precedence and apply in `-p` runs too. It follows `load` lines and applies the
+same lines from the loaded files. When the REPL starts it runs every other
 line (`on`, `alias`, `load`, any command in the table) through the command
 table, in file order; errors name the file and line and do not stop startup.
+A relative `load` path in a `jsrc` resolves against that file's directory.
 `/load <file>` runs every line of a file through the same table. Registered
 event handlers run through it too when an event is emitted. Handler failures
 are recorded on the event emission and in debug telemetry rather than raised

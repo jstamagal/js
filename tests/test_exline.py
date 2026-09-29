@@ -10,6 +10,8 @@ import stat
 import subprocess
 import sys
 
+import pytest
+
 from js import cli, exline, paths, settings
 
 
@@ -87,14 +89,16 @@ def test_command_words_dispatch_through_the_table():
     assert editor.sent == []
 
 
-def test_ex_set_model_changes_the_model(tmp_path):
-    """`:set model X` from the ex line reaches the live model."""
+@pytest.mark.parametrize("verb", ["set", "Set"])
+def test_ex_set_model_changes_the_model(tmp_path, verb):
+    """`:set model X` from the ex line reaches the live model; the table's verbs
+    are case-insensitive there as everywhere."""
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "model": "old/model"}
 
     async def dispatch(command_line: str) -> None:
         cli._handle_command(command_line, state, None)
 
-    asyncio.run(exline.run_ex("set model new/model", FakeEditor(), is_command=lambda v: v in cli.COMMANDS,
+    asyncio.run(exline.run_ex(f"{verb} model new/model", FakeEditor(), is_command=lambda v: v in cli.COMMANDS,
                               dispatch=dispatch))
 
     assert state["model"] == "new/model"

@@ -114,6 +114,35 @@ def test_rc_replay_leaves_set_lines_to_the_settings_layer(monkeypatch, tmp_path)
     assert captured["state"]["aliases"] == {"t": "turns"}
 
 
+def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp_path):
+    jsrc = paths.global_config_file()
+    jsrc.parent.mkdir(parents=True, exist_ok=True)
+    jsrc.write_text("load extra.irc\n", encoding="utf-8")
+    (jsrc.parent / "extra.irc").write_text("set compact.auto off\nalias t turns\n", encoding="utf-8")
+    monkeypatch.setenv("JS_COMPACT_AUTO", "on")
+    captured = _capture_startup_state(monkeypatch)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    _drive_repl(monkeypatch, project, [])
+
+    assert captured["errors"] == []
+    assert captured["state"]["aliases"] == {"t": "turns"}
+    assert settings.get_dotted(captured["state"]["settings"], ("compact", "auto")) is True
+
+
+def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
+    jsrc = tmp_path / "jsrc"
+    jsrc.write_text("load sub/extra.irc\nload jsrc\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "extra.irc").write_text("load ../more.irc\n", encoding="utf-8")
+    (tmp_path / "more.irc").write_text("set compact.auto off\n", encoding="utf-8")
+
+    live = settings.collect_settings(config_paths=[jsrc], env={})
+
+    assert settings.get_dotted(live, ("compact", "auto")) is False
+
+
 def test_rc_errors_name_the_line_and_do_not_stop_startup(monkeypatch, tmp_path):
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)

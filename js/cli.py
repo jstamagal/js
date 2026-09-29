@@ -1458,7 +1458,6 @@ class Command:
 
 
 _MAX_ALIAS_DEPTH = 16
-_MAX_LOAD_DEPTH = 16
 
 
 def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Config) -> str | None:
@@ -1557,7 +1556,7 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     path, error = setcmd.load_path(arg, base)
     if error:
         return error
-    if len(stack) >= _MAX_LOAD_DEPTH:
+    if len(stack) >= setcmd.MAX_LOAD_DEPTH:
         return "load nesting too deep"
     if path in stack:
         return f"load cycle: {path}"
@@ -1570,6 +1569,8 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     stack.append(path)
     try:
         for lineno, raw in enumerate(lines, 1):
+            if state.get("rc_replay") and _config_owned(raw):
+                continue
             error = _run_script_line(raw, state, cfg)
             if error:
                 return f"{path}:{lineno}: {error}"
@@ -1724,8 +1725,7 @@ COMMANDS: dict[str, Command] = {
                    complete="set"),
     "show": Command(_cmd_show, "show [key]", "list every setting and its effective value", complete="keys"),
     "save": Command(_cmd_save, "save", "rewrite the global jsrc from the live settings, handlers and aliases"),
-    "load": _LOAD,
-    "source": _LOAD,
+    **{verb: _LOAD for verb in setcmd.LOAD_VERBS},
     "on": Command(_cmd_on, "on [[^]event command]", "list or register an event handler", complete="events"),
     "alias": Command(_cmd_alias, "alias [name [command]]", "list, show or define a command alias; alias -name removes"),
     "model": Command(_cmd_model, "model [name]", "switch model for this session; bare opens the picker"),
@@ -1830,22 +1830,39 @@ def _event_dispatcher(state: dict, cfg: Config):
 def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
     """Run the jsrc lines the settings layer did not apply at config load
     (`on`, `alias`, `load`, every other command) through the table, in order.
-    Their output is dropped; the errors come back for the banner."""
+    A relative `load` resolves against the jsrc's directory. The `set` lines
+    of loaded files were applied at config load, so the replay skips them.
+    Output is dropped; the errors come back for the banner."""
     errors: list[str] = []
-    for path in paths:
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError):
-            continue
-        for lineno, raw in enumerate(lines, 1):
-            parsed = setcmd.split_command(raw)
-            if parsed is None or setcmd.config_owns(parsed[0]):
+    stack = state.setdefault("load_stack", [])
+    state["rc_replay"] = True
+    try:
+        for path in paths:
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
                 continue
-            with contextlib.redirect_stdout(io.StringIO()):
-                error = _run_script_line(raw, state, cfg)
-            if error:
-                errors.append(f"{path}:{lineno}: {error}")
+            stack.append(path.resolve(strict=False))
+            try:
+                for lineno, raw in enumerate(lines, 1):
+                    if _config_owned(raw):
+                        continue
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        error = _run_script_line(raw, state, cfg)
+                    if error:
+                        errors.append(f"{path}:{lineno}: {error}")
+            finally:
+                stack.pop()
+    finally:
+        state.pop("rc_replay", None)
     return errors
+
+
+def _config_owned(raw: str) -> bool:
+    """A blank line, a comment, or a line the settings layer applied at
+    config load (jsrc and the files it loads)."""
+    parsed = setcmd.split_command(raw)
+    return parsed is None or setcmd.config_owns(parsed[0])
 
 
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:

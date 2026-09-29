@@ -321,6 +321,10 @@ def _strip_load_comment(raw: str) -> str:
     return raw
 
 
+LOAD_VERBS = ("load", "source")
+MAX_LOAD_DEPTH = 16
+
+
 def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
     """Resolve a `load` argument (one shell-quoted path, trailing `# comment`
     allowed) against ``base``. Returns ``(path, error)``."""

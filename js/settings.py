@@ -680,13 +680,31 @@ def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
     from . import setcmd  # lazy: setcmd imports this module
 
     warnings: list[str] = []
-    for path in paths:
-        if not path.exists():
-            continue
-        for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+
+    def apply_file(path: Path, stack: list[Path]) -> None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return
+        stack.append(path)
+        for lineno, raw in enumerate(lines, 1):
+            parsed = setcmd.split_command(raw)
+            if parsed is not None and parsed[0] in setcmd.LOAD_VERBS:
+                # A loaded file's settings sit in the jsrc layer too, resolved
+                # against the containing file. The REPL replay reports a
+                # missing file or a cycle.
+                target, error = setcmd.load_path(parsed[1], path.parent)
+                if error is None and target not in stack and len(stack) < setcmd.MAX_LOAD_DEPTH:
+                    apply_file(target, stack)
+                continue
             result = setcmd.apply_config_line(settings, raw)
             if result.error:
                 warnings.append(f"{path}:{lineno}: {result.error}")
+        stack.pop()
+
+    for path in paths:
+        if path.exists():
+            apply_file(path.resolve(strict=False), [])
     return warnings
 
 
