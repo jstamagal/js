@@ -173,6 +173,51 @@ def test_dry_run_exits_nonzero_when_a_move_would_be_refused(tmp_path, capsys):
     assert paths.global_config_file().read_text(encoding="utf-8") == "new\n"
 
 
+def test_dry_run_reports_what_apply_does_when_old_entries_share_a_target(tmp_path, capsys):
+    legacy = _legacy()
+    _write(legacy["config"] / "state" / "x", "one\n")
+    _write(legacy["data"] / "state" / "x", "two\n")
+    _write(legacy["data"] / "state" / "y", "y\n")
+    _write(legacy["data"] / "commit-backups" / "b.patch", "p\n")
+    _write(legacy["inbox"] / "notes" / "n.md", "inbox\n")
+    _write(legacy["inbox"] / "notes" / "only-inbox.md", "i\n")
+    _write(legacy["data"] / "notes" / "n.md", "data\n")
+    _write(legacy["data"] / "notes" / "only-data.md", "d\n")
+
+    def outcome(steps):
+        return [(step.kind, step.source, step.target) for step in steps if step.kind != "rmdir"]
+
+    planned = outcome(home.steps(apply=False))
+    assert home.main([]) == 1
+    capsys.readouterr()
+
+    assert planned == outcome(home.steps(apply=True))
+
+
+def test_an_entry_that_cannot_be_compared_is_refused_and_the_rest_still_moves(tmp_path, monkeypatch):
+    config = _legacy()["config"]
+    _write(config / "JS.md", "context\n")
+    _write(config / "jsrc", "set model.id old\n")
+    clash = _write(config / "agents" / "a" / "01-prompt.md", "old\n")
+    _write(paths.global_agents_dir() / "a" / "01-prompt.md", "new\n")
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(home.filecmp, "cmp", unreadable)
+    assert home.main([]) == 1
+
+    out = io.StringIO()
+    steps = home.migrate_once(out)
+
+    assert [step.source for step in steps if step.kind == "refuse"] == [clash]
+    assert clash.is_file()
+    assert paths.global_config_file().read_text(encoding="utf-8") == "set model.id old\n"
+    assert (paths.home() / "JS.md").is_file()
+    assert len(out.getvalue().splitlines()) == len(steps)
+    assert paths.home_migration_marker().is_file()
+
+
 def test_across_filesystems_a_directory_lands_whole_then_leaves_the_source(tmp_path, monkeypatch):
     nfs = tmp_path / "nfs"
     nfs.mkdir()

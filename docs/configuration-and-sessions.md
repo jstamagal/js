@@ -345,7 +345,11 @@ Each entry moves by one rename, so a directory lands whole or not at all. A
 symlink moves as the link and is never followed. When the destination already
 exists, a directory is merged entry by entry, an identical file or link drops
 the old copy, and anything else is refused with the reason and left in place.
-Across filesystems an entry is copied beside its destination, renamed into
+An entry that cannot be read or compared is refused the same way; the rest
+still move. The dry run accounts for its own planned moves, so two old entries
+that land in the same place show the same merges and refusals as `--apply`.
+A refused entry is reported once at startup; the marker is written anyway, so
+`just migrate-home` is how to see it again. Across filesystems an entry is copied beside its destination, renamed into
 place, and only then removed from the old location.
 
 The `jsrc` template is written on first run; the per-agent `sessions/`

@@ -10,7 +10,8 @@ Every move is a rename of one entry, so a directory lands whole or not at
 all. A symlink is moved as the link; the walk never descends through one.
 When the destination already exists: an identical file or link drops the
 source copy, a directory is merged entry by entry, and anything else is
-refused with the reason and left where it was. Across filesystems an entry
+refused with the reason and left where it was, as is an entry that cannot
+be read or compared; the walk goes on to the next. Across filesystems an entry
 is copied beside its destination, renamed into place, and only then removed
 from the source.
 """
@@ -141,91 +142,128 @@ def _rename(source: Path, target: Path, mode: int) -> None:
         _move_across(source, target, mode)
 
 
-def _entry(source: Path, target: Path, *, apply: bool) -> Iterator[Step]:
-    """Move one entry to `target`, merging into an existing directory there."""
-    source_stat = _lstat(source)
-    if source_stat is None:
-        return
-    target_stat = _lstat(target)
-    if target_stat is None:
-        if apply:
-            try:
-                _rename(source, target, source_stat.st_mode)
-            except _OldCopyLeft as exc:
-                yield Step("move", source, target)
-                yield Step("refuse", source, target, f"copied to {_short(target)}, but the old copy is left: {exc}")
-                return
-            except OSError as exc:
-                yield Step("refuse", source, target, f"could not move to {_short(target)}: {exc}")
-                return
-        yield Step("move", source, target)
-        return
-    source_mode, target_mode = source_stat.st_mode, target_stat.st_mode
-    if stat.S_ISDIR(source_mode) and stat.S_ISDIR(target_mode):
+class _Walk:
+    """One pass over the old locations, performed or only planned.
+
+    A dry run records each planned move, so a later entry whose target lies
+    at or under a planned target is checked against what would be there: the
+    planned source. The dry run then reports the same merges and refusals the
+    real run meets.
+    """
+
+    def __init__(self, *, apply: bool) -> None:
+        self.apply = apply
+        self.planned: dict[Path, Path] = {}
+
+    def where(self, target: Path) -> Path:
+        """The path whose contents `target` holds once the moves before it are done."""
+        for candidate in (target, *target.parents):
+            source = self.planned.get(candidate)
+            if source is not None:
+                return source / target.relative_to(candidate)
+        return target
+
+    def entry(self, source: Path, target: Path) -> Iterator[Step]:
+        """Move one entry to `target`, merging into an existing directory there."""
         try:
-            children = sorted(os.listdir(source))
+            source_stat = _lstat(source)
+            target_stat = _lstat(self.where(target))
         except OSError as exc:
-            yield Step("refuse", source, target, f"could not list it: {exc}")
+            yield Step("refuse", source, target, f"could not look at it or {_short(target)}: {exc}")
             return
-        for child in children:
-            yield from _entry(source / child, target / child, apply=apply)
-        yield from _remove_if_empty(source, apply=apply)
-        return
-    if _same(source, target, source_mode, target_mode):
-        if apply:
+        if source_stat is None:
+            return
+        if target_stat is None:
+            yield from self._move(source, target, source_stat.st_mode)
+            return
+        source_mode, target_mode = source_stat.st_mode, target_stat.st_mode
+        if stat.S_ISDIR(source_mode) and stat.S_ISDIR(target_mode):
             try:
-                os.unlink(source)
+                children = sorted(os.listdir(source))
             except OSError as exc:
-                yield Step("refuse", source, target, f"identical to {_short(target)} but could not remove it: {exc}")
+                yield Step("refuse", source, target, f"could not list it: {exc}")
                 return
-        yield Step("duplicate", source, target)
-        return
-    if stat.S_ISREG(source_mode) and stat.S_ISREG(target_mode):
-        reason = f"{_short(target)} already exists with different content"
-    else:
-        reason = f"{_short(target)} already exists as {_kind(target_mode)}; this is {_kind(source_mode)}"
-    yield Step("refuse", source, target, reason)
+            for child in children:
+                yield from self.entry(source / child, target / child)
+            yield from self.remove_if_empty(source)
+            return
+        try:
+            same = _same(source, self.where(target), source_mode, target_mode)
+        except OSError as exc:
+            yield Step("refuse", source, target, f"could not compare it with {_short(target)}: {exc}")
+            return
+        if same:
+            if self.apply:
+                try:
+                    os.unlink(source)
+                except OSError as exc:
+                    yield Step("refuse", source, target, f"identical to {_short(target)} but could not remove it: {exc}")
+                    return
+            yield Step("duplicate", source, target)
+            return
+        if stat.S_ISREG(source_mode) and stat.S_ISREG(target_mode):
+            reason = f"{_short(target)} already exists with different content"
+        else:
+            reason = f"{_short(target)} already exists as {_kind(target_mode)}; this is {_kind(source_mode)}"
+        yield Step("refuse", source, target, reason)
+
+    def _move(self, source: Path, target: Path, mode: int) -> Iterator[Step]:
+        if not self.apply:
+            self.planned[target] = source
+            yield Step("move", source, target)
+            return
+        try:
+            _rename(source, target, mode)
+        except _OldCopyLeft as exc:
+            yield Step("move", source, target)
+            yield Step("refuse", source, target, f"copied to {_short(target)}, but the old copy is left: {exc}")
+            return
+        except OSError as exc:
+            yield Step("refuse", source, target, f"could not move to {_short(target)}: {exc}")
+            return
+        yield Step("move", source, target)
+
+    def remove_if_empty(self, directory: Path) -> Iterator[Step]:
+        if not self.apply:
+            return
+        try:
+            os.rmdir(directory)
+        except OSError:
+            return
+        yield Step("rmdir", directory)
+
+    def spread(self, root: Path, renames: dict) -> Iterator[Step]:
+        """Move each entry of an old directory to ~/.js/<name> or its renamed place."""
+        try:
+            root_stat = _lstat(root)
+        except OSError as exc:
+            yield Step("refuse", root, None, f"could not look at it: {exc}")
+            return
+        if root_stat is None:
+            return
+        if not stat.S_ISDIR(root_stat.st_mode):
+            yield Step("refuse", root, None, f"is {_kind(root_stat.st_mode)}, not a directory; move it by hand")
+            return
+        try:
+            # Entries that keep their name go first, so a directory another entry
+            # is renamed into (state/, logs/) arrives whole before it is added to.
+            names = sorted(os.listdir(root), key=lambda name: (name in renames, name))
+        except OSError as exc:
+            yield Step("refuse", root, None, f"could not list it: {exc}")
+            return
+        for name in names:
+            target = renames[name]() if name in renames else paths.home() / name
+            yield from self.entry(root / name, target)
+        yield from self.remove_if_empty(root)
 
 
-def _remove_if_empty(directory: Path, *, apply: bool) -> Iterator[Step]:
-    if not apply:
-        return
-    try:
-        os.rmdir(directory)
-    except OSError:
-        return
-    yield Step("rmdir", directory)
-
-
-def _spread(root: Path, renames: dict, *, apply: bool) -> Iterator[Step]:
-    """Move each entry of an old directory to ~/.js/<name> or its renamed place."""
-    root_stat = _lstat(root)
-    if root_stat is None:
-        return
-    if not stat.S_ISDIR(root_stat.st_mode):
-        yield Step("refuse", root, None, f"is {_kind(root_stat.st_mode)}, not a directory; move it by hand")
-        return
-    try:
-        # Entries that keep their name go first, so a directory another entry
-        # is renamed into (state/, logs/) arrives whole before it is added to.
-        names = sorted(os.listdir(root), key=lambda name: (name in renames, name))
-    except OSError as exc:
-        yield Step("refuse", root, None, f"could not list it: {exc}")
-        return
-    for name in names:
-        target = renames[name]() if name in renames else paths.home() / name
-        yield from _entry(root / name, target, apply=apply)
-    yield from _remove_if_empty(root, apply=apply)
-
-
-def plan_or_apply(*, apply: bool) -> list[Step]:
-    """Every step of the migration, performed when `apply` is true."""
+def steps(*, apply: bool) -> Iterator[Step]:
+    """Every step of the migration, each performed as it is yielded when `apply` is true."""
     legacy = paths.legacy_homes()
-    steps: list[Step] = []
-    steps.extend(_entry(legacy["inbox"], paths.work_dir(), apply=apply))
-    steps.extend(_spread(legacy["config"], _CONFIG_RENAMES, apply=apply))
-    steps.extend(_spread(legacy["data"], _DATA_RENAMES, apply=apply))
-    return steps
+    walk = _Walk(apply=apply)
+    yield from walk.entry(legacy["inbox"], paths.work_dir())
+    yield from walk.spread(legacy["config"], _CONFIG_RENAMES)
+    yield from walk.spread(legacy["data"], _DATA_RENAMES)
 
 
 @contextlib.contextmanager
@@ -242,24 +280,25 @@ def _locked_home() -> Iterator[None]:
 
 def migrate_once(out: TextIO | None = None) -> list[Step]:
     """The startup migration: runs when an old location exists and the marker
-    does not, then writes the marker. With nothing to move it touches nothing."""
+    does not, then writes the marker. With nothing to move it touches nothing.
+    Each step is printed as it is done."""
     marker = paths.home_migration_marker()
     if marker.exists() or not any(os.path.lexists(path) for path in paths.legacy_homes().values()):
         return []
     stream = out if out is not None else sys.stderr
+    done: list[Step] = []
     try:
         with _locked_home():
             if marker.exists():
                 return []
-            steps = plan_or_apply(apply=True)
+            for step in steps(apply=True):
+                done.append(step)
+                print(f"js: {describe(step, apply=True)}", file=stream)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
         print(f"js: could not migrate to {_short(paths.home())}: {exc}", file=stream)
-        return []
-    for step in steps:
-        print(f"js: {describe(step, apply=True)}", file=stream)
-    return steps
+    return done
 
 
 def sweep_tmp(now: float | None = None) -> list[Path]:
@@ -290,16 +329,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="js.home", description=__doc__.splitlines()[0])
     parser.add_argument("--apply", action="store_true", help="move; default is a dry run")
     args = parser.parse_args(argv)
-    if args.apply:
-        with _locked_home():
-            steps = plan_or_apply(apply=True)
-    else:
-        steps = plan_or_apply(apply=False)
-    for step in steps:
-        print(describe(step, apply=args.apply))
-    if not steps:
+    found: list[Step] = []
+    with _locked_home() if args.apply else contextlib.nullcontext():
+        for step in steps(apply=args.apply):
+            found.append(step)
+            print(describe(step, apply=args.apply), flush=True)
+    if not found:
         print(f"nothing to move into {_short(paths.home())}")
-    return 1 if any(step.kind == "refuse" for step in steps) else 0
+    return 1 if any(step.kind == "refuse" for step in found) else 0
 
 
 if __name__ == "__main__":

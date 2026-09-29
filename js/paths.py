@@ -17,7 +17,7 @@ skills, toolbox) stay with the project and are not named here.
       probes/           browser probes and terminal snapshots
 
 The locations js used before this layout are listed in `legacy_homes()`;
-`js.home_migration` moves them here.
+`js.home` moves them here.
 """
 
 from __future__ import annotations
