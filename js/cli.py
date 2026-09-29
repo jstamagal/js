@@ -1857,6 +1857,7 @@ def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
 def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     state["messages"].clear()
     task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
+    compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     M.append_mark(cfg.session_file, "session_reset")
     msgs.say(msgs.RESET_DONE)
     return None
@@ -1891,6 +1892,7 @@ def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     usage_mod.forget(cfg.session_file)
     state["messages"].clear()
     task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
+    compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     if bak:
         msgs.say(msgs.WIPE_ROTATED, path=bak.name)
     else:

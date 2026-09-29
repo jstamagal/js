@@ -257,8 +257,11 @@ in truecolor on every terminal, including the Linux console.
 (`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
 retrying; at 2 (the default) each
 model request, including subagents and compaction, also prints
-`*** Connecting` and `*** Connected ... Nms`, and the bar counts response
-bytes until the first token arrives; at 3 each retry, models.dev catalog
+`*** Connecting` and `*** Connected ... Nms`, the bar counts response
+bytes until the first token arrives, and a response that read more than 5%
+(and at least 2000 tokens) less from the prompt cache than the one before it
+prints one `*** Prompt cache break` line with both counts and the seconds
+since that request; at 3 each retry, models.dev catalog
 refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
@@ -421,8 +424,9 @@ see `<dir>`, and it puts the tools in a jail:
   `terminal_session`, the wiki converters) runs under bubblewrap. `<dir>` is
   bound read-write at its real path. The system is read-only. `/home`, your
   home, `/run/user`, network filesystems (NFS and the like), and any other
-  mount that shows your home are empty. The `PATH` directories under them are
-  bound back read-only, so the toolchains on `PATH` run. `/tmp` and `~/.js/tmp`
+  mount that shows your home are empty. The `PATH` directories under them or
+  under the host `/tmp` are bound back read-only, so the toolchains on `PATH`
+  run. `/tmp` and `~/.js/tmp`
   are directories private to this js process, shared by its commands and
   removed when it exits. The network stays on. The command's environment is
   `limits.shell_env_allow`, so provider keys are not in it.

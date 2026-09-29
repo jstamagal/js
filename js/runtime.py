@@ -1691,21 +1691,42 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _trace_req["sent"] = 0
             _trace_req["schemas"] = True
             active_context.compacted_during_turn = True
+            compaction.history_rewritten(active_context)
 
-        # 1. Old tool-result bodies are the bulk of a long turn and cost no
-        #    model call to drop.
-        cleared, reclaimed = compaction.clear_for_budget(
-            messages, cfg=active_compact_cfg, system=system, trigger=trigger,
-            flight_data=flight_data, over_budget=_over_budget,
-        )
-        if cleared:
+        def _clear() -> bool:
+            """Clear old tool-result bodies; True when that brought the
+            request under budget."""
+            nonlocal reclaimed
+            cleared, chars = compaction.clear_for_budget(
+                messages, cfg=active_compact_cfg, system=system, trigger=trigger,
+                flight_data=flight_data, over_budget=lambda more: _over_budget(reclaimed + more),
+            )
+            if not cleared:
+                return False
+            reclaimed += chars
             _history_changed()
             telemetry.event("context_results_cleared", phase=phase, cleared=cleared)
-            if not (force or _over_budget(reclaimed)):
-                return True
+            return not (force or _over_budget(reclaimed))
+
+        # 1. Old tool-result bodies are the bulk of a long turn and cost no
+        #    model call to drop. Rewriting them mid-history busts the prompt
+        #    cache, so while the cache is warm a summary of the earlier turns
+        #    goes first and clearing waits for step 3. A cold cache, or a
+        #    provider that already refused the request (force), clears first.
+        clearing_deferred = not (force or compaction.cache_expired(active_compact_cfg, active_context))
+        if clearing_deferred:
+            telemetry.event("context_clearing_deferred", phase=phase,
+                            cache_age_s=time.time() - active_context.last_request_at)
+        elif _clear():
+            return True
+
+        summary_failed = False
 
         async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
-            nonlocal reclaimed
+            nonlocal reclaimed, summary_failed
+            if compaction.auto_paused(active_compact_cfg, active_context):
+                telemetry.event("context_compaction_skipped", phase=phase, reason="paused_after_failures")
+                return False
             before_chars = compaction.history_chars(messages)
             turn_status.compacting = True
             try:
@@ -1719,6 +1740,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
                 telemetry.event("context_compaction_failed", phase=phase,
                                 error=f"{type(exc).__name__}: {exc}")
+                if (paused := compaction.record_auto_failure(active_compact_cfg, active_context)) is not None:
+                    msgs.say_said(paused, file=sys.stderr, flush=True)
+                summary_failed = True
                 return False
             finally:
                 turn_status.compacting = False
@@ -1738,10 +1762,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 and await _summarize(preserve_from, f"{phase} context budget")
                 and (force or not _over_budget(reclaimed))):
             return True
-        # 3. The current turn alone is over budget: summarize it too, keeping
+        # 3. Clearing deferred in step 1 runs now whatever the cache: a summary
+        #    of the current turn rewrites the whole history too, and when
+        #    summaries are paused or failing it is the only step left.
+        if clearing_deferred and _clear():
+            return True
+        # 4. The current turn alone is over budget: summarize it too, keeping
         #    its most recent tail so the model can carry on from the summary.
         #    A provider rejection (force) says the request did not fit no matter
         #    what the budget believed, so keep half as much tail each round.
+        #    A summary that already failed in this check is not retried here.
+        if summary_failed:
+            return changed
         tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens")
         if force:
             history_tokens = int(compaction.history_chars(messages) / chars_per_token)
@@ -1853,6 +1885,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
                     active_context.last_incomplete_reason = incomplete_reason
                     active_context.last_max_output_tokens = max_out
+                    _cache_break = compaction.note_response(
+                        active_context, model_key=f"{provider_id}/{model}",
+                        cache_read=active_context.last_cached_tokens if usage else None, now=time.time(),
+                    )
+                    if _cache_break is not None:
+                        telemetry.event("prompt_cache_break", model=model, line=_cache_break)
+                        stream_transport.say_for_caller(2, _cache_break)
                     telemetry.event("turn_complete", model=model,
                                     latency_ms=int((time.time() - t0) * 1000),
                                     finish_reason=finish, n_tool_calls=len(pending_calls),
@@ -1926,6 +1965,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _trace_req["sent"] = 0
                             _trace_req["schemas"] = True
                             active_context.compacted_during_turn = True
+                            compaction.history_rewritten(active_context)
                             continue
                         compacted = await _maybe_compact_request_for_budget(
                             phase="overflow_recovery",

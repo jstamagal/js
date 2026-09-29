@@ -377,7 +377,7 @@ How it is built (`js/jail.py`):
   them back in every text result (`Jail.shown`), so the model never sees the
   private directory. An image marker keeps the host path in its path field,
   where the model client reads the image from.
-- PATH directories under a hidden tree are bound back with every symlinked
+- PATH directories under a hidden tree or the host `/tmp` are bound back with every symlinked
   directory on the way (`jail.reach`), so a venv interpreter that links into
   `~/.local/share/uv/python` still starts.
 - No pid namespace: a command's background server outlives the command, as

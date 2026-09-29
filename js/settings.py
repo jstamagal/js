@@ -390,6 +390,16 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Model used to write the compaction summary; 'same' = active model."),
     SettingSpec("compact.summary_max_tokens", "int",
                 "Max tokens for the compaction summary. Capped at 8192."),
+    SettingSpec("compact.summary_tool_result_chars", "int",
+                "Longest tool result, in characters, that a summary request carries "
+                "whole; a longer one keeps its head and tail. 0 = whole results."),
+    SettingSpec("compact.max_summary_failures", "int",
+                "Failed automatic summaries in a row that pause automatic compaction. "
+                "A successful /compact resumes it."),
+    SettingSpec("compact.cache_ttl_seconds", "int",
+                "Prompt-cache lifetime. An over-budget request clears old tool results "
+                "first when the last request is at least this old; before that it "
+                "summarizes earlier turns first. 0 = always clear first."),
     SettingSpec("compact.pre_hook", "str",
                 "Optional shell command whose stdout guides compaction.",
                 empty=EMPTY_NONE),

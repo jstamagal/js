@@ -347,7 +347,7 @@ async def run_loop(mode):
         nonlocal model_calls
         payload = text_of(kw["messages"])
         if payload.startswith("Summarize this js session"):
-            summaries.append(json.loads(payload.split("Session messages JSON:\n", 1)[1]))
+            summaries.append(payload.split("<conversation>\n", 1)[1].split("\n</conversation>", 1)[0])
             return result("condensed " + str(len(summaries)))
         requests.append([m.model_dump(mode="json") for m in kw["messages"]])
         model_calls += 1
@@ -383,16 +383,10 @@ async def run_loop(mode):
         "disk_replay_matches": loaded == messages,
     }
     if mode == "churn":
+        # A summary request whose conversation holds no message beyond the
+        # previous summary and its re-attached files rewrites only the summary.
         checks["no_summary_only_rewrites"] = all(
-            any(
-                not (
-                    m.get("role") == "user"
-                    and m.get("content", "").startswith(
-                        ("<compaction-summary>", "<post-compaction-files>")
-                    )
-                )
-                for m in source
-            )
+            re.search(r"^\[(User|Assistant|Tool result)", source, re.MULTILINE)
             for source in summaries
         )
     if mode == "midturn_overflow":

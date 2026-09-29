@@ -88,12 +88,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **A turn cut off by max output tokens just ends.** It drops the dangling calls and tells the user to retry (`runtime.py:1844-1858`). Claude Code escalates to 64k and then sends up to 3 resume nudges. pi fails the calls and keeps looping.
 
-**Compaction summaries are cold, bloated, and never give up.**
-- The history is sent as indented JSON with whole tool results (`compaction.py:567`), and it overflows often enough to need recursive splitting.
-- A failed summary is retried every iteration, because nothing breaks the loop.
-- pi serialises the history as plain text with tool results clipped to 2000 chars. Claude Code forks the summary call so it shares the main thread's cache prefix, and stops after 3 failures.
-
-**Clearing old results busts the prompt cache.** `microcompact` rewrites mid-history results whenever the budget trips (`compaction.py:192`). Claude Code clears only after the cache TTL has already expired.
+**Compaction summaries are cold.** The summary request is a fresh one-message prompt, so it reads nothing from the main thread's cache. Claude Code forks the summary call so it shares the main thread's cache prefix. The rest of this gap is done in js-1g1.14: the history goes as plain text with tool results clipped to 2000 chars, a second compaction updates the previous summary, and 3 failed summaries in a row pause automatic compaction.
 
 **`read` prefixes every line with `N:hash|`, and `patch` can't use it.** It costs tokens on every read line. The stale guard already catches changes without it.
 
@@ -138,8 +133,8 @@ pi retries once. Codex does not recover inside a normal turn.
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | `runtime.py:1948` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
-| Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | `compaction.py:567`, `runtime.py:1599` |
-| Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | `compaction.microcompact` |
+| Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
+| Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | `discovery.ranked_entries` |
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | `fs._apply_edit` |

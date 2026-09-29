@@ -113,6 +113,9 @@ set compact.rehydrate_max_tokens_per_file 5000
 set compact.chars_per_token 4.0
 set compact.model same
 set compact.summary_max_tokens 8192
+set compact.summary_tool_result_chars 2000
+set compact.max_summary_failures 3
+set compact.cache_ttl_seconds 300
 set -compact.pre_hook
 
 # --- subagents ---

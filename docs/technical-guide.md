@@ -140,7 +140,13 @@ first token stands in when the transport cannot say). Who is calling (main
 turn, `Subagent N`, `Compacting`) is a context variable set by
 `run_turn_async` and the compaction call sites. `run_turn_async` retries, so
 its role holds each request failure instead of printing it: the next request
-drops it, and the turn prints it (level 1) only when it gives up. The channel
+drops it, and the turn prints it (level 1) only when it gives up. After each
+response `compaction.note_response` compares its cache-read tokens with the
+previous response of the same conversation and model; a drop of more than 5%
+and at least 2000 tokens prints one cache-break line at level 2. A compaction or
+tool-result clearing resets that baseline, because the drop it causes is
+expected; so do `/reset` and `/wipe`. A response without usage keeps the
+baseline. The channel
 prints only while the async REPL has installed a sink; elsewhere every hook is
 a no-op, and the models.dev refresh lines print to stderr as before.
 
@@ -370,16 +376,39 @@ recorded as SKIPPED; any following summarization has its own attempt ID.
 
 ### Compaction commit and replay
 
-In-turn budget recovery clears old tool results first (`compact.clear_keep_recent`
-starts the retained-result count), then summarizes older history. If the active
-turn itself is too large, its older work can be summarized while retaining a
-paired assistant/tool tail. Empty prefixes and summary-only prefixes are skipped.
+In-turn budget recovery clears old tool results (`compact.clear_keep_recent`
+starts the retained-result count), summarizes the history before the current
+user message, and, if the active turn itself is too large, summarizes its older
+work while retaining a paired assistant/tool tail. Empty prefixes and
+summary-only prefixes are not summarized. The order depends on the prompt cache.
+When the last request is at least `compact.cache_ttl_seconds` old (default 300,
+0 = always), or the provider has already refused the request, clearing runs
+first. While the cache is warm, the summary of earlier turns runs first, and
+clearing runs only if that summary did not bring the request under budget.
+Clearing always runs before the current turn is summarized, because that summary
+rewrites the whole history too.
+
+`compact.max_summary_failures` (default 3) automatic summaries that fail in a
+row pause automatic compaction, in-turn and between turns, and print one line
+saying so. One budget check makes at most one failed summary attempt. While
+paused, tool-result clearing still runs, warm cache or not. A successful
+summary, such as a manual `/compact`, resets the count and resumes it.
 Both trigger paths use current provider-anchored input plus generated output;
 output-only usage falls back to estimation. Small windows share the same capped
 reserve and buffer calculation.
 
+The summary request is plain text, not JSON: one `[User]`, `[Assistant]`,
+`[Assistant tool calls]` or `[Tool result name]` paragraph per message inside
+`<conversation>`. Tool results, tool-call arguments and reasoning longer than
+`compact.summary_tool_result_chars` (default 2000, 0 = whole) keep their head
+and tail. When the prefix starts with an earlier `<compaction-summary>`, that
+summary goes in `<previous-summary>` and the model is asked to update it with
+the new messages, so a second compaction carries the first one forward instead
+of summarizing it as conversation. A re-attached files message is reduced to its
+paths.
+
 Summary overflow partitions the source and summarizes both halves, with bounded
-split depth. A failing partition, blank response, or incomplete response leaves
+split depth. The previous summary travels with the older half only. A failing partition, blank response, or incomplete response leaves
 the source history intact. The proposed replacement must shrink the history;
 optional file reattachment is omitted if it consumes those savings.
 
