@@ -13,7 +13,6 @@ import pytest
 import ai
 
 from js import runtime
-from js import colors as C
 from js import model_client as MC
 from js.config import Config
 from js.toolkit import ToolContext
@@ -116,7 +115,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
         n["i"] += 1
         on_text = kwargs["on_text"]
         if n["i"] == 1:
-            on_text("PARTIAL")  # tokens already reached stdout, color left open
+            on_text("PARTIAL")  # tokens already reached stdout, line left open
             raise ai.ProviderAPIError("boom", provider="test", is_retryable=True)
         on_text("FINAL")
         return _result("FINAL")
@@ -135,8 +134,9 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "PARTIAL" in out and "FINAL" in out
-    # A RESET terminates the partial text before the retried text is streamed.
-    assert C.RESET in out[out.index("PARTIAL"):out.index("FINAL")]
+    # The partial text is finished on its own line before the retried text is
+    # streamed, so the two attempts never run together.
+    assert "\n" in out[out.index("PARTIAL"):out.index("FINAL")]
 
 
 # --------------------------------------------------------------------------
