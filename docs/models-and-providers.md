@@ -84,7 +84,7 @@ removes that provider and its cache.
 names backed by an API shape (`openai-completions`, `openai-responses`, or
 `anthropic`) plus a base URL and API key.
 
-Inside the REPL, `/model` and `/pick-model` open the Textual picker. It is a
+Inside the REPL, `/model` and `/pick-model` open the model picker. It is a
 chooser, not a discovery/configuration UI: it shows only saved provider logins
 and the cached models from those logins. Use `/login` or `js --login <provider>`
 to add providers, and use the picker `f` binding to refresh the selected saved

@@ -7,9 +7,8 @@ concern, not ours)."""
 from __future__ import annotations
 
 import contextlib
-from types import SimpleNamespace
 
-from textual.binding import Binding
+import pytest
 
 from js import cli
 from js.memory import load_messages
@@ -76,52 +75,34 @@ def test_nonblocking_repl_empty_line_then_eof_is_clean(monkeypatch, tmp_path):
     assert load_messages(_session_file(tmp_path)) == []
 
 
-def test_tui_flag_routes_to_textual_repl(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    seen = {}
+def test_nonblocking_repl_skill_line_sends_user_only_skill(monkeypatch, tmp_path):
+    skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")
+    turns: list[str] = []
 
-    def run_tui_repl_stub(cfg, state, telemetry, prompt_spec, deps):
-        seen["model"] = state["model"]
-        seen["system"] = state["system"]
-        seen["deps"] = deps
-        return 0
+    async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
+        turns.append(str(messages[-1]["content"]))
+        messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.tui, "run_tui_repl", run_tui_repl_stub)
-
-    rc = cli.main(["--tui", "--model", "flag-model"])
+    lines = ["/skill nosuch", "/skill secret check the plan"]
+    rc = _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub)
     assert rc == 0
-    assert seen["model"] == "flag-model"
-    assert seen["system"]
-    assert seen["deps"].handle_command is cli._handle_command
+
+    # The unknown name starts no turn; the user-only skill reaches the model.
+    assert len(turns) == 1
+    assert "user-only body" in turns[0]
+    assert "check the plan" in turns[0]
+    reloaded = load_messages(_session_file(tmp_path))
+    assert [m["role"] for m in reloaded] == ["user", "assistant"]
+    assert "user-only body" in str(reloaded[0]["content"])
 
 
-def test_tui_ctrl_z_suspends_the_uv_run_process_group(monkeypatch):
-    binding = next(
-        binding
-        for binding in cli.tui.JsTuiApp.BINDINGS
-        if isinstance(binding, Binding) and binding.key == "ctrl+z"
-    )
-    seen = []
-    app = SimpleNamespace(
-        _driver=SimpleNamespace(can_suspend=True),
-        _suspend_signal=lambda: seen.append("terminal-restored"),
-    )
-    monkeypatch.setattr(cli.tui.os, "getpgrp", lambda: 1234)
-    monkeypatch.setattr(
-        cli.tui.os,
-        "killpg",
-        lambda process_group, sig: seen.append((process_group, sig)),
-    )
-
-    cli.tui.JsTuiApp.action_suspend_process(app)
-
-    assert binding.action == "suspend_process"
-    assert binding.priority is True
-    assert seen == ["terminal-restored", (1234, cli.tui.signal.SIGTSTP)]
+def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--tui"])
+    assert exc.value.code == 2
 
 
 def test_turn_state_commands_are_refused_while_a_turn_runs():

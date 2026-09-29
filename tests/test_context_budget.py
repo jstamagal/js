@@ -88,3 +88,11 @@ def test_cached_prompt_is_counted_once_against_128k_window():
     assert state.last_usage.total_tokens == usage.total_tokens == 64500
     assert budget.current_context_tokens == 64500
     assert budget.should_compact is False
+
+
+def test_codex_context_window_comes_from_the_model_catalog(monkeypatch):
+    from js import runtime
+
+    monkeypatch.setattr(runtime.model_metadata, "context_window", lambda *args: 1_050_000)
+
+    assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 1_050_000

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Built-in skills and user-only skills (`js-czp.1`, `js-czp.2`).** js ships
+  nine skills in `js/skills/` (grilling, grill-me, wait-what, diagnosing-bugs,
+  code-review, codebase-design, improve-codebase-architecture, handoff,
+  wayfinder), vendored from mattpocock/skills with a `SOURCE:` line each; a
+  global or project skill of the same name shadows one. `just skills-diff
+  [upstream]` shows upstream drift. `disable-model-invocation: true` is now
+  honored: such a skill is out of the model's catalog and the `skill` tool
+  refuses it; `/skill <name> [request]` in the REPL sends any skill's
+  instructions as that turn's message.
+
+- **Removed `--tui` and textual (`js-jwc.5`).** `js/tui.py`, the flag, and the
+  textual dependency are gone. The `/model` picker is now prompt_toolkit and
+  works under the default non-blocking REPL. Dead `codex_models.py`, the
+  `js/tools.py` facade, and the never-emitted `notice`/`subagent`/`idle` events
+  are deleted. A failed models.dev refresh is tried once per process and warns
+  on one line; a malformed `SKILL.md` warns on one line, once.
+
 - **Reasoning on screen (`js-q7v.2`).** Thinking now streams separately from the
   answer and stays visible by default. `/set ui.reasoning 0–3` controls display;
   the standard async screen supports auto-collapse and Ctrl-R expansion without

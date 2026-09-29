@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "js"
-version = "0.2.1"
+version = "0.2.2"
 description = "LO-shaped AI SDK agent with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,10 +23,8 @@ dependencies = [
     "prompt_toolkit>=3.0",
     "pyte>=0.8.2",
     "PyYAML>=6.0",
-    # direct import in transcript.py, tui.py, and toolkit/kernel.py. was riding
-    # in transitively on textual; declared now because three modules import it.
+    # direct import in toolkit/kernel.py.
     "rich>=13.0",
-    "textual>=0.85",
     "tomli_w>=1.0",
     "platformdirs>=4.0",
     "jsonschema==4.25.1",
@@ -58,7 +56,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js" = ["tool_releases.json"]
+"js" = ["tool_releases.json", "skills/**/*"]
 "js.toolkit" = ["tool_descriptions/*/*.md", "toolbox_examples/*.py"]
 
 # dev tooling for agents hacking this code (and for the justfile quality

@@ -391,6 +391,9 @@ Parameters:
 ### `skill`
 
 Loads a local skill document by name from known skill paths.
+A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
+the tool refuses it and the user loads it with `/skill <name>` in the REPL.
+The built-in skills in `js/skills/` are the lowest layer.
 
 Parameters:
 

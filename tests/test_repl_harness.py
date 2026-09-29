@@ -1372,3 +1372,47 @@ def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp
     active = cli._cfg_for_active_model(cfg, state)
     assert active.provider_id == "deepseek"
     assert active.model == "deepseek-v4-flash"
+
+
+def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatch, tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    turns: list[str] = []
+
+    class SessionStub:
+        def __init__(self, history=None, **kwargs):
+            self.lines = iter(["/skill nosuch", "/skill secret check the plan", "exit"])
+
+        def prompt(self, *args, **kwargs):
+            return next(self.lines)
+
+    def run_turn_stub(cfg, system, messages, *args, **kwargs):
+        turns.append(messages[-1]["content"])
+
+    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    assert cli.main(["--blocking"]) == 0
+
+    assert len(turns) == 1
+    assert "user-only body" in str(turns[0])
+    assert "check the plan" in str(turns[0])
+
+
+def test_bare_skill_command_lists_builtin_skills_without_a_turn(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    state = {"messages": []}
+
+    assert cli._handle_command("/skill", state, make_cfg(tmp_path)) is True
+
+    out = capsys.readouterr().out
+    assert state["messages"] == []
+    for name in ("grilling", "grill-me", "wayfinder"):
+        assert name in out

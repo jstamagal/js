@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import ai
 
-from js import cli, runtime, settings, transcript, tui
+from js import cli, runtime, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -151,29 +150,3 @@ def test_transcript_logging_failure_never_raises(tmp_path):
     sink.write_user("hello")
     sink.write_plain("still no raise\n")
     sink.close()
-
-
-def test_tui_write_transcript_reaches_file(monkeypatch, tmp_path):
-    log_dir = tmp_path / "transcripts"
-    path = log_dir / "tui.log"
-    sink = transcript.open_transcript_sink([path])
-    assert sink is not None
-    cfg = _cfg(tmp_path, log_dir, session_name="tui.jsonl")
-    telemetry = runtime.Telemetry(debug_log=None, transcript_log=sink)
-    state = {"settings": settings.seed_defaults(), "model": cfg.model}
-    app = tui.JsTuiApp(cfg, state, telemetry, None, SimpleNamespace())
-    written: list[object] = []
-
-    class Pane:
-        def write(self, obj):
-            written.append(obj)
-
-    monkeypatch.setattr(tui.JsTuiApp, "query_one", lambda self, *_args, **_kwargs: Pane())
-
-    app._write_transcript("[orange1]error: boom[/]")
-    app._write_transcript("answer", speaker="APE", log_text="answer")
-
-    assert written
-    text = path.read_text(encoding="utf-8")
-    assert "error: boom" in text
-    assert "<APE> answer" in text

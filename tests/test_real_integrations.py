@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from js import tools as runtime_tools
+from js import toolkit as runtime_tools
 from js.config import from_env
 from js.runtime import Telemetry, run_turn
 from js.toolkit import ToolContext

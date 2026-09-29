@@ -493,31 +493,35 @@ def refresh_catalog(*, force: bool = False) -> CatalogStatus:
     return status
 
 
+# Set when an automatic refresh fails. A process makes one automatic attempt:
+# later stale checks reuse the current catalog without a retry or another
+# warning. A forced refresh (/refresh-model-catalog) always tries.
+_refresh_failure: str | None = None
+
+
 def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
+    global _refresh_failure
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    if force:
-        stream_transport.say_or_print(3, "updating models.dev cache...")
-        try:
-            return refresh_catalog(force=True)
-        except Exception as exc:
-            stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}")
-            if current is not None:
-                _activate_database(current.db_path)
-                return current
-            raise
-    if catalog_is_stale(current):
-        stream_transport.say_or_print(3, "updating models.dev cache...")
-        try:
-            return refresh_catalog(force=True)
-        except Exception as exc:
-            stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}")
-            if current is not None:
-                _activate_database(current.db_path)
-                return current
-            raise
-    return current
+    if not force and not catalog_is_stale(current):
+        return current
+    if not force and _refresh_failure is not None:
+        if current is None:
+            raise RuntimeError(_refresh_failure)
+        return current
+    stream_transport.say_or_print(3, "updating models.dev cache...")
+    try:
+        status = refresh_catalog(force=True)
+    except Exception as exc:
+        _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
+        stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {_refresh_failure}")
+        if current is not None:
+            _activate_database(current.db_path)
+            return current
+        raise
+    _refresh_failure = None
+    return status
 
 
 def _is_wrapper_request(catalog_id: str, request: str) -> bool:

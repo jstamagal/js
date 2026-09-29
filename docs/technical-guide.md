@@ -40,7 +40,6 @@ persists each completed turn.
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
-| `js/tools.py` | compatibility import of the default registry/context |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |

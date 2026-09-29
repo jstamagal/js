@@ -153,7 +153,7 @@ class TurnToolSurface:
             discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
         )
         self._skills = {
-            f"skill:{skill.name}": skill for skill in self._skill_catalog.skills
+            f"skill:{skill.name}": skill for skill in self._skill_catalog.model_skills
         }
         # The catalog's native entries are exactly the chain's lazy set.
         self._lazy: dict[str, Tool] = {

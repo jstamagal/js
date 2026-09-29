@@ -5,7 +5,7 @@ request.
 
 A skill is a directory holding a `SKILL.md` (the Agent Skills format):
 `<root>/<name>/SKILL.md`. Roots, lowest layer to highest:
-- package: `js/skills/`
+- built-in: `js/skills/` (shipped with js)
 - global: `~/.agents/skills/`, then `~/.config/js/skills/`
 - project: `./.agents/skills/`, then `./.js/skills/`
 
@@ -18,3 +18,5 @@ Rules:
 - The returned text is the skill's procedure, as written by whoever wrote the
   skill.
 - If no local skill matches, the tool returns an error.
+- A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
+  this tool refuses it, and the user loads it with `/skill <name>`.

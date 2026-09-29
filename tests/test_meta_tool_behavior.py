@@ -126,6 +126,20 @@ def test_skill_loads_from_native_js_skills_dir(tmp_path):
     assert meta.skill("lint", context=context) == "lint skill"
 
 
+def test_skill_tool_refuses_user_only_skill(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    _write_skill(
+        tmp_path / ".js" / "skills",
+        "secret",
+        "---\ndisable-model-invocation: true\n---\nuser-only body\n",
+    )
+
+    result = meta.skill("secret", context=context)
+
+    assert result.startswith("ERROR:")
+    assert "user-only body" not in result
+
+
 def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
     context = ToolContext(cwd=tmp_path)
     context.tool_registry = select(["shell:lazy"])

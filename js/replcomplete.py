@@ -61,6 +61,7 @@ COMMANDS: tuple[str, ...] = (
     "/compact",
     "/compact-auto",
     "/refresh-model-catalog",
+    "/skill",
     "exit",
     "quit",
     ":q",

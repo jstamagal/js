@@ -11,7 +11,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import compaction, events, runtime, setcmd, settings, tools as runtime_tools
+from js import compaction, events, runtime, setcmd, settings, toolkit as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
