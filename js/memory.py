@@ -147,6 +147,33 @@ def _compaction_summary_message(summary: str) -> dict:
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
 
+# User messages js writes on its own: reminders and compaction summaries.
+_HARNESS_USER_PREFIXES = ("<js-reminder>", "<compaction-summary>")
+
+
+def turn_cut_off(messages: list[dict]) -> bool:
+    """Whether the last turn in `messages` ended without a finished reply.
+
+    Trailing user messages js wrote on its own are passed over. The turn was
+    cut off when what is left ends on a user or tool message, or on an
+    assistant message that carries tool calls or an `incomplete_reason`."""
+    index = len(messages) - 1
+    while index >= 0:
+        message = messages[index]
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, str) and content.startswith(_HARNESS_USER_PREFIXES):
+            index -= 1
+            continue
+        break
+    if index < 0:
+        return False
+    last = messages[index]
+    role = last.get("role")
+    if role == "assistant":
+        return bool(last.get("tool_calls") or last.get("incomplete_reason"))
+    return role in ("user", "tool")
+
+
 def _parse_compaction_marker(marker: str) -> dict | None:
     if not marker.startswith("compaction:"):
         return None
@@ -296,6 +323,28 @@ def _last_mark_payload(memory_file: Path, prefix: str) -> str | None:
         marker = record.get("marker") if isinstance(record, dict) else None
         if isinstance(marker, str) and marker.startswith(prefix):
             return marker[len(prefix):]
+    return None
+
+
+def last_reply_stamp(memory_file: Path) -> dict | None:
+    """The stamp of the newest assistant message record that has one, or None."""
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            lines = stream.readlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("kind") != "message":
+            continue
+        stamp = record.get("stamp")
+        message = record.get("message")
+        if (isinstance(stamp, dict) and isinstance(message, dict) and message.get("role") == "assistant"
+                and isinstance(stamp.get("model"), str) and stamp["model"]):
+            return stamp
     return None
 
 

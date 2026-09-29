@@ -873,6 +873,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     folder.mkdir(parents=True)
     scoped_session = folder / "scoped-session.jsonl"
     cli.M.append_message(scoped_session, {"role": "user", "content": "scoped old"})
+    cli.M.append_message(scoped_session, {"role": "assistant", "content": "old reply"})
     loaded_prompt_dirs = []
 
     def completion_stub(**kwargs):
@@ -895,6 +896,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     assert loaded_prompt_dirs[0].name == "scoped"
     assert load_messages(scoped_session) == [
         {"role": "user", "content": "scoped old"},
+        {"role": "assistant", "content": "old reply"},
         {"role": "user", "content": "Reply with SCOPED_SESSION_OK"},
         {"role": "assistant", "content": "SCOPED_SESSION_OK"},
     ]
@@ -1467,14 +1469,16 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
     assert kept[:3] == [user, *exchange]
     assert kept[3]["tool_call_id"] == "read-2"
 
+    resumed_user = {"role": "user", "content": f"continue\n\n{cli._CUT_OFF_NOTICE}"}
+
     def resumed(cfg, system, messages, telemetry, **kwargs):
-        assert messages == [*kept, {"role": "user", "content": "continue"}]
+        assert messages == [*kept, resumed_user]
         messages.append({"role": "assistant", "content": "finished"})
 
     monkeypatch.setattr(runtime, "run_turn", resumed)
     assert cli._run_prompt("continue", session="interrupted") == 0
     assert load_messages(session) == [
-        *kept, {"role": "user", "content": "continue"},
+        *kept, resumed_user,
         {"role": "assistant", "content": "finished"},
     ]
 

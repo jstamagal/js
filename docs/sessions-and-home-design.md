@@ -147,8 +147,10 @@ tags: js · linux admin
 
 - **Every assistant message carries a stamp:** model, provider, reasoning
   level. Resume uses the last stamp, so a session resumes on the model it
-  was last talking to, not the one it started with. Today only session
-  starts record the model; `/model` mid-session writes nothing.
+  was last talking to, not the one it started with. `--model` beats the
+  stamp; a stamp whose provider has no login falls back to the configured
+  model with one line. A turn on a model other than the last stamp's carries
+  one model-switch note (js-1g1.21).
 - The session records how it was started: `repl`, `-p`, or piped, plus the
   command line.
 - Every record carries an `id` (eight hex digits, unique within the file)

@@ -409,8 +409,26 @@ js --session 6d65 -p "resume 2026-09-29T0802-6d65"
 
 A resumed session continues on the model, provider and reasoning level of its
 last stamp (see below) unless the run names them with `--model` or
-`--reasoning`. `--last` resumes the agent's most recently started session,
-wherever it is filed.
+`--reasoning`; `--model` beats the stamp. When the stamped provider is neither
+the configured one nor logged in, the session runs on the configured model
+and js prints one line naming the stamped model and the one it continues on.
+`--last` resumes the agent's most recently started session, wherever it is
+filed.
+
+Two notes ride on the next user message as a `<js-reminder>`:
+
+- **Model switch.** When the newest assistant reply in the session was stamped
+  with a model or provider other than the one this turn runs on (after
+  `/model`, or a resume with `--model`), the message says the model changed
+  from the stamped one to the current one. The turn's reply carries the new
+  stamp, so the note comes once. A stamp without a provider compares on the
+  model id alone.
+- **Cut-off turn.** When a resumed session's last turn ended without a finished
+  reply, the first message of the resume says the last turn was cut off. A
+  turn is cut off when the history ends on a user or tool message, or on an
+  assistant message with tool calls or an `incomplete_reason` (an interrupted
+  stream, a max-output stop). Trailing `<js-reminder>` and
+  `<compaction-summary>` user messages that js wrote itself are passed over.
 
 Generated session ids can be resumed from the `*** Continue:` hint. Driver
 integrations that have a stable caller key can instead derive an opaque name

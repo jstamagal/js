@@ -147,6 +147,38 @@ def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) 
     return attach.with_note(bundle, _MODE_SWITCH_NOTICES[mode])
 
 
+_MODEL_SWITCH_NOTICE = (
+    "<js-reminder>The model changed from {previous} to {current}. "
+    "Earlier replies in this conversation came from {previous}.</js-reminder>"
+)
+_CUT_OFF_NOTICE = (
+    "<js-reminder>The last turn in this conversation was cut off before it finished."
+    "</js-reminder>"
+)
+
+
+def _stamp_label(model: str | None, provider: str | None) -> str:
+    return f"{provider}/{model}" if provider else str(model)
+
+
+def _note_model_switch(cfg: Config, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
+    """When the session's newest reply came from a model other than the one
+    ``cfg`` runs this turn on, this turn's user message carries the
+    model-switch reminder. A stamp without a provider compares on the model id."""
+    if cfg.session_file == Path(os.devnull):
+        return bundle
+    stamp = M.last_reply_stamp(cfg.session_file)
+    if stamp is None:
+        return bundle
+    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
+    if stamp["model"] == cfg.model and (provider is None or provider == cfg.provider_id):
+        return bundle
+    return attach.with_note(bundle, _MODEL_SWITCH_NOTICE.format(
+        previous=_stamp_label(stamp["model"], provider),
+        current=_stamp_label(cfg.model, cfg.provider_id),
+    ))
+
+
 def _parse_bool(raw: str) -> bool | None:
     r = raw.lower().strip()
     if r in _BOOL_WORDS_ON:
@@ -318,11 +350,25 @@ def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
     provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
     if model == cfg.model and (not provider or provider == cfg.provider_id):
         return None
+    if _stamp_without_login(stamp, cfg) is not None:
+        return None
     prefixed = f"{provider}/{model}"
     if (provider and providers.parse_model_prefix(prefixed) == (provider, model)
             and (provider == cfg.provider_id or routing._saved_login(provider) is not None)):
         return prefixed
     return None if model == cfg.model else model
+
+
+def _stamp_without_login(stamp: dict, cfg: Config) -> str | None:
+    """``provider/model`` of a stamp whose provider is neither the configured
+    one nor logged in, else None. Such a session resumes on the configured model."""
+    model = stamp.get("model")
+    provider = stamp.get("provider")
+    if not isinstance(model, str) or not model or not isinstance(provider, str) or not provider:
+        return None
+    if provider == cfg.provider_id or routing._saved_login(provider) is not None:
+        return None
+    return f"{provider}/{model}"
 
 
 def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
@@ -2259,8 +2305,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     # A resumed session continues on the model, provider and reasoning of its
     # last stamp unless this run names them. Read before this start records its own.
     resumed = last_stamp(cfg.session_file) if cfg.session_file != Path(os.devnull) else None
+    unreachable_stamp = None
     if resumed is not None:
         if model is None:
+            unreachable_stamp = _stamp_without_login(resumed, cfg)
             model = _resume_model_spec(resumed, cfg)
         if reasoning is None:
             reasoning_override = _resume_reasoning(resumed, cfg)
@@ -2299,6 +2347,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    if unreachable_stamp is not None:
+        with _transcript_stdio(telemetry):
+            msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+                      model=_stamp_label(cfg.model, cfg.provider_id))
 
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
@@ -2306,6 +2358,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         else cfg
     )
     messages = M.load_replay_messages(cfg.session_file)
+    cut_off = M.turn_cut_off(messages)
     _restore_workspace(cfg)
     before_len = len(messages)
     try:
@@ -2321,6 +2374,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
     if save:
         user_bundle = _note_mode_switch(cfg, user_bundle, "-p")
+    user_bundle = _note_model_switch(cfg, user_bundle)
+    if cut_off:
+        user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
     messages.append(user_bundle.runtime_message)
     if save:
         _append_turn(cfg, user_bundle.history_message)
@@ -3053,6 +3109,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         msgs.say(msgs.FAILED, error=e)
         return
     user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+    user_bundle = _note_model_switch(turn_cfg, user_bundle)
     user_bundle = _with_pending_notes(state, user_bundle)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
@@ -3422,6 +3479,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             continue
 
         user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+        user_bundle = _note_model_switch(turn_cfg, user_bundle)
         user_bundle = _with_pending_notes(state, user_bundle)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
@@ -4036,6 +4094,8 @@ def _main(argv: list[str] | None = None) -> int:
     # put an otherwise fine launch through the login gate for a model it was
     # going to use anyway.
     resumed = last_stamp(cfg.session_file)
+    unreachable_stamp = (_stamp_without_login(resumed, cfg)
+                         if args.model is None and resumed is not None else None)
     if args.model is None and resumed is not None:
         remembered_model = _resume_model_spec(resumed, cfg)
         if remembered_model:
@@ -4066,6 +4126,9 @@ def _main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    if unreachable_stamp is not None:
+        msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+                 model=_stamp_label(cfg.model, cfg.provider_id))
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
@@ -4092,6 +4155,7 @@ def _main(argv: list[str] | None = None) -> int:
     )
 
     messages = M.load_replay_messages(cfg.session_file)
+    cut_off = M.turn_cut_off(messages)
     _restore_workspace(cfg)
     if messages:
         msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
@@ -4138,6 +4202,8 @@ def _main(argv: list[str] | None = None) -> int:
         tool_registry=active_registry,
     )
     state["keymap"] = keymap
+    if cut_off:
+        _queue_note(state, _CUT_OFF_NOTICE)
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.ignore_local,

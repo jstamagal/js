@@ -288,10 +288,10 @@ def test_the_stamped_provider_rides_only_where_routing_takes_it():
     assert cli._resume_model_spec({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
     assert cli._resume_model_spec({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
         "deepseek/deepseek-v4-pro"
-    # A provider routing does not know as a prefix, or one with no login that
-    # is not the configured one, leaves the model id alone.
-    assert cli._resume_model_spec({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) == "a/b"
-    assert cli._resume_model_spec({"model": "gpt-x", "provider": "openai"}, on_deepseek) == "gpt-x"
+    # A stamped provider that is not the configured one and has no login
+    # falls back to the configured model.
+    assert cli._resume_model_spec({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) is None
+    assert cli._resume_model_spec({"model": "gpt-x", "provider": "openai"}, on_deepseek) is None
     assert cli._resume_model_spec({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
 
 
@@ -466,6 +466,7 @@ def test_a_name_in_two_other_folders_is_refused_with_both_paths(monkeypatch, tmp
     for name in ("a", "b"):
         path = session_store.folder_for(_dir(tmp_path, name)) / "dup.jsonl"
         M.append_message(path, {"role": "user", "content": name})
+        M.append_message(path, {"role": "assistant", "content": "OK"})
         found.append(path)
     _replies(monkeypatch, _text("OK"))
     monkeypatch.chdir(_dir(tmp_path, "c"))

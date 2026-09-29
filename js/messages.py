@@ -576,6 +576,7 @@ STARTUP = Message(
     banner=False,
 )
 RESUMED_MODEL = Message("Model: {model}")
+RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.", WARN)
 RESUMED = Message("Resumed: {messages}.")
 EMPTY_SESSION = Message("Empty session. Nothing to resume: {path}", WARN)
 PROMPT_CHANGED = Message("Agent prompt changed on disk. Session keeps the one it started with.")

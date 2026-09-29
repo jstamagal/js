@@ -145,9 +145,9 @@ pi retries once. Codex does not recover inside a normal turn.
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | `fs._apply_edit` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | `_reconcile_read_delivery` |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
-| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | resume path |
+| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `_stamp_without_login`, `_note_model_switch` |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
-| Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | resume path |
+| Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, `_CUT_OFF_NOTICE` |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | beside `alias` |
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | `screen.py` |
@@ -177,7 +177,7 @@ Hot spots over 441 commits in two months:
 1. **One per-turn settings projection** (Strong, top pick). Each limit setting is copied by hand through six modules, and `fetch_timeout_s` appears in 9 files. One module that derives the effective limits gives a new setting one place to land.
 2. **Split the internals of `run_turn_async`** (Strong). It is 883 lines, with 19 parameters and 13 closures. Keep the one interface and move the closures into separate modules.
 3. **The REPL live-state dict** (Worth exploring). It has 165 use sites, and `provider_base_url` is written from 8 of them.
-4. **Delete the compat shims in `cli.py`** (Strong, cheapest). They exist only so tests can patch old signatures, and one can mask a real `TypeError`.
+4. **Delete the compat shims in `cli.py`** (Strong, cheapest). They existed only so tests could patch old signatures, and one could mask a real `TypeError`. Done in js-1g1.25.
 5. **Move the run modes out of `cli.py`** (Worth exploring). That is about 500 lines, and `_run_prompt` takes 22 parameters.
 6. **One session-file reservation module** (Worth exploring). There are two copies, and they disagree on the name format.
 7. **Split code search out of `fs.py`** (Speculative). It would help navigation only.
@@ -190,4 +190,4 @@ Hot spots over 441 commits in two months:
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
 5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.
 6. **stream-json output for `-p`.**
-7. **Architecture #1 (settings projection) and #4 (delete the shims).**
+7. **Architecture #1 (settings projection) and #4 (delete the shims, done in js-1g1.25).**
