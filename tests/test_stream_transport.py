@@ -132,7 +132,17 @@ def test_sdk_closes_unfinished_response_body(provider, cancel, caplog):
                 handlers.discard(asyncio.current_task())
 
         server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        base_url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1"
         try:
+            # Build the provider's SDK client once before the bounded calls. The
+            # first construction in a process imports the SDK and probes the
+            # platform; that cold start is not what the bounds below measure.
+            warm = model_client.resolve_model(
+                "audit", provider_id=provider, provider_base_url=base_url,
+                provider_api_key="fixture",
+            )
+            assert warm.provider.sdk_client is not None
+            await warm.provider.aclose()
             for _ in range(6):
 
                 def text(_chunk):
@@ -142,7 +152,7 @@ def test_sdk_closes_unfinished_response_body(provider, cancel, caplog):
                 call = model_client.stream_model_async(
                     model_id="audit",
                     provider_id=provider,
-                    provider_base_url=f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1",
+                    provider_base_url=base_url,
                     provider_api_key="fixture",
                     messages=[ai.user_message("hello")],
                     tools=None,
@@ -179,6 +189,9 @@ def test_sdk_closes_unfinished_response_body(provider, cancel, caplog):
                 await asyncio.gather(*list(handlers), return_exceptions=True)
             loop.set_exception_handler(previous)
 
+    # Garbage an earlier test left behind is finalized now, not inside the
+    # window below, where its asyncio errors would be counted against this test.
+    gc.collect()
     with caplog.at_level(logging.ERROR, logger="asyncio"):
         asyncio.run(drive())
     assert caplog.records == []
