@@ -4,6 +4,7 @@ version-tagged. Loader ignores records it doesn't understand."""
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -258,13 +259,8 @@ def append_system_prompt(memory_file: Path, system: str) -> None:
     append_mark(memory_file, _SYSTEM_MARK + json.dumps({"system": system}, separators=(",", ":")))
 
 
-def load_system_prompt(memory_file: Path) -> str | None:
-    """The system prompt a session was started with, or None when unrecorded.
-
-    A resumed session has to send the bytes it sent before. Rebuilding the prompt
-    puts a fresh clock, uptime and load average in front of an append-only
-    history, so the request no longer shares a prefix with the one that built the
-    conversation and every previously cached token is re-read at full price."""
+def _last_mark_payload(memory_file: Path, prefix: str) -> str | None:
+    """The text after `prefix` in the newest mark that starts with it, or None."""
     try:
         with _open_locked(memory_file, "r") as stream:
             lines = stream.readlines()
@@ -276,15 +272,53 @@ def load_system_prompt(memory_file: Path) -> str | None:
         except json.JSONDecodeError:
             continue
         marker = record.get("marker") if isinstance(record, dict) else None
-        if not isinstance(marker, str) or not marker.startswith(_SYSTEM_MARK):
-            continue
-        try:
-            payload = json.loads(marker[len(_SYSTEM_MARK):])
-        except json.JSONDecodeError:
-            return None
-        system = payload.get("system") if isinstance(payload, dict) else None
-        return system if isinstance(system, str) and system else None
+        if isinstance(marker, str) and marker.startswith(prefix):
+            return marker[len(prefix):]
     return None
+
+
+def load_system_prompt(memory_file: Path) -> str | None:
+    """The system prompt a session was started with, or None when unrecorded.
+
+    A resumed session has to send the bytes it sent before. Rebuilding the prompt
+    puts a fresh clock, uptime and load average in front of an append-only
+    history, so the request no longer shares a prefix with the one that built the
+    conversation and every previously cached token is re-read at full price."""
+    raw = _last_mark_payload(memory_file, _SYSTEM_MARK)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    system = payload.get("system") if isinstance(payload, dict) else None
+    return system if isinstance(system, str) and system else None
+
+
+_PROMPT_SEEN_MARK = "prompt_seen:"
+
+
+def prompt_fingerprint(system: str) -> str:
+    return hashlib.sha256(system.encode("utf-8")).hexdigest()[:16]
+
+
+def last_prompt_seen(memory_file: Path) -> str | None:
+    """Fingerprint of the on-disk prompt at the newest launch, or None when no
+    launch recorded one."""
+    seen = _last_mark_payload(memory_file, _PROMPT_SEEN_MARK)
+    return seen or None
+
+
+def record_prompt_seen(memory_file: Path, prompt: str) -> bool:
+    """Append this launch's `prompt_seen:` mark and report whether the on-disk
+    prompt differs from the one the previous launch saw.
+
+    A launch with no earlier mark reports no change: at birth the recorded
+    prompt is the on-disk prompt."""
+    previous = last_prompt_seen(memory_file)
+    current = prompt_fingerprint(prompt)
+    append_mark(memory_file, _PROMPT_SEEN_MARK + current)
+    return previous is not None and previous != current
 
 
 def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
