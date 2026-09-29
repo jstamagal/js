@@ -10,7 +10,7 @@ uses the SDK's direct-routing form; truly unprefixed ids route through AI Gatewa
 
 Configuration precedence is:
 
-1. built-in defaults
+1. `js/jsrc`, shipped in the package: the built-in defaults
 2. platform `jsrc`
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`

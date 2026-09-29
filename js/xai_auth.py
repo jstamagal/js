@@ -35,7 +35,7 @@ XAI_PROVIDER_ID = "xai-oauth"
 DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration"
 CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
 SCOPE = "openid profile email offline_access grok-cli:access api:access"
-DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
+XAI_BASE_URL = "https://api.x.ai/v1"
 CALLBACK_PORT = 56121
 CALLBACK_PATH = "/callback"
 CALLBACK_REDIRECT_URI = f"http://127.0.0.1:{CALLBACK_PORT}{CALLBACK_PATH}"
@@ -249,7 +249,7 @@ def login_from_token(token: XaiToken) -> Login:
     return Login(
         provider_id=XAI_PROVIDER_ID,
         sdk_provider_id="openai",
-        provider_base_url=DEFAULT_XAI_BASE_URL,
+        provider_base_url=XAI_BASE_URL,
         provider_api_key=token.access,
         xai_refresh_token=token.refresh,
         xai_token_expires=token.expires_at,

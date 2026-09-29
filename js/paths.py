@@ -26,6 +26,11 @@ import os
 from pathlib import Path
 
 
+# The agent a run uses when neither --agent nor JS_AGENT names one: the
+# prompt directory shipped as prompts/defaultagent.
+STOCK_AGENT = "defaultagent"
+
+
 def user_home() -> Path:
     return Path.home()
 

@@ -82,7 +82,7 @@ def test_task_backend_runs_real_child_turn_through_local_proxy():
 def test_real_model_turn_uses_fs_search_and_task_end_to_end(monkeypatch):
     _require_provider()
     monkeypatch.chdir(PROJECT_ROOT)
-    runtime_tools.DEFAULT_CONTEXT = ToolContext(cwd=PROJECT_ROOT)
+    runtime_tools.STOCK_CONTEXT = ToolContext(cwd=PROJECT_ROOT)
     cfg = from_env()
     messages = [
         {

@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
+from .. import settings as _settings
 from ..capped_process import truncation_marker
 from .core import Tool, ToolContext
 from .descriptions import load_description
@@ -92,10 +93,6 @@ del __js_probe
 """
 
 VERBOSITY_LEVELS = ("quiet", "normal", "verbose")
-DEFAULT_RENDER_MAX_LINES = 24
-# How long a submitted cell is waited for before the call returns a handle.
-# Overridden by the `kernel.wait_seconds` knob.
-DEFAULT_WAIT_SECONDS = 5
 # One read of the iopub queue, in seconds. Short enough that a poll that finds
 # nothing feels immediate, long enough not to spin the CPU.
 POLL_SLICE = 0.25
@@ -125,7 +122,7 @@ def _shutdown_live_kernels() -> None:
 
 
 def resolve_verbosity(context: Any, override: str = "") -> str:
-    """Per-call parameter beats the config knob beats 'normal'.
+    """Per-call parameter beats the config knob beats its js/jsrc value.
 
     Both exist on purpose. The knob (`kernel.verbosity`) is how the operator
     sets the baseline he wants to read all session without editing tool calls;
@@ -138,12 +135,12 @@ def resolve_verbosity(context: Any, override: str = "") -> str:
     configured = str(getattr(context, "kernel_verbosity", "") or "").strip().lower()
     if configured in VERBOSITY_LEVELS:
         return configured
-    return "normal"
+    return _settings.default_value("kernel.verbosity")
 
 
 def render_max_lines(context: Any) -> int:
     value = int_or_default(getattr(context, "kernel_render_max_lines", None),
-                           DEFAULT_RENDER_MAX_LINES, minimum=1)
+                           _settings.default_value("kernel.render_max_lines"), minimum=1)
     return value
 
 
@@ -789,7 +786,7 @@ def cap_for_model(text: str, context: Any) -> str:
 def wait_seconds(context: Any) -> float:
     """How long a submitted cell is waited for before the call returns a handle."""
     return float(int_or_default(getattr(context, "kernel_wait_seconds", None),
-                                DEFAULT_WAIT_SECONDS, minimum=1))
+                                _settings.default_value("kernel.wait_seconds"), minimum=1))
 
 
 def _output_parts(output: CellOutput) -> list[str]:

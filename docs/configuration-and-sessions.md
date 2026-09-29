@@ -7,85 +7,44 @@ frozen `Config` dataclass. CLI flags override individual runs where supported.
 
 `js` reads config in this order, lowest to highest:
 
-1. built-in defaults
-2. platform `jsrc`
+1. `js/jsrc`, shipped in the package: the built-in defaults
+2. user `jsrc` (`~/.js/jsrc`)
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: built-in defaults < platform `jsrc` < project `.js/jsrc` < project
+In one line: `js/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
 `.js/jsrc.local` < env vars < `--extra` CLI flags.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. First run writes `~/.js/jsrc` as a set-script template with stock
-defaults and commented reference lines for the remaining registered knobs.
+`#`. `set -<key>` drops what the layers in between set, so the knob takes its
+`js/jsrc` value again.
 
-Stock template lines include:
+`js/jsrc` holds one line per registered knob and is where every default value
+lives: change a number there and js starts with it. A knob it leaves unset is
+written `set -<key>`. If `js/jsrc` is missing, leaves out a registered knob,
+or holds a line that does not apply, js stops at startup with one line naming
+the file.
 
-```text
-set model.id deepseek/deepseek-v4-flash
-```
+No other `jsrc` exists until you write one: js does not create
+`~/.js/jsrc`. `/save` writes it, holding only the knobs whose live
+value differs from `js/jsrc`.
 
-`provider.id`, `provider.base_url`, and `provider.api_key` are `<none>` by
-default. When `provider.id` is set, the provider is constructed explicitly with
+`provider.id`, `provider.base_url`, and `provider.api_key` are unset in
+`js/jsrc`. When `provider.id` is set, the provider is constructed explicitly with
 the given base URL and API key; otherwise `ai-python` routes the model id
 natively through AI Gateway or via `provider:model` syntax for direct providers.
 
-## Full Key Reference
+## Knob Reference
 
-Every settable key comes from `js/settings.py` `REGISTRY`. The table uses
-dotted `set` names and `show` rendering for defaults. Empty-state rendering uses
-`off` for false booleans, `<none>` for no-value knobs, and `<unset>` for knobs
-that explicitly defer to provider defaults. A set `provider.api_key` is masked
-as `<set>`.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
-| `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. Clear with `set -model.reasoning_effort`. |
-| `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
-| `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
-| `provider.extra` | `<none>` | Free-form extra params passed through to the provider SDK. |
-| `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
-| `shell.wait_seconds` | `30` | Seconds a `shell` call waits for its command before returning a handle to poll. The command keeps running. |
-| `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
-| `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `limits.fetch_timeout_s` | `15` | Whole-request deadline for unsaved fetch() calls, in seconds. |
-| `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
-| `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
-| `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
-| `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
-| `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
-| `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `runtime.trace` | `on` | Show the per-turn run line, per-call stats and tool exchanges as the model runs; `ui.tools` sets how much of each exchange. |
-| `runtime.steer` | `now` | What a line typed while a turn runs does. `now`: it reaches the model at the turn's next tool boundary, as a user message; a turn with no boundary left gets it after it ends. `batch`: every line typed during the turn goes in as one message after it ends. `one`: each line is its own turn, in order. |
-| `ui.tools` | `1` | Tool exchange display: `0` nothing, `1` one metrics line (`read: 4054B 292L`), `2` the call plus the first `ui.tools_preview_lines` result lines, `...` and shown/total metrics, `3` the call plus the whole result. |
-| `ui.tools_preview_lines` | `12` | Lines of a tool's command and of its result shown at `ui.tools 2`. |
-| `ui.markdown` | `on` | Render assistant Markdown on a terminal; off writes the text as it arrives. Output that is not a terminal is always plain text. |
-| `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
-| `compact.auto` | `on` | Automatic cache-aware context compaction. |
-| `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
-| `compact.notify_threshold` | `0.5` | Notify once when context reaches this fraction. |
-| `compact.trigger_threshold` | `0.8` | Auto-compact at this fullness fraction. |
-| `compact.force_threshold` | `0.9` | Force compact at this fullness fraction. |
-| `compact.tail_tokens` | `16384` | Recent tail budget retained after compaction. |
-| `compact.min_savings_tokens` | `400` | Skip compaction unless estimated savings exceeds this. |
-| `compact.chars_per_token` | `4.0` | Fallback/self-calibrating character-to-token estimate. |
-| `compact.model` | `same` | Model used to write the compaction summary; 'same' = active model. |
-| `compact.summary_max_tokens` | `4096` | Max tokens for the compaction summary (hard-capped at 8192). |
-| `compact.pre_hook` | `<none>` | Optional shell command whose stdout guides compaction. |
-| `subagents.prefer_inherit` | `off` | Subagents inherit the parent's model when true; else use the agent's own primary. |
-| `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
-| `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:string\|[...], aliases:{...}}. |
-| `sampling.temperature` | `<unset>` | Provider-default sampling temperature; unset = do not send. |
-| `sampling.top_p` | `<unset>` | Provider-default nucleus sampling top_p; unset = do not send. |
-| `sampling.top_k` | `<unset>` | Provider-default top_k sampling; unset = do not send. |
-| `sampling.repetition_penalty` | `<unset>` | Provider-default repetition penalty; unset = do not send. |
-| `sampling.presence_penalty` | `<unset>` | Provider-default presence penalty; unset = do not send. |
+Every settable key is registered in `js/settings.py` `REGISTRY` with its type
+and help text; its default is its line in `js/jsrc`. `/set` with no argument
+lists every knob and its current value; `/show <key>` shows one knob with its
+help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
+knobs, and `<unset>` for knobs that explicitly defer to provider defaults. A set
+`provider.api_key` is masked as `<set>`.
 
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
@@ -146,23 +105,25 @@ secrets in prompts or server-controlled content.
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
-coercion as `set`.
+coercion as `set`. Every knob reads its canonical `JS_<DOTTED_UPPER>` name
+(`sampling.top_p` <-> `JS_SAMPLING_TOP_P`); the knobs below also take a shorter
+name, which wins when both are set. Default values are the lines in `js/jsrc`.
 
-| Variable | Key | Default | Meaning |
-| --- | --- | --- | --- |
-| `JS_MODEL` | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
-| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
-| `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
-| `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
-| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
-| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
-| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
-| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
-| `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | `on` | Show the per-turn run line, per-call stats and tool exchanges as the model runs. |
+| Variable | Key | Meaning |
+| --- | --- | --- |
+| `JS_MODEL` | `model.id` | Default model id; unprefixed ids route through AI Gateway. |
+| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
+| `JS_REASONING` | `model.reasoning_effort` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
+| `JS_PROVIDER` | `provider.id` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
+| `JS_BASE_URL` | `provider.base_url` | Explicit provider base URL; unset = provider default. |
+| `JS_API_KEY` | `provider.api_key` | Explicit provider API key; unset = env/login default. |
+| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | Max tool calls per turn before the loop gives up. |
+| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | Hard cap on shell stdout per call. |
+| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | Hard cap on any tool result string. |
+| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
+| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
+| `JS_DEBUG` | `runtime.debug` | Append per-event records to `state/<agent>/debug.log`. |
+| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs. |
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
@@ -172,10 +133,8 @@ Agent/session env remains accepted for compatibility (`JS_AGENT`, `JS_SESSION`),
 but CLI code threads selected agent/session through `Config` instead of mutating
 `os.environ`. Artifact mode is threaded through `ToolContext`.
 
-The byte caps use the canonical `_BYTES` env names only
-(`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter
-aliases. Note there is **no** env var for `limits.task_max_depth` or
-`limits.subagent_max_workers` — set them in `jsrc` or via `--extra limits.*=N`.
+`limits.task_max_depth` and `limits.subagent_max_workers` have only their
+canonical names, `JS_LIMITS_TASK_MAX_DEPTH` and `JS_LIMITS_SUBAGENT_MAX_WORKERS`.
 
 Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0`
 disables them (`--im-a-pussy` sets exactly that for one run). See
@@ -237,7 +196,8 @@ generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
 on the first `=` only, so values may contain `=`.
 
 In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
-`set key` shows one value, and `set key value` changes the live setting.
+`set key` shows one value, `set key value` changes the live setting, and
+`set -key` puts it back to the value the session started with.
 `show [key]` lists every current value or only the requested key. Secret values
 such as `provider.api_key` render as `<set>` once set.
 
@@ -352,8 +312,8 @@ A refused entry is reported once at startup; the marker is written anyway, so
 `just migrate-home` is how to see it again. Across filesystems an entry is copied beside its destination, renamed into
 place, and only then removed from the old location.
 
-The `jsrc` template is written on first run; the per-agent `sessions/`
-and `state/` directories are created lazily when an agent runs. The agent id is
+The per-agent `sessions/` and `state/` directories are created lazily when an
+agent runs. The agent id is
 validated (`^[A-Za-z0-9_-]+$`) *before* any directory is created, so a bad id
 never leaves stray files.
 

@@ -59,9 +59,9 @@ def _build_config(
 
 def test_collect_settings_uses_built_in_default_when_no_file_or_env():
     out = settings.collect_settings(config_paths=[], env={})
-    assert out["model"]["id"] == settings.DEFAULT_MODEL
-    assert out["limits"]["max_tool_iterations"] == settings.DEFAULT_MAX_TOOL_ITERATIONS
-    assert out["limits"]["max_tool_calls_per_message"] == settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
+    assert out["model"]["id"] == settings.default_value("model.id")
+    assert out["limits"]["max_tool_iterations"] == settings.default_value("limits.max_tool_iterations")
+    assert out["limits"]["max_tool_calls_per_message"] == settings.default_value("limits.max_tool_calls_per_message")
 
 
 def test_collect_settings_reads_jsrc_set_lines(tmp_path):
@@ -129,32 +129,7 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
     assert out["limits"]["max_tool_iterations"] == 7
 
 
-def test_write_default_template_creates_jsrc_once(tmp_path):
-    target = tmp_path / "jsrc"
-
-    assert settings.write_default_template(target) is True
-    text = target.read_text(encoding="utf-8")
-    template_lines = text.splitlines()
-    template_keys = {
-        line.split()[1]
-        for line in template_lines
-        if line.startswith("#set ")
-    }
-    env_keys = {
-        line.removeprefix("# ").split(" -> ", 1)[0]
-        for line in template_lines
-        if line.startswith("# JS_") and " -> set " in line
-    }
-
-    assert {spec.key for spec in settings.REGISTRY} <= template_keys
-    assert {spec.env for spec in settings.REGISTRY if spec.env} <= env_keys
-    rendered = settings.collect_settings(config_paths=[target], env={})
-    assert rendered["model"]["id"] == settings.DEFAULT_MODEL
-    assert settings.write_default_template(target) is False
-    assert target.read_text(encoding="utf-8") == text
-
-
-def test_from_env_uses_the_js_home_and_writes_global_jsrc(monkeypatch, tmp_path):
+def test_from_env_uses_the_js_home_and_writes_no_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
     # Explicit pin (provider.id / JS_PROVIDER) authorizes reading the provider's
     # native env key: an env key alone would create no route (ruling #1).
@@ -166,7 +141,8 @@ def test_from_env_uses_the_js_home_and_writes_global_jsrc(monkeypatch, tmp_path)
     assert cfg.provider_id == "deepseek"
     assert cfg.provider_api_key == "sk-test"
     assert cfg.sessions_dir == data_home / "sessions" / "defaultagent"
-    assert (config_home / "jsrc").exists()
+    # No jsrc means no file: only /save writes one.
+    assert not (config_home / "jsrc").exists()
     assert not (tmp_path / "config").exists()
     assert not (tmp_path / "data").exists()
 

@@ -66,6 +66,7 @@ class MCPConfiguration:
 
     servers: tuple[MCPServer, ...]
     policy: MCPPolicy
+    request_timeout_s: float | None = None  # mcp.request_timeout_s; None = its js/jsrc value
 
     def allows_tool(self, namespaced_tool_name: str) -> bool:
         return self.policy.allows_tool(namespaced_tool_name)
@@ -254,4 +255,9 @@ def resolve(settings: Mapping[str, Any], agent_id: str) -> MCPConfiguration:
         for server, is_enabled in parsed_servers
         if is_enabled and policy.allows_server(server.name)
     )
-    return MCPConfiguration(servers=enabled, policy=policy)
+    timeout = mcp.get("request_timeout_s")
+    return MCPConfiguration(
+        servers=enabled,
+        policy=policy,
+        request_timeout_s=float(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else None,
+    )

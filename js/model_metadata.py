@@ -30,7 +30,8 @@ from . import codex_auth, model_matching, paths, providers, settings as _setting
 
 _CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
-_LOCAL_PROBE_TIMEOUT_S = min(float(_settings.DEFAULT_FETCH_TIMEOUT_S), 3.0)
+# A local server that has not answered in this many seconds is not up.
+_LOCAL_PROBE_MAX_S = 3.0
 _LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai", "openai"}
 _OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai", "openai"}
 _CONTEXT_WINDOW_KEYS = {
@@ -261,7 +262,8 @@ def _server_root_url(base_url: str) -> str:
 
 
 def _request_json(method: str, url: str, *, json_body: dict[str, Any] | None = None) -> Any:
-    with httpx.Client(timeout=_LOCAL_PROBE_TIMEOUT_S) as client:
+    timeout = min(float(_settings.default_value("limits.fetch_timeout_s")), _LOCAL_PROBE_MAX_S)
+    with httpx.Client(timeout=timeout) as client:
         response = client.request(method, url, json=json_body)
         response.raise_for_status()
         return response.json()

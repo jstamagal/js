@@ -62,7 +62,7 @@ _INTERRUPTED_TOOL_OUTPUT = "[No tool output recorded: the tool call was interrup
 
 
 def _trim_base_url(base_url: str | None) -> str:
-    raw = (base_url or codex_auth.DEFAULT_CODEX_BASE_URL).strip() or codex_auth.DEFAULT_CODEX_BASE_URL
+    raw = (base_url or codex_auth.CODEX_BASE_URL).strip() or codex_auth.CODEX_BASE_URL
     return raw.rstrip("/")
 
 
@@ -447,7 +447,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
 
     provider_class_id: str = "openai-codex"
     name: str = _PROVIDER
-    default_base_url: str = codex_auth.DEFAULT_CODEX_BASE_URL
+    default_base_url: str = codex_auth.CODEX_BASE_URL
 
     _access_token: str = pydantic.PrivateAttr(default="")
     _refresh_token: str | None = pydantic.PrivateAttr(default=None)

@@ -19,7 +19,7 @@ _CONTINUE = re.compile(r"continue with (\{.*\})\]$")
 @pytest.fixture
 def context(tmp_path, monkeypatch):
     ctx = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=4_000)
-    monkeypatch.setattr(toolkit, "DEFAULT_CONTEXT", ctx)
+    monkeypatch.setattr(toolkit, "STOCK_CONTEXT", ctx)
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,

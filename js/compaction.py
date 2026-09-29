@@ -38,13 +38,23 @@ from .config import Config
 # --------------------------------------------------------------------------
 
 
-def get(cfg: Config, key: str, default: Any = None) -> Any:
+# A reader called without a default falls back to the knob's js/jsrc value.
+_JSRC = object()
+
+
+def _fallback(key: str, default: Any) -> Any:
+    return _settings.default_value(f"compact.{key}") if default is _JSRC else default
+
+
+def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
+    default = _fallback(key, default)
     settings = getattr(cfg, "settings", {}) or {}
     compact = settings.get("compact", {}) if isinstance(settings, dict) else {}
     return compact.get(key, default) if isinstance(compact, dict) else default
 
 
-def get_bool(cfg: Config, key: str, default: bool) -> bool:
+def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
+    default = _fallback(key, default)
     value = get(cfg, key, default)
     if isinstance(value, bool):
         return value
@@ -57,7 +67,8 @@ def get_bool(cfg: Config, key: str, default: bool) -> bool:
     return default
 
 
-def get_int(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
+def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -72,9 +83,10 @@ def get_int(cfg: Config, key: str, default: int, *, max_value: int | None = None
     return value
 
 
-def get_nonnegative_int(cfg: Config, key: str, default: int, *, max_value: int | None = None) -> int:
+def get_nonnegative_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
     """Like get_int but 0 is a legal value, not a request for the default —
     a buffer of 0 is a real choice."""
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -89,7 +101,8 @@ def get_nonnegative_int(cfg: Config, key: str, default: int, *, max_value: int |
     return value
 
 
-def get_float(cfg: Config, key: str, default: float, *, max_value: float | None = None) -> float:
+def get_float(cfg: Config, key: str, default: Any = _JSRC, *, max_value: float | None = None) -> float:
+    default = _fallback(key, default)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -105,7 +118,7 @@ def get_float(cfg: Config, key: str, default: float, *, max_value: float | None 
 
 
 def get_model(cfg: Config) -> str:
-    raw = get(cfg, "model", "same")
+    raw = get(cfg, "model")
     if not isinstance(raw, str):
         return cfg.model
     model = raw.strip()
@@ -277,7 +290,7 @@ def clear_for_budget(
     Starts with ``compact.clear_keep_recent`` intact results and halves that
     each round down to one. An explicit zero clears all eligible results.
     Returns (results_cleared, chars_reclaimed)."""
-    keep_recent = get_nonnegative_int(cfg, "clear_keep_recent", _settings.DEFAULT_COMPACT_CLEAR_KEEP_RECENT)
+    keep_recent = get_nonnegative_int(cfg, "clear_keep_recent")
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data)
     try:
         flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
@@ -322,19 +335,17 @@ def prefix_worth_summarizing(messages: list[dict], preserve_from: int) -> bool:
 # After a summary compaction the model knows it edited a file but not what is
 # in it, so its next move is to re-read everything it was just working on —
 # one turn wasted, and the summary rarely carries enough detail to edit from.
-# Re-attach the files it touched most recently, newest first, under a budget.
-POST_COMPACT_MAX_FILES = 5
-POST_COMPACT_TOKEN_BUDGET = 50_000
-POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+# Re-attach the files it touched most recently, newest first, under a budget
+# (compact.rehydrate_*).
 
 
 def _post_compact_rehydration(
     context: Any,
     *,
     chars_per_token: float = 4.0,
-    max_files: int = POST_COMPACT_MAX_FILES,
-    token_budget: int = POST_COMPACT_TOKEN_BUDGET,
-    per_file_tokens: int = POST_COMPACT_MAX_TOKENS_PER_FILE,
+    max_files: int | None = None,
+    token_budget: int | None = None,
+    per_file_tokens: int | None = None,
 ) -> dict | None:
     """Build one user message re-attaching recently read files, or None.
 
@@ -342,7 +353,14 @@ def _post_compact_rehydration(
     content is current — the model may have edited the file since. Files that
     vanished or grew past the per-file budget are named but not inlined, which
     is still useful: it tells the model the file exists and must be re-read.
+    A budget left None is its compact.rehydrate_* value in js/jsrc.
     """
+    if max_files is None:
+        max_files = _settings.default_value("compact.rehydrate_max_files")
+    if token_budget is None:
+        token_budget = _settings.default_value("compact.rehydrate_token_budget")
+    if per_file_tokens is None:
+        per_file_tokens = _settings.default_value("compact.rehydrate_max_tokens_per_file")
     paths = list(getattr(context, "read_paths", []) or [])
     if not paths:
         return None
@@ -388,9 +406,9 @@ def _post_compact_rehydration(
 
 
 def thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = get_float(cfg, "notify_threshold", 0.50, max_value=1.0)
-    trigger_at = get_float(cfg, "trigger_threshold", 0.80, max_value=1.0)
-    force_at = get_float(cfg, "force_threshold", 0.90, max_value=1.0)
+    notify_at = get_float(cfg, "notify_threshold", max_value=1.0)
+    trigger_at = get_float(cfg, "trigger_threshold", max_value=1.0)
+    force_at = get_float(cfg, "force_threshold", max_value=1.0)
     if not (notify_at <= trigger_at <= force_at):
         return 0.50, 0.80, 0.90
     return notify_at, trigger_at, force_at
@@ -401,7 +419,7 @@ def configured_context_window(cfg: Config, resolve_window: Any) -> int:
     window = get_int(cfg, "context_window", 0)
     if window <= 0:
         window = int(resolve_window() or 0)
-    return window if window > 0 else get_int(cfg, "context_window_fallback", 1_000_000)
+    return window if window > 0 else get_int(cfg, "context_window_fallback")
 
 
 def effective_context_window(cfg: Config, context_window: int) -> int:
@@ -421,9 +439,9 @@ def effective_context_window(cfg: Config, context_window: int) -> int:
     # happens. Cap it the way Claude Code does (min(max_output, 20k)).
     reserve = min(
         max(0, int(max_out or 0)),
-        get_nonnegative_int(cfg, "summary_reserve_tokens", 20_000),
+        get_nonnegative_int(cfg, "summary_reserve_tokens"),
     )
-    buffer_tokens = get_nonnegative_int(cfg, "buffer_tokens", 4096)
+    buffer_tokens = get_nonnegative_int(cfg, "buffer_tokens")
     # Never let the reserve eat the whole window on a model with a huge declared
     # output cap; keep at least half the window addressable for input.
     return max(context_window // 2, context_window - reserve - buffer_tokens)
@@ -455,7 +473,7 @@ def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> i
     reads 0, does nothing, and the history that caused the failure survives
     into the next attempt unchanged.
     """
-    cpt = get_float(cfg, "chars_per_token", 4.0)
+    cpt = get_float(cfg, "chars_per_token")
     try:
         return (
             context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
@@ -473,11 +491,11 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
     estimator drifts far enough that "keep 16k of tail" kept something quite
     different from 16k.
     """
-    configured = get_float(cfg, "chars_per_token", 4.0)
+    configured = get_float(cfg, "chars_per_token")
     try:
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
-        context = context or T.DEFAULT_CONTEXT
+        context = context or T.STOCK_CONTEXT
         tracker = getattr(context, "context_budget_state", None)
         if not hasattr(tracker, "calibrated_chars_per_token"):
             return configured
@@ -515,7 +533,7 @@ def _run_pre_hook(cfg: Config) -> str:
         else os.environ.get("SHELL", "/bin/sh")
     )
     shell_arg = "/C" if sys.platform == "win32" else "-c"
-    cap = int(getattr(cfg, "max_bash_output_bytes", 256 * 1024))
+    cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
     ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
     if ceiling > 0:
         cap = min(cap, ceiling)
@@ -677,8 +695,8 @@ async def compact_now(
     try:
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
-            tail_tokens = get_int(cfg, "tail_tokens", 16384)
-        min_savings = get_int(cfg, "min_savings_tokens", 400)
+            tail_tokens = get_int(cfg, "tail_tokens")
+        min_savings = get_int(cfg, "min_savings_tokens")
         original_len = len(messages)
         keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
         if preserve_from is not None:
@@ -704,7 +722,13 @@ async def compact_now(
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
                             "flight_path": str(flight.path)}
-        rehydrated = _post_compact_rehydration(context or T.DEFAULT_CONTEXT, chars_per_token=chars_per_token)
+        rehydrated = _post_compact_rehydration(
+            context or T.STOCK_CONTEXT,
+            chars_per_token=chars_per_token,
+            max_files=get_nonnegative_int(cfg, "rehydrate_max_files"),
+            token_budget=get_nonnegative_int(cfg, "rehydrate_token_budget"),
+            per_file_tokens=get_nonnegative_int(cfg, "rehydrate_max_tokens_per_file"),
+        )
         after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *messages[keep_from:]]
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
@@ -720,7 +744,7 @@ async def compact_now(
         M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from,
                                  forced=forced, trigger=recorded_trigger, rehydrated=rehydrated)
         messages[:] = after
-        tracker = getattr(context or T.DEFAULT_CONTEXT, "context_budget_state", None)
+        tracker = getattr(context or T.STOCK_CONTEXT, "context_budget_state", None)
         if tracker is not None:
             tracker.reset()
         result = f"compacted: kept tail from message {keep_from}/{original_len} using {compact_model}"

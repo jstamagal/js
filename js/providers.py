@@ -378,7 +378,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         "OpenAI Codex OAuth",
         "codex_oauth",
         sdk=codex_auth.CODEX_PROVIDER_ID,
-        base=codex_auth.DEFAULT_CODEX_BASE_URL,
+        base=codex_auth.CODEX_BASE_URL,
         aliases=(codex_auth.CODEX_DEVICE_PROVIDER_ID, "codex"),
     ),
     _p(
@@ -389,7 +389,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         "xAI OAuth",
         "openai",
         sdk="openai",
-        base=xai_auth.DEFAULT_XAI_BASE_URL,
+        base=xai_auth.XAI_BASE_URL,
         aliases=("grok-oauth", "xai-login"),
     ),
     _p(
@@ -397,7 +397,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         "xAI API",
         "openai",
         sdk="openai",
-        base=xai_auth.DEFAULT_XAI_BASE_URL,
+        base=xai_auth.XAI_BASE_URL,
         key_env=("XAI_API_KEY",),
         base_env=("XAI_BASE_URL",),
         model_env=("XAI_MODEL",),

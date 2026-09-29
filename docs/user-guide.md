@@ -294,9 +294,8 @@ non-directory target prints an error and exits.
 `--ignore-local` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
 
-`--ignore-global` ignores `~/.js/jsrc`. With this flag `js` also skips
-writing the default config template, so it will not create that file on first
-run.
+`--ignore-global` ignores `~/.js/jsrc`. The defaults in the package's
+`js/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
 [Configuration And Sessions](configuration-and-sessions.md) for the file-level
@@ -453,4 +452,4 @@ Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes
 that one compaction with the named summarizer instead of `compact.model`.
 Automatic cache-aware compaction is controlled by `set compact.auto` and the
-`set compact.*` knobs in platform `jsrc` or project `.js/jsrc`.
+`set compact.*` knobs in `~/.js/jsrc` or project `.js/jsrc`.

@@ -31,10 +31,10 @@ from prompt_toolkit.styles import DynamicStyle, Style
 
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
-from .settings import is_hex_colour
+from .settings import default_value, is_hex_colour
 
-STATUS_BG = "#00007f"
-STATUS_FG = "#ffffff"
+STATUS_BG = default_value("ui.status_bg")
+STATUS_FG = default_value("ui.status_fg")
 STATUS_STYLE = f"bold {STATUS_FG} bg:{STATUS_BG}"
 SCROLLBACK_LINES = 5000
 THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"

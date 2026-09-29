@@ -495,7 +495,7 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 
 def _tool_settings(tool_context: ToolContext | None) -> Any:
     """Live settings for the display dials; `/set ui.tools 3` reaches the next exchange."""
-    context = tool_context or T.DEFAULT_CONTEXT
+    context = tool_context or T.STOCK_CONTEXT
     return getattr(getattr(context, "config", None), "settings", None)
 
 
@@ -665,7 +665,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     if inline_cap is None:
         # Read from the active context rather than threading a fifth argument
         # through four dispatch signatures; subagent contexts inherit it.
-        inline_cap = int(getattr(T.DEFAULT_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
+        inline_cap = int(getattr(T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
@@ -819,8 +819,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
             _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True)
         return {}, result
 
-    active_registry = registry or T.DEFAULT_REGISTRY
-    context = tool_context or T.DEFAULT_CONTEXT
+    active_registry = registry or T.STOCK_REGISTRY
+    context = tool_context or T.STOCK_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
     if trace and not trace_together:
@@ -1228,9 +1228,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         max_out = model_metadata.resolve_max_output(model, provider_id)
     ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
     error_tracker = ToolErrorTracker()
-    base_registry = tool_registry or T.DEFAULT_REGISTRY
+    base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
-    active_context = tool_context or T.DEFAULT_CONTEXT
+    active_context = tool_context or T.STOCK_CONTEXT
     # Delegation inherits this turn's effective settings, not a fresh env load
     # or a stale config left on a reused context. Do not mutate the caller's cfg.
     active_context.config = replace(
@@ -1278,11 +1278,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.max_tool_result_bytes = getattr(cfg, "max_tool_result_bytes", active_context.max_tool_result_bytes)
     active_context.max_bash_output_bytes = getattr(cfg, "max_bash_output_bytes", active_context.max_bash_output_bytes)
     active_context.fetch_timeout_s = getattr(cfg, "fetch_timeout_s", active_context.fetch_timeout_s)
-    active_context.shell_env_allow = getattr(
-        cfg,
-        "shell_env_allow",
-        getattr(active_context, "shell_env_allow", _settings.DEFAULT_SHELL_ENV_ALLOW),
-    )
+    active_context.shell_env_allow = getattr(cfg, "shell_env_allow", active_context.shell_env_allow)
     active_context.browse_timeout_s = getattr(cfg, "browse_timeout_s", active_context.browse_timeout_s)
     active_context.download_timeout_s = getattr(cfg, "download_timeout_s", active_context.download_timeout_s)
     active_context.max_download_bytes = getattr(cfg, "max_download_bytes", active_context.max_download_bytes)
@@ -1297,8 +1293,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.kernel_render_max_lines = getattr(cfg, "kernel_render_max_lines", active_context.kernel_render_max_lines)
     active_context.kernel_wait_seconds = getattr(cfg, "kernel_wait_seconds", active_context.kernel_wait_seconds)
     active_context.shell_wait_seconds = getattr(cfg, "shell_wait_seconds", active_context.shell_wait_seconds)
-    active_context.task_max_depth = getattr(cfg, "task_max_depth", getattr(active_context, "task_max_depth", 2))
-    active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", getattr(active_context, "subagent_max_workers", 8))
+    active_context.task_max_depth = getattr(cfg, "task_max_depth", active_context.task_max_depth)
+    active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", active_context.subagent_max_workers)
+    live_settings = getattr(cfg, "settings", None)
+    active_context.user_agent = _settings.knob(live_settings, "tools.user_agent")
+    active_context.terminal_cols = _settings.knob(live_settings, "tools.terminal_cols")
+    active_context.terminal_rows = _settings.knob(live_settings, "tools.terminal_rows")
     active_context.last_incomplete_reason = None
     active_context.last_output_tokens = 0
     active_context.last_max_output_tokens = max_out
@@ -1307,7 +1307,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.tokens_until_compaction = None
     turn_status = active_context.turn_status
     turn_status.reset()
-    chars_per_token = compaction.get_float(cfg, "chars_per_token", 4.0)
+    chars_per_token = compaction.get_float(cfg, "chars_per_token")
     token_state = getattr(active_context, "context_budget_state", None)
     if not isinstance(token_state, context_budget.TokenState):
         token_state = context_budget.TokenState(chars_per_token=chars_per_token)
@@ -1388,11 +1388,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     _transcript_log = getattr(telemetry, "transcript_log", None)
     streamed_reasoning: list[str] = []
     reasoning_display: ReasoningDisplay | None = None
-    reasoning_level = _settings.get_dotted(
-        getattr(cfg, "settings", {}) or {}, ("ui", "reasoning"), 2,
-    )
+    reasoning_level = _settings.knob(getattr(cfg, "settings", None), "ui.reasoning")
     if not isinstance(reasoning_level, int) or reasoning_level not in range(4):
-        reasoning_level = 2
+        reasoning_level = _settings.default_value("ui.reasoning")
 
     def _emit_reasoning(chunk: str) -> None:
         nonlocal reasoning_display
@@ -1497,7 +1495,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         )
 
     def _budget_buffer_tokens() -> int:
-        return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens", 4096)
+        return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens")
 
     def _active_preserve_from() -> int | None:
         return _last_user_message_index(messages)
@@ -1514,7 +1512,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         user message, then summarize the current turn itself keeping only its
         tail. Returns True when the history changed."""
         nonlocal ai_convo
-        if not force and not compaction.get_bool(active_compact_cfg, "auto", True):
+        if not force and not compaction.get_bool(active_compact_cfg, "auto"):
             return False
         context_window = _budget_context_window()
         if context_window <= 0 and not force:
@@ -1623,7 +1621,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         #    its most recent tail so the model can carry on from the summary.
         #    A provider rejection (force) says the request did not fit no matter
         #    what the budget believed, so keep half as much tail each round.
-        tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens", 16384)
+        tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens")
         if force:
             history_tokens = int(compaction.history_chars(messages) / chars_per_token)
             tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_recovered
@@ -1869,7 +1867,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     getattr(
                         cfg,
                         "max_tool_calls_per_message",
-                        _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE,
+                        _settings.default_value("limits.max_tool_calls_per_message"),
                     ),
                 )
                 telemetry.event(

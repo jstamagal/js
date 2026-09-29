@@ -70,11 +70,12 @@ spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 
 ## Config And Model Defaults
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
-applied at startup. Files layer lowest-to-highest as the platform `jsrc`,
+applied at startup. Files layer lowest-to-highest as `js/jsrc` (shipped in the
+package: one line per knob, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
-CLI `--extra key=value` overrides env. First run writes a commented `jsrc`
-template covering every knob in the `js.settings` registry. Built-in `model.id`
-defaults to `deepseek/deepseek-v4-flash`; `JS_MODEL` overrides it. Explicit
+CLI `--extra key=value` overrides env. js creates no `~/.js/jsrc`; `/save`
+writes it. `js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
+`JS_MODEL` overrides it. Explicit
 `set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by

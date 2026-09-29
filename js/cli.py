@@ -335,7 +335,7 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     if cfg.session_file == Path(os.devnull) or not state.get("messages"):
         return
     resume = "js"
-    if cfg.agent_id != "defaultagent":
+    if cfg.agent_id != _paths.STOCK_AGENT:
         resume += f" --agent {shlex.quote(cfg.agent_id)}"
     model = state.get("model")
     if isinstance(model, str) and model:
@@ -711,7 +711,7 @@ def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
     """Resolve the per-session autolog path, or None when autolog is off. Mirrors
     how sessions/<agent>/<session>.jsonl is built, one directory over in logs/."""
     if not _live_bool_setting(
-        live_settings, ("runtime", "debug_autolog"), getattr(cfg, "debug_autolog", True)
+        live_settings, ("runtime", "debug_autolog"), settings.knob_attr(cfg, "debug_autolog", "runtime.debug_autolog")
     ):
         return None
     session = cfg.session_file
@@ -1088,17 +1088,17 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here."""
-    if not compaction.get_bool(cfg, "auto", True):
+    if not compaction.get_bool(cfg, "auto"):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
-    turn_status = runtime.T.DEFAULT_CONTEXT.turn_status
+    turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
         with stream_transport.net_role("Compacting"):
             outcome = await compaction.maybe_auto_compact_async(
                 active_cfg,
                 state.setdefault("auto_compact", compaction.AutoCompactState()),
-                runtime.T.DEFAULT_CONTEXT,
+                runtime.T.STOCK_CONTEXT,
                 state.get("system") or "",
                 state.get("messages") or [],
                 lambda: runtime._resolve_context_window(
@@ -1163,7 +1163,6 @@ def _is_active_model_id_line(line: str) -> bool:
 def _persist_default_model_id(model_id: str) -> tuple[Path | None, str | None]:
     config_path = _paths.global_config_file()
     try:
-        settings.write_default_template(config_path)
         if config_path.exists():
             lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
         else:
@@ -1546,7 +1545,9 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if len(parts) < 2 and not (parts and parts[0].startswith("-") and len(parts[0]) > 1):
         return _show_settings(state, cfg, parts[0] if parts else None)
-    return _apply_settings_result(setcmd.set_command(state["settings"], arg), state, cfg)
+    # `set -key` goes back to the value the session started with.
+    baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
+    return _apply_settings_result(setcmd.set_command(state["settings"], arg, baseline), state, cfg)
 
 
 def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
@@ -2761,7 +2762,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
 
 def _steer_mode(state: dict) -> str:
     return settings.steer_mode(
-        settings.get_dotted(state["settings"], ("runtime", "steer"), settings.DEFAULT_STEER)
+        settings.knob(state["settings"], "runtime.steer")
     )
 
 
@@ -2911,7 +2912,9 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return len(_take_queued(queue))
 
 
-def _live_ui_int(state: dict, key: str, default: int) -> int:
+def _live_ui_int(state: dict, key: str) -> int:
+    """A 0-3 `ui.<key>` level from live settings; its js/jsrc value when bad."""
+    default = settings.default_value(f"ui.{key}")
     value = settings.get_dotted(state.get("settings") or {}, ("ui", key), default)
     return value if isinstance(value, int) and value in range(4) else default
 
@@ -2919,15 +2922,15 @@ def _live_ui_int(state: dict, key: str, default: int) -> int:
 def _status_colours(state: dict) -> str:
     live = state.get("settings") or {}
     return screen.status_style(
-        settings.get_dotted(live, ("ui", "status_fg"), screen.STATUS_FG),
-        settings.get_dotted(live, ("ui", "status_bg"), screen.STATUS_BG),
+        settings.knob(live, "ui.status_fg"),
+        settings.knob(live, "ui.status_bg"),
     )
 
 
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
     """The REPL status bar from live state: what is running, on what, how full."""
     live = state.get("settings") or {}
-    context = runtime.T.DEFAULT_CONTEXT
+    context = runtime.T.STOCK_CONTEXT
     provider = _provider_from_live_settings(live)[0] or state.get("provider_id") or cfg.provider_id
     model = _model_from_live_settings(live) or state.get("model") or cfg.model
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
@@ -2939,7 +2942,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     if turn_active:
         throbber = screen.throbber_frame(now)
         phase, output_tokens = screen.turn_centre(
-            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net", 2) >= 2,
+            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net") >= 2,
         )
     return screen.status_line(
         width,
@@ -3037,7 +3040,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_eof=on_eof,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         status_colours=lambda: _status_colours(state),
-        editing_mode=lambda: settings.get_dotted(state["settings"], ("ui", "editing_mode"), "emacs"),
+        editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
     )
     previous_reasoning_factory = telemetry.reasoning_factory
@@ -3052,7 +3055,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     try:
         with screen.capture_stdio(loop, scrollback, app):
             stream_transport.install_sink(stream_transport.NetSink(
-                level=lambda: _live_ui_int(state, "net", 2),
+                level=lambda: _live_ui_int(state, "net"),
                 emit=lambda line: print(line, flush=True),
             ))
             if banner:
@@ -3160,7 +3163,7 @@ def _printonly_run(args, cli_agent, presets) -> int:
         raw_spec = None
 
     allow_code = bool(getattr(cfg, "allow_inline_code", True))
-    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
     system = raw_spec.system if raw_spec is not None else ""
     selectors = raw_spec.tool_selectors if raw_spec is not None else ()
 
@@ -3330,9 +3333,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{C.ORANGE}error: -C target is not a directory: {cd_target}{C.RESET}", file=sys.stderr)
             return 2
         os.chdir(cd_target)
-        # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
+        # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
-        runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
+        runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
     # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
@@ -3363,7 +3366,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             last_agent = validate_agent_id(
-                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", "defaultagent")
+                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
@@ -3377,7 +3380,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             mode_agent = "commit" if args.commit else None
             effective_agent = validate_agent_id(
-                args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
+                args.agent or mode_agent or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
             )
         except ValueError as e:
             print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)

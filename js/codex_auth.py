@@ -41,7 +41,7 @@ DEVICE_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 DEVICE_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 DEVICE_AUTH_URL = "https://auth.openai.com/codex/device"
-DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
+CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 _TOKEN_TIMEOUT = 15.0
 _DEVICE_POLL_SAFETY_MARGIN = 3.0
 _DEVICE_MAX_POLLS = 120
@@ -481,7 +481,7 @@ def login_from_token(token: CodexToken) -> Login:
     return Login(
         provider_id=CODEX_PROVIDER_ID,
         sdk_provider_id=CODEX_PROVIDER_ID,
-        provider_base_url=DEFAULT_CODEX_BASE_URL,
+        provider_base_url=CODEX_BASE_URL,
         provider_api_key=token.access,
         codex_refresh_token=token.refresh,
         codex_token_expires=token.expires_at,
@@ -511,7 +511,7 @@ def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
     """
     return replace(
         login,
-        provider_base_url=login.provider_base_url or DEFAULT_CODEX_BASE_URL,
+        provider_base_url=login.provider_base_url or CODEX_BASE_URL,
         provider_api_key=token.access,
         codex_refresh_token=token.refresh,
         codex_token_expires=token.expires_at,

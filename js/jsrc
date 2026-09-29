@@ -1,0 +1,113 @@
+# js built-in defaults: one line per registered knob.
+#
+# This file is the lowest config layer. Precedence, lowest to highest:
+#   js/jsrc (this file) < ~/.js/jsrc < .js/jsrc < .js/jsrc.local
+#   < env vars < --extra
+# `set -key` leaves a knob unset. `/set` with no argument lists every knob
+# and its value; `/show <key>` shows one with its help text.
+
+# --- model ---
+set model.id deepseek/deepseek-v4-flash
+set -model.max_output_tokens
+set -model.context_window
+set -model.reasoning_effort
+set -model.vision
+
+# --- ui ---
+set ui.reasoning 2
+set ui.net 2
+set ui.status_bg #00007f
+set ui.status_fg #ffffff
+set ui.tools 1
+set ui.tools_preview_lines 12
+set ui.markdown on
+set ui.editing_mode emacs
+
+# --- provider ---
+set -provider.id
+set -provider.base_url
+set -provider.api_key
+set provider.extra {}
+
+# --- limits ---
+set limits.max_tool_iterations 500
+set limits.max_tool_calls_per_message 50
+set limits.max_bash_output_bytes 262144
+set limits.max_bash_output_ceiling 150000
+set limits.max_tool_result_inline_bytes 51200
+set limits.max_tool_result_bytes 262144
+set limits.fetch_timeout_s 15
+set limits.shell_env_allow ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL"]
+set limits.browse_timeout_s 60
+set limits.download_timeout_s 300
+set limits.max_download_bytes 0
+set limits.inline_code_timeout_s 300
+set limits.max_read_lines 2000
+set limits.max_file_bytes 2000000
+set limits.max_text_attachment_bytes 65536
+set limits.max_read_bytes 262144
+set limits.max_tool_results_per_turn_bytes 200000
+set limits.task_max_depth 2
+set limits.subagent_max_workers 8
+
+# --- kernel ---
+set kernel.verbosity normal
+set kernel.render_max_lines 24
+set kernel.wait_seconds 5
+
+# --- shell ---
+set shell.wait_seconds 30
+
+# --- runtime ---
+set runtime.debug off
+set runtime.trace on
+set runtime.steer now
+set runtime.debug_autolog on
+set -runtime.debug_autolog_dir
+set runtime.transcript_log on
+set -runtime.transcript_log_dir
+set runtime.allow_inline_code on
+
+# --- compact ---
+set compact.auto on
+set -compact.flight_log_dir
+set -compact.context_window
+set compact.context_window_overrides {}
+set compact.context_window_fallback 1000000
+set compact.notify_threshold 0.5
+set compact.trigger_threshold 0.8
+set compact.force_threshold 0.9
+set compact.buffer_tokens 4096
+set compact.summary_reserve_tokens 20000
+set compact.tail_tokens 16384
+set compact.min_savings_tokens 400
+set compact.clear_keep_recent 20
+set compact.rehydrate_max_files 5
+set compact.rehydrate_token_budget 50000
+set compact.rehydrate_max_tokens_per_file 5000
+set compact.chars_per_token 4.0
+set compact.model same
+set compact.summary_max_tokens 8192
+set -compact.pre_hook
+
+# --- subagents ---
+set subagents.prefer_inherit off
+set subagents.lock_model off
+
+# --- tools ---
+set -tools.alias_profiles
+set tools.user_agent js-agent/0.1
+set tools.terminal_cols 64
+set tools.terminal_rows 36
+
+# --- mcp ---
+set mcp.servers {}
+set mcp.agents {}
+set mcp.request_timeout_s 10.0
+
+# --- sampling ---
+set -sampling.temperature
+set -sampling.top_p
+set -sampling.top_k
+set -sampling.repetition_penalty
+set -sampling.presence_penalty

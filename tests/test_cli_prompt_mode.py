@@ -20,7 +20,7 @@ from js.model_client import ModelStreamResult
 def fresh_tool_context(monkeypatch, tmp_path):
     from js.toolkit.core import ToolContext
 
-    monkeypatch.setattr(runtime.T, "DEFAULT_CONTEXT", ToolContext(cwd=tmp_path))
+    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
 
 
 def _fake_stream_result(text: str = "ok"):
@@ -59,8 +59,8 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert actual.sessions_dir == expected_agent_dir
     latest = json.loads((expected_agent_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
-    # First-run template is written to the platform config dir.
-    assert (tmp_path / ".js" / "jsrc").exists()
+    # No jsrc means no file: only /save writes one.
+    assert not (tmp_path / ".js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -813,7 +813,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
     seen: list[str] = []
 
     def run_turn_stub(cfg, system, messages, telemetry, **kwargs):
-        monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 120_000, raising=False)
+        monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 120_000, raising=False)
         messages.append({"role": "assistant", "content": "PROMPT_COMPACT_OK"})
 
     def compact_stub(cfg, system, messages, *, forced=False, **kwargs):
@@ -1172,7 +1172,7 @@ def _auto_state() -> dict:
 
 def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
 
     disabled = _auto_compact_cfg(tmp_path, compact={"auto": False})
@@ -1191,11 +1191,11 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 49, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 49, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert capsys.readouterr().out == ""
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 50, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
     first = capsys.readouterr().out
     cli._maybe_auto_compact(cfg, state)
@@ -1204,10 +1204,10 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     assert second == ""
     assert calls == []
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 40, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 40, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert state["auto_compact"].notified is False
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 50, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert "50% full" in capsys.readouterr().out
 
@@ -1219,7 +1219,7 @@ def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
         seen.append(cfg.model)
         return "compacted: fixture"
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
@@ -1240,9 +1240,9 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     cfg = _auto_compact_cfg(tmp_path)
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 90, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 90, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert [call["forced"] for call in calls] == [False, True]
@@ -1251,14 +1251,14 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
 def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 10, raising=False)
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_incomplete_reason", "max_output_tokens", raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 10, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_incomplete_reason", "max_output_tokens", raising=False)
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
     for _ in range(3):
         cli._maybe_auto_compact(cfg, state)
     assert calls == []
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 1
     assert calls[0]["forced"] is True
@@ -1270,11 +1270,11 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state()
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert state["auto_compact"].consecutive == 1
     assert state["auto_compact"].paused is False
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80)
     cli._maybe_auto_compact(cfg, state)
     assert state["auto_compact"].consecutive == 2
     assert state["auto_compact"].paused is True
@@ -1282,11 +1282,11 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 2
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 79, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert state["auto_compact"].consecutive == 0
     assert state["auto_compact"].paused is False
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 3
 
@@ -1311,7 +1311,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
     ):
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
         monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
-        monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
+        monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
         cli._maybe_auto_compact(cfg, _auto_state())
 
     assert len(calls) == 2
@@ -1331,7 +1331,7 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
         },
     )
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 80, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert len(calls) == 1
@@ -1341,7 +1341,7 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
 
 def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 95, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or "compacted: fixture"))
 
     for raw in ("false", "0", "off", "no"):
@@ -1361,7 +1361,7 @@ def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
 
     def completion_stub(**kwargs):
         seen["cwd"] = os.getcwd()
-        seen["ctx_cwd"] = str(runtime.T.DEFAULT_CONTEXT.cwd)
+        seen["ctx_cwd"] = str(runtime.T.STOCK_CONTEXT.cwd)
         return _fake_stream_result("ok")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
@@ -1400,7 +1400,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     )
     cfg = replace(cfg, max_output_tokens=8_000)
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 79_000, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79_000, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert len(calls) == 1
@@ -1420,7 +1420,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     )
     cfg = replace(cfg, max_output_tokens=64_000)
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 8_000, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 8_000, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
@@ -1440,7 +1440,7 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
     )
     cfg = replace(cfg, max_output_tokens=128_000)
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
@@ -1460,7 +1460,7 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     )
     cfg = replace(cfg, max_output_tokens=128_000)
 
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
 
     # Same 260k now measured against 237,904 -> over 100%, compaction fires.
@@ -1478,7 +1478,7 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     )
     cfg = replace(cfg, max_output_tokens=128_000)
     # 300k is 81% of a 370k pin but 29% of the real 1.05M window.
-    monkeypatch.setattr(cli.runtime.T.DEFAULT_CONTEXT, "last_prompt_tokens", 300_000, raising=False)
+    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 300_000, raising=False)
     cli._maybe_auto_compact(cfg, _auto_state())
     assert calls == []
 

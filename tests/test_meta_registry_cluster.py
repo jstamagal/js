@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import types
 
+from js import settings
 from js.toolkit import ToolContext
 from js.toolkit import meta
 from js.toolkit import registry as registry_mod
@@ -99,10 +100,10 @@ def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
 
     monkeypatch.setattr(meta, "_run_one_task_async", probe)
 
-    ctx = _ctx()  # no override -> module default (8)
+    ctx = _ctx()  # no override -> the js/jsrc limits.subagent_max_workers
     asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
 
-    assert peak <= meta._DEFAULT_SUBAGENT_MAX_WORKERS
+    assert peak <= settings.default_value("limits.subagent_max_workers")
 
 
 # --------------------------------------------------------------------------

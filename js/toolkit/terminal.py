@@ -18,9 +18,6 @@ from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
-DEFAULT_COLS = 64
-DEFAULT_ROWS = 36
-
 _KEY_SEQUENCES = {
     "enter": "\r",
     "tab": "\t",
@@ -246,8 +243,8 @@ def terminal_session(
     wait = min(int_or_default(wait_ms, 700, minimum=0), 10_000)
     cols_supplied = cols is not None
     rows_supplied = rows is not None
-    width = min(int_or_default(cols, DEFAULT_COLS, minimum=1), 400)
-    height = min(int_or_default(rows, DEFAULT_ROWS, minimum=1), 200)
+    width = min(int_or_default(cols, context.terminal_cols, minimum=1), 400)
+    height = min(int_or_default(rows, context.terminal_rows, minimum=1), 200)
     sessions = context.terminal_sessions
 
     if action != "start" and (cols_supplied or rows_supplied):

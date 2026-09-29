@@ -87,7 +87,7 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
 def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
     monkeypatch, tmp_path
 ):
-    assert settings.DEFAULT_SHELL_ENV_ALLOW == (
+    assert tuple(settings.default_value("limits.shell_env_allow")) == (
         "PATH",
         "HOME",
         "USER",

@@ -603,7 +603,7 @@ def test_apply_refreshed_token_falls_back_to_default_base_url_when_missing():
     login = logins.Login(provider_id="openai-codex", provider_api_key="old", codex_refresh_token="r", codex_token_expires=0.0)
     token = codex_auth.CodexToken(access="new", refresh="new-r", expires_at=1.0, account_id="acct")
     refreshed = codex_auth.apply_refreshed_token(login, token)
-    assert refreshed.provider_base_url == codex_auth.DEFAULT_CODEX_BASE_URL
+    assert refreshed.provider_base_url == codex_auth.CODEX_BASE_URL
 
 
 def test_refreshed_login_preserves_provider_headers(monkeypatch):
