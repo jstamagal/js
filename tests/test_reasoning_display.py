@@ -311,7 +311,7 @@ def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(mo
 
 @pytest.mark.parametrize(("level", "cancel"), [(0, False), (2, False), (2, True)])
 def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, tmp_path, capsys, level, cancel):
-    prompts = tmp_path / ".config" / "js" / "agents" / "reason-ui"
+    prompts = tmp_path / ".js" / "agents" / "reason-ui"
     prompts.mkdir(parents=True)
     (prompts / "01-prompt.md").write_text("system\n")
     cfg = config.from_env(agent_id="reason-ui", extras=[

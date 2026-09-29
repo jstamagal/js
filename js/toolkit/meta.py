@@ -11,6 +11,7 @@ import secrets
 import time
 from typing import Any
 
+from .. import paths
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
@@ -48,13 +49,14 @@ def plan(
     safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in plan_name).strip("-.") or "plan"
     safe_version = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in version).strip("-.") or "v1"
     filename = f"{safe_name}-{safe_version}.md"
-    limit = _filename_limit(context.cwd)
+    plans = paths.plans_dir()
+    limit = _filename_limit(plans if plans.is_dir() else plans.parent if plans.parent.is_dir() else context.cwd)
     if len(filename.encode("utf-8")) > limit:
         return (
             f"ERROR: plan filename is {len(filename.encode('utf-8'))} bytes, over this "
             f"filesystem's {limit}-byte limit for one name; shorten plan_name or version"
         )
-    target = context.resolve_path(Path("plans") / filename)
+    target = plans / filename
     existed = target.exists()
     if existed and not overwrite:
         return f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"

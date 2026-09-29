@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from js import runtime
+from js import paths, runtime
 from js.toolkit import browser as browser_module
 from js.toolkit.browser import browser_probe
 from js.toolkit.core import ToolContext
@@ -411,7 +411,8 @@ def test_terminal_snapshot_validates_path_before_drain_or_numbering(tmp_path):
         assert list(state["screen"].display) == screen_before_errors
 
         terminal_snapshot(session="shot", wait_ms=500, context=context)
-        assert (tmp_path / "terminal-snapshots" / "shot-01.png").is_file()
+        assert (paths.terminal_snapshots_dir() / "shot-01.png").is_file()
+        assert not (tmp_path / "terminal-snapshots").exists()
         assert any("PENDING_OUTPUT" in line for line in state["screen"].display)
     finally:
         close_terminal_sessions(context)
@@ -590,6 +591,8 @@ def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path
         assert path.is_file()
         with Image.open(path) as image:
             assert list(image.size) == frame["dimensions"]
+    assert Path(report["output_dir"]).parent == paths.browser_probes_dir()
+    assert not (tmp_path / "browser-probes").exists()
 
 
 @_needs_chromium

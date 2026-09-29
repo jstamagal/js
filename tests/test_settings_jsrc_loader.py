@@ -1,4 +1,4 @@
-"""Tests for jsrc settings, platform dirs, provider env, and runtime plumbing."""
+"""Tests for jsrc settings, the js home, provider env, and runtime plumbing."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
         if spec.env:
             monkeypatch.delenv(spec.env, raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    return config_home, data_home
+    js_home = tmp_path / "home" / ".js"
+    return js_home, js_home
 
 
 def _build_config(
@@ -153,7 +154,7 @@ def test_write_default_template_creates_jsrc_once(tmp_path):
     assert target.read_text(encoding="utf-8") == text
 
 
-def test_from_env_uses_platform_dirs_and_writes_global_jsrc(monkeypatch, tmp_path):
+def test_from_env_uses_the_js_home_and_writes_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
     # Explicit pin (provider.id / JS_PROVIDER) authorizes reading the provider's
     # native env key: an env key alone would create no route (ruling #1).
@@ -164,14 +165,15 @@ def test_from_env_uses_platform_dirs_and_writes_global_jsrc(monkeypatch, tmp_pat
 
     assert cfg.provider_id == "deepseek"
     assert cfg.provider_api_key == "sk-test"
-    assert cfg.sessions_dir == data_home / "js" / "sessions" / "defaultagent"
-    assert (config_home / "js" / "jsrc").exists()
-    assert not (tmp_path / "home" / ".js").exists()
+    assert cfg.sessions_dir == data_home / "sessions" / "defaultagent"
+    assert (config_home / "jsrc").exists()
+    assert not (tmp_path / "config").exists()
+    assert not (tmp_path / "data").exists()
 
 
 def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
-    global_cfg = config_home / "js" / "jsrc"
+    global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
     global_cfg.write_text("set model.id global-model\nset limits.max_tool_iterations 8\n", encoding="utf-8")
 
@@ -184,7 +186,7 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
 
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
-    js_dir = config_home / "js"
+    js_dir = config_home
     js_dir.mkdir(parents=True)
     (js_dir / "jsrc").write_text("set model.id base-model\nset limits.fetch_timeout_s 5\n", encoding="utf-8")
     (js_dir / "jsrc.fast").write_text("set model.id fast-model\n", encoding="utf-8")
@@ -214,7 +216,7 @@ def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
 def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
     # Deliberate opt-out through the config knob.
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
-    global_cfg = config_home / "js" / "jsrc"
+    global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
     global_cfg.write_text("set runtime.allow_inline_code off\n", encoding="utf-8")
 

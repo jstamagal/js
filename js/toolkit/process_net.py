@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .. import paths
 from .. import settings as _settings
 from ..capped_process import (
     CappedProcess,
@@ -574,7 +575,7 @@ def _aria_payload(
     raw: bool | None,
     context: ToolContext,
 ) -> str:
-    with tempfile.TemporaryDirectory(prefix="js-fetch-") as raw_temp:
+    with tempfile.TemporaryDirectory(prefix="js-fetch-", dir=paths.tmp_dir()) as raw_temp:
         destination = Path(raw_temp) / "response"
         download_with_aria2(
             binary,
@@ -609,7 +610,7 @@ def _descriptor(kind: str, content_type: str, size: int, truncated: bool) -> str
 
 def _temp_image_path(mime: str, data: bytes) -> Path:
     suffix = mimetypes.guess_extension(mime) or ".img"
-    with tempfile.NamedTemporaryFile(prefix="js-fetch-", suffix=suffix, delete=False) as handle:
+    with tempfile.NamedTemporaryFile(prefix="js-fetch-", suffix=suffix, delete=False, dir=paths.tmp_dir()) as handle:
         handle.write(data)
         return Path(handle.name)
 

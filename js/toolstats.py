@@ -153,14 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="js.toolstats", description=__doc__.split("\n\n")[1])
     parser.add_argument("path", nargs="?", help="session JSONL to summarize")
     parser.add_argument("--latest", action="store_true", help="summarize the newest session instead of a path")
-    parser.add_argument("--data-dir", type=Path, default=None, help="js data dir holding sessions/ (default: the platform data dir)")
+    parser.add_argument("--data-dir", type=Path, default=None, help="directory holding sessions/ (default: the js home)")
     parser.add_argument("--agent", default=None, help="restrict --latest to this agent's sessions")
     parser.add_argument("--tag", default="", help="prefix the JSON line with this word, e.g. TOOLSTATS")
     parser.add_argument("--extra", action="append", default=[], metavar="K=V", help="extra key=value to include (repeatable)")
     args = parser.parse_args(argv)
 
     if args.latest:
-        path = latest_session(args.data_dir or _paths.data_dir(), args.agent)
+        path = latest_session(args.data_dir or _paths.sessions_root().parent, args.agent)
         if path is None:
             print("js: toolstats: no session found", file=sys.stderr)
             return 1

@@ -284,20 +284,20 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "one: each line is its own turn, in order."),
     SettingSpec("runtime.debug_autolog", "bool", True,
                 "Append the full request trace (unclipped system prompt, tool-schema "
-                "JSON, and the messages sent each call) to logs/<agent>/<session>.log "
-                "under the js data dir. On by default; this trace never prints to the "
+                "JSON, and the messages sent each call) to ~/.js/logs/<agent>/<session>.log. "
+                "On by default; this trace never prints to the "
                 "terminal, only to the file.",
                 env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
     SettingSpec("runtime.debug_autolog_dir", "str", None,
-                "Directory for the debug autolog; unset = logs/<agent> under the js data dir.",
+                "Directory for the debug autolog; unset = ~/.js/logs/<agent>.",
                 env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.transcript_log", "bool", True,
-                "Append the visible terminal/TUI transcript to transcript/<agent>/<session>.log "
-                "under the js data dir. On by default; records what printed to the user with "
+                "Append the visible terminal/TUI transcript to "
+                "~/.js/logs/transcript/<agent>/<session>.log. On by default; records what printed to the user with "
                 "IRC-style <USER>/<APE> tags for user/assistant turns.",
                 env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
     SettingSpec("runtime.transcript_log_dir", "str", None,
-                "Directory for the visible transcript log; unset = transcript/<agent> under the js data dir.",
+                "Directory for the visible transcript log; unset = ~/.js/logs/transcript/<agent>.",
                 env="JS_TRANSCRIPT_LOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.allow_inline_code", "bool", True,
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "

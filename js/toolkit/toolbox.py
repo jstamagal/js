@@ -170,7 +170,7 @@ del __js_load
 
 def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
     """(global, project). Project wins on a name clash, mirroring agent precedence."""
-    return _paths.config_dir() / "toolbox", Path(cwd) / ".js" / "toolbox"
+    return _paths.global_toolbox_dir(), Path(cwd) / ".js" / "toolbox"
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
@@ -186,7 +186,7 @@ def seed_examples() -> list[str]:
     """
     if not _EXAMPLES.is_dir():
         return []
-    global_dir = _paths.config_dir() / "toolbox"
+    global_dir = _paths.global_toolbox_dir()
     seeded: list[str] = []
     for path in sorted(_EXAMPLES.glob("*.py")):
         target = global_dir / path.name

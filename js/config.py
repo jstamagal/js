@@ -182,9 +182,9 @@ class Config:
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
     debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
-    debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
+    debug_autolog_dir: str | None = None  # override dir for the autolog; None = ~/.js/logs/<agent>
     transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
-    transcript_log_dir: str | None = None  # override dir for transcript logs; None = transcript/<agent> under data dir
+    transcript_log_dir: str | None = None  # override dir for transcript logs; None = ~/.js/logs/transcript/<agent>
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
 
 
@@ -237,7 +237,7 @@ def _existing_tail_match(
     """Find an existing session named by the trailing components of *relative_path*.
 
     `<name>`, `<name>.jsonl`, `<dir>/<name>` and a whole pasted
-    `.local/share/js/sessions/<agent>/<name>.jsonl` all name one session, because
+    `~/.js/sessions/<agent>/<name>.jsonl` all name one session, because
     that is how the flag reads to anyone pasting a path back out of `--list`.
     Without this, the leading components are taken literally and mkdir'd, so the
     paste silently opens an empty session instead of the one it names.
@@ -376,7 +376,10 @@ def jsrc_paths(
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
 ) -> list[Path]:
-    """The jsrc files a run loads, lowest layer first."""
+    """The jsrc files a run loads, lowest layer first, each once.
+
+    Run from the home directory, the project `.js/` is `~/.js` itself, so its
+    jsrc is the global layer and loads there only."""
     paths: list[Path] = []
     if not ignore_global_config:
         paths.append(_paths.global_config_file())
@@ -389,7 +392,7 @@ def jsrc_paths(
         ignore_local_config=ignore_local_config,
         ignore_global_config=ignore_global_config,
     ))
-    return paths
+    return list(dict.fromkeys(paths))
 
 
 def from_env(
@@ -419,6 +422,7 @@ def from_env(
     pkg = Path(__file__).resolve().parent
     js_root = pkg.parent
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
+    agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
 
     if not ignore_global_config:
         _settings.write_default_template(_paths.global_config_file())
@@ -528,7 +532,6 @@ def from_env(
     prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
     lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
 
-    agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
     from . import mcp_config
 
     mcp = mcp_config.resolve(js_root_settings, agent_id)

@@ -214,12 +214,12 @@ class _Harness:
             await asyncio.sleep(0.01)
 
     def transcript(self) -> str:
-        found = list((self.tmp_path / ".local" / "share" / "js" / "transcript").rglob("*.log"))
+        found = list((self.tmp_path / ".js" / "logs" / "transcript").rglob("*.log"))
         assert len(found) == 1, found
         return found[0].read_text()
 
     def session(self) -> list[dict]:
-        found = list((self.tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+        found = list((self.tmp_path / ".js" / "sessions").rglob("*.jsonl"))
         assert len(found) == 1, found
         return load_messages(found[0])
 

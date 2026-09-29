@@ -66,13 +66,13 @@ def _repl(monkeypatch, tmp_path, argv, lines=()):
 
 
 def _only_session(tmp_path):
-    found = list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+    found = list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
     assert len(found) == 1, found
     return found[0]
 
 
 def _agent_prompt(tmp_path, body):
-    prompts = tmp_path / ".config" / "js" / "agents" / "defaultagent"
+    prompts = tmp_path / ".js" / "agents" / "defaultagent"
     prompts.mkdir(parents=True, exist_ok=True)
     (prompts / "01-prompt.md").write_text(body, encoding="utf-8")
 

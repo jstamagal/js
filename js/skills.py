@@ -229,7 +229,7 @@ def discover_skills(
 
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
     global_root = global_dir or paths.global_skills_dir()
-    user_root = user_dir or Path.home() / ".agents" / "skills"
+    user_root = user_dir or paths.shared_skills_dir()
     # Within a scope the cross-client dir (.agents/skills) is scanned first and
     # the js-native dir last, so native wins a name collision — with a warning,
     # because two same-named skills in one scope is ambiguity, not layering.

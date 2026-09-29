@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .. import paths
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
@@ -234,22 +235,17 @@ def browser_probe(
     height = min(int_or_default(viewport_height, 800, minimum=100), 2160)
 
     server: _ThreadingServer | None = None
-    root: Path | None = None
     url = target
     if not re.match(r"^https?://", target, flags=re.IGNORECASE):
         path = context.resolve_path(target)
         if not path.exists():
             return f"ERROR: no such local target: {path}"
         try:
-            server, url, root = _start_local_server(path)
+            server, url, _root = _start_local_server(path)
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
 
-    base = (
-        context.resolve_path(output_dir)
-        if output_dir
-        else (root or context.cwd) / "browser-probes"
-    )
+    base = context.resolve_path(output_dir) if output_dir else paths.browser_probes_dir()
     run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     report: dict[str, Any] = {

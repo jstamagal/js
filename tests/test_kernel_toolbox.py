@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from js import config as jsconfig
+from js import paths
 from js import settings as jssettings
 from js.toolkit import ToolContext
 from js.toolkit import kernel as kmod
@@ -37,7 +38,7 @@ def ctx(tmp_path, monkeypatch):
     """A ToolContext whose toolbox writes into tmp_path, never the real config dir."""
     work = tmp_path / "work"
     work.mkdir()
-    monkeypatch.setattr(tbmod._paths, "config_dir", lambda: tmp_path / "config")
+    monkeypatch.setattr(tbmod._paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
     context = ToolContext(cwd=work)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"
@@ -645,7 +646,8 @@ def test_image_output_lands_in_an_artifact_file_named_in_the_result(ctx):
     saved = Path(line.removeprefix("IMAGE "))
     assert saved.is_file()
     assert saved.read_bytes().startswith(b"\x89PNG")
-    assert saved.parent == Path(ctx.cwd) / ".js" / "kernel"
+    assert saved.parent.parent == paths.kernel_state_root()
+    assert not (Path(ctx.cwd) / ".js").exists()
 
 
 @needs_kernel
@@ -653,7 +655,8 @@ def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx,
     _result, screen = stderr_of(monkeypatch, lambda: kmod.kernel(
         code="1 + 1", verbosity="verbose", context=ctx))
 
-    log = (Path(ctx.cwd) / ".js" / "kernel" / "kernel.log").read_text(encoding="utf-8")
+    log = ctx.kernel_session.log_path.read_text(encoding="utf-8")
+    assert ctx.kernel_session.log_path.parent.parent == paths.kernel_state_root()
     assert "IPKernelApp" in log
     assert "IPKernelApp" not in screen
 

@@ -132,8 +132,9 @@ def _isolate(monkeypatch, tmp_path: Path) -> Path:
         if spec.env:
             monkeypatch.delenv(spec.env, raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    (config_home / "js").mkdir(parents=True)
-    return config_home / "js" / "jsrc"
+    js_home = tmp_path / "home" / ".js"
+    js_home.mkdir(parents=True)
+    return js_home / "jsrc"
 
 
 def _result(name: str | None = None, arguments: dict | None = None, *, text: str = "") -> ModelStreamResult:

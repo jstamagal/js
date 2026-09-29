@@ -107,7 +107,7 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     assert rows["02-benchmark"]["ttft_s"] == 0.05
     assert rows["02-benchmark"]["ok"] is True
     # Bench is throwaway — no session JSONL persisted anywhere.
-    assert list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl")) == []
+    assert list((tmp_path / ".js" / "sessions").rglob("*.jsonl")) == []
 
 
 def test_run_bench_csv_has_one_row_per_benchmark(tmp_path, monkeypatch):

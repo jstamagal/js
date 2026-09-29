@@ -1,6 +1,6 @@
 """Dynamic model capability lookup backed by models.dev data.
 
-js keeps its own writable mirror of the models.dev catalog under platform data.
+js keeps its own writable mirror of the models.dev catalog under ~/.js/cache.
 The bundled DB from the installed package is only the seed. On lookup we check
 whether the active catalog is older than 8 hours; if so, we refresh it into
 js's own DB and record when that happened. A forced refresh is available from

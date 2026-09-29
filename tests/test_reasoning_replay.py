@@ -34,7 +34,7 @@ def replay(monkeypatch, tmp_path):
             "runtime.transcript_log=off",
         ],
     )
-    prompts = tmp_path / ".config" / "js" / "agents" / "replay"
+    prompts = tmp_path / ".js" / "agents" / "replay"
     prompts.mkdir(parents=True)
     (prompts / "01-prompt.md").write_text("SYSTEM\n")
     cfg = replace(cfg, prompts_dir=prompts, project_dir=tmp_path)

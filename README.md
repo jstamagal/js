@@ -55,8 +55,8 @@ js/toolkit/process_net.py         shell and fetch
 js/toolkit/meta.py                plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
 js/toolkit/tool_descriptions/     model-facing tool contracts
-prompts/                          repo prompt-directory agents; layered with platform config agents/ and project .js/agents/
-                                  (repo `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`;
+prompts/                          repo prompt-directory agents; layered with ~/.js/agents/ and project .js/agents/
+                                  (repo `prompts/`, global `~/.js/agents/`, and project `.js/agents/`;
                                   project scope wins over global, which wins over repo)
 tests/                            offline, harness, smoke, and live/proxy tests
 docs/                             full user and technical documentation
@@ -85,11 +85,11 @@ with `/load <file>`; any REPL command works there without the `/`, including
 typed event hooks (`on <event> <handler>`) and aliases (`alias <name>
 <command>`). `/save` writes settings, handlers and aliases back to `jsrc`.
 
-Config, logins, and the model cache live in the platform config dir; saved
-sessions live at the platform data `sessions/<agent_id>/<session>.jsonl`, and
-each agent has isolated session state. Global prompt-directory agents live in
-the platform config `agents/`, skills live in `skills/`, and per-agent runtime
-state lives in the platform data `state/`. Session memory is append-only JSONL
+Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
+saved sessions at `sessions/<agent_id>/<session>.jsonl` (each agent has
+isolated session state), global prompt-directory agents in `agents/`, skills in
+`skills/`, and per-agent runtime state in `state/`. On first start js moves its
+old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL
 with control marks; see the compaction section for compaction commands.
 
 ## Provider Management
