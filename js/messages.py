@@ -602,7 +602,7 @@ NET_ROLE_CONNECTING_AGENT = Message("{role}: connecting {url}  agent={agent}")
 NET_ROLE_CONNECTED = Message("{role}: connected: {host}  {ms}ms")
 NET_COMPACTING = Message("Compacting: {model} via {url}")
 NET_CACHE_BREAK = Message(
-    "Prompt cache break: cache read {before} -> {after} tokens (-{drop:.0%}), {idle}s since the last request")
+    "Prompt cache break: cache read {before} -> {after} tokens, down {drop:.0%}, {idle}s since the last request")
 NET_DNS_FAILURE = Message("DNS failure")
 NET_TIMEOUT = Message("Timeout")
 NET_CONNECT_FAILED = Message("Connection failed")
