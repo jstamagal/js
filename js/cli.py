@@ -7,7 +7,6 @@ import asyncio
 import contextlib
 import copy
 import functools
-import inspect
 import io
 import json
 import os
@@ -177,32 +176,6 @@ def _from_env(
         presets=presets,
     )
 
-
-def _cfg_from_env_compat(
-    session: str | None,
-    *,
-    save_session: bool,
-    extras: list[str] | None,
-    agent_id: str | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
-) -> Config:
-    try:
-        return _from_env(
-            session,
-            save_session=save_session,
-            extras=extras,
-            agent_id=agent_id,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
-    except TypeError:
-        # Tests and external callers may monkeypatch the old helper signature.
-        if agent_id is None:
-            return _from_env(session, save_session=save_session, extras=extras)
-        return _from_env(session, save_session=save_session, extras=extras, agent_id=agent_id)
 
 def _append_turn(cfg: Config, message: dict) -> None:
     M.append_message(cfg.session_file, message)
@@ -2269,7 +2242,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             session,
             save_session=save,
             extras=extras,
@@ -2472,35 +2445,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     return 1
 
 
-
-def _accepts_kwarg(func, name: str) -> bool:
-    """Whether ``func`` can take keyword ``name`` — a named parameter or ``**kwargs``.
-    Falls back to True when the signature can't be read, so the real call decides."""
-    try:
-        params = inspect.signature(func).parameters.values()
-    except (TypeError, ValueError):
-        return True
-    for param in params:
-        if param.kind is inspect.Parameter.VAR_KEYWORD:
-            return True
-        if param.name == name and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return True
-    return False
-
-
-def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
-    # Decide whether the (possibly monkeypatched) _run_prompt takes tool_context
-    # by INSPECTING its signature, not by catching TypeError around the whole
-    # turn — a stray TypeError raised deep inside a commit/wiki run must surface
-    # as an error, never trigger a silent second full execution of the turn.
-    if tool_context is not None and _accepts_kwarg(_run_prompt, "tool_context"):
-        return _run_prompt(*args, tool_context=tool_context, **kwargs)
-    return _run_prompt(*args, **kwargs)
-
-
 def _bench_row_line(row: dict) -> msgs.Said:
     if not row.get("ok"):
         return msgs.BENCH_FAILED.said(name=row["name"], error=row.get("error") or "failed")
@@ -2531,7 +2475,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             None, save_session=False, extras=extras, agent_id=agent_id,
             ignore_local_config=ignore_local_config,
             ignore_global_config=ignore_global_config, presets=presets,
@@ -2755,7 +2699,7 @@ def _run_commit(target: str | None,
     if extra_context and extra_context.strip():
         prompt += f"\n\nOperator context:\n{extra_context.strip()}"
 
-    return _run_prompt_compat(
+    return _run_prompt(
         prompt,
         model=model,
         debug=debug,
@@ -2776,7 +2720,7 @@ def _run_commit(target: str | None,
 
 def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "", extras: list[str] | None = None, model: str | None = None) -> int:
     try:
-        cfg = _cfg_from_env_compat(session, save_session=True, extras=extras, agent_id=agent)
+        cfg = _from_env(session, save_session=True, extras=extras, agent_id=agent)
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
@@ -3640,7 +3584,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     sections = _printonly_letters(letters)
 
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             session, save_session=False, extras=extras, agent_id=agent,
             ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
             presets=presets,
@@ -3914,7 +3858,7 @@ def _main(argv: list[str] | None = None) -> int:
             cfg = None
             provider_arg = args.models_json or None
             if provider_arg is None:
-                cfg = _cfg_from_env_compat(
+                cfg = _from_env(
                     args.session,
                     save_session=False,
                     extras=args.extras,
@@ -3931,7 +3875,7 @@ def _main(argv: list[str] | None = None) -> int:
             cfg = None
             provider_arg = args.list_models or None
             if provider_arg is None:
-                cfg = _cfg_from_env_compat(
+                cfg = _from_env(
                     args.session,
                     save_session=False,
                     extras=args.extras,
@@ -4072,7 +4016,7 @@ def _main(argv: list[str] | None = None) -> int:
     os.environ["JS_MODE"] = "repl"
     _session_leases.start["mode"] = "repl"
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             args.session,
             save_session=True,
             extras=args.extras,

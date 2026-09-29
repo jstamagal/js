@@ -375,7 +375,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
         calls.append(kwargs)
         return _fake_stream_result("I can write that scraper.")
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli._run_prompt("Can you write a recipe scraper?")
@@ -682,7 +682,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
         seen["max_output_tokens"] = kwargs["max_output_tokens"]
         return _fake_stream_result("KNOBS_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
+    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = cli._run_prompt("hi", reasoning="off", maxout=321)
@@ -1373,7 +1373,7 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     cli.M.append_message(nested, {"role": "user", "content": "new"})
     from js.session_catalog import record_session_start
     record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9, agent="agent")
-    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
+    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
     assert cli._print_session_list(json_lines=False) == 0
     table = capsys.readouterr().out
