@@ -222,6 +222,14 @@ exit line.
 
 Use `cwd` instead of writing `cd ... && ...` in the command.
 
+Under `js -C DIR` the command runs under bubblewrap (`js/jail.py`): DIR
+read-write at its real path, the system read-only, `/home`, the home,
+`/run/user` and network filesystems empty except the `PATH` directories under
+them (read-only) and the `jail.bind` entries, a `/tmp` and `~/.js/tmp` private
+to the js process, the network shared, `--die-with-parent`. `kernel`,
+`terminal_session` and the wiki converters run in the same jail. The file tools
+refuse paths outside DIR and the bound paths with one `ERROR` line.
+
 ### `fetch`
 
 Fetches HTTP/HTTPS or `file://` content.

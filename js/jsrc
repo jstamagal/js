@@ -62,6 +62,9 @@ set kernel.wait_seconds 5
 set shell.program bash
 set shell.wait_seconds 30
 
+# --- jail ---
+set jail.bind ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
+
 # --- runtime ---
 set runtime.debug off
 set runtime.trace on

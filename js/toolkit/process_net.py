@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .. import jail
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import (
@@ -287,8 +288,10 @@ def shell(
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
     try:
+        argv = jail.wrap(_shell_argv(shell_path, command), context, cwd=workdir,
+                         env=safe_env, extra_ro=(Path(shell_path),))
         process = start_capped(
-            _shell_argv(shell_path, command),
+            argv,
             cwd=str(workdir),
             env=safe_env,
             cap=cap,
@@ -550,7 +553,7 @@ def _request_body(headers: dict[str, str], body: str | None, json_body: Any) -> 
 
 
 def _download_target(save: str | None, context: ToolContext) -> Path | None:
-    return context.resolve_path(save) if save else None
+    return context.resolve_path(save, write=True) if save else None
 
 
 def _content_length(headers: Any) -> int | None:
@@ -734,7 +737,7 @@ def _fetch_file_url(
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc and parsed.netloc not in {"localhost", "127.0.0.1"}:
         return f"ERROR: unsupported file:// host {parsed.netloc!r}"
-    path = Path(urllib.request.url2pathname(parsed.path))
+    path = context.resolve_path(urllib.request.url2pathname(parsed.path))
     try:
         size = path.stat().st_size
         if save_target is not None:

@@ -359,8 +359,11 @@ OPT_URL = Message(
     "Desugars to --extra model.id/provider.id/provider.base_url/provider.api_key, "
     "so an explicit --extra still wins.")
 OPT_CD = Message(
-    "Run as if launched from DIR, like git -C. It binds the working directory for every mode: "
-    "-p, the REPL, --commit and the rest. DIR must exist.")
+    "Keep the agent in DIR, for every mode: -p, the REPL, --commit and the rest. DIR is the "
+    "working directory. Every tool that starts a process runs under bubblewrap: DIR "
+    "read-write, the system read-only, /home hidden except PATH directories and jail.bind "
+    "entries, a private /tmp, the network on. File tools refuse paths outside DIR and the "
+    "bound paths. Needs bwrap.")
 OPT_DEBUG = Message(
     "In prompt and --bench modes, stream the concise per-turn diagnostics and the answer live to the terminal: "
     "run header, tool-call lines, per-call timing. The full request trace still goes only to the debug "
@@ -505,7 +508,7 @@ PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Print
 # --- Command-line flags ------------------------------------------------------
 
 BAD_URL_SPEC = Message("-u: {error}", GRAVE)
-CD_NOT_A_DIR = Message("-C target is not a directory: {path}", GRAVE)
+JAIL_REFUSED = Message("{error}", GRAVE)
 JSON_NEEDS_LIST = Message("--json requires --list.", GRAVE)
 LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
 LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.", GRAVE)

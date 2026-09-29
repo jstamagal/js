@@ -120,3 +120,4 @@ Nothing here survives the session. When this session ends the kernel is torn
 down and every definition in it is gone. Write code accordingly: if something
 must outlive the session, write it to a file.
 {{/unless}}
+When js runs with `-C DIR`, the kernel runs in the same jail as `shell`.

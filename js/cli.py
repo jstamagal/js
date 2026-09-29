@@ -48,6 +48,7 @@ from . import replcomplete
 from . import runtime
 from . import stats
 from . import home as _home
+from . import jail as _jail
 from . import paths as _paths
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
@@ -3513,11 +3514,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
-        cd_target = Path(args.cd).expanduser()
-        if not cd_target.is_dir():
-            msgs.warn(msgs.CD_NOT_A_DIR, path=cd_target)
+        # -C is the jail: every tool that starts a process runs under
+        # bubblewrap, and the file tools stay inside DIR and the bound paths.
+        try:
+            jailed = _jail.enter(Path(args.cd).expanduser())
+        except _jail.JailError as exc:
+            msgs.warn(msgs.JAIL_REFUSED, error=exc)
             return 2
-        os.chdir(cd_target)
+        os.chdir(jailed.root)
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()

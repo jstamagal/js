@@ -34,6 +34,7 @@ import atexit
 import base64
 import json
 import math
+import os
 import queue
 import re
 import shutil
@@ -47,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import messages as msgs
+from .. import jail
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
@@ -360,6 +362,10 @@ class KernelSession:
     visible_names: set[str] = field(default_factory=set)
     log_handle: Any = None
     socket_dir: Path | None = None
+    # Under `js -C` the kernel runs in the jail with these binds and only the
+    # allowlisted environment names; taken from the ToolContext that started it.
+    jail_bind: tuple[str, ...] = ()
+    env_allow: tuple[str, ...] = ()
 
     @property
     def log_path(self) -> Path:
@@ -387,12 +393,30 @@ class KernelSession:
             transport="ipc",
             connection_file=str(self.socket_dir / "kernel.json"),
         )
+        launch: dict[str, Any] = {}
+        if jail.active() is not None:
+            launch["env"] = self._jail_kernel_command()
         self.manager.start_kernel(cwd=str(self.cwd), stdout=self.log_handle,
-                                  stderr=self.log_handle)
+                                  stderr=self.log_handle, **launch)
         self.client = self.manager.blocking_client()
         self.client.start_channels()
         self.client.wait_for_ready(timeout=60)
         _LIVE_SESSIONS.add(self)
+
+    def _jail_kernel_command(self) -> dict[str, str]:
+        """Make the manager launch (and relaunch) the kernel in the jail, and
+        return the environment the kernel gets there."""
+        env = {key: os.environ[key] for key in self.env_allow if key in os.environ}
+        runtime = (Path(sys.executable), Path(sys.prefix), Path(sys.base_prefix))
+        socket_dir = self.socket_dir
+        format_command = self.manager.format_kernel_cmd
+
+        def jailed_command(extra_arguments: list[str] | None = None) -> list[str]:
+            return jail.wrap(format_command(extra_arguments), self, cwd=self.cwd, env=env,
+                             extra_ro=runtime, extra_rw=(socket_dir,), ignore_sigint=True)
+
+        self.manager.format_kernel_cmd = jailed_command
+        return env
 
     def alive(self) -> bool:
         return self.manager is not None and self.manager.is_alive()
@@ -514,7 +538,9 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     if session is not None and session.alive():
         return session, "", False
     artifacts = paths.kernel_state_root() / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts)
+    session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts,
+                            jail_bind=tuple(getattr(context, "jail_bind", ()) or ()),
+                            env_allow=tuple(getattr(context, "shell_env_allow", ()) or ()))
     try:
         session.start()
     except Exception as exc:  # noqa: BLE001 - a dead start is a tool result, not a crash

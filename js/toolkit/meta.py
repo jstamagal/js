@@ -46,6 +46,7 @@ _INHERITED_FIELDS = (
     "kernel_wait_seconds",
     "shell_wait_seconds",
     "shell_program",
+    "jail_bind",
     "model",
 )
 

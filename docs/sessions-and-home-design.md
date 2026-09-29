@@ -290,7 +290,7 @@ calls", a rule that exists nowhere in js. The only one-shot rule js sends is
 
 ## 6. `-C DIR` keeps the agent in DIR
 
-Today `-C` only `chdir`s. On 2026-09-10 an audit turn "confined" with `-C
+Before js-1g1.10 `-C` only `chdir`ed. On 2026-09-10 an audit turn "confined" with `-C
 /tmp` read `~/.zshrc` and sent four live API keys to a remote endpoint
 (commit `59bc8cb`); the fix only jailed the bench scripts. The goal here is
 not hostile-model security (that is `~/src/llmbench`'s job) but keeping the
@@ -312,6 +312,37 @@ home.
   line; there is no unjailed fallback.
 - `-C` is the jail; there is no separate flag. A plain working directory is
   `cd DIR && js`. The operator always read `-C` as a jail.
+
+How it is built (`js/jail.py`):
+
+- One jail per js process, entered by `-C` after a self-test (`bwrap … true`).
+  Each command builds its own bwrap argv, so a changed `jail.bind` reaches the
+  next command.
+- `--ro-bind / /`, then empty tmpfs mounts over `/home`, the operator's home
+  (by `$HOME` and by the password database), `/run/user`, every network
+  filesystem mount, and every other mount that shows one of those (a home on a
+  btrfs subvolume is also under the mount of the whole filesystem). Other
+  users' homes on this box alias the operator's, so all of `/home` goes.
+- `/tmp` and `~/.js/tmp` are directories under `~/.js/state/jail/<pid>-…`,
+  bound in the jail and also at their own path. They last for the js
+  process, so a file one command leaves in `/tmp` is there for the next. The
+  file tools map `/tmp/…` and `~/.js/tmp/…` to them.
+- PATH directories under a hidden tree are bound back with every symlinked
+  directory on the way (`jail.reach`), so a venv interpreter that links into
+  `~/.local/share/uv/python` still starts.
+- No pid namespace: a command's background server outlives the command, as
+  outside the jail. `--unshare-ipc --unshare-uts --unshare-cgroup-try`, network
+  shared, `--die-with-parent`.
+- The kernel starts through `sh -c 'trap "" INT; exec "$@"'`: its interrupt
+  SIGINTs the process group, which holds bwrap, and bwrap would die of it.
+- The file tools go through `ToolContext.resolve_path`, which asks the jail;
+  a `JailError` becomes one `ERROR:` line in `call_tool`. Writes need a
+  read-write area (DIR, a `:rw` bind, the private tmp).
+- `JS_JAIL` is exported; `tools/envctx.c` prints `confined=DIR` and a rule
+  line. It prints `shell=$JS_SHELL`, which js exports from `shell.program`
+  before expanding the system prompt.
+- Not jailed: MCP servers (the operator configures them), the commit helper's
+  git (js's own code), inline prompt directives (the operator's prompt).
 
 ## Open
 

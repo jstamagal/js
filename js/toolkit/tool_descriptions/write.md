@@ -12,6 +12,8 @@ the file, and there is no read tool. Write new files only.
 {{#if undo}}
 The replaced content is snapshotted, so `undo` brings it back.
 {{/if}}
+When js runs with `-C DIR`, a path outside DIR and the writable paths the
+operator bound is refused with one ERROR line.
 {{#if patch}}
 Edit existing files with `patch`; use this only for new files or a deliberate
 full rewrite.

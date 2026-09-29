@@ -242,6 +242,13 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Seconds a `kernel` call waits for a submitted cell before returning "
                 "a handle to poll. The cell keeps running; nothing is interrupted by "
                 "this wait."),
+    # --- jail ---
+    SettingSpec("jail.bind", "json",
+                "Under `js -C DIR`, more paths the jail shows: a JSON list of "
+                "entries, absolute or starting with ~. \"path\" is read-only and "
+                "\"path:rw\" read-write. A path that does not exist is skipped. Commands see "
+                "each at its real path; the file tools may read it, and write it when "
+                "it is :rw."),
     # --- runtime ---
     SettingSpec("runtime.debug", "bool",
                 "Append per-event records to state/<agent>/debug.log.",
@@ -511,6 +518,13 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.text()
+        if spec.key == "jail.bind":
+            from . import jail
+
+            try:
+                jail.parse_binds(value)
+            except ValueError as exc:
+                return None, str(exc)
         if spec.key in {"mcp.servers", "mcp.agents"}:
             from . import mcp_config
 

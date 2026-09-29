@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from js import model_metadata, paths
+from js import jail, model_metadata, paths
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +40,10 @@ def isolated_user_profile(monkeypatch, tmp_path):
     for name in tuple(os.environ):
         if name.startswith("JS_"):
             monkeypatch.delenv(name, raising=False)
+    # `js -C` puts the whole process in a jail; one test's jail must not
+    # confine the next test's tools.
+    yield
+    jail.leave()
 
 @pytest.fixture(scope="session")
 def _worker_cache_home(tmp_path_factory):
