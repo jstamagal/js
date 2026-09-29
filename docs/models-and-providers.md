@@ -187,8 +187,8 @@ independently of `model.reasoning_effort`:
 | `2` | Stream and leave visible — **default** |
 | `3` | Stream and leave visible, with token counts (`~` marks estimates) |
 
-Use `/set ui.reasoning <0-3>` and `/save`; `JS_UI_REASONING` is the environment
-alias. Setting changes apply to subsequent turns. In the standard async screen,
+Use `/set ui.reasoning <0-3>` and `/save`; `JS_UI_REASONING` is its canonical
+environment variable. Setting changes apply to subsequent turns. In the standard async screen,
 **Ctrl-R** collapses or expands retained reasoning blocks without changing the
 input line; a manual toggle overrides auto-collapse for those blocks.
 

@@ -147,8 +147,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.reasoning", "int", 2,
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
                 "3 leave visible with token counts. Ctrl-R toggles reasoning in the "
-                "async screen. Display only; session reasoning is always retained.",
-                env="JS_UI_REASONING"),
+                "async screen. Display only; session reasoning is always retained."),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
@@ -368,6 +367,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "tools",
     "mcp",
     "sampling",
+    "ui",
 )
 
 
