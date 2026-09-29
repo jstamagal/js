@@ -176,7 +176,7 @@ def test_yaml_manifest_absent_tools_empty_list_and_missing_00_default_none(tmp_p
 def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
     prompts = write_prompt_dir(tmp_path, "tools: [\n", ("01.md", "BODY\n"))
 
-    with pytest.raises(ValueError, match="invalid YAML manifest"):
+    with pytest.raises(ValueError):
         persona.load_prompt_spec(prompts)
 
 

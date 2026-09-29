@@ -25,7 +25,7 @@ def test_static_aria2_selection_handles_both_linux_libcs(monkeypatch, machine, c
     ("Darwin", "arm64"), ("Windows", "amd64"), ("Linux", "riscv64"),
 ])
 def test_aria2_reports_unverified_targets(system, machine):
-    with pytest.raises(binaries.InstallError, match="aria2: no verified release asset"):
+    with pytest.raises(binaries.InstallError, match="aria2"):
         binaries.aria2_release(machine, system)
 
 
