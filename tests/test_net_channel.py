@@ -312,8 +312,11 @@ def test_turn_counts_response_bytes_into_its_turn_status(sink, tmp_path):
     async def drive():
         server = await asyncio.start_server(_serve_sse, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
+        # A configured window: a custom endpoint's own window would otherwise be
+        # probed with a GET this server never answers.
         cfg = dataclasses.replace(_cfg(tmp_path, model="t"),
-                                  provider_base_url=f"http://127.0.0.1:{port}/v1")
+                                  provider_base_url=f"http://127.0.0.1:{port}/v1",
+                                  settings={"compact": {"context_window": 262_144}})
         try:
             await runtime.run_turn_async(
                 cfg, "sys", [{"role": "user", "content": "go"}],

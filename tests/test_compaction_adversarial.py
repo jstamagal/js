@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize(
     "script,result_file", [("harness.py", "results.json"), ("wire.py", "wire-results.json")]
 )
-def test_adversarial_compaction(tmp_path, script, result_file):
+def test_adversarial_compaction(tmp_path, home_model_catalog, script, result_file):
     root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [

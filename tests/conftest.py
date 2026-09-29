@@ -1,6 +1,7 @@
 """Keep offline tests and their subprocesses out of the invoking user's profile,
 and keep the models.dev catalog local."""
 
+import json
 import os
 import shutil
 import sqlite3
@@ -9,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from js import model_metadata
+from js import model_metadata, paths
 
 
 @pytest.fixture(autouse=True)
@@ -73,3 +74,23 @@ def local_model_catalog(monkeypatch, fresh_model_catalog):
         raise RuntimeError(f"offline test suite: not downloading {source}")
 
     monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", no_download)
+
+
+@pytest.fixture
+def home_model_catalog(fresh_model_catalog):
+    """Put the session's catalog where a js process started in this test's
+    HOME looks for it, so that process does not download models.dev either."""
+    db, _status_path, status = fresh_model_catalog
+    target = paths.model_catalog_db_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.symlink_to(db)
+    paths.model_catalog_status_path().write_text(json.dumps({
+        "version": model_metadata._STATUS_VERSION,
+        "db_path": str(target),
+        "generated_at": None if status.generated_at is None else status.generated_at.isoformat(),
+        "refreshed_at": status.refreshed_at.isoformat(),
+        "source": status.source,
+        "provider_count": status.provider_count,
+        "model_count": status.model_count,
+    }), encoding="utf-8")
+    return target

@@ -90,6 +90,7 @@ def _clear_caches() -> None:
     _all_models.cache_clear()
     lookup_limits.cache_clear()
     accepts_image_input.cache_clear()
+    _image_inputs.cache_clear()
     _probe_local_context_window_cached.cache_clear()
 
 
@@ -187,16 +188,23 @@ def accepts_image_input(model_id: str) -> bool | None:
     wanted = _bare_model_name(model_id)
     if not wanted:
         return None
-    seen = False
+    return _image_inputs().get(wanted)
+
+
+@lru_cache(maxsize=1)
+def _image_inputs() -> dict[str, bool]:
+    """Every catalog model's bare name, and whether any model by that name
+    takes image input."""
+    found: dict[str, bool] = {}
     for model in modelsdotdev.iter_models():
-        if _bare_model_name(model.id) != wanted:
-            continue
-        seen = True
+        name = _bare_model_name(model.id)
         modalities = getattr(model, "modalities", None)
-        for modality in getattr(modalities, "input", ()) or ():
-            if str(getattr(modality, "value", modality)).lower() == "image":
-                return True
-    return False if seen else None
+        image = any(
+            str(getattr(modality, "value", modality)).lower() == "image"
+            for modality in getattr(modalities, "input", ()) or ()
+        )
+        found[name] = found.get(name, False) or image
+    return found
 
 
 def _bare_model_name(model_id: str) -> str:
