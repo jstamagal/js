@@ -617,9 +617,15 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     """
     kmod.kernel(code="x = 1", context=ctx)
     session = ctx.kernel_session
-    session.submit("import signal, time\n"
-                   "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
-                   "time.sleep(1)")
+    blocker = session.submit("import signal, time\n"
+                             "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+                             "print('ignoring', flush=True)\n"
+                             "time.sleep(3)")
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not any(
+            m["header"]["msg_type"] == "stream" for m in blocker.messages):
+        kmod.pump(session, time.monotonic() + 0.1)
+    assert not blocker.finished
     target = session.submit("import time\ntime.sleep(30)")
 
     assert kmod.interrupt_inflight(ctx) is True
