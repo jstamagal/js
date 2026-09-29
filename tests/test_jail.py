@@ -165,6 +165,26 @@ def test_path_directories_under_home_run(jailed, operator_home, monkeypatch):
 
 
 @needs_bwrap
+def test_path_directories_under_host_tmp_run_and_tmp_stays_private(jailed, tmp_path_factory, monkeypatch):
+    # Outside HOME (which the tests put under /tmp too), so only /tmp hides it.
+    host_tmp = tmp_path_factory.mktemp("host-tmp")
+    assert Path(os.environ["HOME"]) not in host_tmp.parents
+    bin_dir = host_tmp / "bin"
+    bin_dir.mkdir()
+    hello = bin_dir / "hello-from-tmp"
+    hello.write_text("#!/bin/sh\necho hello-ran\n")
+    hello.chmod(0o755)
+    (host_tmp / "beside.txt").write_text("host tmp\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    code, result = run_shell("hello-from-tmp", jailed)
+    assert code == 0
+    assert "hello-ran" in result
+    code, _ = run_shell(f"test -e {host_tmp / 'beside.txt'}", jailed)
+    assert code != 0
+
+
+@needs_bwrap
 def test_network_stays_on(jailed, tmp_path):
     client = shutil.which("curl")
     python = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else None
