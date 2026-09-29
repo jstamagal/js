@@ -28,7 +28,7 @@ and that read authorizes no edit; within the limit, the lines a page shows whole
 count as read for `patch`.
 
 A tool result over `limits.max_tool_result_inline_bytes` is spilled to
-`~/oldinbox/js-tool-results/` and replaced by a preview plus a notice naming
+`~/.js/state/tool-results/` and replaced by a preview plus a notice naming
 the file and the `range` that continues past the preview: always a byte range,
 plus a line range when the result has more than one line. A single-line
 payload, such as a JSON tool response, is reachable only by byte range.
@@ -348,7 +348,7 @@ Parameters:
 - `output_path`: optional `.png` destination.
 - `wait_ms`: pending-redraw collection delay, default `100`.
 
-Default output lands under `terminal-snapshots/` in the session working
+Default output lands under `~/.js/probes/terminal/`, never in the working
 directory. The result follows the standard js image contract: `IMAGE_RESULT`
 when vision is enabled, otherwise a visual-file metadata stub.
 
@@ -365,7 +365,7 @@ Parameters:
 - `target`: required URL, local HTML file, or local directory.
 - `click`: optional `>`-separated regex chain for visible buttons or links.
 - `press`: optional keyboard key to hold after clicks.
-- `output_dir`: optional parent directory for generated frames.
+- `output_dir`: optional parent directory for generated frames; default `~/.js/probes/browser/`.
 - `settle_ms`: wait after load and clicks, default `1200`.
 - `hold_ms`: key-hold duration, default `1600`.
 - `viewport_width`, `viewport_height`: defaults `1280` by `800`.
@@ -380,7 +380,7 @@ Use `browse` instead when rendered text or links are sufficient.
 
 ### `plan`
 
-Writes a markdown plan under `plans/`.
+Writes a markdown plan under `~/.js/plans/`.
 
 Parameters:
 
@@ -466,8 +466,9 @@ never a restart. The cell dies, the namespace lives. A cell blocked in a syscall
 that ignores SIGINT (a DNS lookup on a dead resolver is the observed case) is
 cleared only by `restart=true`. A kernel that actually dies is reported as such,
 naming the cell, instead of blocking until the deadline. Image output (matplotlib
-and friends) is written under `.js/kernel/` and reported as `IMAGE <path>`; the
-kernel process's own stderr goes to `.js/kernel/kernel.log`, never the terminal.
+and friends) is written under `~/.js/state/kernel/<run>/` and reported as
+`IMAGE <path>`; the kernel process's own stderr goes to `kernel.log` in the same
+directory, never the terminal.
 The result string is capped by `limits.max_tool_result_bytes` with the standard
 truncation marker.
 
@@ -508,7 +509,7 @@ Parameters:
 - `name`: the tool name — a plain Python identifier matching the definition.
 - `note`: for `save`, what changed and why. This is the message the next model
   reads.
-- `scope`: `global` (platform config dir `toolbox/`) or `project`
+- `scope`: `global` (`~/.js/toolbox/`) or `project`
   (`.js/toolbox/`). Project shadows global, mirroring agent precedence.
 - `revision`: for `restore`.
 - `source`: an explicit definition, for saving without a live kernel.
@@ -634,7 +635,7 @@ trace headers and prompt events include `tool_names` for the published schema se
 
 ## Generated Agent Tools
 
-Prompt directories under repo `prompts/`, global `agents/` in the platform config dir, and
+Prompt directories under repo `prompts/`, global `~/.js/agents/`, and
 project `.js/agents/` become tools named after the directory. Project scope
 wins over global, which wins over repo. Current generated tool names include:
 

@@ -93,7 +93,7 @@ stale page describes, correct or delete the stale text in the same change.
 Issues are beads: `bd ready` for open work, `bd show <id>` for the spec
 pointer and acceptance, `bd create` to file, `bd close <id>` when done,
 `bd sync` after a batch. Never `bd delete` a child id (`js-x.N`) — it can
-take the parent epic with it. Design docs live in `~/inbox/agents/js/`.
+take the parent epic with it. Design docs live in `~/.js/work/`.
 `.scratch/` is for a reproduction you are still building, not a backlog.
 Leave `toolsweep-*` artifacts alone unless explicitly asked to clean them up.
 

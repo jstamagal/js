@@ -34,7 +34,7 @@ Rules:
 
 ## Direct Agent Tools
 
-Prompt directories under repo `prompts/`, global `agents/` in the platform config dir, and
+Prompt directories under repo `prompts/`, global `~/.js/agents/`, and
 project `.js/agents/` become direct tools. Project scope wins over global,
 which wins over repo:
 
@@ -86,7 +86,7 @@ Child agents do not inherit the parent's selected tool surface.
 The child loads:
 
 ```text
-<root>/<agent_id>/*.md  # root is repo prompts/, platform config agents/, or project .js/agents/
+<root>/<agent_id>/*.md  # root is repo prompts/, ~/.js/agents/, or project .js/agents/
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`
@@ -126,7 +126,7 @@ What exists today:
 
 - `task`: generic subagent runner.
 - prompt-directory agents: any `<root>/<agent_id>` directory under repo
-  `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`.
+  `prompts/`, global `~/.js/agents/`, and project `.js/agents/`.
 - generated direct tools for prompt directories.
 - bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a

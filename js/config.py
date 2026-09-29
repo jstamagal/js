@@ -182,9 +182,9 @@ class Config:
     prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
     lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
     debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
-    debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
+    debug_autolog_dir: str | None = None  # override dir for the autolog; None = ~/.js/logs/<agent>
     transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
-    transcript_log_dir: str | None = None  # override dir for transcript logs; None = transcript/<agent> under data dir
+    transcript_log_dir: str | None = None  # override dir for transcript logs; None = ~/.js/logs/transcript/<agent>
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
 
 

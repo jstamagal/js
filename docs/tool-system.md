@@ -71,7 +71,7 @@ is one of:
 - `ban`: not on this agent's surface
 
 `tag:NAME` expands the tag's entries in place. Tags are defined in
-`tools.yaml` in the platform config dir (`~/.config/js/tools.yaml`):
+`~/.js/tools.yaml`:
 
 ```yaml
 tags:
@@ -300,7 +300,7 @@ subagent use those tools, add entries to that agent's `agent.yaml`.
 ## Generated Agent Tools
 
 Every prompt directory with markdown files or an `agent.yaml` under repo `prompts/`, global
-`agents/` in the platform config dir, and project `.js/agents/` becomes a direct agent tool unless
+`~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
 its name collides with a base tool. Project scope wins over global, which wins
 over repo when the same agent id appears in multiple roots.
 

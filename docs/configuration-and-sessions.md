@@ -19,7 +19,7 @@ In one line: built-in defaults < platform `jsrc` < project `.js/jsrc` < project
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. First run writes `~/.config/js/jsrc` as a set-script template with stock
+`#`. First run writes `~/.js/jsrc` as a set-script template with stock
 defaults and commented reference lines for the remaining registered knobs.
 
 Stock template lines include:
@@ -194,11 +194,11 @@ Files consulted, nearest first:
 
 1. `./.env`
 2. each parent directory's `.env`, up to the filesystem root
-3. `~/.config/js/.env`
+3. `~/.js/.env`
 
 The real process environment always wins, and the nearest file wins over a
 farther one: `TAVILY_API_KEY=x js ...` beats every file, and a project `.env`
-beats `~/.config/js/.env`. Nothing is ever overwritten — only unset names are
+beats `~/.js/.env`. Nothing is ever overwritten — only unset names are
 filled. `-C DIR` is applied first, so the walk starts at `DIR`.
 
 Format is the usual one: `KEY=value` per line, `#` comments, optional
@@ -277,40 +277,76 @@ run or session.
 output is unset, the runtime asks models.dev for the active model limit and
 otherwise leaves the provider cap alone.
 `--refresh-model-catalog` forces an immediate refresh of js's local models.dev
-mirror, writes the refreshed timestamp to platform data, and exits unless you
+mirror, writes the refreshed timestamp under `~/.js/cache/`, and exits unless you
 also requested another action such as `--prompt`.
 
 ## Agent Directories
 
-Config lives in the platform config directory and runtime/session state in the
-platform data directory (resolved by `platformdirs`; on Linux these honor
-`$XDG_CONFIG_HOME`/`$XDG_DATA_HOME`, defaulting to `~/.config/js` and
-`~/.local/share/js`). Project-local `.js/` files stay with the project.
-
-Platform config directory:
+Everything js keeps outside a project lives in `~/.js/`; `js/paths.py` is the
+one module that names these locations. Project-local `.js/` files stay with the
+project.
 
 ```text
-<config-dir>/            # e.g. ~/.config/js
-  jsrc
-  logins.toml
-  models-cache.json
+~/.js/
+  jsrc                   # the user layer; /save writes it
+  .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
+  tools.yaml
   agents/<agent_id>/     # global agent prompts
   skills/
-```
-
-Platform data directory:
-
-```text
-<data-dir>/              # e.g. ~/.local/share/js
+  toolbox/
+  logins/
+    logins.toml
+    models-cache.json
   sessions/<agent_id>/
     .history
     latest.json
     <session>.jsonl
-  state/<agent_id>/
-    debug.log
+  state/
+    <agent_id>/debug.log
+    <agent_id>/undo/
+    kernel/<run>/        # kernel.log and rich-output images
+    tool-results/        # oversized results, spilled whole
+    commit-backups/
+  logs/
+    <agent_id>/          # debug autolog, compaction flights
+    transcript/<agent_id>/
+  cache/modelsdotdev/
+  work/                  # what the agent must not lose; notes/ holds :n and :w
+  tmp/                   # js scratch; entries a day old are removed at start
+  plans/                 # the plan tool
+  probes/
+    browser/             # browser_probe runs
+    terminal/            # terminal_snapshot images
 ```
+
+Running js from the home directory makes `~/.js` the project `.js/` too; its
+`jsrc` then loads once, as the global layer.
+
+### Moving in from the old locations
+
+Before `~/.js`, js kept config in the XDG config directory
+(`~/.config/js`), state in the XDG data directory (`~/.local/share/js`), and
+agent keepers in `~/inbox/agents/js`. On the first start that finds any of
+them, js moves them in and prints one line per move on stderr, then writes
+`~/.js/state/home-migrated` so it never runs again. `just migrate-home` shows
+the same moves without making them; `just migrate-home --apply` makes them,
+marker or not.
+
+- Old config entries land at `~/.js/<name>`, except `logins.toml` and
+  `models-cache.json`, which go to `~/.js/logins/`.
+- Old data entries land at `~/.js/<name>`, except `transcript` (to
+  `logs/transcript`), `modelsdotdev` (to `cache/modelsdotdev`), `notes` (to
+  `work/notes`) and `commit-backups` (to `state/commit-backups`).
+- `~/inbox/agents/js` becomes `~/.js/work`.
+
+Each entry moves by one rename, so a directory lands whole or not at all. A
+symlink moves as the link and is never followed. When the destination already
+exists, a directory is merged entry by entry, an identical file or link drops
+the old copy, and anything else is refused with the reason and left in place.
+Across filesystems an entry is copied beside its destination, renamed into
+place, and only then removed from the old location.
 
 The `jsrc` template is written on first run; the per-agent `sessions/`
 and `state/` directories are created lazily when an agent runs. The agent id is
@@ -319,28 +355,28 @@ never leaves stray files.
 
 ### Agent prompts
 
-Agent prompts are discovered from repo `prompts/`, global `agents/` in the
-platform config dir, and project `.js/agents/`; project scope wins over global,
+Agent prompts are discovered from repo `prompts/`, global `~/.js/agents/`,
+and project `.js/agents/`; project scope wins over global,
 which wins over repo.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
 
-- `JS.md` and `JS.local.md` from the platform config dir. These are js's own
+- `JS.md` and `JS.local.md` from `~/.js/`. These are js's own
   always-on operator context and load whatever directory js runs in. They are
   deliberately NOT called `AGENTS.md`: that name is the per-repo convention a
   dozen other tools also read, so a global one would silently apply
   repo-shaped instructions everywhere.
 - `AGENTS.md` and `AGENTS.local.md` from the project, exactly the way any other
-  directory's project files load. A `~/.config/js/AGENTS.md` therefore applies
-  only when js is run from inside `~/.config/js`.
+  directory's project files load. A `~/.js/AGENTS.md` therefore applies
+  only when js is run from inside `~/.js`.
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
 Agent manifests are an `agent.yaml` beside the prompt files: `tools:`
 entries in `noun:modifier` form, and optional `model:`, `reasoning:`,
 `sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
-`tools.yaml` in the platform config dir. See [tool-system.md](tool-system.md).
+`~/.js/tools.yaml`. See [tool-system.md](tool-system.md).
 
 ## Session Resolution
 

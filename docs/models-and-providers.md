@@ -73,8 +73,8 @@ js --models-edit deepseek      # curate only DeepSeek's already-cached model lis
 js --logout deepseek           # remove saved DeepSeek login and cached models
 ```
 
-Successful logins are saved in `~/.config/js/logins.toml`, and the fetched
-model ids are cached in `~/.config/js/models-cache.json`. Multiple providers
+Successful logins are saved in `~/.js/logins/logins.toml`, and the fetched
+model ids are cached in `~/.js/logins/models-cache.json`. Multiple providers
 can be logged in at the same time. `--models-edit <provider>` opens the cached
 model checklist with every current entry selected and allows adding model ids
 without logging in, fetching, or making a model call. `--logout <provider>`
@@ -267,8 +267,8 @@ models.dev provider id; if that misses, it pattern-matches the model id against
 the models.dev catalog so wrappers like `deepseek-v4-pro:cloud` can still pick
 up the underlying model limits.
 
-js keeps a local writable mirror of the models.dev catalog under platform data
-(`~/.local/share/js/modelsdotdev/` on a default Linux setup). On model-limit
+js keeps a local writable mirror of the models.dev catalog in
+`~/.js/cache/modelsdotdev/`. On model-limit
 lookups it checks the catalog age and refreshes it automatically when it is more
 than 8 hours old. To force it immediately:
 

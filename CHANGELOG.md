@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`~/.js` is the one home (`js-l7e.1`).** Config, logins, sessions, state,
+  logs, the models.dev cache, notes, plans, probes and js's scratch all live
+  under `~/.js/`; `js/paths.py` is the only module that names a location. On
+  first start js moves the old XDG config and data directories and
+  `~/inbox/agents/js` in, one line per move, once; `just migrate-home` previews
+  it and `--apply` runs it by hand. Symlinks move as links, a differing target
+  is refused and left in place. The plan tool, browser probes, terminal
+  snapshots and kernel images no longer write into the working directory, and
+  oversized tool results spill to `~/.js/state/tool-results/`. XDG variables no
+  longer move js's home; the `platformdirs` dependency is gone.
+
 - **Built-in skills and user-only skills (`js-czp.1`, `js-czp.2`).** js ships
   nine skills in `js/skills/` (grilling, grill-me, wait-what, diagnosing-bugs,
   code-review, codebase-design, improve-codebase-architecture, handoff,

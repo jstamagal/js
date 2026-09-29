@@ -399,7 +399,7 @@ def _default_prompts_root() -> Path:
 def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tuple[Tool, ...]:
     """Build direct agent tools from roots ordered least- to most-specific.
 
-    ``from_env`` passes repo ``prompts/``, then platform config ``agents/``,
+    ``from_env`` passes repo ``prompts/``, then ``~/.js/agents/``,
     then project ``.js/agents/``. Later roots shadow earlier roots for the same
     agent id, matching prompt loading for main agents and subagents.
     """

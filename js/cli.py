@@ -3256,7 +3256,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
     parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
-    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
+    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
                         help="reach an endpoint with no saved login in one string: "
@@ -3271,7 +3271,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
+    session_group.add_argument("-s", "--session", help="create or resume a named session under ~/.js/sessions/<agent>")
     session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
     parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
