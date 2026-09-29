@@ -42,12 +42,26 @@ THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
 
-# Skin-tone modifiers and variation selectors: the Linux console cannot draw
-# them, and prompt_toolkit's width for the sequence disagrees with fbcon's, so
-# every column after one is off and the wrapper re-breaks the line on each
-# repaint. Dropped on TERM=linux; the base glyph stays.
-_CONSOLE_UNDRAWABLE = re.compile("[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F]")
+# Variation selectors: prompt_toolkit folds one into the cell before it and
+# keeps that cell's width, so U+26A0 U+FE0F (a warning sign) is one column in
+# its screen model while a terminal that honours U+FE0F draws it two wide. The
+# rest of that row then sits one column right of where the renderer believes
+# it is, and a later repaint, which writes only the cells it thinks changed,
+# leaves that row's characters showing through the next text drawn there.
+# Dropped from all scrollback text; the base glyph stays, and prompt_toolkit
+# and the terminal give it the same width.
+_VARIATION_SELECTORS = re.compile("[\uFE0E\uFE0F]")
+# Skin-tone modifiers: the Linux console cannot draw them, and prompt_toolkit's
+# width for the sequence disagrees with fbcon's. Dropped on TERM=linux.
+_CONSOLE_UNDRAWABLE = re.compile("[\U0001F3FB-\U0001F3FF]")
 _ON_CONSOLE = os.environ.get("TERM") == "linux"
+
+
+def _drawable(text: str) -> str:
+    """`text` as the scrollback holds it: no variation selectors, and no
+    skin-tone modifiers on the Linux console."""
+    text = _VARIATION_SELECTORS.sub("", text)
+    return _CONSOLE_UNDRAWABLE.sub("", text) if _ON_CONSOLE else text
 
 
 # --- status bar ------------------------------------------------------------
@@ -208,9 +222,7 @@ class Scrollback:
         self._answer: AnswerSpan | None = None
 
     def append(self, text: str) -> None:
-        if _ON_CONSOLE:
-            text = _CONSOLE_UNDRAWABLE.sub("", text)
-        self._pending += text
+        self._pending += _drawable(text)
         if "\n" not in self._pending and len(self._pending) < 200:
             return
         self._commit()
@@ -270,9 +282,7 @@ class Scrollback:
                 return
             block.start = block.end = len(doc.text)
             self._spans.append(block)
-        rendered = block.render()
-        if _ON_CONSOLE:
-            rendered = _CONSOLE_UNDRAWABLE.sub("", rendered)
+        rendered = _drawable(block.render())
         end = block.end
         change = len(rendered) - (end - block.start)
         text = doc.text[:block.start] + rendered + doc.text[end:]

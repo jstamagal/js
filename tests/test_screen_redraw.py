@@ -48,7 +48,7 @@ ANSWER = """Log itself restricted (`dmesg_restrict=1`) — pulled via `journalct
 _CSI = re.compile(r"\x1b\[([?0-9;]*)[ -/]*([@-~])")
 _OSC = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 _SGR = re.compile(r"\x1b\[[0-9;]*m")
-_VS16 = "️"
+_VS16 = "\ufe0f"
 
 
 class Terminal:
