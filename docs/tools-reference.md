@@ -411,6 +411,19 @@ A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
 the tool refuses it and the user loads it with `/skill <name>` in the REPL.
 The built-in skills in `js/skills/` are the lowest layer.
 
+A skill whose frontmatter sets `paths:` (a list of globs, or one string of
+comma-separated globs) is path-scoped. The first time `read`, `patch` or
+`write` succeeds on a file that matches, the tool result ends with one
+`<js-reminder>` that names the skill, its description and the
+`tool_discovery {"load":"skill:<name>"}` call. Each skill is offered once per
+session: the record lives in the session's tool-surface mark, so it survives
+later turns, compaction and resume, and a `/reset` clears it. A skill already
+loaded is not offered. Globs match the path relative to the working directory,
+as in `.gitignore`: a pattern without a `/` matches a name at any depth
+(`*.rs`), a pattern with one is anchored (`src/**/*.ts`), a directory pattern
+matches everything under it, and files outside the working directory match
+nothing. `paths: ['**']` scopes nothing and is ignored.
+
 Parameters:
 
 - `name`

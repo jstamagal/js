@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
@@ -34,6 +35,35 @@ class SkillMetadata:
     # False when the frontmatter sets ``disable-model-invocation: true``: the
     # skill is absent from the model's catalog and only the user loads it.
     model_invocable: bool = True
+    # Frontmatter ``paths:`` globs, relative to the session's working
+    # directory. The first read, patch or write of a matching file offers the
+    # skill to the model once per session.
+    paths: tuple[str, ...] = ()
+
+    def matches_path(self, relative: str) -> bool:
+        """Whether a path relative to the working directory matches ``paths``.
+
+        A pattern without a ``/`` (a trailing one aside) matches a file or
+        directory name at any depth, so ``*.rs`` matches ``src/main.rs``. A
+        pattern with a ``/`` is anchored at the working directory; ``**`` spans directories. A pattern
+        that names a directory matches everything under it.
+        """
+        parts = PurePosixPath(relative).parts
+        if not parts or parts[0] in {"..", "/"}:
+            return False
+        for raw in self.paths:
+            anchored = "/" in raw.strip().rstrip("/")
+            pattern = raw.strip().removeprefix("/").removesuffix("/**").rstrip("/")
+            if not pattern:
+                continue
+            if not anchored:
+                if any(fnmatchcase(part, pattern) for part in parts):
+                    return True
+                continue
+            for end in range(1, len(parts) + 1):
+                if _glob_match(parts[:end], tuple(pattern.split("/"))):
+                    return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -209,6 +239,15 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
     return f"{block}\n\n{request}" if request else block
 
 
+def _glob_match(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    """Match path components against pattern components; ``**`` spans any number."""
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_glob_match(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
+    return bool(parts) and fnmatchcase(parts[0], pattern[0]) and _glob_match(parts[1:], pattern[1:])
+
+
 def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
     names = set(reported)
     return tuple(name for name in required if name in names)
@@ -292,6 +331,7 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
         source=source,
         path=path,
         model_invocable=not user_only,
+        paths=_paths_field(manifest),
     )
     return _SkillRecord(metadata=metadata)
 
@@ -370,6 +410,23 @@ def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
         seen.add(tool)
         tools.append(tool)
     return tuple(tools)
+
+
+def _paths_field(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """``paths:`` as a list of globs, or one string of comma-separated globs."""
+    value = manifest.get("paths")
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("paths frontmatter must be a list of glob strings")
+    patterns = tuple(dict.fromkeys(item.strip() for item in value if item.strip()))
+    # A match-all pattern would offer the skill on the first file touched; it
+    # scopes nothing, so the skill is left unscoped.
+    if all(pattern.strip("/") == "**" for pattern in patterns):
+        return ()
+    return patterns
 
 
 def _validate_name(name: str) -> None:

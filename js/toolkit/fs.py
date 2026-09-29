@@ -11,6 +11,7 @@ import signal
 import stat
 import subprocess
 import threading
+import functools
 from functools import lru_cache
 from pathlib import Path
 from collections.abc import Iterable
@@ -1735,12 +1736,31 @@ def list_dir(path: str, recursive: bool = False, context: ToolContext | None = N
 
 
 
+def _offering_path_skills(handler):
+    """Wrap a read, patch or write handler so a successful call on a file that
+    matches a skill's ``paths:`` ends with that skill's one-time offer."""
+
+    @functools.wraps(handler)
+    def wrapped(*args, **kwargs):
+        result = handler(*args, **kwargs)
+        context = kwargs.get("context")
+        raw = kwargs.get("file_path") or kwargs.get("path")
+        offer = getattr(getattr(context, "tool_registry", None), "offer_path_skills", None)
+        if not raw or not callable(offer) or not isinstance(result, str) or result.startswith("ERROR"):
+            return result
+        path = Path(os.path.expanduser(str(raw)))
+        reminder = offer(path if path.is_absolute() else context.cwd / path, context.cwd)
+        return f"{result}\n{reminder}" if reminder else result
+
+    return wrapped
+
+
 def tools() -> tuple[Tool, ...]:
     return (
         Tool(
             "read",
             load_description("read"),
-            fs_read,
+            _offering_path_skills(fs_read),
             {
                 "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a file."},
                 "range": {
@@ -1762,7 +1782,7 @@ def tools() -> tuple[Tool, ...]:
         Tool(
             "write",
             load_description("write"),
-            write,
+            _offering_path_skills(write),
             {
                 "file_path": {"type": "string", "description": "File path to create or overwrite."},
                 "content": {"type": "string", "description": "Complete file content to write."},
@@ -1814,7 +1834,7 @@ def tools() -> tuple[Tool, ...]:
         Tool(
             "patch",
             load_description("patch"),
-            patch,
+            _offering_path_skills(patch),
             {
                 "file_path": {"type": "string", "description": "File path to edit."},
                 "old_string": {"type": "string", "description": "Exact text to replace. Required unless edits is used."},

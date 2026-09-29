@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field, replace
 from functools import cache
@@ -171,6 +172,8 @@ class TurnToolSurface:
         self._loaded: set[str] = set()
         self._mcp_loaded: set[str] = set()
         self._loaded_ids: set[str] = set()
+        # Skills a path-scoped offer already named this session.
+        self._offered_skills: set[str] = set()
         # `skill` is read-only, so two of its calls can activate tools at once.
         self._activation_lock = threading.Lock()
         self._discovery = discovery.discovery_tool(self)
@@ -245,7 +248,10 @@ class TurnToolSurface:
                 remote = self.mcp_host.remote_tools.get(name)
                 if remote is not None:
                     sources.add(remote[0])
-        return {"ids": sorted(self._loaded_ids), "mcp_sources": sorted(sources)}
+        state: dict = {"ids": sorted(self._loaded_ids), "mcp_sources": sorted(sources)}
+        if self._offered_skills:
+            state["offered_skills"] = sorted(self._offered_skills)
+        return state
 
     def _state_changed(self) -> None:
         if self.on_change is not None:
@@ -253,6 +259,9 @@ class TurnToolSurface:
 
     async def restore(self, state: dict) -> None:
         """Restore visibility through current policy; never replay skill instructions."""
+        offered = state.get("offered_skills", [])
+        if isinstance(offered, list):
+            self._offered_skills.update(name for name in offered if isinstance(name, str))
         ids = state.get("ids", [])
         if not isinstance(ids, list):
             return
@@ -304,6 +313,34 @@ class TurnToolSurface:
                     self._loaded_ids.add(f"native:{tool.name}")
         self._state_changed()
         return ToolActivationResult(activated=tuple(activated), denied=tuple(denied), missing=tuple(missing))
+
+    def offer_path_skills(self, path: Path, cwd: Path) -> str:
+        """A js-reminder offering each unoffered skill whose ``paths`` match ``path``.
+
+        Each skill is offered at most once per session; a skill already loaded
+        is marked offered without a reminder. Returns "" when nothing is new.
+        """
+        relative = os.path.relpath(os.path.abspath(path), os.path.abspath(cwd))
+        offers = []
+        with self._activation_lock:
+            matched = [
+                (item_id, skill) for item_id, skill in self._skills.items()
+                if skill.paths and skill.name not in self._offered_skills
+                and skill.matches_path(relative)
+            ]
+            if not matched:
+                return ""
+            for item_id, skill in matched:
+                self._offered_skills.add(skill.name)
+                if item_id not in self._loaded_ids:
+                    offers.append((item_id, skill))
+            self._state_changed()
+        lines = [
+            f"Skill {skill.name} applies to {relative}: {skill.description} "
+            f'Load it with tool_discovery {{"load":"{item_id}"}}.'
+            for item_id, skill in offers
+        ]
+        return f"<js-reminder>{' '.join(lines)}</js-reminder>" if lines else ""
 
     def catalog(self) -> tuple[CatalogEntry, ...]:
         present = set(self.allowed.by_name)

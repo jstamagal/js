@@ -148,7 +148,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | resume path |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | resume path |
-| Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
+| Path-scoped rules and skills | Claude Code `claudemd.ts:250` | skills done in js-1g1.24: `paths:` frontmatter, `TurnToolSurface.offer_path_skills`; rules still missing |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | beside `alias` |
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | `screen.py` |
 | Hooks that return context or block | Claude Code `utils/hooks.ts:418` | `events.py` |
