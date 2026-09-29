@@ -864,7 +864,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes)
@@ -1095,7 +1095,7 @@ async def _dispatch_fan_out_async(
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
         _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together)
@@ -1130,7 +1130,7 @@ async def _dispatch_async_tool(
         raise
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
-        result = f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(exc).__name__}: {exc}")
     raw_result = result
     result = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
