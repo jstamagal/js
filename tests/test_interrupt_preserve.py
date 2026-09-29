@@ -8,7 +8,7 @@ from js.memory import append_message, load_messages
 
 
 def _session_file(tmp_path):
-    found = list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+    found = list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
     assert len(found) == 1, found
     return found[0]
 

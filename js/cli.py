@@ -46,6 +46,7 @@ from . import providers
 from . import replcomplete
 from . import runtime
 from . import stats
+from . import home as _home
 from . import paths as _paths
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
@@ -82,7 +83,7 @@ RUN
   js -C DIR ...               run as if launched from DIR
 
 PICK
-  -a NAME     agent profile (~/.config/js/agents/NAME)
+  -a NAME     agent profile (~/.js/agents/NAME)
   -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
   -r EFFORT   off|minimal|low|medium|high|xhigh|max
 
@@ -122,7 +123,7 @@ def _error_text(e: BaseException) -> str:
 def _registry_for(cfg) -> object:
     # Always build from THIS cfg's prompt roots. The old code returned a module-level
     # registry built with no roots on the normal path, and only passed cfg.prompt_roots
-    # on the locked branch — so every agent in ~/.config/js/agents and .js/agents was
+    # on the locked branch — so every agent in ~/.js/agents and .js/agents was
     # invisible as a tool unless the operator happened to lock subagent models.
     #
     # The `model_override` flag exposes the subagent `model` param on the task tool;
@@ -1968,7 +1969,7 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
             agent_id = getattr(cfg, "agent_id", "?")
             return (
                 f"no such agent: {agent_id}; looked in project .js/agents, "
-                f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
+                f"{agents_dir}, and repo prompts. "
                 f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
                 f"and an optional agent.yaml manifest."
             )
@@ -2361,7 +2362,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
 
 
 def _commit_backup_root() -> Path:
-    return _paths.data_dir() / "commit-backups"
+    return _paths.commit_backups_dir()
 
 
 def _worktree_patch(repo_dir: Path, commit_helper) -> str:
@@ -3228,6 +3229,9 @@ def _printonly_run(args, cli_agent, presets) -> int:
 @_session_scope
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
+    # Before anything reads or writes ~/.js: move the old locations in, once.
+    _home.migrate_once()
+    _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
@@ -3329,7 +3333,7 @@ def main(argv: list[str] | None = None) -> int:
         # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
-    # Fill unset env names from .env, cwd upward, then ~/.config/js/.env. The
+    # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
     dotenv.load()

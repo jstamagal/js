@@ -6,7 +6,7 @@ request.
 A skill is a directory holding a `SKILL.md` (the Agent Skills format):
 `<root>/<name>/SKILL.md`. Roots, lowest layer to highest:
 - built-in: `js/skills/` (shipped with js)
-- global: `~/.agents/skills/`, then `~/.config/js/skills/`
+- global: `~/.agents/skills/`, then `~/.js/skills/`
 - project: `./.agents/skills/`, then `./.js/skills/`
 
 Later layers override earlier ones by name; within a layer the js-native

@@ -453,7 +453,7 @@ def registry_for_roots(
 
     Every caller must go through here rather than through a module-level singleton.
     A registry built with no roots falls back to the js REPO's own prompts/ dir, which
-    holds two agents; the operator's agents live in ~/.config/js/agents and .js/agents,
+    holds two agents; the operator's agents live in ~/.js/agents and .js/agents,
     which only reach the registry via cfg.prompt_roots. The singleton in cli.py meant
     every one of those agents was invisible as a tool, and selecting one printed
     "tool selector 'reviewer' matched no tool; ignoring".

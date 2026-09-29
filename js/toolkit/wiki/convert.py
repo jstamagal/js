@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ... import paths
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
@@ -70,7 +71,7 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
     spreadsheet = ext in _SPREADSHEET_EXT
     target = _SPREADSHEET_FILTER if spreadsheet else "txt"
-    with TemporaryDirectory(prefix="js-wiki-") as tmp:
+    with TemporaryDirectory(prefix="js-wiki-", dir=paths.tmp_dir()) as tmp:
         rc, out, err = run(
             ["soffice", "--headless", "--convert-to", target, "--outdir", tmp, str(p)],
             context,

@@ -1,4 +1,4 @@
-Persist a markdown plan under `./plans`.
+Persist a markdown plan under `~/.js/plans`.
 
 Use this for durable implementation plans, task breakdowns, investigation notes,
 or strategy documents that should survive the current turn.

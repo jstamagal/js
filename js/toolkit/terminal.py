@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import paths
 from . import fs
 from .core import Tool, ToolContext
 from .descriptions import load_description
@@ -441,11 +442,7 @@ def terminal_snapshot(
         target = context.resolve_path(raw_output_path)
     else:
         safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "-", session).strip("-") or "main"
-        target = (
-            state["cwd"]
-            / "terminal-snapshots"
-            / f"{safe_session}-{snapshot_n:02d}.png"
-        )
+        target = paths.terminal_snapshots_dir() / f"{safe_session}-{snapshot_n:02d}.png"
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)

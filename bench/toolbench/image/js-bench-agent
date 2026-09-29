@@ -5,10 +5,14 @@
 set -u
 agent="$1"
 prompt="$2"
-mkdir -p "$HOME/.config"
-[ -d "$HOME/.config/js" ] || cp -r /opt/js-config/js "$HOME/.config/js"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-/telemetry/js-data}"
-mkdir -p "$XDG_DATA_HOME"
+# ~/.js holds the bench agents and jsrc; its sessions, state and logs live
+# under /telemetry so they outlive the sandbox.
+telemetry="${JS_TELEMETRY_DIR:-/telemetry/js-data}"
+[ -d "$HOME/.js" ] || cp -r /opt/js-config/js "$HOME/.js"
+for dir in sessions state logs; do
+    mkdir -p "$telemetry/$dir"
+    [ -e "$HOME/.js/$dir" ] || ln -s "$telemetry/$dir" "$HOME/.js/$dir"
+done
 
 # RepoRacer's prompt lists the files the human touched. Hiding that list makes
 # the agent locate them itself, which is the tool use this bench measures.
@@ -24,6 +28,6 @@ code=$?
 end=$(date +%s)
 
 python="$(dirname "$(readlink -f "$(command -v js)")")/python"
-"$python" -m js.toolstats --latest --data-dir "$XDG_DATA_HOME/js" --agent "$agent" \
+"$python" -m js.toolstats --latest --data-dir "$HOME/.js" --agent "$agent" \
     --tag TOOLSTATS --extra "wall_s=$((end - start))" --extra "exit=$code" || true
 exit $code

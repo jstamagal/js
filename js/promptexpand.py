@@ -47,7 +47,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import settings
+from . import paths, settings
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 
 __all__ = ["expand_prompt", "PromptExpansionError"]
@@ -289,7 +289,7 @@ def _interpreted(label: str, interp_argv, ext: str):
     throwaway compile dir. This matches the bare ``!{sh}``/``!{bash}`` runners.
     """
     def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=paths.tmp_dir()) as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
             return _run_capture(
@@ -309,7 +309,7 @@ def _compiled(label: str, compiler: str, ext: str):
     """
     def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
         cc = shutil.which(compiler) or compiler
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=paths.tmp_dir()) as d:
             src = Path(d) / f"snippet{ext}"
             exe = Path(d) / "snippet.out"
             src.write_text(body, encoding="utf-8")

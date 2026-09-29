@@ -54,7 +54,7 @@ async def edit_buffer(editor: Editor, argv: list[str], path: Path | None = None)
     buffer takes the file's text afterwards. Nothing is sent."""
     temp = path is None
     if path is None:
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8", dir=paths.tmp_dir()) as fh:
             fh.write(editor.text)
         path = Path(fh.name)
     try:

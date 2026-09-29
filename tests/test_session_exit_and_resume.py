@@ -47,7 +47,7 @@ def _repl(monkeypatch, tmp_path, argv, lines=(), interrupts=0):
 
 
 def _only_session(tmp_path):
-    found = list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+    found = list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
     assert len(found) == 1, found
     return found[0]
 
