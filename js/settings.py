@@ -517,28 +517,28 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
 
 def _validate_alias_profiles(value: Any) -> str | None:
     if not isinstance(value, list):
-        return "expected a JSON list"
+        return msgs.EXPECTED_JSON_LIST.text()
     for profile in value:
         if not isinstance(profile, dict):
-            return "expected profiles with match and aliases"
+            return msgs.EXPECTED_ALIAS_PROFILES.text()
         match = profile.get("match")
         aliases = profile.get("aliases")
         if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
-            return "expected profiles with match and aliases"
+            return msgs.EXPECTED_ALIAS_PROFILES.text()
         if not aliases:
-            return "expected non-empty aliases"
+            return msgs.EXPECTED_NONEMPTY_ALIASES.text()
         matches = [match] if isinstance(match, str) else match
         if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
-            return "expected non-empty match values"
+            return msgs.EXPECTED_NONEMPTY_MATCH.text()
         seen_aliases: set[str] = set()
         for canonical, alias in aliases.items():
             if not isinstance(canonical, str) or _TOOL_ALIAS_NAME_RE.fullmatch(canonical) is None:
-                return "expected canonical tool names matching [A-Za-z0-9_-]+"
+                return msgs.EXPECTED_CANONICAL_TOOL_NAMES.text()
             if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
-                return "expected alias names matching [A-Za-z0-9_-]+"
+                return msgs.EXPECTED_ALIAS_NAMES.text()
             key = alias.lower()
             if key in seen_aliases:
-                return "expected unique alias names"
+                return msgs.EXPECTED_UNIQUE_ALIASES.text()
             seen_aliases.add(key)
     return None
 
@@ -613,18 +613,18 @@ def coerce_extra_value(raw: str) -> Any:
 def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
     """Parse one ``--extra KEY=VALUE`` argument into (path, value)."""
     if "=" not in arg:
-        raise ValueError(f"--extra expects KEY=VALUE, got: {arg!r}")
+        raise ValueError(msgs.EXTRA_NOT_KEY_VALUE.text(arg=arg))
     raw_key, raw_value = arg.split("=", 1)
     key = raw_key.strip()
     if not key:
-        raise ValueError(f"--extra key is empty: {arg!r}")
+        raise ValueError(msgs.EXTRA_EMPTY_KEY.text(arg=arg))
     if raw_value == "":
-        raise ValueError(f"--extra value is empty: {arg!r}")
+        raise ValueError(msgs.EXTRA_EMPTY_VALUE.text(arg=arg))
     spec = SPEC_BY_KEY.get(key)
     if spec is not None:
         value, error = coerce_value(spec, raw_value)
         if error is not None:
-            raise ValueError(f"--extra {key}: {error}")
+            raise ValueError(msgs.EXTRA_BAD_VALUE.text(key=key, error=error))
         return spec.path, value
     prefix_spec = parent_spec(key)
     if prefix_spec is not None and prefix_spec.type != "map":

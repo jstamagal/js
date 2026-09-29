@@ -195,14 +195,11 @@ def _run_subsystem(
     spec = _SUBSYSTEMS.get(key)
     if spec is None:
         raise PromptExpansionError(
-            f"unknown inline subsystem '{name}'. known: {', '.join(sorted(_SUBSYSTEMS))}"
+            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.text(name=name, known=", ".join(sorted(_SUBSYSTEMS)))
         )
     is_code, runner = spec
     if is_code and not allow_code:
-        raise PromptExpansionError(
-            f"inline '{name}' executes code, but inline-code execution is off "
-            f"(--im-a-pussy / set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0)"
-        )
+        raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.text(name=name))
     if is_code:
         # Code subsystems run against the real process environment, always.
         return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
@@ -214,7 +211,7 @@ def _run_subsystem(
 def _sub_env(body: str, *, environ: dict, timeout_s: int) -> str:
     name = body.strip()
     if not _NAME.fullmatch(name):
-        raise PromptExpansionError(f"!{{env ...}} needs a variable name, got '{body}'")
+        raise PromptExpansionError(msgs.DIRECTIVE_ENV_NEEDS_NAME.text(body=body))
     return environ.get(name, "")
 
 
@@ -247,9 +244,9 @@ def _run_capture(argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes
             cap=max_output_bytes,
         )
     except FileNotFoundError:
-        raise PromptExpansionError(f"{label}: '{argv[0]}' not found on PATH") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_NOT_ON_PATH.text(label=label, program=argv[0])) from None
     except subprocess.TimeoutExpired:
-        raise PromptExpansionError(f"{label}: timed out after {timeout_s}s") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_TIMED_OUT.text(label=label, seconds=timeout_s)) from None
     if not isinstance(proc, CappedProcessResult):
         proc = CappedProcessResult(proc[0], proc[1], proc[2])
     stdout = _decode_capped(
@@ -264,7 +261,9 @@ def _run_capture(argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes
     )
     if proc.returncode != 0:
         err = stderr.strip()
-        raise PromptExpansionError(f"{label}: exited {proc.returncode}: {err or '(no stderr)'}")
+        if err:
+            raise PromptExpansionError(msgs.DIRECTIVE_EXITED.text(label=label, code=proc.returncode, stderr=err))
+        raise PromptExpansionError(msgs.DIRECTIVE_EXITED_SILENT.text(label=label, code=proc.returncode))
     return stdout.rstrip("\n")
 
 
@@ -323,7 +322,7 @@ def _compiled(label: str, compiler: str, ext: str):
                 [cc, str(src), "-o", str(exe)],
                 cwd=d,
                 timeout_s=timeout_s,
-                label=f"{label} (compile)",
+                label=f"{label} compile",
                 max_output_bytes=max_output_bytes,
             )
             return _run_capture(

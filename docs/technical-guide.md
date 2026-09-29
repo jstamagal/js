@@ -204,46 +204,41 @@ the process cwd (`js/commit_helper.py:292`). With no repo flag the helper resolv
 `Path.cwd()` (`js/commit_helper.py:50`).
 
 `python -m js.commit_helper survey` prints one compact snapshot the agent reads
-once instead of probing (`js/commit_helper.py:170`):
+once instead of probing (`cmd_survey`). Its lines are `SURVEY_*` entries in
+`js/messages.py`:
 
-- `branch:` line (`branch --show-current`, falling back to a detached-HEAD short
-  hash or `(no commits yet)`) (`js/commit_helper.py:127`)
-- `-- status --`: raw `git status --porcelain` `XY path` rows, or
-  `(clean tree, nothing to commit)` (`js/commit_helper.py:181`)
-- `-- staged diff --` and `-- unstaged diff --`: per-tracked-file text diffs with
-  every `@@` hunk numbered, each headed `### <path>  (N hunks)`
-  (`js/commit_helper.py:149`)
-- `-- untracked --`: `??` files, each tagged with the `stage <p> all` hint
-  (`js/commit_helper.py:198`)
-- `-- recent log --`: `git log --oneline -8`, or `(no history)`
-  (`js/commit_helper.py:205`)
+- `Branch:` line (`branch --show-current`, falling back to `Detached HEAD at
+  <hash>` or `No commits yet`)
+- `-- Status --`: raw `git status --porcelain` `XY path` rows, or
+  `Clean tree. Nothing to commit.`
+- the staged and the unstaged diff sections: per-tracked-file text diffs with
+  every `@@` hunk numbered, each headed `### <path>: N hunks`. Only the
+  unstaged heading names the `stage <file> <n[,n]|all>` form, since only
+  unstaged hunk numbers address `stage`.
+- `-- Untracked --`: `??` files, each with the `stage <p> all` hint, or `None.`
+- `-- Recent log --`: `git log --oneline -8`, or `No history.`
 
 The survey is deterministic: it only reads git state (status/diff/log), runs no
-model, and does not mutate the repo (`js/commit_helper.py:170`). A file with no
-text hunks prints `(no text hunks — binary/rename/mode? stage the whole file)`
-(`js/commit_helper.py:160`).
+model, and does not mutate the repo. A file with no text hunks says so and
+tells the agent to stage the whole file.
 
 `python -m js.commit_helper stage <file> <hunks|all>` stages part of one file
-(`js/commit_helper.py:232`). `<hunks>` is a comma-separated list of the 1-based
-hunk numbers the survey printed (e.g. `1,3`), or `all`:
+(`cmd_stage`). `<hunks>` is a comma-separated list of the 1-based hunk numbers
+the survey printed (e.g. `1,3`), or `all`:
 
 - For a tracked text file, the named hunks are extracted from `git diff -- <file>`
   and replayed with `git apply --cached --recount`; output is
-  `staged <file> hunk(s) 1,3 of N` (`js/commit_helper.py:276`).
-- `all` on any file stages the whole file via `git add -- <file>`
-  (`js/commit_helper.py:214`).
-- An untracked (`??`) file only accepts `all`; a hunk spec on it errors
-  (`js/commit_helper.py:245`).
-- Out-of-range hunk numbers, non-numeric specs, files with no pending changes,
-  and `git apply` failures each error with exit code `2` (or `1` for the apply
-  failure, which also prints the `stage <file> all` fallback)
-  (`js/commit_helper.py:271`).
+  `Staged <file>: hunks 1,3 of N`.
+- `all` on any file stages the whole file via `git add -- <file>`.
+- An untracked (`??`) file only accepts `all`; a hunk spec on it fails.
+- Out-of-range hunk numbers, non-numeric specs and files with no pending
+  changes each fail with exit code `2`; a `git apply` failure exits `1` and
+  prints the `stage <file> all` fallback.
 
-For a bare or unknown subcommand `main()` prints the module docstring; exit is
-`2` when no args were given and `0` when an unknown subcommand was passed
-(`js/commit_helper.py:312`). `stage` with the wrong argument count exits `2`
-(`js/commit_helper.py:317`). A non-git directory exits `2`; other git failures
-exit `1` (`js/commit_helper.py:175`).
+For a bare or unknown subcommand `main()` prints `COMMIT_HELPER_HELP`; exit is
+`2` when no args were given and `0` when an unknown subcommand was passed.
+`stage` or `commit` with the wrong argument count exits `2`. A non-git
+directory exits `2`; other git failures exit `1`.
 
 ## Error Boundaries
 
@@ -258,16 +253,22 @@ its current position, including after compaction has shifted the history.
 
 ## Operator Messages
 
-Every line js prints for the operator is a named `Message` in
-`js/messages.py`; code passes the values for its holes (`msgs.say(msgs.MODEL_SET,
-model=m)`, `msgs.warn(...)` for stderr, `.text()` for an error string returned
-to a caller). A banner entry prints behind the `BANNER` slot (`***` today); no
-template spells the slot. Severity is colour, never a word: `WARN` paints the
-holes light yellow, `GRAVE` light red, and a message with no holes is painted
-whole. Tool results, tool descriptions and prompts are the model's text and
-stay where they are; so does the commit helper's output, which the commit agent
-reads. `tests/test_messages.py` fails on a `print` in `js/` that carries the
-slot, `error:`, `warning:`, `js:`, `knob` or `(no `.
+The operator's messages are named `Message` entries in `js/messages.py`; code
+passes the values for their holes (`msgs.say(msgs.MODEL_SET, model=m)`,
+`msgs.warn(...)` for stderr, `.text()` for an error string returned to a
+caller or raised as exception text). A banner entry prints behind the `BANNER`
+slot (`***` today); no template spells the slot. Severity is colour, never a
+word: `WARN` paints the holes light yellow, `GRAVE` light red, and a message
+with no holes is painted whole. The commit helper prints its entries with
+`.text()`, because the commit agent reads its output: no colour, no slot.
+
+Registry text keeps its own home: command usage and doc strings in the command
+table, `SettingSpec` docs, argparse help and the kernel panel's field labels.
+Tool results, tool descriptions and prompts are the model's text and stay
+where they are. `tests/test_messages.py` fails on a `print`, `.print` or
+stream write in `js/`, or an argparse help string, that carries the slot,
+`error:`, `warning:`, `js:`, `knob` or `(no `, and it drives the `/tools`
+table, a failed prompt directive and the commit helper to check their output.
 
 ## Backward Compatibility Policy
 

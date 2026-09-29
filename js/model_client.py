@@ -22,7 +22,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 import ai
 
-from . import codex_auth, codex_provider, providers, reasoning, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, routing, stream_transport, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -87,31 +87,19 @@ def _friendly_provider_error(
     detail = _detail(exc)
 
     if isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc):
-        return FriendlyProviderError(
-            f"provider {provider!r} needs an API key; run `js --login {provider}` "
-            "or `set provider.api_key <value>`; detail: SDK could not resolve authentication"
-        )
+        return FriendlyProviderError(msgs.PROVIDER_NO_AUTH_METHOD.text(provider=provider))
 
     if isinstance(exc, ValueError) and str(exc).startswith("unknown provider id:"):
         unknown = str(exc).partition(":")[2].strip()
         if unknown.startswith(("'", '"')) and len(unknown) >= 2:
             provider = unknown[1:-1]
-        return FriendlyProviderError(
-            f"unknown provider {provider!r}; run `js --login {provider}` "
-            "(js --list-models shows what's runnable)"
-        )
+        return FriendlyProviderError(msgs.PROVIDER_UNKNOWN.text(provider=provider))
 
     if isinstance(exc, ai.ProviderAuthenticationError):
-        return FriendlyProviderError(
-            f"provider {provider!r} authentication failed; detail: {detail}; "
-            f"run `js --login {provider}` or `set provider.api_key <value>`"
-        )
+        return FriendlyProviderError(msgs.PROVIDER_AUTH_FAILED.text(provider=provider, detail=detail))
 
     if isinstance(exc, ai.ProviderNotConfiguredError):
-        return FriendlyProviderError(
-            f"provider {provider!r} is not configured; detail: {detail}; "
-            f"run `js --login {provider}` or `set provider.api_key <value>`"
-        )
+        return FriendlyProviderError(msgs.PROVIDER_NOT_CONFIGURED.text(provider=provider, detail=detail))
 
     # Keep request failures intact: runtime and summary recovery consume the
     # SDK type, retryability and structured overflow fields. The SDK diagnostic

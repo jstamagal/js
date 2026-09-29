@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, logins, providers
+from js import cli, logins, messages as msgs, providers
 from js.config import from_env
 from js.logins import Login
 from js.routing import ProviderNotLoggedInError, resolve_model_route
@@ -148,7 +148,7 @@ def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
     with pytest.raises(ProviderNotLoggedInError) as excinfo:
         cli._resolve_cli_model_override(cfg, "huggingface/foo")
 
-    assert "provider 'huggingface' is not logged in" in str(excinfo.value)
+    assert str(excinfo.value) == msgs.PROVIDER_NOT_LOGGED_IN.text(provider="huggingface")
 
 
 def test_js_model_known_unlogged_prefix_does_not_ride_saved_default(monkeypatch, tmp_path):
@@ -163,7 +163,7 @@ def test_js_model_known_unlogged_prefix_does_not_ride_saved_default(monkeypatch,
     with pytest.raises(ProviderNotLoggedInError) as excinfo:
         from_env(cwd=tmp_path, save_session=False)
 
-    assert "provider 'huggingface' is not logged in" in str(excinfo.value)
+    assert str(excinfo.value) == msgs.PROVIDER_NOT_LOGGED_IN.text(provider="huggingface")
 
 
 def test_explicit_gateway_provider_keeps_known_provider_model_id(monkeypatch, tmp_path):

@@ -287,7 +287,7 @@ def test_quiet_stays_silent_on_success_and_still_reports_an_error(ctx, monkeypat
         return screen
 
     assert render("") == ""
-    assert "kernel[3] ERROR" in render("ZeroDivisionError: division by zero")
+    assert msgs.KERNEL_CELL.text(cell=3) in render("ZeroDivisionError: division by zero")
     assert "ZeroDivisionError" in render("ZeroDivisionError: division by zero")
 
 

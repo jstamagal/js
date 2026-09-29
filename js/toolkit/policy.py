@@ -305,13 +305,15 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
     order = {"eager": 0, "lazy": 1, "ban": 2, None: 3}
     rows = sorted(decisions, key=lambda d: (order[d.modifier], d.tool.name))
     width = max((len(d.tool.name) for d in rows), default=4)
-    lines = [f"{'tool':<{width}}  {'state':<8}decided by"]
+    lines = [msgs.TOOL_CHAIN_ROW.text(tool=msgs.TOOL_CHAIN_TOOL.text(), width=width,
+                                      state=msgs.TOOL_CHAIN_STATE.text(),
+                                      decided=msgs.TOOL_CHAIN_DECIDED_BY.text())]
     for d in rows:
         state = d.modifier or "-"
-        decided = d.rule.label if d.rule is not None else "(no entry)"
-        lines.append(f"{d.tool.name:<{width}}  {state:<8}{decided}")
+        decided = d.rule.label if d.rule is not None else msgs.NONE_VALUE.text()
+        lines.append(msgs.TOOL_CHAIN_ROW.text(tool=d.tool.name, width=width, state=state, decided=decided))
     shown = {d.tool.name.lower() for d in rows if d.modifier in ("eager", "lazy")}
     for name, patterns in sorted(bans.items()):
         if name in shown:
-            lines.append(f"ban {name}: " + ", ".join(repr(p) for p in patterns))
+            lines.append(msgs.TOOL_CHAIN_BAN.text(tool=name, patterns=", ".join(repr(p) for p in patterns)))
     return lines

@@ -5,16 +5,18 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from js import cli, colors as C, messages as msgs, stream_transport
+from js import cli, colors as C, commit_helper, messages as msgs, stream_transport
+from js.promptexpand import expand_prompt
+from js.toolkit import policy
+from js.toolkit.registry import build_default_registry
 
 JS_ROOT = Path(msgs.__file__).parent
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# The commit helper's output is read by the commit agent, not the operator.
-MODEL_FACING = {JS_ROOT / "commit_helper.py"}
 DEAD = ("error:", "warning:", "js:", "note:", "(no ", "knob", "!!")
 
 
@@ -97,23 +99,28 @@ def _string_parts(node: ast.AST) -> list[str]:
     return parts
 
 
-def _screen_calls(tree: ast.AST) -> list[ast.Call]:
-    """print(...) calls and writes to sys.stdout / sys.stderr."""
-    calls = []
+def _screen_calls(tree: ast.AST) -> list[ast.AST]:
+    """print(...) and console.print(...) calls, writes to sys.stdout /
+    sys.stderr, and argparse help strings."""
+    calls: list[ast.AST] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if isinstance(func, ast.Name) and func.id == "print":
             calls.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr == "print":
+            calls.append(node)
         elif (isinstance(func, ast.Attribute) and func.attr == "write"
               and isinstance(func.value, ast.Attribute) and func.value.attr in ("stdout", "stderr")):
             calls.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr == "add_argument":
+            calls.extend(kw.value for kw in node.keywords if kw.arg == "help")
     return calls
 
 
 def _modules() -> list[Path]:
-    return [path for path in sorted(JS_ROOT.rglob("*.py")) if path not in MODEL_FACING]
+    return sorted(JS_ROOT.rglob("*.py"))
 
 
 def test_no_print_in_js_carries_a_dead_word_or_the_slot():
@@ -124,7 +131,7 @@ def test_no_print_in_js_carries_a_dead_word_or_the_slot():
             for text in _string_parts(call):
                 lowered = text.lower()
                 if msgs.BANNER in text or any(word in lowered for word in DEAD):
-                    found.append(f"{path.relative_to(JS_ROOT)}:{call.lineno}: {text!r}")
+                    found.append(f"{path.relative_to(JS_ROOT)}:{getattr(call, 'lineno', 0)}: {text!r}")
     assert found == []
 
 
@@ -132,3 +139,44 @@ def test_the_slot_is_spelled_only_in_messages():
     spelled = [str(path.relative_to(JS_ROOT)) for path in _modules()
                if path.name != "messages.py" and f'"{msgs.BANNER}' in path.read_text(encoding="utf-8")]
     assert spelled == []
+
+
+def _clean(lines: list[str]) -> list[str]:
+    """Lines that carry a dead word or a paren aside."""
+    return [line for line in lines
+            if "(" in line or ")" in line or any(word in line.lower() for word in DEAD)]
+
+
+def test_the_tools_table_names_an_undecided_tool_without_a_paren_aside():
+    decisions = policy.resolve(build_default_registry().tools, ())
+    rows = policy.render_table(decisions, {})
+    assert len(rows) == len(decisions) + 1
+    assert _clean(rows) == []
+
+
+def test_a_failed_directive_without_stderr_warns_without_a_paren_aside(capsys):
+    assert expand_prompt("x !{sh exit 3} y", allow_code=True) == "x !{sh exit 3} y"
+    err = _plain(capsys.readouterr().err).strip()
+    reason = msgs.DIRECTIVE_EXITED_SILENT.text(label="!{sh}", code=3)
+    assert err == msgs.banner(msgs.DIRECTIVE_NOT_EXPANDED.text(error=reason))
+    assert _clean([err]) == []
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def test_the_commit_helper_speaks_in_entries(tmp_path, capsys):
+    """A clean tree with no history, then a failed stage: every line is an
+    entry, with no dead word and no paren aside."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    assert commit_helper.main(["-C", str(tmp_path), "survey"]) == 0
+    out = capsys.readouterr().out
+    assert msgs.SURVEY_CLEAN.text() in out
+    assert msgs.SURVEY_NO_HISTORY.text() in out
+    assert _clean(out.splitlines()[1:]) == []   # the heading line carries the path
+
+    assert commit_helper.main(["-C", str(tmp_path), "stage", "nope.txt", "1"]) == 2
+    err = capsys.readouterr().err.strip()
+    assert err == msgs.STAGE_NO_CHANGES.text(path="nope.txt")
+    assert "\x1b" not in out + err

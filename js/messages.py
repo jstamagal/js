@@ -219,6 +219,7 @@ GIT_INIT_FAILED = Message("git init failed in {path}: {error}", GRAVE)
 SNAPSHOT_FAILED = Message("Worktree snapshot failed: {error}", WARN)
 SNAPSHOT_SAVED = Message("Worktree snapshot saved: {path}")
 SURVEY_FAILED = Message("Commit survey failed for {path}: {error}", GRAVE)
+SURVEY_EXITED = Message("commit_helper survey exited {code}")
 
 # --- Model listing, presets, binaries ---------------------------------------
 
@@ -266,7 +267,7 @@ BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AG
 COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.", GRAVE)
 STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.", GRAVE)
 STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.", GRAVE)
-NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.")
+NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.", WARN)
 
 # --- REPL startup ------------------------------------------------------------
 
@@ -406,8 +407,8 @@ HOME_REMOVED_DUPLICATE = Message("Removed {source}: identical to {target}")
 HOME_WOULD_REMOVE_DUPLICATE = Message("Would remove {source}: identical to {target}")
 HOME_REMOVED_EMPTY = Message("Removed empty {source}")
 HOME_WOULD_REMOVE_EMPTY = Message("Would remove empty {source}")
-HOME_REFUSED = Message("Refused {source}: {reason}")
-HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}")
+HOME_REFUSED = Message("Refused {source}: {reason}", WARN)
+HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}", WARN)
 HOME_KIND_LINK = Message("a symlink")
 HOME_KIND_DIR = Message("a directory")
 HOME_KIND_FILE = Message("a file")
@@ -454,6 +455,16 @@ SKILL_DUPLICATE = Message("Skill {path} skipped: {root} already has a skill name
 SKILL_OVERRIDES = Message("Skill {name!r} at {path} is used in place of {prior}")
 ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.", WARN)
 DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}", WARN)
+# Why a directive was not expanded: the {error} hole of DIRECTIVE_NOT_EXPANDED.
+DIRECTIVE_UNKNOWN_SUBSYSTEM = Message("Unknown inline subsystem {name!r}. Known: {known}")
+DIRECTIVE_CODE_OFF = Message(
+    "Inline {name!r} runs code, and inline code is off: "
+    "--im-a-pussy, set runtime.allow_inline_code off or JS_ALLOW_INLINE_CODE=0")
+DIRECTIVE_ENV_NEEDS_NAME = Message("!{{env ...}} needs a variable name. Got {body!r}")
+DIRECTIVE_NOT_ON_PATH = Message("{label}: {program!r} not found on PATH")
+DIRECTIVE_TIMED_OUT = Message("{label}: timed out after {seconds}s")
+DIRECTIVE_EXITED = Message("{label}: exited {code}: {stderr}")
+DIRECTIVE_EXITED_SILENT = Message("{label}: exited {code}. No stderr")
 FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}", GRAVE)
 FLIGHT_NOTICE = Message("Compaction {event} {id}: operation={operation} {detail} flight={path}")
 
@@ -478,7 +489,49 @@ EXPECTED_POSITIVE_NUMBER = Message("expected a number > 0")
 EXPECTED_JSON = Message("expected a JSON value")
 EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
+EXPECTED_JSON_LIST = Message("expected a JSON list")
+EXPECTED_ALIAS_PROFILES = Message("expected profiles with match and aliases")
+EXPECTED_NONEMPTY_ALIASES = Message("expected non-empty aliases")
+EXPECTED_NONEMPTY_MATCH = Message("expected non-empty match values")
+EXPECTED_CANONICAL_TOOL_NAMES = Message("expected canonical tool names matching [A-Za-z0-9_-]+")
+EXPECTED_ALIAS_NAMES = Message("expected alias names matching [A-Za-z0-9_-]+")
+EXPECTED_UNIQUE_ALIASES = Message("expected unique alias names")
+EXTRA_NOT_KEY_VALUE = Message("--extra expects KEY=VALUE. Got {arg!r}")
+EXTRA_EMPTY_KEY = Message("--extra key is empty: {arg!r}")
+EXTRA_EMPTY_VALUE = Message("--extra value is empty: {arg!r}")
+EXTRA_BAD_VALUE = Message("--extra {key}: {error}")
 UNKNOWN_PROVIDER_ID = Message("unknown provider id: {provider!r}. Pick a known id or add a custom one with js --login.")
+
+# --- Provider failures -------------------------------------------------------
+
+# Raised as exception text and shown through FAILED.
+NO_PROVIDER_SET = Message("No provider set.")
+PROVIDER_NOT_LOGGED_IN = Message(
+    "Provider {provider!r} is not logged in. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
+MODEL_UNCONFIGURED = Message(
+    "Model {model!r} has no provider and no login. Set provider.id or JS_PROVIDER, run `js --login`, "
+    "or prefix a logged-in provider. `js --list-models` lists what is runnable.")
+PROVIDER_NEEDS_KEY = Message(
+    "Provider {provider!r} needs an API key. Run `js --login {provider}` or `set provider.api_key <value>`.")
+PROVIDER_NO_AUTH_METHOD = Message(
+    "Provider {provider!r} needs an API key: the SDK found no way to authenticate. "
+    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+PROVIDER_UNKNOWN = Message(
+    "Unknown provider {provider!r}. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
+PROVIDER_AUTH_FAILED = Message(
+    "Provider {provider!r} authentication failed: {detail}. "
+    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+PROVIDER_NOT_CONFIGURED = Message(
+    "Provider {provider!r} is not configured: {detail}. "
+    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+
+# --- Tool policy table (/tools) ----------------------------------------------
+
+TOOL_CHAIN_ROW = Message("{tool:<{width}}  {state:<8}{decided}", banner=False)
+TOOL_CHAIN_TOOL = Message("Tool")
+TOOL_CHAIN_STATE = Message("State")
+TOOL_CHAIN_DECIDED_BY = Message("Decided by")
+TOOL_CHAIN_BAN = Message("ban {tool}: {patterns}", banner=False)
 
 # --- Status bar --------------------------------------------------------------
 
@@ -493,6 +546,12 @@ TOOL_MORE_LINES = Message("... +{count} lines")
 # --- The kernel panel --------------------------------------------------------
 
 KERNEL_MORE_LINES = Message("... {count} more lines. The model got the full text.")
+KERNEL_MORE_CODE_LINES = Message("... {count} more lines of code.")
+KERNEL_EVENT_MORE_LINES = Message("... {count} more lines.")
+KERNEL_CELL = Message("Kernel cell {cell}: ")
+KERNEL_CELL_INTERRUPTED = Message("Cell interrupted.")
+KERNEL_STOPPED = Message("SIGINT sent. Namespace intact.")
+KERNEL_PANEL_TITLE = Message("Kernel cell {cell}")
 KERNEL_STARTED = Message("Kernel started in {cwd}")
 KERNEL_RESTARTED = Message("Kernel restarted. Namespace cleared.")
 DEFAULTS_MISSING = Message("Defaults file missing: {path}", GRAVE)
@@ -513,3 +572,60 @@ PICK_FETCHING = Message("Fetching…")
 PICK_PROVIDERS = Message("Providers")
 PICK_MODELS = Message("Models")
 PICK_PROVIDER_ROW = Message("● {provider}  {name}")
+
+# --- The commit helper ---------------------------------------------------------
+
+# `python -m js.commit_helper` prints these with .text(): the commit agent reads
+# its output through a shell and its survey goes into the agent's prompt, so no
+# colour or slot is added.
+COMMIT_HELPER_HELP = Message(
+    "Usage: python3 -m js.commit_helper [-C DIR|--repo DIR] <command>\n"
+    "\n"
+    "  survey\n"
+    "      Branch, porcelain status, staged and unstaged text diffs with every hunk\n"
+    "      numbered per file, untracked files and recent log.\n"
+    "  stage <file> <hunks|all>\n"
+    "      Stage the named unstaged hunks of one tracked file, such as 1,3, or all of it.\n"
+    "      An untracked file takes only `stage <file> all`.\n"
+    "  commit <message-file> [--amend]\n"
+    "      Commit the staged changes with the message read from a file.", banner=False)
+COMMIT_HELPER_USAGE = Message("Usage: python3 -m js.commit_helper {usage}", banner=False)
+GIT_NOT_A_REPO = Message("Not a git repository: {repo}", GRAVE)
+GIT_FAILED = Message("Git failed in {repo}: git {argv}: {detail}", GRAVE)
+GIT_EXIT = Message("exit {code}")
+SURVEY_HEADING = Message("=== Survey: {repo} ===", banner=False)
+SURVEY_BRANCH = Message("Branch: {branch}", banner=False)
+SURVEY_DETACHED = Message("Detached HEAD at {sha}")
+SURVEY_NO_COMMITS = Message("No commits yet")
+SURVEY_STATUS = Message("-- Status --", banner=False)
+SURVEY_STATUS_ROW = Message("{xy} {path}", banner=False)
+SURVEY_CLEAN = Message("Clean tree. Nothing to commit.", banner=False)
+SURVEY_STAGED = Message(
+    "\n-- Staged diff. Already staged: review before commit. These hunk numbers do not address `stage`. --",
+    banner=False)
+SURVEY_UNSTAGED = Message(
+    "\n-- Unstaged diff. Hunks are numbered per file: `stage <file> <n[,n]|all>` --", banner=False)
+SURVEY_FILE = Message("\n### {path}: {hunks}", banner=False)
+SURVEY_NO_TEXT_HUNKS = Message(
+    "No text hunks. A binary, rename or mode change: stage the whole file.", banner=False)
+SURVEY_HUNK = Message("  --- Hunk {index}: {header}", banner=False)
+SURVEY_NONE = Message("None.", banner=False)
+SURVEY_UNTRACKED = Message("\n-- Untracked --", banner=False)
+SURVEY_UNTRACKED_ROW = Message("?? {path}  New file. `stage {path} all` adds it whole.", banner=False)
+SURVEY_LOG = Message("\n-- Recent log --", banner=False)
+SURVEY_NO_HISTORY = Message("No history.", banner=False)
+STAGED_WHOLE = Message("Staged whole file: {path}")
+STAGED_HUNKS = Message("Staged {path}: hunks {hunks} of {total}")
+STAGE_NO_CHANGES = Message("{path} has no pending changes.", GRAVE)
+STAGE_UNTRACKED = Message(
+    "{path} is untracked. Use `stage {path} all`. Hunk specs work only for tracked text diffs.", GRAVE)
+STAGE_BAD_SPEC = Message("Hunks must be comma-separated numbers or all. Got {spec!r}.", GRAVE)
+STAGE_NO_HUNKS = Message(
+    "No unstaged text hunks in {path}. A binary, rename or mode change, or already staged: "
+    "use `stage {path} all`.", GRAVE)
+STAGE_OUT_OF_RANGE = Message("Hunks {bad} out of range. {path} has {count}.", GRAVE)
+STAGE_APPLY_FAILED = Message("{detail}\nFallback: `stage {path} all`", GRAVE)
+GIT_APPLY_FAILED = Message("git apply failed")
+MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}", GRAVE)
+MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}", GRAVE)
+COMMITTED = Message("Committed.")

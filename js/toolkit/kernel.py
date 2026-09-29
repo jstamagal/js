@@ -218,9 +218,10 @@ def render_execution(
     limit = render_max_lines(context)
 
     if level == "quiet":
-        head = "INTERRUPTED" if interrupted else "ERROR"
-        body, hidden = _clip(error or "cell interrupted", limit)
-        console.print(Text(f"kernel[{cell}] {head}: ", style="bold red") + Text(body))
+        # Severity is the colour: yellow for an interrupt, red for a failure.
+        style = "bold yellow" if interrupted and not error else "bold red"
+        body, hidden = _clip(error or msgs.KERNEL_CELL_INTERRUPTED.text(), limit)
+        console.print(Text(msgs.KERNEL_CELL.text(cell=cell), style=style) + Text(body))
         if hidden:
             console.print(Text("  " + msgs.KERNEL_MORE_LINES.text(count=hidden),
                                style="dim"))
@@ -234,7 +235,7 @@ def render_execution(
     grid.add_row("code", Syntax(shown_code, "python", theme="ansi_dark",
                                 word_wrap=True, background_color="default"))
     if code_hidden:
-        grid.add_row("", Text(f"... {code_hidden} more lines of code", style="dim"))
+        grid.add_row("", Text(msgs.KERNEL_MORE_CODE_LINES.text(count=code_hidden), style="dim"))
 
     if level == "verbose":
         sections = (("stdout", stdout, ""), ("stderr", stderr, "yellow"),
@@ -259,7 +260,7 @@ def render_execution(
             grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
                                   style="dim"))
     if interrupted:
-        grid.add_row("stopped", Text("SIGINT sent; namespace intact", style="bold yellow"))
+        grid.add_row("stopped", Text(msgs.KERNEL_STOPPED.text(), style="bold yellow"))
     if added:
         grid.add_row("defined", Text(", ".join(added), style="green"))
     if removed:
@@ -268,7 +269,7 @@ def render_execution(
     for image in images:
         grid.add_row("image", Text(str(image), style="blue"))
 
-    console.print(Panel(grid, title=f"kernel cell {cell}",
+    console.print(Panel(grid, title=msgs.KERNEL_PANEL_TITLE.text(cell=cell),
                         subtitle=f"{elapsed:.2f}s", title_align="left",
                         subtitle_align="right", border_style="cyan"))
 
@@ -294,7 +295,7 @@ def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
     for line in shown.splitlines():
         console.print(Text("· ", style="dim") + Text(line, style=style))
     if hidden:
-        console.print(Text(f"  ... {hidden} more lines", style="dim"))
+        console.print(Text("  " + msgs.KERNEL_EVENT_MORE_LINES.text(count=hidden), style="dim"))
 
 
 # --------------------------------------------------------------------------

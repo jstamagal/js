@@ -1121,17 +1121,14 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if not canonical_id:
-        raise ValueError("no provider set")
+        raise ValueError(msgs.NO_PROVIDER_SET.text())
     saved = logins.load_logins().get(canonical_id)
     if saved is not None:
         return saved
     provider_def = providers.provider_for_login(canonical_id)
     resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
     if provider_def.requires_api_key and not resolved_api_key:
-        raise ValueError(
-            f"provider {canonical_id!r} needs an API key; run `js --login {canonical_id}` "
-            "or `set provider.api_key <value>`"
-        )
+        raise ValueError(msgs.PROVIDER_NEEDS_KEY.text(provider=canonical_id))
     return logins.Login(
         provider_id=canonical_id,
         sdk_provider_id=provider_def.effective_sdk_provider_id,
@@ -2442,7 +2439,7 @@ def _run_commit(target: str | None,
         survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
     survey = survey_out.getvalue().rstrip()
     if survey_rc != 0:
-        detail = survey_err.getvalue().strip() or survey or f"commit_helper survey exited {survey_rc}"
+        detail = survey_err.getvalue().strip() or survey or msgs.SURVEY_EXITED.text(code=survey_rc)
         msgs.warn(msgs.SURVEY_FAILED, path=target_dir, error=detail)
         return 1
 
@@ -3473,7 +3470,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
     parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
     parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
-    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
+    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
     parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
