@@ -13,8 +13,25 @@ Reads one file.
 Parameters:
 
 - `file_path`: required path.
-- `range`: optional `{start_line, end_line}` for text files.
+- `range`: optional `{start_line, end_line}` for text files, or a byte range
+  `{start_byte, end_byte}`: `start_byte` is a 0-based offset and `end_byte`
+  the offset one past the last byte. Passing both kinds is an error, and so
+  is a negative or non-integer offset.
 - `show_line_numbers`: default true.
+
+A byte-range read returns raw text, no line prefixes, at most half the tighter
+of `limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes`
+per call, so a page is never spilled again. Both ends move back to a UTF-8
+character start, and a footer names the offsets returned and the `range` that
+continues. A file over `limits.max_file_bytes` is read by seeking to the page,
+and that read authorizes no edit; within the limit, the lines a page shows whole
+count as read for `patch`.
+
+A tool result over `limits.max_tool_result_inline_bytes` is spilled to
+`~/oldinbox/js-tool-results/` and replaced by a preview plus a notice naming
+the file and the `range` that continues past the preview: always a byte range,
+plus a line range when the result has more than one line. A single-line
+payload, such as a JSON tool response, is reachable only by byte range.
 
 Text output lines are prefixed like:
 
@@ -39,8 +56,9 @@ Parameters:
 - `content`
 - `overwrite`
 
-Existing files require `overwrite=true` and a prior `read` in the same process.
-The previous state is snapshotted for `undo`.
+Existing files require `overwrite=true` and a prior `read` in the same process;
+one page of the file is enough. The file's hash must still match the one the
+read saw, and the previous state is snapshotted for `undo`.
 
 ### `patch`
 
@@ -55,7 +73,20 @@ Parameters:
 - `edits`: list of `{old_string, new_string, replace_all?}`, used instead of
   `old_string`/`new_string`
 
-Requires a prior `read`. Each edit fails when its old string is absent, on
+Requires a prior `read` that showed every line an edit touches.
+
+When `write(overwrite=true)` or `patch` finds the file changed on disk since
+the read (the hash differs), the call writes nothing. js keeps the bytes each
+read saw, so the error carries the diff from that content to the current one
+and names both hashes. Lines the model had seen that the change left alone stay
+seen at their new line numbers, and the lines the diff shows count as read, so
+the retry needs no second `read`. A diff larger than half the tighter of
+`limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes` is
+replaced by the changed line numbers. `patch` then stays gated on those lines
+until they are read; an overwrite retry goes through and discards them, and
+`undo` brings them back.
+
+Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals
 `new_string` (also after line-ending normalization, which would leave the file
 unchanged). Overlapping occurrences count as separate matches, so `aba` in
@@ -77,8 +108,10 @@ Parameters:
 - `permanent`: delete directly instead of trashing (default `false`)
 
 Default sends targets to `trash`/`trash-put`; targets over 512 MiB are refused
-unless `permanent=true`. Symlinks are removed as symlinks (not followed).
-Snapshots the prior file bytes or directory tree for `undo`.
+unless `permanent=true`. `permanent=true` never touches the trash, so it works
+on a box with no trash command or trash directory. Symlinks are removed as
+symlinks (not followed). Both paths snapshot the prior file bytes or directory
+tree for `undo`.
 
 ### `undo`
 

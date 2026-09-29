@@ -32,6 +32,8 @@ Snapshot = bytes | None | dict[str, Any]
 _SNAPSHOT_FORMAT_VERSION = 1
 _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
+# Upper bound on ToolContext.known_content; the oldest entries go first.
+_KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
 
 
 def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -332,6 +334,10 @@ class ToolContext:
     read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)
     read_line_totals: dict[Path, int] = field(default_factory=dict)
     fully_read_paths: set[Path] = field(default_factory=set)
+    # The bytes js last knew a file to hold, with their hash: set by read and
+    # by every tool that writes the file. A later edit that finds the file
+    # changed on disk diffs against this instead of asking for a re-read.
+    known_content: dict[Path, tuple[str, bytes]] = field(default_factory=dict, repr=False)
     snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)
     snapshot_files: dict[Path, list[Path | None]] = field(default_factory=dict, repr=False)
     snapshot_store: Path | None = field(default=None, repr=False)
@@ -424,22 +430,32 @@ class ToolContext:
                 return True
         return cursor > end
 
+    def remember_content(self, path: Path, content_hash: str, data: bytes) -> None:
+        """Keep *data* as the content of *path* that *content_hash* names."""
+        self.known_content.pop(path, None)
+        self.known_content[path] = (content_hash, data)
+        total = sum(len(entry[1]) for entry in self.known_content.values())
+        while total > _KNOWN_CONTENT_MAX_BYTES and len(self.known_content) > 1:
+            oldest = next(iter(self.known_content))
+            total -= len(self.known_content.pop(oldest)[1])
+
     def require_read(
         self,
         path: Path,
         action: str,
         *,
         line_ranges: list[tuple[int, int]] | None = None,
-        whole_file: bool = False,
         content_hash: str | None = None,
         seen_ranges: list[tuple[int, int]] | None = None,
     ) -> str | None:
         if path not in self.read_paths:
             return f"ERROR: You must read the file with the read tool before attempting to {action}."
-        if content_hash is not None and self.file_hashes.get(path) != content_hash:
-            return f"ERROR: {path} changed since it was read; read it again before attempting to {action}."
-        if whole_file and path not in self.fully_read_paths:
-            return f"ERROR: You must read the whole file before attempting to {action}."
+        known_hash = self.file_hashes.get(path)
+        if content_hash is not None and known_hash != content_hash:
+            return (
+                f"ERROR: {path} changed since it was read (hash {known_hash} when read, "
+                f"{content_hash} now); read it again before attempting to {action}."
+            )
         unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
         if unseen:
             rendered = ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in unseen)
@@ -472,8 +488,8 @@ class ToolContext:
 
         The read handler recorded coverage for the whole text it returned, but
         the runtime clips or spills that text before the model sees it. Keep only
-        the numbered lines fully present in the shared prefix, so a later edit or
-        overwrite is never authorized against bytes the model never received."""
+        the numbered lines fully present in the shared prefix, so a later edit is
+        never authorized against lines the model never received."""
         limit = 0
         upper = min(len(raw), len(delivered))
         while limit < upper and raw[limit] == delivered[limit]:

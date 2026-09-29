@@ -2,6 +2,9 @@ Replace exact text in one file.
 {{#if read}}
 Every line `old_string` touches must have been shown by a prior `read`. The
 `12:ab|` prefix in read output is not file content; only the text after `|` is.
+If the file changed on disk since your read, the call writes nothing and the
+error shows the diff from what you read to what is there now; retry against the
+current text without reading again. Lines the diff shows count as read.
 {{/if}}
 {{#unless read}}
 Every line `old_string` touches must have been shown by a prior read, and this

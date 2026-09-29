@@ -101,7 +101,7 @@ def _trash_target(target: Path, context: ToolContext) -> str | None:
         return "ERROR: trash command not found; pass permanent=true to delete without trash."
     rc, _out, err = run([command, str(target)], context=context, timeout=120)
     if rc != 0:
-        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}"
+        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}; pass permanent=true to delete without trash."
     return None
 
 
@@ -114,6 +114,112 @@ def _hash_bytes(data: bytes) -> str:
 
 def _line_hash(line: str) -> str:
     return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
+
+
+def _result_page_bytes(context: ToolContext) -> int:
+    """Bytes of text one tool result can carry to the model whole: half the
+    tighter of the inline spill cap and the hard result cap, leaving room for
+    the text around it. 0 when neither cap is set."""
+    caps = [
+        cap
+        for cap in (
+            int(getattr(context, "max_tool_result_inline_bytes", 0) or 0),
+            int(getattr(context, "max_tool_result_bytes", 0) or 0),
+        )
+        if cap > 0
+    ]
+    return min(caps) // 2 if caps else 0
+
+
+def _render_line_spans(spans: list[tuple[int, int]]) -> str:
+    return ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in spans)
+
+
+def _changed_since_read(
+    context: ToolContext,
+    target: Path,
+    action: str,
+    current: bytes,
+    current_hash: str,
+    *,
+    edits_lines: bool,
+) -> str | None:
+    """Refuse an edit of a file that changed on disk since the model read it,
+    and hand the model the diff from the content it read to the content there now.
+
+    Read coverage moves to the current content: lines the model had seen that
+    the change left alone keep counting as seen, and every current line the
+    diff shows (changed lines and their context) counts as seen when the diff
+    is delivered whole, so the retry needs no second read.
+    A diff over the result budget is replaced by the changed line numbers.
+    *edits_lines* is True for patch, which stays gated on those lines until
+    they are read; an overwrite discards them, so its retry goes through.
+    Returns None when the file is unchanged since the read, or when js holds no
+    UTF-8 copy of the content that was read; require_read covers those cases.
+    """
+    if target not in context.read_paths:
+        return None
+    known_hash = context.file_hashes.get(target)
+    if known_hash == current_hash:
+        return None
+    cached = context.known_content.get(target)
+    if cached is None or cached[0] != known_hash:
+        return None
+    try:
+        old_text = cached[1].decode("utf-8")
+        new_text = current.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    # The same line split and matcher _unified_diff uses, so the hunks
+    # credited below are the hunks the model is shown.
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    was_whole = target in context.fully_read_paths
+    prior = [(1, len(old_lines))] if was_whole else list(context.read_ranges.get(target, []))
+    carried: list[tuple[int, int]] = []
+    changed: list[tuple[int, int]] = []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for seen_start, seen_end in prior:
+                low, high = max(seen_start, i1 + 1), min(seen_end, i2)
+                if low <= high:
+                    carried.append((low - i1 + j1, high - i1 + j1))
+        elif j2 > j1:
+            changed.append((j1 + 1, j2))
+    shown = [
+        (group[0][3] + 1, group[-1][4])
+        for group in matcher.get_grouped_opcodes(3)
+        if group[-1][4] > group[0][3]
+    ]
+    diff = _unified_diff(old_text, new_text, f"{target} (as read)", f"{target} (now)")
+    budget = _result_page_bytes(context)
+    delivered = not budget or len(diff.encode("utf-8")) <= budget
+    context.replace_read_coverage(
+        target,
+        current_hash,
+        carried + (shown if delivered else []),
+        len(new_lines),
+        whole_file=was_whole and delivered,
+    )
+    context.remember_content(target, current_hash, current)
+    head = (
+        f"ERROR: {target} changed on disk since it was read (hash {known_hash} when read, "
+        f"{current_hash} now); nothing was written."
+    )
+    if delivered:
+        return f"{head} Diff from what you read to what is there now:\n{diff}Retry to {action} against the current text."
+    spans = _render_line_spans(changed) or "none (lines were only removed)"
+    if not edits_lines:
+        return (
+            f"{head} The diff is too large to show; the changed lines are now {spans}. "
+            f"A retry will {action} and discard them (undo restores them); read them first "
+            "if you need what changed."
+        )
+    return (
+        f"{head} The diff is too large to show; the changed lines are now {spans}. "
+        f"Read those, then retry to {action}."
+    )
 
 
 def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
@@ -234,6 +340,106 @@ def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes
     return data
 
 
+def _utf8_char_start(buf: bytes, index: int) -> int:
+    """Move *index* back to the first byte of the UTF-8 character it lands in."""
+    back = 0
+    while 0 < index < len(buf) and back < 3 and (buf[index] & 0xC0) == 0x80:
+        index -= 1
+        back += 1
+    return index
+
+
+def _read_byte_call(target: Path, start_byte: int) -> str:
+    """JSON arguments for a follow-up byte-range `read` call."""
+    return json.dumps({"file_path": str(target), "range": {"start_byte": start_byte}})
+
+
+def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_byte: int | None) -> str:
+    """Return the text between two byte offsets of *target*, one page at most.
+
+    A page is what one tool result carries whole (_result_page_bytes), so a
+    page of a spilled result is never spilled again. Both ends move back to a
+    UTF-8 character start and the footer names the offsets actually returned.
+    The lines the page shows whole count as read, for files of at most
+    limits.max_file_bytes; a larger file is read by seeking and records no
+    coverage."""
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    if size == 0:
+        return f"{target} is empty"
+    if end_byte is not None and end_byte < start_byte:
+        start_byte, end_byte = end_byte, start_byte
+    if start_byte >= size:
+        return f"{target} has {size} bytes; requested start_byte={start_byte} is past EOF"
+    page = _result_page_bytes(context) or size
+    stop = min(size, start_byte + page, end_byte if end_byte is not None else size)
+    if stop <= start_byte:
+        return f"ERROR: empty byte range {start_byte}-{end_byte}"
+    whole: bytes | None = None
+    try:
+        if size <= context.max_file_bytes:
+            whole = _read_regular_bytes(target)
+            size = len(whole)
+            base, buf = 0, whole
+        else:
+            base = max(0, start_byte - 3)
+            with target.open("rb") as handle:
+                handle.seek(base)
+                buf = handle.read(min(size, stop + 1) - base)
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    start = base + _utf8_char_start(buf, start_byte - base)
+    end = size if stop >= size else base + _utf8_char_start(buf, stop - base)
+    if end <= start:
+        end = min(size, stop)
+    text = buf[start - base:end - base].decode("utf-8", errors="replace")
+    if whole is not None:
+        _remember_byte_read(target, context, whole, start, end)
+    if end < size:
+        footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
+    else:
+        footer = f"[bytes {start}-{end} of {size}; end of file]"
+    return f"{text}\n{footer}"
+
+
+def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: int, end: int) -> None:
+    """Record the lines that bytes start..end of *data* show whole, numbered
+    the way the line reader numbers them."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return
+    content_hash = _hash_bytes(data)
+    lines = text.splitlines(keepends=True)
+    shown: list[tuple[int, int]] = []
+    offset = 0
+    for number, line in enumerate(lines, start=1):
+        line_end = offset + len(line.encode("utf-8"))
+        if offset >= start and line_end <= end:
+            if shown and shown[-1][1] == number - 1:
+                shown[-1] = (shown[-1][0], number)
+            else:
+                shown.append((number, number))
+        offset = line_end
+        if offset >= end:
+            break
+    if shown:
+        first, last = shown[0]
+        context.remember_read(
+            target,
+            content_hash,
+            start_line=first,
+            end_line=last,
+            total_lines=len(lines),
+            whole_file=first == 1 and last == len(lines),
+        )
+    else:
+        context.remember_read(target, content_hash, total_lines=len(lines), whole_file=False)
+    context.remember_content(target, content_hash, data)
+
+
 def fs_read(
     path: str | None = None,
     file_path: str | None = None,
@@ -242,6 +448,8 @@ def fs_read(
     end_line: int | None = None,
     show_line_numbers: bool = True,
     context: ToolContext | None = None,
+    start_byte: int | None = None,
+    end_byte: int | None = None,
 ) -> str:
     assert context is not None
     raw_path = file_path or path
@@ -250,10 +458,18 @@ def fs_read(
     if isinstance(range, dict):
         start_line = start_line if start_line is not None else range.get("start_line")
         end_line = end_line if end_line is not None else range.get("end_line")
+        start_byte = start_byte if start_byte is not None else range.get("start_byte")
+        end_byte = end_byte if end_byte is not None else range.get("end_byte")
+    for name, value in (("start_byte", start_byte), ("end_byte", end_byte)):
+        if value is not None and int_or_default(value, -1, minimum=0) == -1:
+            return f"ERROR: {name} must be a non-negative integer, got {value!r}"
+    byte_start = int_or_default(start_byte, -1, minimum=0)
+    byte_end = int_or_default(end_byte, -1, minimum=0)
+    byte_ranged = byte_start != -1 or byte_end != -1
     # A whole-file read (no range asked for) is the only one gated by
     # max_read_bytes. Once the caller names a range it is reading deliberately,
-    # so a 40 MB log stays addressable line-by-line — max_file_bytes is still
-    # the outer ceiling for both.
+    # so a 40 MB log stays addressable line-by-line up to max_file_bytes; a
+    # byte range seeks, so it reaches past max_file_bytes too.
     # Matches the acceptance rule the line math below uses: bools, junk and
     # out-of-range values are not a range, so they can't smuggle a whole-file
     # read past the cap.
@@ -261,6 +477,8 @@ def fs_read(
         int_or_default(start_line, -1, minimum=1) != -1
         or int_or_default(end_line, -1, minimum=1) != -1
     )
+    if byte_ranged and ranged:
+        return "ERROR: pass a line range (start_line/end_line) or a byte range (start_byte/end_byte), not both"
     target = context.resolve_path(raw_path)
     if not target.exists():
         return f"ERROR: no such file: {target}"
@@ -274,6 +492,10 @@ def fs_read(
         return f"ERROR: {exc}"
 
     mime = _detect_visual_mime(target, header)
+    if byte_ranged:
+        if mime or _is_binary(target):
+            return f"ERROR: byte ranges read text files; {target} is not text"
+        return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
         if size > context.max_file_bytes:
             return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -320,6 +542,7 @@ def fs_read(
     total = len(all_lines)
     if total == 0:
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
+        context.remember_content(target, content_hash, data)
         return f"{target} is empty (hash {content_hash})"
 
     # Resolve the window: a reversed range is
@@ -346,6 +569,7 @@ def fs_read(
         total_lines=total,
         whole_file=start == 1 and end == total,
     )
+    context.remember_content(target, content_hash, data)
     # Lines are returned whole: `read` pages by line, not by column, so a cut
     # line is unreachable content. max_read_bytes/max_read_lines bound the read,
     # and the tool-result spill bounds what reaches the model.
@@ -376,14 +600,23 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     if target.exists() and not overwrite:
         return (
             f"ERROR: {raw_path} already exists. To change part of it use patch; "
-            "to replace it whole, read it in full first and pass overwrite=true."
+            "to replace it whole, read it first and pass overwrite=true."
         )
-    if target.exists() and overwrite:
+    replacing = target.exists()
+    if replacing:
+        # One read of any page is the gate: it shows the model what the file
+        # is. The hash proves nothing moved since; the snapshot makes the
+        # discard undoable.
         try:
-            current_hash = _hash_bytes(target.read_bytes())
+            current = target.read_bytes()
         except OSError as exc:
             return f"ERROR: {exc}"
-        guard = context.require_read(target, "overwrite it", whole_file=True, content_hash=current_hash)
+        current_hash = _hash_bytes(current)
+        guard = _changed_since_read(
+            context, target, "overwrite it", current, current_hash, edits_lines=False
+        ) or context.require_read(
+            target, "overwrite it", content_hash=current_hash
+        )
         if guard:
             return guard
     try:
@@ -392,7 +625,14 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     except OSError as exc:
         return f"ERROR: {exc}"
     content_hash = _hash_bytes(data)
-    context.file_hashes[target] = content_hash
+    if replacing:
+        # The model wrote every byte of the new content.
+        context.replace_read_coverage(
+            target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True
+        )
+    else:
+        context.file_hashes[target] = content_hash
+    context.remember_content(target, content_hash, data)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
@@ -499,6 +739,7 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                 len(previous.decode("utf-8", errors="replace").splitlines()),
                 whole_file=bool(valid and coverage["whole"]),
             )
+            context.remember_content(target, content_hash, previous)
             return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
@@ -744,7 +985,11 @@ def patch(
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
     source_hash = _hash_bytes(source_bytes)
-    guard = context.require_read(target, "edit it", content_hash=source_hash)
+    guard = _changed_since_read(
+        context, target, "edit it", source_bytes, source_hash, edits_lines=True
+    ) or context.require_read(
+        target, "edit it", content_hash=source_hash
+    )
     if guard:
         return guard
 
@@ -782,6 +1027,7 @@ def patch(
         len(updated.splitlines()),
         whole_file=was_whole,
     )
+    context.remember_content(target, content_hash, data)
     diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
@@ -1456,6 +1702,7 @@ def ast_search(
         if updated != source:
             changed += 1
         context.file_hashes[target] = _hash_bytes(updated)
+        context.remember_content(target, context.file_hashes[target], updated)
         prepared[target] = (source, updated)
     diff = _ast_rewrite_diff(prepared) or "(no changes)"
     summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"
@@ -1499,9 +1746,11 @@ def tools() -> tuple[Tool, ...]:
                     "properties": {
                         "start_line": {"type": "integer", "description": "Optional 1-based first line for text files."},
                         "end_line": {"type": "integer", "description": "Optional inclusive 1-based last line for text files."},
+                        "start_byte": {"type": "integer", "description": "0-based offset of the first byte to read, for text files. Use instead of lines."},
+                        "end_byte": {"type": "integer", "description": "Optional 0-based offset one past the last byte to read."},
                     },
                     "additionalProperties": False,
-                    "description": "Optional line range for partial reads.",
+                    "description": "Optional line range or byte range for partial reads.",
                 },
                 "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its anchored line number."},
             },
@@ -1556,7 +1805,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("pattern",),
         ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after the operator confirms permanent deletion."}}, required=("path",)),
+        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly without the trash; the path is still snapshotted for undo."}}, required=("path",)),
         Tool(
             "patch",
             load_description("patch"),

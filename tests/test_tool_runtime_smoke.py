@@ -376,17 +376,14 @@ def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_pa
     assert target.read_text(encoding="utf-8") == "new\n"
 
 
-def test_write_overwrite_requires_complete_read_coverage(tmp_path):
+def test_write_overwrite_is_authorized_by_a_partial_read(tmp_path):
     target = tmp_path / "partial.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     fs.read("partial.txt", start_line=1, end_line=1, context=context)
 
-    blocked = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
-    fs.read("partial.txt", start_line=2, end_line=3, context=context)
     written = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
 
-    assert blocked == "ERROR: You must read the whole file before attempting to overwrite it."
     assert written.startswith(f"wrote 12 bytes to {target}")
     assert target.read_text(encoding="utf-8") == "replacement\n"
 
@@ -682,7 +679,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
 
 
-def test_a_read_clipped_by_the_inline_cap_does_not_authorize_overwrite(tmp_path, monkeypatch):
+def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_path, monkeypatch):
     """The read handler records coverage for its full text, but the runtime
     clips the result before the model sees it. Only the delivered preview may
     count as read."""
@@ -711,12 +708,10 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_overwrite(tmp_path,
     assert len(delivered.encode("utf-8")) < target.stat().st_size
     assert target.resolve() not in context.fully_read_paths
 
-    overwrite = fs.write(file_path=str(target), content="X\n", overwrite=True, context=context)
     late_line = fs.patch(
         file_path=str(target), old_string="L02000 filler\n", new_string="changed\n", context=context
     )
 
-    assert overwrite.startswith("ERROR:")
     assert late_line.startswith("ERROR:")
     assert target.read_text(encoding="utf-8").startswith("L00000")
     assert target.read_text(encoding="utf-8").endswith("L02999 filler\n")
