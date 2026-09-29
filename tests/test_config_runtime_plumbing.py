@@ -68,7 +68,7 @@ def _isolated_config_home(monkeypatch, tmp_path: Path) -> Path:
         if spec.env:
             monkeypatch.delenv(spec.env, raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    return config_home / "js"
+    return tmp_path / "home" / ".js"
 
 
 def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):

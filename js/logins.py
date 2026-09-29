@@ -1,6 +1,6 @@
 """Multi-provider login state and cached model lists.
 
-Logins and model caches live in the js platform config directory.  Provider ids
+Logins and model caches live in ~/.js/logins.  Provider ids
 are user-facing js ids; the registry decides the SDK/API shape used at runtime.
 """
 

@@ -87,7 +87,7 @@ def _repl(monkeypatch, tmp_path, argv, lines=()):
 
 
 def _only_session(tmp_path):
-    found = list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+    found = list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
     assert len(found) == 1, found
     return found[0]
 
@@ -115,7 +115,7 @@ def test_an_explicit_model_flag_still_wins_over_the_recorded_one(monkeypatch, tm
 
 
 def test_resuming_an_empty_session_says_so(monkeypatch, tmp_path, capsys):
-    sessions = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    sessions = tmp_path / ".js" / "sessions" / "defaultagent"
     sessions.mkdir(parents=True)
     (sessions / "blank.jsonl").write_text("", encoding="utf-8")
 

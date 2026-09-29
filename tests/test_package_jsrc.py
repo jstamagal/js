@@ -94,7 +94,7 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
 def test_user_jsrc_layers_over_package_jsrc(monkeypatch, tmp_path):
     _package_copy(tmp_path, monkeypatch, **{"limits.fetch_timeout_s": "44", "limits.max_read_lines": "17"})
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
 
@@ -164,7 +164,7 @@ def _show_value(cfg, state, key: str, capsys) -> str:
 
 def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, tmp_path, capsys):
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
         "set runtime.trace off\nset limits.max_read_lines 33\nset runtime.allow_inline_code off\n"
@@ -191,7 +191,7 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     monkeypatch, tmp_path, capsys,
 ):
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
@@ -230,7 +230,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     from js.toolkit import build_default_registry
 
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
         "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n",
@@ -316,7 +316,7 @@ def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
     from js import attach
 
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text("set limits.max_text_attachment_bytes 10\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
@@ -337,7 +337,7 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
     from js import compaction
 
     project = _isolated_home(monkeypatch, tmp_path)
-    user = tmp_path / "config" / "js" / "jsrc"
+    user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
         f"set model.id offline-test-model\nset compact.rehydrate_max_files {max_files}\n", encoding="utf-8",

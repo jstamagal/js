@@ -203,8 +203,7 @@ newline, and Esc then `:` opens the ex line at the bottom:
 :nvim          any program on PATH runs on the buffer; it comes back unsent
 ```
 
-Notes and `:w` saves live in the platform data `notes/` directory
-(`paths.notes_dir()`).
+Notes and `:w` saves live in `~/.js/work/notes/`.
 
 A line typed while a turn runs is handled by `runtime.steer`:
 
@@ -295,7 +294,7 @@ non-directory target prints an error and exits.
 `--ignore-local` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
 
-`--ignore-global` ignores the platform `jsrc`. The defaults in the package's
+`--ignore-global` ignores `~/.js/jsrc`. The defaults in the package's
 `js/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
@@ -386,7 +385,7 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 ## Prompt-Directory Agents
 
-Agents are discovered from repo `prompts/`, global `agents/` in the platform config dir, and
+Agents are discovered from repo `prompts/`, global `~/.js/agents/`, and
 project `.js/agents/`; project scope wins over global, which wins over repo.
 Each agent lives at `<root>/<agent_id>/`: `*.md` prompt files, concatenated in
 sorted filename order, and an `agent.yaml` manifest:
@@ -403,7 +402,7 @@ tools:
 Each entry is `noun:modifier`: `eager` publishes the tool from the first call,
 `lazy` puts it in the `tool_discovery` catalog, `ban` removes it. Nouns can be
 globs (`"*:ban"`, `wiki_*:lazy`) and `tag:NAME` pulls in a tag from
-`~/.config/js/tools.yaml`. A tool no entry matches is not available; no
+`~/.js/tools.yaml`. A tool no entry matches is not available; no
 entries means the model gets no tools. `/tools` shows the resolved table.
 Details: [tool-system.md](tool-system.md).
 
@@ -433,10 +432,10 @@ command string.
 
 ## Sessions And Memory
 
-Saved sessions live under the platform data directory:
+Saved sessions live under `~/.js/`:
 
 ```text
-<data-dir>/sessions/<agent_id>/<session>.jsonl
+~/.js/sessions/<agent_id>/<session>.jsonl
 ```
 
 Each agent id has isolated session state. A `wiki-*` agent session is not a `defaultagent` session. Use `--session` to continue a specific saved session.
@@ -453,4 +452,4 @@ Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes
 that one compaction with the named summarizer instead of `compact.model`.
 Automatic cache-aware compaction is controlled by `set compact.auto` and the
-`set compact.*` knobs in platform `jsrc` or project `.js/jsrc`.
+`set compact.*` knobs in `~/.js/jsrc` or project `.js/jsrc`.

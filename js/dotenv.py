@@ -49,12 +49,12 @@ def candidate_files(cwd: Path | None = None) -> list[Path]:
     """`.env` files to consult, highest precedence first.
 
     `cwd/.env` first, then each parent up to the filesystem root, then the
-    global `~/.config/js/.env` last.  `load()` fills with setdefault, so the
+    global `~/.js/.env` last.  `load()` fills with setdefault, so the
     nearest file wins and the global one only supplies what nothing else did.
     """
     start = (cwd or Path.cwd()).resolve(strict=False)
     files: list[Path] = [parent / FILENAME for parent in (start, *start.parents)]
-    files.append(_paths.config_dir() / FILENAME)
+    files.append(_paths.global_env_file())
     seen: set[Path] = set()
     return [path for path in files if not (path in seen or seen.add(path))]
 

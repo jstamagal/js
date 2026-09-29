@@ -54,7 +54,7 @@ def test_codex_login_round_trips_private_oauth_fields(tmp_path: Path):
         assert loaded.codex_email == "king@example.test"
         assert (logins.login_path().stat().st_mode & 0o777) == 0o600
     finally:
-        logins.set_config_dir(Path.home() / ".config" / "js")
+        logins.set_config_dir(Path.home() / ".js" / "logins")
 
 
 def test_login_cli_lists_and_dispatches_codex_oauth(monkeypatch):
@@ -697,7 +697,7 @@ def test_ensure_access_refresh_preserves_login_headers_end_to_end(tmp_path: Path
         assert saved.provider_api_key == new_access
         assert saved.codex_refresh_token == "new-refresh"
     finally:
-        logins.set_config_dir(Path.home() / ".config" / "js")
+        logins.set_config_dir(Path.home() / ".js" / "logins")
 
 
 def test_codex_refresh_preserves_refresh_token_and_profile():

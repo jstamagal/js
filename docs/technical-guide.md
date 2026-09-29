@@ -20,7 +20,7 @@ One normal prompt run follows this path:
 1. `js.cli.main()` parses flags.
 2. `_from_env()` builds `Config`.
 3. `js.persona.load_prompt_spec()` loads the selected agent from repo
-   `prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`.
+   `prompts/`, global `~/.js/agents/`, and project `.js/agents/`.
 4. `ToolRegistry.select()` filters the default registry by prompt selectors.
 5. Existing session messages are loaded through `js.memory.load_replay_messages()`,
    which keeps every assistant's reasoning for replay.
@@ -83,7 +83,7 @@ generated prompt-directory agent tools
 ```
 
 Generated agent tools come from directories with markdown files under repo
-`prompts/`, global `agents/` in the platform config dir, and project `.js/agents/`. Project scope
+`prompts/`, global `~/.js/agents/`, and project `.js/agents/`. Project scope
 wins over global, which wins over repo when roots define the same agent id. A
 prompt directory whose name collides with an existing tool is skipped.
 

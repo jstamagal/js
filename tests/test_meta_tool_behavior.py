@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from js import paths
 from js.skills import ToolActivationResult
 from js.toolkit import ToolContext
 from js.toolkit import fs, meta
@@ -9,8 +10,10 @@ from js.toolkit.registry import select
 
 
 def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):
-    # js/toolkit/meta.py:67-75 — writes ./plans/<name>-<version>.md relative to cwd.
-    context = ToolContext(cwd=tmp_path)
+    # Plans go to ~/.js/plans/<name>-<version>.md, never into the working directory.
+    project = tmp_path / "project"
+    project.mkdir()
+    context = ToolContext(cwd=project)
 
     result = meta.plan(
         plan_name="rollout",
@@ -19,12 +22,13 @@ def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):
         context=context,
     )
 
-    target = tmp_path / "plans" / "rollout-v2.md"
+    target = paths.plans_dir() / "rollout-v2.md"
     assert result == f"plan written to {target}"
     assert target.is_file()
     assert target.read_text() == "# Rollout\n\n- step one\n"
     # The parent dir was created on demand.
-    assert (tmp_path / "plans").is_dir()
+    assert paths.plans_dir().is_dir()
+    assert not (project / "plans").exists()
 
 
 def test_plan_sanitizes_unsafe_name_and_version_into_filename(tmp_path):
@@ -38,7 +42,7 @@ def test_plan_sanitizes_unsafe_name_and_version_into_filename(tmp_path):
         context=context,
     )
 
-    target = tmp_path / "plans" / "my-plan-draft-1.0-beta.md"
+    target = paths.plans_dir() / "my-plan-draft-1.0-beta.md"
     assert result == f"plan written to {target}"
     assert target.read_text() == "body"
 
@@ -49,7 +53,7 @@ def test_plan_empty_name_and_version_fall_back_to_defaults(tmp_path):
 
     result = meta.plan(plan_name="///", version="...", content="x", context=context)
 
-    target = tmp_path / "plans" / "plan-v1.md"
+    target = paths.plans_dir() / "plan-v1.md"
     assert result == f"plan written to {target}"
     assert target.is_file()
 
@@ -57,7 +61,7 @@ def test_plan_empty_name_and_version_fall_back_to_defaults(tmp_path):
 def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
     # js/toolkit/meta.py:72 — snapshot() captures pre-write state for undo support.
     context = ToolContext(cwd=tmp_path)
-    target = tmp_path / "plans" / "rollout-v1.md"
+    target = paths.plans_dir() / "rollout-v1.md"
 
     meta.plan(plan_name="rollout", version="v1", content="first", context=context)
     result = meta.plan(
@@ -80,7 +84,7 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
 
 def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):
     context = ToolContext(cwd=tmp_path)
-    target = tmp_path / "plans" / "rollout-v1.md"
+    target = paths.plans_dir() / "rollout-v1.md"
     meta.plan(plan_name="rollout", version="v1", content="first", context=context)
 
     result = meta.plan(plan_name="rollout", version="v1", content="second", context=context)
@@ -98,7 +102,7 @@ def test_plan_rejects_a_name_over_the_filename_limit(tmp_path):
 
     assert result.startswith("ERROR:")
     assert str(os.pathconf(tmp_path, "PC_NAME_MAX")) in result
-    assert not (tmp_path / "plans").exists()
+    assert not (paths.plans_dir()).exists()
 
 
 def _write_skill(root: Path, name: str, text: str) -> Path:

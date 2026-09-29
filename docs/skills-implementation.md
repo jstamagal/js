@@ -9,7 +9,7 @@ reference implementation, not as the target.
 
 | Stage | Spec | js now |
 |---|---|---|
-| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `js/skills/` (ships in the package), global `~/.agents/skills` then `~/.config/js/skills`, project `./.agents/skills` then `./.js/skills`. Native wins within a layer; a higher layer shadows a lower one by name. |
+| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `js/skills/` (ships in the package), global `~/.agents/skills` then `~/.js/skills`, project `./.agents/skills` then `./.js/skills`. Native wins within a layer; a higher layer shadows a lower one by name. |
 | Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools` and `disable-model-invocation`. `js/skills.py` indexes metadata only; bodies read at activation. |
 | **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
 | Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
@@ -134,7 +134,7 @@ bodies are re-injected, each truncated to 5000 tokens, 25 000 tokens total.
 
 | | Yours | Claude Code |
 |---|---|---|
-| Roots | `~/.config/js/skills` (→ `~/.js/skills`), `~/.agents/skills`, `./.js/skills`, `./.agents/skills` | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
+| Roots | `~/.js/skills`, `~/.agents/skills`, `./.js/skills`, `./.agents/skills` | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
 | Layout | `<root>/<name>/SKILL.md`, exact case | Same |
 | Where the catalog goes | system prompt, under a "skills available" heading | first-turn user message in `<system-reminder>`, plus rules in the tool description |
 | When | once per session | once per process; deltas for late-added skills; suppressed on resume |

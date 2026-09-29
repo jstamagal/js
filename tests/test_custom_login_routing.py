@@ -136,8 +136,8 @@ def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
 ):
     _isolate_config(monkeypatch, tmp_path)
     _save_custom_login("testes")
-    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
-    config_file.parent.mkdir(parents=True)
+    config_file = tmp_path / "home" / ".js" / "jsrc"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text("set model.id testes/test\n", encoding="utf-8")
     monkeypatch.setenv("HF_TOKEN", "hf-decoy")
 
@@ -154,8 +154,8 @@ def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
 def test_js_model_known_unlogged_prefix_does_not_ride_saved_default(monkeypatch, tmp_path):
     _isolate_config(monkeypatch, tmp_path)
     _save_custom_login("testes")
-    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
-    config_file.parent.mkdir(parents=True)
+    config_file = tmp_path / "home" / ".js" / "jsrc"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text("set model.id testes/test\n", encoding="utf-8")
     monkeypatch.setenv("JS_MODEL", "huggingface/foo")
     monkeypatch.setenv("HF_TOKEN", "hf-decoy")
@@ -211,8 +211,8 @@ def test_explicit_gateway_provider_still_yields_to_saved_login_prefix(monkeypatc
 def test_explicit_model_same_saved_prefix_routes_to_saved_login(monkeypatch, tmp_path):
     _isolate_config(monkeypatch, tmp_path)
     _save_custom_login("testes")
-    config_file = tmp_path / "home" / ".config" / "js" / "jsrc"
-    config_file.parent.mkdir(parents=True)
+    config_file = tmp_path / "home" / ".js" / "jsrc"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text("set model.id testes/test\n", encoding="utf-8")
 
     cfg = from_env(cwd=tmp_path, save_session=False)

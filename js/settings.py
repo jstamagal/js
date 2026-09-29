@@ -12,7 +12,7 @@ A config file is a *script*: each non-comment line is a command (see
 There is no TOML — `js --migrate-config` converts a legacy `config.toml` once.
 
 Precedence, lowest to highest:
-    js/jsrc < ~/.config/js/jsrc < project .js/jsrc
+    js/jsrc < ~/.js/jsrc < project .js/jsrc
         < project .js/jsrc.local < env vars < --extra CLI flag
 """
 
@@ -44,7 +44,7 @@ class DefaultsError(SystemExit):
 
 CONFIG_PRECEDENCE_LAYERS = (
     "js/jsrc",
-    "~/.config/js/jsrc",
+    "~/.js/jsrc",
     "project .js/jsrc",
     "project .js/jsrc.local",
     "env vars",
@@ -247,20 +247,19 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "one: each line is its own turn, in order."),
     SettingSpec("runtime.debug_autolog", "bool",
                 "Append the full request trace (unclipped system prompt, tool-schema "
-                "JSON, and the messages sent each call) to logs/<agent>/<session>.log "
-                "under the js data dir. This trace never prints to the terminal, only "
-                "to the file.",
+                "JSON, and the messages sent each call) to ~/.js/logs/<agent>/<session>.log. "
+                "This trace never prints to the terminal, only to the file.",
                 env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
     SettingSpec("runtime.debug_autolog_dir", "str",
-                "Directory for the debug autolog; unset = logs/<agent> under the js data dir.",
+                "Directory for the debug autolog; unset = ~/.js/logs/<agent>.",
                 env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.transcript_log", "bool",
-                "Append the visible terminal/TUI transcript to transcript/<agent>/<session>.log "
-                "under the js data dir: what printed to the user, with IRC-style "
-                "<USER>/<APE> tags for user/assistant turns.",
+                "Append the visible terminal/TUI transcript to "
+                "~/.js/logs/transcript/<agent>/<session>.log: what printed to the user, with "
+                "IRC-style <USER>/<APE> tags for user/assistant turns.",
                 env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
     SettingSpec("runtime.transcript_log_dir", "str",
-                "Directory for the visible transcript log; unset = transcript/<agent> under the js data dir.",
+                "Directory for the visible transcript log; unset = ~/.js/logs/transcript/<agent>.",
                 env="JS_TRANSCRIPT_LOG_DIR", empty=EMPTY_NONE),
     SettingSpec("runtime.allow_inline_code", "bool",
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
@@ -804,7 +803,7 @@ def collect_settings(
 ) -> dict:
     """Run precedence: js/jsrc < jsrc files (in order) < env < CLI extras.
 
-    ``config_paths`` defaults to the platform jsrc file. ``js.config.from_env``
+    ``config_paths`` defaults to ``~/.js/jsrc``. ``js.config.from_env``
     passes the global, project, and project-local files explicitly.
     """
     settings = seed_defaults()

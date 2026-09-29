@@ -11,15 +11,13 @@ from js.toolkit.registry import build_default_registry
 def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypatch, tmp_path):
     home = tmp_path / "home"
     project = tmp_path / "project"
-    config_home = home / ".config"
-    global_js = config_home / "js"
+    global_js = home / ".js"
     global_js.mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
     (global_js / "jsrc").write_text("set model.id global\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
     (project / ".js" / "jsrc").write_text("set model.id project\nset limits.max_tool_iterations 9\n", encoding="utf-8")
     (project / ".js" / "jsrc.local").write_text("set model.id local\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     monkeypatch.setenv("JS_MODEL", "env")
     monkeypatch.chdir(project)
 

@@ -30,6 +30,7 @@ from . import context_budget
 from . import display
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
+from . import paths
 from . import providers
 from . import settings as _settings
 from . import toolkit as T
@@ -691,7 +692,7 @@ def spill_oversized_result(
     """
     if inline_cap <= 0 or (not force and byte_size(result) <= inline_cap):
         return result
-    target_dir = spill_dir or (Path(os.path.expanduser("~")) / "oldinbox" / "js-tool-results")
+    target_dir = spill_dir or paths.tool_results_dir()
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(result.encode("utf-8", "replace")).hexdigest()[:16]

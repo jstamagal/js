@@ -46,6 +46,7 @@ from . import providers
 from . import replcomplete
 from . import runtime
 from . import stats
+from . import home as _home
 from . import paths as _paths
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
@@ -82,7 +83,7 @@ RUN
   js -C DIR ...               run as if launched from DIR
 
 PICK
-  -a NAME     agent profile (~/.config/js/agents/NAME)
+  -a NAME     agent profile (~/.js/agents/NAME)
   -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
   -r EFFORT   off|minimal|low|medium|high|xhigh|max
 
@@ -122,7 +123,7 @@ def _error_text(e: BaseException) -> str:
 def _registry_for(cfg) -> object:
     # Always build from THIS cfg's prompt roots. The old code returned a module-level
     # registry built with no roots on the normal path, and only passed cfg.prompt_roots
-    # on the locked branch — so every agent in ~/.config/js/agents and .js/agents was
+    # on the locked branch — so every agent in ~/.js/agents and .js/agents was
     # invisible as a tool unless the operator happened to lock subagent models.
     #
     # The `model_override` flag exposes the subagent `model` param on the task tool;
@@ -1969,7 +1970,7 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
             agent_id = getattr(cfg, "agent_id", "?")
             return (
                 f"no such agent: {agent_id}; looked in project .js/agents, "
-                f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
+                f"{agents_dir}, and repo prompts. "
                 f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
                 f"and an optional agent.yaml manifest."
             )
@@ -2362,7 +2363,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
 
 
 def _commit_backup_root() -> Path:
-    return _paths.data_dir() / "commit-backups"
+    return _paths.commit_backups_dir()
 
 
 def _worktree_patch(repo_dir: Path, commit_helper) -> str:
@@ -3231,6 +3232,9 @@ def _printonly_run(args, cli_agent, presets) -> int:
 @_session_scope
 def main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
+    # Before anything reads or writes ~/.js: move the old locations in, once.
+    _home.migrate_once()
+    _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
@@ -3255,7 +3259,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
     parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
     parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
-    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
+    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in ~/.js/sessions/<agent>, runtime state in ~/.js/state/<agent>")
     parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
     parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
                         help="reach an endpoint with no saved login in one string: "
@@ -3270,7 +3274,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
     parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
+    session_group.add_argument("-s", "--session", help="create or resume a named session under ~/.js/sessions/<agent>")
     session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
     parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
@@ -3332,7 +3336,7 @@ def main(argv: list[str] | None = None) -> int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
-    # Fill unset env names from .env, cwd upward, then ~/.config/js/.env. The
+    # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
     dotenv.load()

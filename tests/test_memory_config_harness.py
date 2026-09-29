@@ -107,7 +107,7 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
         "JS_INLINE_CODE_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
-    config_dir = tmp_path / ".config" / "js"
+    config_dir = tmp_path / ".js"
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text(
         """set model.max_output_tokens true
@@ -159,8 +159,8 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
 
     actual = from_env(save_session=False)
 
-    expected_agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "agent_one"
-    expected_state_dir = tmp_path / ".local" / "share" / "js" / "state" / "agent_one"
+    expected_agent_dir = tmp_path / ".js" / "sessions" / "agent_one"
+    expected_state_dir = tmp_path / ".js" / "state" / "agent_one"
     assert actual.agent_id == "agent_one"
     assert actual.agent_dir == expected_agent_dir
     assert actual.session_file == Path(os.devnull)
@@ -267,8 +267,8 @@ def test_resolve_session_file_resumes_pasted_relative_path_of_existing_session(t
     existing.write_text("history\n", encoding="utf-8")
 
     for pasted in (
-        ".local/share/js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
-        ".local/share/js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8",
+        ".js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
+        ".js/sessions/defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8",
         "defaultagent/20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
         "20260830T130250464430Z-53b4fd3cc19a55c8.jsonl",
         "20260830T130250464430Z-53b4fd3cc19a55c8",

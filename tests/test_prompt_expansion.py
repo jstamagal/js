@@ -188,10 +188,11 @@ def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
 @pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
 def test_inline_python_snippet_does_not_litter_cwd(tmp_path, monkeypatch):
     # Running in the invocation cwd must not leave the snippet file behind there.
-    monkeypatch.chdir(tmp_path)
-    before = set(tmp_path.iterdir())
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     expand_prompt("!{python print(1)}", allow_code=True)
-    assert set(tmp_path.iterdir()) == before
+    assert list(project.iterdir()) == []
 
 
 @pytest.mark.skipif(not (shutil.which("cc") or shutil.which("gcc")), reason="no C compiler")
@@ -352,6 +353,6 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
     """Global context is JS.md. A global AGENTS.md must NOT be loaded everywhere."""
     from js import paths
 
-    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "home", lambda: tmp_path)
 
     assert [p.name for p in paths.global_instruction_files()] == ["JS.md", "JS.local.md"]

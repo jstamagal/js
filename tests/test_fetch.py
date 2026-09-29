@@ -239,7 +239,7 @@ def test_http_text_over_cap_spills_full_response_using_standard_convention(
     result = process_net.fetch("https://example.test/long", context=context)
 
     digest = hashlib.sha256(body.encode()).hexdigest()[:16]
-    expected_path = tmp_path / "oldinbox" / "js-tool-results" / f"result-{digest}.txt"
+    expected_path = tmp_path / ".js" / "state" / "tool-results" / f"result-{digest}.txt"
     pointer = re.search(r"the full text is at (.+) — read it", result)
     assert pointer is not None
     assert Path(pointer.group(1)) == expected_path

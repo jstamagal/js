@@ -7,8 +7,8 @@ Root `README.md` is only a launch pad.
 
 1. [User Guide](user-guide.md): how to run the harness day to day.
 2. [Configuration And Sessions](configuration-and-sessions.md): config files and
-   precedence, the full key reference, environment variables, the platformdirs
-   config/data layout, session files, reset/wipe/rollback, and compaction.
+   precedence, the full key reference, environment variables, the `~/.js`
+   layout and the move into it, session files, reset/wipe/rollback, and compaction.
 3. [Inline Directives](inline-directives.md): `{{VAR}}`, `!{sub args}`, and
    ` ```!lang ` fences in system prompts, the subsystems, and the
    `--im-a-pussy` opt-out (code directives run by default).

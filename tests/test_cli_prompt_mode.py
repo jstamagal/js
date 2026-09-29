@@ -46,8 +46,8 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     actual = from_env()
 
     # Platformdirs layout: sessions/state live under the platform data dir.
-    expected_agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
-    expected_state_dir = tmp_path / ".local" / "share" / "js" / "state" / "defaultagent"
+    expected_agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
+    expected_state_dir = tmp_path / ".js" / "state" / "defaultagent"
     assert actual.agent_id == "defaultagent"
     assert actual.agent_dir == expected_agent_dir
     assert actual.history_file == expected_agent_dir / ".history"
@@ -60,13 +60,13 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     latest = json.loads((expected_agent_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
     # No jsrc means no file: only /save writes one.
-    assert not (tmp_path / ".config" / "js" / "jsrc").exists()
+    assert not (tmp_path / ".js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
-    personal_default = tmp_path / ".config" / "js" / "agents" / "defaultagent"
+    personal_default = tmp_path / ".js" / "agents" / "defaultagent"
     personal_default.mkdir(parents=True)
     (personal_default / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
     (personal_default / "01-prompt.md").write_text("personal defaultagent\n", encoding="utf-8")
@@ -91,9 +91,9 @@ def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, 
 
     assert len(set(session_files)) == 10
     for session_file in session_files:
-        assert session_file.parent == tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+        assert session_file.parent == tmp_path / ".js" / "sessions" / "defaultagent"
         assert session_file.exists()
-    latest = json.loads((tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
+    latest = json.loads((tmp_path / ".js" / "sessions" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(session_files[-1])
 
 
@@ -303,7 +303,7 @@ def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, t
 
     from js.config import from_env
 
-    sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "foo-20260519T010203000000Z-deadbeefcafebabe.jsonl"
     existing.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -325,7 +325,7 @@ def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
 
     from js.config import from_env
 
-    sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
 
     actual = from_env()
 
@@ -336,7 +336,7 @@ def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
 def test_config_existing_absolute_session_path_loads_exact_file(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
-    sessions_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    sessions_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "foo-20260519T010203000000Z-deadbeefcafebabe.jsonl"
     existing.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -368,7 +368,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = Config(
         agent_id="test-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
+        agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -382,8 +382,8 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent" / "prompt.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "test-agent",
+        session_file=tmp_path / ".js" / "sessions" / "test-agent" / "prompt.jsonl",
         prompts_dir=prompts,
     )
     calls: list[dict] = []
@@ -417,7 +417,7 @@ def test_js_prompt_mode_reads_pipe_without_prompt_flag(monkeypatch, tmp_path, ca
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = Config(
         agent_id="test-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
+        agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -431,8 +431,8 @@ def test_js_prompt_mode_reads_pipe_without_prompt_flag(monkeypatch, tmp_path, ca
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent" / "pipe.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "test-agent",
+        session_file=tmp_path / ".js" / "sessions" / "test-agent" / "pipe.jsonl",
         prompts_dir=prompts,
     )
 
@@ -464,7 +464,7 @@ def test_js_prompt_flag_reads_pipe(monkeypatch, tmp_path, capsys):
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = Config(
         agent_id="test-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
+        agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -478,8 +478,8 @@ def test_js_prompt_flag_reads_pipe(monkeypatch, tmp_path, capsys):
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent" / "pipe-flag.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "test-agent",
+        session_file=tmp_path / ".js" / "sessions" / "test-agent" / "pipe-flag.jsonl",
         prompts_dir=prompts,
     )
 
@@ -515,7 +515,7 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch, tmp_path, cap
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = Config(
         agent_id="test-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
+        agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -529,8 +529,8 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch, tmp_path, cap
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent" / "pipe-review.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "test-agent",
+        session_file=tmp_path / ".js" / "sessions" / "test-agent" / "pipe-review.jsonl",
         prompts_dir=prompts,
     )
     seen: list[str] = []
@@ -567,7 +567,7 @@ def test_js_prompt_existing_session_persists_to_selected_session(monkeypatch, tm
     prompts.mkdir()
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     # New layout: sessions live directly under the per-agent dir.
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent"
+    agent_dir = tmp_path / ".js" / "sessions" / "test-agent"
     session_file = agent_dir / "2026-05-18-soup-20260519T010203000000Z-deadbeefcafebabe.jsonl"
     cfg = Config(
         agent_id="test-agent",
@@ -622,7 +622,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
     actual = cli.main(["--model", "hint-model", "-p", "Reply with MODEL_HINT_OK"])
 
     output = capsys.readouterr().out
-    session_file = next((tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent").glob("*.jsonl"))
+    session_file = next((tmp_path / ".js" / "sessions" / "defaultagent").glob("*.jsonl"))
     assert actual == 0
     assert output == f"MODEL_HINT_OK\nContinue: js --model hint-model --session {session_file.stem}\n"
 
@@ -632,10 +632,10 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setenv("JS_MODEL", "from-js-model")
-    config_dir = tmp_path / ".config" / "js"
+    config_dir = tmp_path / ".js"
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text("set model.id from-config\n", encoding="utf-8")
-    session_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-env-model.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -669,7 +669,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
 
     captured = capsys.readouterr()
     # New layout: sessions live directly under the per-agent dir.
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     session_files = list(agent_dir.glob("*.jsonl"))
     assert actual == 0
     assert len(session_files) == 1
@@ -697,7 +697,7 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     actual = cli.main(["--no-save", "-p", "Reply with NO_SAVE_OK"])
 
     captured = capsys.readouterr()
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     assert actual == 0
     assert captured.out == "NO_SAVE_OK\n"
     assert captured.err.splitlines().count("session not saved; resume unavailable") == 1
@@ -734,7 +734,7 @@ def test_js_pipe_modes_no_save_write_no_session_or_latest(monkeypatch, tmp_path,
     actual_prompt_pipe = cli.main(["--no-save", "-p"])
     captured_prompt_pipe = capsys.readouterr()
 
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     assert actual_pipe == 0
     assert actual_prompt_pipe == 0
     assert captured_pipe.out == "PIPE_NO_SAVE_OK\n"
@@ -762,7 +762,7 @@ def test_short_no_save_prompt_alias_suppresses_persistence(monkeypatch, tmp_path
     actual = cli.main(["-n", "-p", "Reply with SHORT_NO_SAVE_OK"])
 
     captured = capsys.readouterr()
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     assert actual == 0
     assert captured.out == "SHORT_NO_SAVE_OK\n"
     assert captured.err.splitlines().count("session not saved; resume unavailable") == 1
@@ -854,7 +854,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = Config(
         agent_id="test-agent",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
+        agent_dir=tmp_path / ".js" / "sessions" / "test-agent",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -868,8 +868,8 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "test-agent" / "knobs.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "test-agent",
+        session_file=tmp_path / ".js" / "sessions" / "test-agent" / "knobs.jsonl",
         prompts_dir=prompts,
     )
     seen: dict[str, object] = {}
@@ -920,7 +920,7 @@ def test_prompt_mode_missing_agent_says_no_such_agent(monkeypatch, tmp_path, cap
     err = capsys.readouterr().err
     assert actual == 2
     assert "no such agent: ghostagent" in err
-    assert "$XDG_CONFIG_HOME/js/agents" in err
+    assert f"{tmp_path / '.js' / 'agents'}," in err
 
 
 def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatch, tmp_path, capsys):
@@ -950,7 +950,7 @@ def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path, caps
 
 def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    session_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     session_dir.mkdir(parents=True)
     session_file = session_dir / "compact-session.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -1038,7 +1038,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    session_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    session_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-model.jsonl"
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
@@ -1066,7 +1066,7 @@ def test_short_session_alias_loads_existing_session(monkeypatch, tmp_path, capsy
     prompts.mkdir()
     (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
     # New layout: sessions live directly under the per-agent dir.
-    agent_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    agent_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     sessions_dir = agent_dir
     sessions_dir.mkdir(parents=True)
     session_file = sessions_dir / "short-session.jsonl"
@@ -1095,8 +1095,8 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     # Sessions live directly under the platform data sessions/<agent>/ dir.
-    scoped_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "scoped"
-    default_dir = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent"
+    scoped_dir = tmp_path / ".js" / "sessions" / "scoped"
+    default_dir = tmp_path / ".js" / "sessions" / "defaultagent"
     scoped_sessions_dir = scoped_dir
     default_sessions_dir = default_dir
     scoped_sessions_dir.mkdir(parents=True)
@@ -1138,7 +1138,7 @@ def test_short_agent_alias_scopes_session_lookup(monkeypatch, tmp_path, capsys):
 def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
     return Config(
         agent_id="auto",
-        agent_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "auto",
+        agent_dir=tmp_path / ".js" / "sessions" / "auto",
         model="offline-test-model",
         provider_id=None,
         provider_base_url=None,
@@ -1152,8 +1152,8 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
         debug_log=None,
         trace=False,
         history_file=tmp_path / ".history",
-        sessions_dir=tmp_path / ".local" / "share" / "js" / "sessions" / "auto",
-        session_file=tmp_path / ".local" / "share" / "js" / "sessions" / "auto" / "auto.jsonl",
+        sessions_dir=tmp_path / ".js" / "sessions" / "auto",
+        session_file=tmp_path / ".js" / "sessions" / "auto" / "auto.jsonl",
         prompts_dir=tmp_path / "prompts",
         # buffer_tokens 0 keeps these threshold tests on raw-window math, so the
         # synthetic 100-token window still means "80 tokens == 80% full"; the
@@ -1562,14 +1562,14 @@ def test_named_nested_and_derived_sessions_append_stably(monkeypatch, tmp_path, 
 
     assert cli.main(["-s", "caller/nested", "-p", "first"]) == 0
     assert cli.main(["-s", "caller/nested", "-p", "second"]) == 0
-    nested = tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "caller" / "nested.jsonl"
+    nested = tmp_path / ".js" / "sessions" / "defaultagent" / "caller" / "nested.jsonl"
     assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
 
     project = tmp_path / "project"
     project.mkdir()
     assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "third"]) == 0
     assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "fourth"]) == 0
-    derived = list((tmp_path / ".local" / "share" / "js" / "sessions" / "defaultagent" / "derived").glob("*.jsonl"))
+    derived = list((tmp_path / ".js" / "sessions" / "defaultagent" / "derived").glob("*.jsonl"))
     assert len(derived) == 1
     assert [message["content"] for message in load_messages(derived[0])] == ["third", "OK", "fourth", "OK"]
     capsys.readouterr()
@@ -1584,7 +1584,7 @@ def test_session_key_isolated_by_agent_cwd_and_key(monkeypatch, tmp_path):
     two = tmp_path / "two"
     one.mkdir()
     two.mkdir()
-    other_agent = tmp_path / ".config" / "js" / "agents" / "other"
+    other_agent = tmp_path / ".js" / "agents" / "other"
     other_agent.mkdir(parents=True)
     (other_agent / "01.md").write_text("SYSTEM\n", encoding="utf-8")
 
@@ -1597,7 +1597,7 @@ def test_session_key_isolated_by_agent_cwd_and_key(monkeypatch, tmp_path):
     for argv in runs:
         assert cli.main(argv) == 0
 
-    root = tmp_path / ".local" / "share" / "js" / "sessions"
+    root = tmp_path / ".js" / "sessions"
     assert len(list(root.rglob("derived/*.jsonl"))) == 4
 
 
@@ -1620,7 +1620,7 @@ def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeyp
 
 def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    root = tmp_path / ".local" / "share" / "js" / "sessions"
+    root = tmp_path / ".js" / "sessions"
     old = root / "old" / "legacy.jsonl"
     nested = root / "agent" / "caller" / "nested.jsonl"
     old.parent.mkdir(parents=True)
@@ -1649,7 +1649,7 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
 
 def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    session = tmp_path / ".local" / "share" / "js" / "sessions" / "agent" / "open.jsonl"
+    session = tmp_path / ".js" / "sessions" / "agent" / "open.jsonl"
     session.parent.mkdir(parents=True)
     session.touch()
     ready = tmp_path / "ready"
@@ -1688,7 +1688,7 @@ def test_json_is_scoped_to_list(capsys):
 @pytest.mark.parametrize("failure, status", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
 def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, debug, failure, status):
     monkeypatch.setenv("HOME", str(tmp_path))
-    session = tmp_path / ".local/share/js/sessions/defaultagent/interrupted.jsonl"
+    session = tmp_path / ".js/sessions/defaultagent/interrupted.jsonl"
     user = {"role": "user", "content": "inspect tests"}
     exchange = [
         {"role": "assistant", "content": "checking", "tool_calls": [
@@ -1736,7 +1736,7 @@ def test_prompt_interrupt_keeps_streamed_partial(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(runtime.model_client, "stream_model_async", interrupted)
     assert cli.main(["-s", "partial", "-p", "explain"]) == 130
-    session = tmp_path / ".local/share/js/sessions/defaultagent/partial.jsonl"
+    session = tmp_path / ".js/sessions/defaultagent/partial.jsonl"
     assert load_messages(session) == [
         {"role": "user", "content": "explain"},
         {"role": "assistant", "content": "partial answer", "incomplete_reason": "cancelled"},
@@ -1750,4 +1750,4 @@ def test_prompt_interrupt_without_save(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(runtime, "run_turn", interrupted)
     assert cli.main(["--no-save", "-p", "explain"]) == 130
-    assert not list((tmp_path / ".local/share/js/sessions").rglob("*.jsonl"))
+    assert not list((tmp_path / ".js/sessions").rglob("*.jsonl"))

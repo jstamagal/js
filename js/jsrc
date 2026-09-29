@@ -1,7 +1,7 @@
 # js built-in defaults: one line per registered knob.
 #
 # This file is the lowest config layer. Precedence, lowest to highest:
-#   js/jsrc (this file) < ~/.config/js/jsrc < .js/jsrc < .js/jsrc.local
+#   js/jsrc (this file) < ~/.js/jsrc < .js/jsrc < .js/jsrc.local
 #   < env vars < --extra
 # `set -key` leaves a knob unset. `/set` with no argument lists every knob
 # and its value; `/show <key>` shows one with its help text.

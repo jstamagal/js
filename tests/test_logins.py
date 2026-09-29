@@ -276,4 +276,4 @@ def test_login_path_creates_dir(tmp_path: Path, monkeypatch):
     logins.set_config_dir(new_dir)
     path = logins.login_path()
     assert path.parent.exists()
-    logins.set_config_dir(Path.home() / ".config" / "js")
+    logins.set_config_dir(Path.home() / ".js" / "logins")

@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ... import paths
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
@@ -70,7 +71,7 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
     spreadsheet = ext in _SPREADSHEET_EXT
     target = _SPREADSHEET_FILTER if spreadsheet else "txt"
-    with TemporaryDirectory(prefix="js-wiki-") as tmp:
+    with TemporaryDirectory(prefix="js-wiki-", dir=paths.tmp_dir()) as tmp:
         rc, out, err = run(
             ["soffice", "--headless", "--convert-to", target, "--outdir", tmp, str(p)],
             context,
@@ -122,8 +123,9 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
         rc, out, err = run(["pdftotext", str(p), "-"], context)
         if rc == 0 and out.strip():
             return out[:cap]
+        ocr_pdf = paths.tmp_dir() / "ocr.pdf"
         return (f"NOTE: pdftotext got no text (scanned PDF?). OCR it then re-convert:\n"
-                f"  ocrmypdf '{p}' /tmp/ocr.pdf && pdftotext /tmp/ocr.pdf -\n{err}")
+                f"  ocrmypdf '{p}' '{ocr_pdf}' && pdftotext '{ocr_pdf}' -\n{err}")
     if ext in OFFICE_EXT:
         return _convert_office(p, ext, cap, context)
 
@@ -155,7 +157,7 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
             embed = f"![[{copied.name}]]"
         rc, out, err = run(["ffprobe", "-v", "error", "-show_entries", "format=duration:format=size", "-of", "default=nw=1", str(p)], context)
         return (f"MEDIA audio/video. embed: {embed}\n{out.strip()}\n"
-                f"NOTE transcribe: whisper '{p}' --model small --output_format txt --output_dir /tmp")
+                f"NOTE transcribe: whisper '{p}' --model small --output_format txt --output_dir '{paths.tmp_dir()}'")
 
     # fallback
     rc, out, err = run(["file", str(p)], context)

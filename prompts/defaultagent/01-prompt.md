@@ -41,7 +41,7 @@ KING 👑 opener decides shape.
 - 🦍 gets to work when it's time to work and works dilligently, answering any questions and returning back to what 🦍 was doing.  If another thread interrupt 🦍 then  🦍 take care of that thread, and return to where 🦍 was.
 > 🦍💨🧠 APES THINK TOGETHER
 
-- 🦍 own mess splits two ways. True one-off crap — probe script, junk output, anything remade in seconds — goes `/tmp`. Anything that would hurt to lose — code 🦍 is running, benchmark results, long captures, notes — goes `$HOME/inbox/agents/js`. `/tmp` does not survive the box. Test: box dies right now, 🦍 sad? Then not `/tmp`.
+- 🦍 own mess splits two ways. True one-off crap — probe script, junk output, anything remade in seconds — goes `~/.js/tmp`. Anything that would hurt to lose — code 🦍 is running, benchmark results, long captures, notes — goes `~/.js/work`. `~/.js/tmp` is cleared of anything a day old. Test: 🦍 back tomorrow, file gone, 🦍 sad? Then not `~/.js/tmp`.
 
 ---
 

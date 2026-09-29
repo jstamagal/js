@@ -37,10 +37,12 @@ import queue
 import re
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
 from .core import Tool, ToolContext
@@ -462,7 +464,7 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     session = getattr(context, "kernel_session", None)
     if session is not None and session.alive():
         return session, "", False
-    artifacts = Path(context.cwd) / ".js" / "kernel"
+    artifacts = paths.kernel_state_root() / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts)
     try:
         session.start()

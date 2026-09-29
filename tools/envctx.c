@@ -18,7 +18,7 @@
 //
 set -e
 _src=$0
-_cache=${XDG_CACHE_HOME:-$HOME/.cache}/js
+_cache=$HOME/.js/cache
 _bin=$_cache/envctx.bin
 if [ ! -x "$_bin" ] || [ "$_src" -nt "$_bin" ]; then
   mkdir -p "$_cache"
@@ -894,12 +894,8 @@ int main(void) {
     for (char *p = fp; *p; p++)
       hash = hash * 33u + (unsigned char)*p;
 
-    const char *xdg = getenv("XDG_CACHE_HOME");
     char cachedir[900], cachefile[1024];
-    if (xdg && *xdg)
-      snprintf(cachedir, sizeof cachedir, "%s/js", xdg);
-    else
-      snprintf(cachedir, sizeof cachedir, "%s/.cache/js", HOMEDIR);
+    snprintf(cachedir, sizeof cachedir, "%s/.js/cache", HOMEDIR);
     snprintf(cachefile, sizeof cachefile, "%s/envctx.tools.%lx", cachedir,
              hash);
 

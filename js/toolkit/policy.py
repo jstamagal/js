@@ -14,7 +14,7 @@ while two entries of the same kind resolve by position: in
 tag claims tavily_search first. A tool no entry matches is not on the
 agent's surface.
 
-`~/.config/js/tools.yaml` (platform config dir) holds the shared parts:
+`~/.js/tools.yaml` holds the shared parts:
 
     tags:                 # named entry lists, usable as tag:NAME
       code_editor: ["*:ban", read:eager]
@@ -54,7 +54,7 @@ class ToolPolicyError(ValueError):
 
 
 def tools_config_path() -> Path:
-    return paths.config_dir() / "tools.yaml"
+    return paths.tools_config_file()
 
 
 @dataclass(frozen=True)
