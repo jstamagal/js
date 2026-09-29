@@ -310,12 +310,12 @@ home.
   outside DIR (and the bound paths) with one line.
 - Subagents inherit the jail. No bwrap on the box: js refuses `-C` with one
   line; there is no unjailed fallback.
+- `-C` is the jail; there is no separate flag. A plain working directory is
+  `cd DIR && js`. The operator always read `-C` as a jail.
 
 ## Open
 
 - Probes that failed with no reply (a 402, a DNS error): shown with the
   error and model (`✗ 402 deepseek-v4-flash`), or hidden with the empty
   sessions?
-- `-C` as the jail with `cd DIR && js` for the plain case, or `-C` kept as
-  `chdir` and a new `--jail DIR`?
 - Tags as a fourth `v` view (`[nfs / mounts]`, …) or only a column and filter?
