@@ -63,6 +63,7 @@ from . import setcmd
 from . import skills
 from . import settings
 from . import stream_transport
+from . import turn_settings
 from . import headless
 from . import usage as usage_mod
 from . import routing
@@ -540,80 +541,6 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
     return cfg
 
 
-_LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("max_tool_iterations", ("limits", "max_tool_iterations")),
-    ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
-    ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
-    ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
-    ("browse_timeout_s", ("limits", "browse_timeout_s")),
-    ("download_timeout_s", ("limits", "download_timeout_s")),
-    ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
-    ("max_read_lines", ("limits", "max_read_lines")),
-    ("max_file_bytes", ("limits", "max_file_bytes")),
-    ("max_read_bytes", ("limits", "max_read_bytes")),
-    ("max_bash_output_ceiling", ("limits", "max_bash_output_ceiling")),
-    ("max_tool_result_inline_bytes", ("limits", "max_tool_result_inline_bytes")),
-    ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
-    ("max_tool_calls_per_message", ("limits", "max_tool_calls_per_message")),
-    ("task_max_depth", ("limits", "task_max_depth")),
-    ("subagent_max_workers", ("limits", "subagent_max_workers")),
-    ("kernel_render_max_lines", ("kernel", "render_max_lines")),
-    ("kernel_wait_seconds", ("kernel", "wait_seconds")),
-    ("shell_wait_seconds", ("shell", "wait_seconds")),
-    ("max_parallel_tools", ("runtime", "max_parallel_tools")),
-)
-
-
-# `set kernel.verbosity verbose` mid-session has to take effect on the next
-# kernel call, so it rides the same live-settings path as the numeric knobs.
-_LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
-    ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
-)
-
-_LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("shell_env_allow", ("limits", "shell_env_allow")),
-)
-
-
-_LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("max_output_tokens", ("model", "max_output_tokens")),
-    ("model_context_window", ("model", "context_window")),
-    ("thinking_budget", ("model", "thinking_budget")),
-)
-
-
-_LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("trace", ("runtime", "trace")),
-    ("prefer_inherit", ("subagents", "prefer_inherit")),
-    ("lock_subagent_model", ("subagents", "lock_model")),
-)
-
-
-def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
-    raw = settings.get_dotted(live_settings, path, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _live_optional_int_setting(live_settings: dict, path: tuple[str, str], default: int | None) -> int | None:
-    missing = object()
-    raw = settings.get_dotted(live_settings, path, missing)
-    if raw is missing:
-        return default
-    if raw is None:
-        return None
-    if isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
 def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
     missing = object()
     raw = settings.get_dotted(live_settings, path, missing)
@@ -868,33 +795,13 @@ def _sync_trace_sink(
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
-    updates = {
-        "settings": live_settings,
-        "vision_enabled": vision_enabled_for_model(active.model, live_settings),
-    }
-    for attr, path in _LIVE_LIMIT_FIELDS:
-        updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
-    for attr, path in _LIVE_OPTIONAL_INT_FIELDS:
-        updates[attr] = _live_optional_int_setting(live_settings, path, getattr(active, attr))
-    updates["reasoning_effort"] = _live_reasoning_effort_setting(
-        live_settings,
-        active.reasoning_effort,
+    return replace(
+        active,
+        **turn_settings.project(live_settings, fallback=active),
+        settings=live_settings,
+        vision_enabled=vision_enabled_for_model(active.model, live_settings),
+        reasoning_effort=_live_reasoning_effort_setting(live_settings, active.reasoning_effort),
     )
-    for attr, path in _LIVE_BOOL_FIELDS:
-        updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
-    for attr, path, allowed in _LIVE_STR_FIELDS:
-        raw = str(settings.get_dotted(live_settings, path, getattr(active, attr)) or "").strip().lower()
-        updates[attr] = raw if raw in allowed else getattr(active, attr)
-    for attr, path in _LIVE_STR_LIST_FIELDS:
-        raw = settings.get_dotted(live_settings, path, getattr(active, attr))
-        updates[attr] = (
-            tuple(raw)
-            if isinstance(raw, (list, tuple))
-            and all(isinstance(item, str) and item.strip() for item in raw)
-            else getattr(active, attr)
-        )
-    return replace(active, **updates)
-
 
 def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
     """Rebuild the live registry. The agent load already printed the
