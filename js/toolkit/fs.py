@@ -17,7 +17,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from ..tool_binaries import resolve_binary
-from .core import Tool, ToolContext
+from .core import Output, Tool, ToolContext
 from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description
@@ -396,7 +396,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
         footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
     else:
         footer = f"[bytes {start}-{end} of {size}; end of file]"
-    return f"{text}\n{footer}"
+    return Output(f"{text}\n{footer}")
 
 
 def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: int, end: int) -> None:
@@ -586,7 +586,7 @@ def fs_read(
     # line is unreachable content. max_read_bytes/max_read_lines bound the read,
     # and the tool-result spill bounds what reaches the model.
     body = _format_numbered_lines(selected, start) if numbered else "\n".join(selected)
-    result = f"{body}{suffix}"
+    result = Output(f"{body}{suffix}")
     context.offer_read(target, read_key, result)
     return result
 

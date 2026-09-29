@@ -32,7 +32,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Oversized result spill | byte + line continuation named | preview + path | none | bash/MCP only |
 | Long shell jobs | handle, never killed | backgrounded | session id | blocks |
 | Async subagents | handle + reminder (js-1g1.17) | yes, notification | yes, mailbox | ? |
-| Persistent code kernel | yes, live `NAMESPACE` | stub in source | fresh V8 per cell | fresh QuickJS |
+| Persistent code kernel | yes, live `NAMESPACE`, calls js tools (js-1g1.22) | stub in source | fresh V8 per cell | fresh QuickJS |
 | Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
 | Branch / fork / rewind | no (designed) | yes | yes | yes |
 | Session picker with search | no (designed) | yes | yes | yes |
@@ -149,7 +149,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
 | Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |
 | Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
-| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | `kernel.py` |
+| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `kernel_bridge.py`, `kernel_client.py` |
 
 ## Entirely lacking
 
@@ -158,7 +158,7 @@ pi retries once. Codex does not recover inside a normal turn.
 - **Branch, fork and rewind of history.** (designed)
 - **An in-REPL picker, titles and search.** (designed)
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.
-- **Programmatic tool calling** (code mode). js already has the kernel, so this is the cheapest of the four to add.
+- **Programmatic tool calling** (code mode). Done in js-1g1.22: a kernel cell calls `tools.read(...)` and gets a Python value.
 - **Push notifications.** Shell and kernel jobs are pull-only, and there's no stall watchdog.
 - **Worktree isolation for `task` workers.** They share one tree.
 - **Provider fallback.** The stream idle watchdog (`runtime.stream_idle_seconds`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.

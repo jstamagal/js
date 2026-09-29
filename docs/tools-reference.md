@@ -622,6 +622,55 @@ handle for it instead of stalling the turn; the next `code` is refused as still
 running, and `action="interrupt"` clears it. `restart` is only for a cell stuck
 in a syscall SIGINT cannot reach.
 
+A cell calls js tools through `tools`, which js binds in the kernel namespace
+at start and after every restart: `tools.read("setup.py")`,
+`tools.fs_search(pattern="TODO")`. Keyword arguments are the tool's parameters;
+positional ones fill them in schema order. The result comes back as a Python
+value — the text the model would have received, uncapped — and a result that
+starts with `ERROR` raises `tools.ToolError` carrying that text. A tool that
+returns content it was asked for marks it `core.Output` (`read` does for a
+file's lines and byte ranges), and that is a value even when the content
+starts with `ERROR`.
+`tools.names()` lists what a cell can call; `tools.call(name, ...)` takes a name
+that is not an identifier.
+
+The kernel is a separate process, so the bridge is a unix socket (`tools.sock`)
+in the session's private `js-kernel-*` directory, which the `-C` jail already
+binds into the kernel. `kernel_client.py` is sent to the kernel as a cell and
+talks to it; `kernel_bridge.py` serves it in the js process, one request at a
+time, and checks a per-session token. A call runs as a direct call does: the
+registry the `kernel` call was dispatched through resolves the name (so a cell
+reaches the agent's surface and nothing else), the arguments are checked
+against the schema and the tools.yaml argument bans, and the handler runs with
+the live ToolContext. Jail confinement, read-before-write and read coverage are
+therefore the same: a file a cell read counts as read for a later `patch`.
+`kernel` and `toolbox` (they run cells in the busy kernel), fan-out tools
+(`task` and agent tools) and async handlers (MCP tools, `tool_discovery`) are
+refused from a cell. A kernel driven without a dispatch registry — a direct
+`kernel()` call from Python — refuses every tool call. A relative path in a
+cell's tool call resolves against the ToolContext's cwd, as a direct call's
+does, not against the kernel's `os.getcwd()`; after an `os.chdir` in a cell, or
+after `/cd` moves js while the kernel keeps its start directory, the two differ.
+
+Each cell call is traced and logged like a direct call: the trace shows the
+exchange whole, and the flight log gets `tool_ok`/`tool_exception` with
+`"via": "kernel"`. The `on` table of the turn running the `kernel` call
+(`ToolContext.tool_call_hooks`) sees each cell call as it sees a direct one:
+`tool_call` fires first and a refusal comes back to the cell as
+`tools.ToolError` without the tool running; `tool_result` fires after a call
+that ran. A kernel started from a subagent answers to the parent's guards.
+The bridge serves one request at a time and runs a tool call to its end:
+interrupting the cell ends its wait, not the tool, and the cell's next tool
+call waits behind it. A cell left running in the background keeps the
+ToolContext, registry and trace of the `kernel` call that started it, and its
+tool calls are not ordered against the model's direct calls.
+Every connection gets a reply; a request or result the bridge cannot handle
+comes back as `tools.ToolError`, and results carry any `str`, including the
+lone surrogates a non-UTF-8 file name decodes to. If the serving thread stops
+anyway, the next `kernel` call or restart serves again on the same socket with
+the same token. A kernel that died is shut down, bridge included, before its
+replacement starts.
+
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.
 

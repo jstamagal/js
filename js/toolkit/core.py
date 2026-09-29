@@ -59,6 +59,38 @@ def call_scope(call_id: str):
         _CALL_ID.reset(token)
 
 
+# The registry the running tool call was dispatched through. The kernel's tool
+# bridge dispatches a cell's `tools.<name>(...)` calls through it, so a cell
+# reaches exactly the tools, and the argument bans, of the agent that ran it.
+_REGISTRY: contextvars.ContextVar[Any] = contextvars.ContextVar("js_tool_registry", default=None)
+# What the dispatcher of the running call wants told about calls made on its
+# behalf (the bridge's cell calls): the runtime traces and logs them with it.
+_OBSERVER: contextvars.ContextVar[Any] = contextvars.ContextVar("js_tool_observer", default=None)
+
+
+@contextmanager
+def registry_scope(registry: Any, observer: Any = None):
+    """Run the body as a call dispatched through ``registry``; ``observer``
+    is told about the tool calls made on the body's behalf."""
+    token = _REGISTRY.set(registry)
+    observer_token = _OBSERVER.set(observer)
+    try:
+        yield
+    finally:
+        _OBSERVER.reset(observer_token)
+        _REGISTRY.reset(token)
+
+
+def current_registry() -> Any:
+    """The registry the running tool call was dispatched through, or None."""
+    return _REGISTRY.get()
+
+
+def current_observer() -> Any:
+    """The observer the running tool call was dispatched with, or None."""
+    return _OBSERVER.get()
+
+
 def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
     """True when calling ``tool`` with ``args`` writes nothing."""
     if tool.read_only:
@@ -199,6 +231,12 @@ def _snapshot_raw_size(snapshot: Snapshot) -> int:
     if snapshot.get("kind") == "file":
         return len(snapshot["data"])
     return len(str(snapshot.get("target", "")).encode("utf-8"))
+
+
+class Output(str):
+    """A tool result that is the content the tool was asked for, such as a
+    file's text. A caller that tells a failure by its ERROR prefix treats an
+    Output as a value even when the content itself starts with ERROR."""
 
 
 @dataclass(frozen=True)
@@ -993,11 +1031,13 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
         return _jail.Refusal(f"ERROR: {exc}")
+    output = isinstance(result, Output)
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
         result = f"{result}\n{rendered}"
-    return _as_jail_shows(result)
+    result = _as_jail_shows(result)
+    return Output(result) if output and not isinstance(result, Output) else result
 
 
 def _as_jail_shows(result: Any) -> Any:

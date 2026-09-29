@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import http.server
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -472,6 +473,30 @@ def test_kernel_runs_in_the_jail_and_survives_an_interrupt(jailed):
     assert ".zshrc" not in listing
     assert "KeyboardInterrupt" in stopped
     assert "still-here" in after
+
+
+@needs_bwrap
+@needs_kernel
+def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
+    jailed.kernel_verbosity = "quiet"
+    jailed.kernel_wait_seconds = 30
+    code = ("print('INSIDE', tools.read('inside.txt', show_line_numbers=False).strip())\n"
+            "try:\n"
+            "    print(tools.read('~/.zshrc'))\n"
+            "except tools.ToolError as exc:\n"
+            "    print('REFUSED')\n")
+    try:
+        _, result = runtime._dispatch("kernel", json.dumps({"code": code}), runtime.Telemetry(None),
+                                      cap_bytes=65536, registry=build_default_registry(),
+                                      tool_context=jailed)
+    finally:
+        session = jailed.kernel_session
+        if session is not None:
+            session.shutdown()
+
+    assert "INSIDE inside" in result
+    assert "REFUSED" in result
+    assert SECRET not in result
 
 
 def test_no_bwrap_refuses_dash_C(monkeypatch, tmp_path, capsys):

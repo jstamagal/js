@@ -178,8 +178,8 @@ on tool_call exec ~/bin/js-guard
 A `tool_call` handler whose command exits 2 refuses the call: the call never
 runs, and the model reads the first line of the command's stderr (else of its
 stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Subagents'
-tool calls go through the same `tool_call` handlers; a subagent's turn fires
-no other event. Any other status, or running past `events.exec_timeout_s`
+tool calls and a kernel cell's `tools.<name>(...)` calls go through the same
+`tool_call` handlers; a subagent's turn fires no other event. Any other status, or running past `events.exec_timeout_s`
 seconds (30, 0 for no limit; the process group is killed), prints one `exec:`
 line and queues nothing. A handler's command holds up the event that ran it
 until the shell exits; what it starts in the background (`cmd &`) keeps
