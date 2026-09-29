@@ -154,8 +154,11 @@ one line per exchange, `> read: 4054B 292L`, with the exit status when a shell
 command exits nonzero; `2` shows the call with its command highlighted, the
 first `ui.tools_preview_lines` lines of the result, `...` when there is more,
 and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
-`3` shows the call and the whole result. Each exchange starts with one `>`
-line, so `grep '> shell'` over a saved transcript finds every shell call. Tool
+`3` shows the call and the whole result, with the text of a `read` source file
+highlighted. Calls that run at the same time, such as parallel `task` calls,
+print each exchange whole when it finishes. Each exchange the screen shows has
+one `>` line, so `grep '] > shell'` over a saved transcript finds every shell
+call made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
 output, tool arguments and model text are stripped of escape sequences and
 control bytes before the terminal sees them.
 

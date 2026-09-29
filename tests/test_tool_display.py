@@ -161,3 +161,49 @@ def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys):
     )
 
     assert capsys.readouterr().out == ""
+
+
+def test_level_three_read_highlights_the_file_text_and_keeps_every_byte():
+    result = '1:ab|def f(x):\n2:cd|    return "s"\n3:ef|\n[9 total lines; continue with {}]'
+
+    rendered = display.render_tool_result("read", result, 3, args={"file_path": "x.py"}, width=80)
+    rows = rendered.splitlines()
+
+    assert _plain(rendered)[:4] == result.split("\n")
+    assert SGR.sub("", rows[0]).startswith("1:ab|def")
+    # The source is highlighted; the paging note is not.
+    assert SGR.search(rows[0].removeprefix("1:ab|"))
+    assert rows[3] == "[9 total lines; continue with {}]" + display.C.RESET
+
+
+def test_concurrent_task_exchanges_print_whole_at_level_two(capsys):
+    import threading
+
+    first_done = threading.Event()
+
+    def task(prompt: str = "", **_kwargs):
+        # "slow" finishes after "fast" so results complete out of call order.
+        if prompt == "slow":
+            first_done.wait(5)
+        else:
+            first_done.set()
+        return f"result-for-{prompt}"
+
+    registry = ToolRegistry(tools=(Tool("task", "task", task, {}),), aliases={"task": "task"})
+    context = ToolContext(cwd="/tmp")
+    context.config = SimpleNamespace(settings={"ui": {"tools": 2}})
+    calls = [
+        runtime._PendingToolCall("c1", "task", ['{"prompt": "slow"}']),
+        runtime._PendingToolCall("c2", "task", ['{"prompt": "fast"}']),
+    ]
+
+    runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 256 * 1024, True, runtime.ToolErrorTracker(), registry, context,
+    )
+
+    lines = _plain(capsys.readouterr().out)
+    headers = [i for i, line in enumerate(lines) if line.startswith(display.TOOL_MARKER + " ")]
+    assert len(headers) == 2
+    for start, end in zip(headers, headers[1:] + [len(lines)], strict=True):
+        prompt = "slow" if "slow" in lines[start] else "fast"
+        assert f"result-for-{prompt}" in lines[start + 1:end]

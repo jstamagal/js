@@ -511,10 +511,19 @@ def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: st
     ))
 
 
-def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any) -> None:
+def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
+                  *, args: dict | None = None, with_call: bool = False, malformed: bool = False) -> None:
+    """Print the result half of an exchange. `with_call` prints the call header
+    in the same write, so exchanges that finish concurrently stay whole."""
     settings = _tool_settings(tool_context)
-    _show_trace(telemetry, display.render_tool_result(
-        name, result, display.tools_level(settings), preview=display.preview_lines(settings),
+    level = display.tools_level(settings)
+    preview = display.preview_lines(settings)
+    call = (
+        display.render_tool_call(name, args, level, preview=preview, malformed=malformed)
+        if with_call else ""
+    )
+    _show_trace(telemetry, call + display.render_tool_result(
+        name, result, level, preview=preview, args=args,
     ))
 
 
@@ -757,33 +766,37 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
               error_tracker: ToolErrorTracker | None = None,
               registry: ToolRegistry | None = None,
-              tool_context: ToolContext | None = None) -> tuple[dict, str]:
-    """Parse + execute one tool call. Returns (parsed_args, result_string)."""
+              tool_context: ToolContext | None = None,
+              trace_together: bool = False) -> tuple[dict, str]:
+    """Parse + execute one tool call. Returns (parsed_args, result_string).
+
+    `trace_together` prints the call header with the result instead of before
+    the call runs; concurrent calls use it so their exchanges do not interleave."""
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
-        if trace:
+        if trace and not trace_together:
             _trace_call(telemetry, tool_context, name, None, malformed=True)
         telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {name}: {e}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
         if trace:
-            _trace_result(telemetry, tool_context, name, result)
+            _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True)
         return {}, result
 
     active_registry = registry or T._REGISTRY
     context = tool_context or T.DEFAULT_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
-    if trace:
+    if trace and not trace_together:
         _trace_call(telemetry, context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, context, trace_name, capped)
+            _trace_result(telemetry, context, trace_name, capped, args=args, with_call=trace_together)
         return args, capped
 
     started = time.time()
@@ -800,7 +813,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     capped = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, result, capped, context)
     if trace:
-        _trace_result(telemetry, context, tool.name, capped)
+        _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together)
     return args, capped
 
 
@@ -828,12 +841,14 @@ def _dispatch_tool_calls(
     registry: ToolRegistry,
     tool_context: ToolContext,
     progress: _DispatchProgress | None = None,
+    trace_together: bool = False,
 ) -> list[tuple[_PendingToolCall, dict, str]]:
     """Dispatch one assistant batch.
 
     All `task` calls from the same assistant turn run concurrently, non-task
     tools run sequentially, then restores the original result order before
-    appending tool messages.
+    appending tool messages. `trace_together` is set when other calls run
+    beside this batch; concurrent `task` calls always trace together.
     """
     records: list[tuple[dict, str] | None] = [None] * len(tool_calls)
     for idx, pc in enumerate(tool_calls):
@@ -848,8 +863,7 @@ def _dispatch_tool_calls(
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
         if trace:
-            _trace_call(telemetry, tool_context, pc.name, args)
-            _trace_result(telemetry, tool_context, pc.name, recorded)
+            _trace_result(telemetry, tool_context, pc.name, recorded, args=args, with_call=True)
         records[idx] = (args, recorded)
         if progress is not None:
             progress.record(pc, args, recorded)
@@ -871,6 +885,7 @@ def _dispatch_tool_calls(
                     None,
                     registry,
                     tool_context,
+                    trace_together or len(task_indices) > 1,
                 )
                 for idx in task_indices
             }
@@ -898,6 +913,7 @@ def _dispatch_tool_calls(
             error_tracker,
             registry,
             tool_context,
+            trace_together,
         )
         if progress is not None:
             progress.record(pc, *records[idx])
@@ -917,6 +933,7 @@ async def _dispatch_fan_out_async(
     error_tracker: ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
+    trace_together: bool = False,
 ) -> tuple[_PendingToolCall, dict, str]:
     """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
     turns on the current loop (never a dispatch thread). Mirrors ``_dispatch``'s
@@ -927,25 +944,25 @@ async def _dispatch_fan_out_async(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as e:
-        if trace:
+        if trace and not trace_together:
             _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {pc.name}: {e}"
         recorded = error_tracker.record(pc.name, result)
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded)
+            _trace_result(telemetry, tool_context, pc.name, recorded, with_call=trace_together, malformed=True)
         return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
     trace_name = tool.name if tool is not None else pc.name
-    if trace:
+    if trace and not trace_together:
         _trace_call(telemetry, tool_context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, tool_context, trace_name, recorded)
+            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, with_call=trace_together)
         return pc, args, recorded
 
     started = time.time()
@@ -959,7 +976,7 @@ async def _dispatch_fan_out_async(
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, recorded)
+        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together)
     return pc, args, recorded
 
 
@@ -972,15 +989,13 @@ async def _dispatch_async_tool(
     except ValueError as exc:
         result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
         if trace:
-            _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
-            _trace_result(telemetry, tool_context, pc.name, result)
+            _trace_result(telemetry, tool_context, pc.name, result, with_call=True, malformed=True)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
         result = registry.unavailable_error(pc.name)
         if trace:
-            _trace_call(telemetry, tool_context, pc.name, args)
-            _trace_result(telemetry, tool_context, pc.name, result)
+            _trace_result(telemetry, tool_context, pc.name, result, args=args, with_call=True)
         return pc, args, result
     if trace:
         _trace_call(telemetry, tool_context, tool.name, args)
@@ -999,7 +1014,7 @@ async def _dispatch_async_tool(
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, result)
+        _trace_result(telemetry, tool_context, tool.name, result, args=args)
     return pc, args, result
 
 
@@ -1058,7 +1073,7 @@ async def _dispatch_batch(
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") as executor:
             future = loop.run_in_executor(
                 executor, _dispatch_tool_calls, calls, telemetry, cap_bytes,
-                trace, error_tracker, registry, tool_context, progress,
+                trace, error_tracker, registry, tool_context, progress, concurrent,
             )
             try:
                 await asyncio.shield(future)
@@ -1076,10 +1091,16 @@ async def _dispatch_batch(
     async def async_call(i: int) -> None:
         if progress.stopped.is_set():
             return
-        dispatch = _dispatch_fan_out_async if i in fan_out else _dispatch_async_tool
-        record = await dispatch(tool_calls[i], telemetry, cap_bytes, trace,
-                                error_tracker, registry, tool_context)
+        if i in fan_out:
+            record = await _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace,
+                                                   error_tracker, registry, tool_context, concurrent)
+        else:
+            record = await _dispatch_async_tool(tool_calls[i], telemetry, cap_bytes, trace,
+                                                error_tracker, registry, tool_context)
         progress.record(*record)
+
+    # Pure fan-out batches run every call at once; their exchanges print whole.
+    concurrent = bool(fan_out) and not async_leaves and len(tool_calls) > 1
 
     jobs: list[asyncio.Task] = []
     try:

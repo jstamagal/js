@@ -166,7 +166,7 @@ def test_plain_prompt_run_keeps_trace_off_stdout(monkeypatch, tmp_path, capsys):
     assert rc == 0
     # The request trace never reaches the terminal on a plain run.
     assert REQUEST_MARKER not in out
-    assert "max_out=" not in out  # the per-turn run line
+    assert "offline-test-model" not in out  # the per-turn run line names the model
     assert "streamed-token" not in out  # streaming was suppressed from the terminal
     # The clean final answer is the only thing on stdout.
     assert "final answer" in out
@@ -196,6 +196,6 @@ def test_debug_flag_prints_concise_form(monkeypatch, tmp_path, capsys):
 
     assert rc == 0
     # -d restores the concise per-turn diagnostics on the terminal ...
-    assert "max_out=" in out  # the per-turn run line
+    assert "offline-test-model" in out  # the per-turn run line names the model
     # ... but the oversized request trace still never hits stdout.
     assert REQUEST_MARKER not in out

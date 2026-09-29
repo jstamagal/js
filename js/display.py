@@ -144,10 +144,21 @@ class LiveSurface(Protocol):
 
 class TtyLive:
     """Live region on a plain terminal: the tail of the open block, redrawn in
-    place with cursor-up and erase-below. Committed text is written once."""
+    place with cursor-up and erase-below. Committed text is written once.
 
-    def __init__(self, write: Callable[[str], None], flush: Callable[[], None] | None = None) -> None:
+    Redraws and erases go through `write`; committed text goes through
+    `commit_write` (default `write`), so a stream that logs what it writes can
+    keep the final answer and skip the redraws."""
+
+    def __init__(
+        self,
+        write: Callable[[str], None],
+        flush: Callable[[], None] | None = None,
+        *,
+        commit_write: Callable[[str], None] | None = None,
+    ) -> None:
         self._write = write
+        self._commit_write = commit_write or write
         self._flush = flush or (lambda: None)
         self._rows = 0
 
@@ -171,7 +182,7 @@ class TtyLive:
 
     def commit(self, rendered: str) -> None:
         self._erase()
-        self._write(rendered)
+        self._commit_write(rendered)
         self._rows = 0
         self._flush()
 
@@ -206,13 +217,13 @@ class Display:
 
     @classmethod
     def for_stream(cls, stream: Any, *, markdown: bool = True) -> Display:
-        write = getattr(stream, "write_unlogged", None) or stream.write
+        redraw = getattr(stream, "write_unlogged", None) or stream.write
         flush = getattr(stream, "flush", None)
         try:
             tty = bool(stream.isatty())
         except Exception:  # noqa: BLE001 - a closed or foreign stream is not a terminal
             tty = False
-        live = TtyLive(write, flush) if (markdown and tty) else None
+        live = TtyLive(redraw, flush, commit_write=stream.write) if (markdown and tty) else None
         return cls(stream.write, live=live, flush=flush)
 
     @property
@@ -305,6 +316,8 @@ _HEADER_VALUE_CHARS = 80
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
 _SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
+# A `read` result line: `N:hash|` before the file's own text.
+_READ_GUTTER = re.compile(r"^\d+:[0-9a-f]+\|")
 
 
 @dataclass
@@ -435,13 +448,49 @@ def render_tool_call(name: str, args: dict | None, level: int, *, preview: int =
     return "".join(out)
 
 
+def _highlight_lines(lines: list[str], lexer: str, width: int) -> list[str]:
+    """Each line highlighted as `lexer` source, one output line per input line."""
+    code = "\n".join(lines)
+    text = Syntax(code, lexer, theme=CODE_THEME, background_color="default").highlight(code)
+    parts = text.split("\n", allow_blank=True)[:len(lines)]
+    console = _render_console(width)
+    out = []
+    for part in parts:
+        with console.capture() as captured:
+            console.print(part, end="", soft_wrap=True)
+        out.append(captured.get())
+    return out if len(out) == len(lines) else lines
+
+
+def _read_body_lines(lines: list[tuple[str, bool]], args: dict | None,
+                     width: int) -> list[str] | None:
+    """A `read` result's lines with the file text highlighted by the file's
+    type. `N:hash|` gutters, and lines without one when others have one (the
+    paging note), stay plain. None when the file type has no lexer."""
+    if not isinstance(args, dict) or not lines:
+        return None
+    matches = [_READ_GUTTER.match(line) for line, _ in lines]
+    gutters = any(match is not None for match in matches)
+    code_rows = [i for i, match in enumerate(matches) if match is not None or not gutters]
+    content = [lines[i][0][matches[i].end():] if matches[i] else lines[i][0] for i in code_rows]
+    lexer = _lexer("read", args, "\n".join(content))
+    if lexer in ("text", "default"):
+        return None
+    highlighted = _highlight_lines(content, lexer, width)
+    out = [line for line, _ in lines]
+    for i, body in zip(code_rows, highlighted, strict=True):
+        out[i] = (matches[i].group(0) if matches[i] else "") + body
+    return out
+
+
 def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
-                       width: int | None = None) -> str:
+                       width: int | None = None, args: dict | None = None) -> str:
     """The result half of an exchange.
 
     1  one metrics line, carrying the marker (level 1 prints no call header)
     2  the first `preview` lines in chrome, `...`, and shown/total metrics
-    3  every line, then the metrics line
+    3  every line, then the metrics line; a `read` of source code is
+       highlighted by the file's type (`args` carries its path)
     """
     if level <= 0:
         return ""
@@ -463,7 +512,11 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
         else:
             out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
         return "".join(out)
-    for line, err in output.lines:
-        out.append(f"{STDERR}{line}{C.RESET}\n" if err else f"{line}\n")
+    highlighted = _read_body_lines(output.lines, args, width) if name == "read" else None
+    if highlighted is not None:
+        out.extend(f"{line}{C.RESET}\n" for line in highlighted)
+    else:
+        for line, err in output.lines:
+            out.append(f"{STDERR}{line}{C.RESET}\n" if err else f"{line}\n")
     out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
     return "".join(out)

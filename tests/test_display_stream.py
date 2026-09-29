@@ -5,12 +5,8 @@ from __future__ import annotations
 
 import io
 import re
-from pathlib import Path
 
-from js import cli, display, runtime, screen
-from js.config import Config
-from js.model_client import ModelStreamResult
-from test_debug_autolog import _fake_stream_result
+from js import cli, display, screen
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -139,38 +135,43 @@ def test_tty_live_redraws_only_the_rows_it_wrote():
     assert written[-1] == "final\n"
 
 
-def _cfg(tmp_path: Path) -> Config:
-    prompts = tmp_path / "prompts"
-    prompts.mkdir()
-    (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
-    sessions = tmp_path / "sessions"
-    return Config(
-        agent_id="test-agent", agent_dir=sessions, model="offline-test-model",
-        provider_id=None, provider_base_url=None, provider_api_key=None,
-        reasoning_effort=None, max_output_tokens=None, max_tool_iterations=5,
-        max_bash_output_bytes=65536, max_tool_result_bytes=65536, fetch_timeout_s=5,
-        debug_log=None, trace=False, history_file=tmp_path / ".history",
-        sessions_dir=sessions, session_file=sessions / "sess.jsonl", prompts_dir=prompts,
-        settings={"runtime": {"debug_autolog": False, "transcript_log": False}},
-    )
+def test_print_answer_to_a_pipe_is_plain_bytes():
+    out = io.StringIO()
+
+    display.print_answer("# Heading\n\n```python\nx = 1\n```\n\x1b]0;title\x07tail", out)
+
+    assert out.getvalue() == "# Heading\n\n```python\nx = 1\n```\ntail\n"
 
 
-def test_prompt_mode_to_a_pipe_prints_the_answer_as_plain_bytes(monkeypatch, tmp_path, capsys):
-    cfg = _cfg(tmp_path)
-    answer = "# Heading\n\n```python\nx = 1\n```\n\x1b]0;title\x07tail"
+class _Tty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
-    def stub(**kwargs):
-        kwargs["on_text"](answer)
-        result: ModelStreamResult = _fake_stream_result(answer)
-        return result
 
-    monkeypatch.setattr(cli, "_from_env", lambda session=None, save_session=True, extras=None: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(cli, "_append_turn", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+class _Log:
+    def __init__(self) -> None:
+        self.text = ""
 
-    assert cli.main(["-p", "hi", "--no-save"]) == 0
-    out = capsys.readouterr().out
+    def write(self, text: str) -> None:
+        self.text += text
 
-    assert out.startswith("# Heading\n\n```python\nx = 1\n```\ntail\n")
-    assert "\x1b" not in out
+    def flush(self) -> None:
+        pass
+
+
+def test_debug_log_keeps_the_committed_answer_but_not_the_redraws():
+    terminal, log = _Tty(), _Log()
+    sink = display.Display.for_stream(cli._StdoutTee(terminal, log))
+    sink.refresh_s = 0
+    assert sink.pretty
+
+    for piece in ANSWER.split("\n"):
+        sink.chunk("text", piece + "\n")
+    sink.finish()
+
+    logged = ANSI.sub("", log.text)
+    for name in ("alpha_one", "beta_two", "gamma_three", "Done."):
+        assert logged.count(name) == 1, name
+    # Cursor movement for the live region stays on the terminal.
+    assert "\x1b[J" in terminal.getvalue()
+    assert "\x1b[J" not in log.text
