@@ -35,6 +35,7 @@ from . import tools as T
 from . import tool_args
 from . import routing
 from . import compaction
+from . import stream_transport
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
@@ -1313,6 +1314,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.compacted_during_turn = False
     active_context.context_tokens = 0
     active_context.tokens_until_compaction = None
+    turn_status = active_context.turn_status
+    turn_status.reset()
     chars_per_token = compaction.get_float(cfg, "chars_per_token", 4.0)
     token_state = getattr(active_context, "context_budget_state", None)
     if not isinstance(token_state, context_budget.TokenState):
@@ -1404,6 +1407,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         if not chunk:
             return
         streamed_reasoning.append(chunk)
+        turn_status.stream(chunk)
         if suppress_output or reasoning_level == 0:
             return
         if reasoning_display is None:
@@ -1432,6 +1436,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         if reasoning_display is not None:
             reasoning_display.answer_started()
         streamed_text["value"] += t
+        turn_status.stream(t)
         _emit_event("stream", text=t)
         if suppress_output:
             return
@@ -1589,17 +1594,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
             nonlocal reclaimed
             before_chars = compaction.history_chars(messages)
+            turn_status.compacting = True
             try:
-                result = await compaction.compact_now(
-                    active_compact_cfg, system, messages, focus=focus, forced=True,
-                    preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                    tail_tokens=tail_tokens, context=active_context,
-                )
+                with stream_transport.net_role("Compacting"):
+                    result = await compaction.compact_now(
+                        active_compact_cfg, system, messages, focus=focus, forced=True,
+                        preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
+                        tail_tokens=tail_tokens, context=active_context,
+                    )
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMPACT FAILURE] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
                 telemetry.event("context_compaction_failed", phase=phase,
                                 error=f"{type(exc).__name__}: {exc}")
                 return False
+            finally:
+                turn_status.compacting = False
             if not result.startswith("compacted:"):
                 telemetry.event("context_compaction_skipped", phase=phase, reason=result)
                 return False
@@ -1632,6 +1641,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             telemetry.event("context_compaction_skipped", phase=phase, reason="tail_fills_budget")
         return changed
 
+    net_role_token = stream_transport.set_role(
+        active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
+    )
     try:
         if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
             await active_registry.restore(prior_surface)
@@ -1734,6 +1746,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         _out_tok = int(getattr(usage, "output_tokens", 0)
                                        or getattr(usage, "completion_tokens", 0) or 0)
                     active_context.last_output_tokens = _out_tok
+                    turn_status.settle(_out_tok)
                     if call_stats is not None:
                         # Stream-isolated numbers (model_client clocks `ai.stream` itself,
                         # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
@@ -1748,7 +1761,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             "finish_reason": finish,
                             "n_tool_calls": len(pending_calls),
                         })
-                    if trace:
+                    _net = stream_transport.net_level()
+                    _label = active_context.net_label
+                    if (_net >= 3 and (_label or not suppress_output)) if _net is not None else trace:
                         _elapsed = time.time() - t0
                         _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
                         _cache = ""
@@ -1756,7 +1771,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
                             _cache = f"  cache {_pct:.0f}%"
                         _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                        print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
+                        print(f"  {C.GREY}{_label + ': ' if _label else ''}▸ {int(_elapsed * 1000)}ms  "
                               f"finish={finish}  tool_calls={len(pending_calls)}  "
                               f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
                     break
@@ -1808,6 +1823,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                             _end_turn("error")
                             raise
+                        stream_transport.say_for_caller(3, f"Retry {transport_retries + 1}: "
+                                                           f"{stream_transport.describe_failure(e)}")
                         await asyncio.sleep(_backoff(transport_retries))
                         transport_retries += 1
                     else:
@@ -1824,6 +1841,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     _end_turn("error")
                     raise
             else:
+                stream_transport.report_held_failure()
                 print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
                 _end_turn("retry_budget_exhausted")
                 return
@@ -1956,6 +1974,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # named-agent) calls are awaited ON the loop instead, so a parent turn
             # never parks a dispatch thread its descendants need (see _dispatch_batch).
             progress = _DispatchProgress()
+            turn_status.tool_begin([_canonical_tool_call_name(pc.name, active_registry) for pc in pending_calls])
             try:
                 dispatch_records = await _dispatch_batch(
                     pending_calls,
@@ -1969,6 +1988,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     progress,
                 )
             finally:
+                turn_status.tool_end()
                 # Also runs on cancellation, before the REPL persists the turn
                 # and balances genuinely unanswered calls with orphan markers.
                 dispatch_records = [progress.records[pc.id] for pc in pending_calls
@@ -2047,9 +2067,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _close_text()
             _commit_streamed_partial()
             _end_turn("cancelled")
+        else:
+            stream_transport.report_held_failure()
         raise
     finally:
         _close_reasoning()
+        stream_transport.reset_role(net_role_token)
+        turn_status.reset()
         if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()
 

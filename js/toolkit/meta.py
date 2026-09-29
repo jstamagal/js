@@ -327,6 +327,7 @@ async def _run_one_task_async(
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
+    child_context.net_label = f"Subagent {idx}"
     messages = M.load_replay_messages(cfg.session_file)
     messages.append({"role": "user", "content": prompt})
     try:

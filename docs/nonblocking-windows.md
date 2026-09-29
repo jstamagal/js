@@ -60,8 +60,9 @@ Full async, not worker threads (fork B resolved — see below).
 - Subagents schedule onto the SAME loop from the tool-dispatch thread via
   `run_coroutine_threadsafe`, as cancelable `subagent` jobs — not a private
   loop (that would leave them detached and un-cancelable).
-- Output paints above the live input line via `patch_stdout(raw=True)` today;
-  it moves to events → irciipy → target window later.
+- `js/screen.py` splits the terminal into scrollback, a one-line status bar,
+  and the input line. Output lands in the scrollback today; it moves to
+  events → irciipy → target window later.
 - Cancel = `task.cancel()`. Ctrl-C cancels the active turn; the turn's
   `CancelledError` handler persists partial work and heals orphaned tool_calls.
   A running tool batch finishes detached (v1 contract) — a per-task flag
@@ -96,7 +97,8 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
    (Supersedes the old worker-thread plan.)
 2. **Wire output through events.** Route `run_turn_async`'s stdout writes
    through `OutputEvent` → `Sink`; default sink stays byte-for-byte stdout.
-   ← NEXT.
+   ← NEXT. The status bar is this step's first consumer: it reads the turn's
+   state from `TurnStatus` on the `ToolContext` instead of parsing stdout.
 3. irciipy as dispatcher: events → ON hooks → rendered text.
 4. `/window` commands + key bindings (`/jobs`, `/cancel` are the seed).
 5. `model!provider@baseurl` identity on every event; window↔source binding.

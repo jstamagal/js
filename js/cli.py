@@ -50,6 +50,7 @@ from .promptexpand import expand_prompt
 from . import screen
 from . import setcmd
 from . import settings
+from . import stream_transport
 from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
@@ -1121,16 +1122,22 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     if not compaction.get_bool(cfg, "auto", True):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
-    outcome = await compaction.maybe_auto_compact_async(
-        active_cfg,
-        state.setdefault("auto_compact", compaction.AutoCompactState()),
-        runtime.T.DEFAULT_CONTEXT,
-        state.get("system") or "",
-        state.get("messages") or [],
-        lambda: runtime._resolve_context_window(
-            active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
-        ),
-    )
+    turn_status = runtime.T.DEFAULT_CONTEXT.turn_status
+    turn_status.compacting = True
+    try:
+        with stream_transport.net_role("Compacting"):
+            outcome = await compaction.maybe_auto_compact_async(
+                active_cfg,
+                state.setdefault("auto_compact", compaction.AutoCompactState()),
+                runtime.T.DEFAULT_CONTEXT,
+                state.get("system") or "",
+                state.get("messages") or [],
+                lambda: runtime._resolve_context_window(
+                    active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
+                ),
+            )
+    finally:
+        turn_status.compacting = False
     for notice in outcome.notices:
         print(f"{C.ORANGE}{notice}{C.RESET}")
     if outcome.result is not None:
@@ -1695,7 +1702,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
             focus = ""
         try:
             compact_cfg = _cfg_for_live_state(cfg, state)
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
+            with stream_transport.net_role("Compacting"):
+                result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
         else:
@@ -2685,6 +2693,51 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return len(_take_queued(queue))
 
 
+def _live_ui_int(state: dict, key: str, default: int) -> int:
+    value = settings.get_dotted(state.get("settings") or {}, ("ui", key), default)
+    return value if isinstance(value, int) and value in range(4) else default
+
+
+def _status_colours(state: dict) -> str:
+    live = state.get("settings") or {}
+    return screen.status_style(
+        settings.get_dotted(live, ("ui", "status_fg"), screen.STATUS_FG),
+        settings.get_dotted(live, ("ui", "status_bg"), screen.STATUS_BG),
+    )
+
+
+def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
+    """The REPL status bar from live state: what is running, on what, how full."""
+    live = state.get("settings") or {}
+    context = runtime.T.DEFAULT_CONTEXT
+    provider = _provider_from_live_settings(live)[0] or state.get("provider_id") or cfg.provider_id
+    model = _model_from_live_settings(live) or state.get("model") or cfg.model
+    if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
+        model = model[len(provider) + 1:]
+    prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
+    cached_tokens = int(getattr(context, "last_cached_tokens", 0) or 0)
+    now = time.monotonic()
+    phase, output_tokens, throbber = "", None, ""
+    if turn_active:
+        throbber = screen.throbber_frame(now)
+        phase, output_tokens = screen.turn_centre(
+            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net", 2) >= 2,
+        )
+    return screen.status_line(
+        width,
+        clock=time.strftime("%H:%M"),
+        provider=provider,
+        model=model,
+        context_tokens=int(getattr(context, "context_tokens", 0) or 0),
+        phase=phase,
+        output_tokens=output_tokens,
+        throbber=throbber,
+        agent_id=cfg.agent_id,
+        session_short=screen.session_short(cfg.session_file),
+        cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
+    )
+
+
 async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. The screen has three regions (scrollback, status, input); turn
@@ -2756,15 +2809,24 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_line=on_line,
         on_interrupt=on_interrupt,
         on_eof=on_eof,
+        status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
+        status_colours=lambda: _status_colours(state),
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
+    ticker = loop.create_task(screen.tick(app, sup.turn_active))
     try:
         with screen.capture_stdio(loop, scrollback, app):
+            stream_transport.install_sink(stream_transport.NetSink(
+                level=lambda: _live_ui_int(state, "net", 2),
+                emit=lambda line: print(line, flush=True),
+            ))
             if banner:
                 print(banner)
             await app.run_async()
     finally:
+        stream_transport.install_sink(None)
+        ticker.cancel()
         telemetry.reasoning_factory = previous_reasoning_factory
         supervisor.set_current(None)
         # Graceful quit (EOF / exit): let queued and in-flight turns finish

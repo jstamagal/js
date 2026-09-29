@@ -127,6 +127,18 @@ entry on normal completion or cancellation. This covers SSE termination before
 HTTP EOF with httpx2 2.12 (upstream pydantic/httpx2#1195). Custom transports are
 left as supplied. Recheck this adapter when upstream stream ownership changes.
 
+The same wrapper carries the `ui.net` channel. `stream_model_async` opens a
+`NetCall` per request (`stream_transport.begin_call`); the response iterator
+counts bytes into the caller's `TurnStatus` until the first token, and a
+`trace` request extension reports the TCP/TLS handshake as "connected" (the
+first token stands in when the transport cannot say). Who is calling (main
+turn, `Subagent N`, `Compacting`) is a context variable set by
+`run_turn_async` and the compaction call sites. `run_turn_async` retries, so
+its role holds each request failure instead of printing it: the next request
+drops it, and the turn prints it (level 1) only when it gives up. The channel
+prints only while the async REPL has installed a sink; elsewhere every hook is
+a no-op, and the models.dev refresh lines print to stderr as before.
+
 Provider request retry:
 
 - SDK `ProviderAPIError.is_retryable` permits two transport retries with backoff.

@@ -247,6 +247,62 @@ class Todo:
 
 
 @dataclass
+class TurnStatus:
+    """What the running turn is doing right now, for the REPL status bar.
+
+    The runtime writes it; the bar reads it on each repaint. A read may land
+    between two writes from another thread, so every field is a plain value and
+    no reader relies on two fields agreeing.
+    """
+
+    output_tokens: int = 0       # this turn so far, reasoning included
+    tool: str = ""               # registry name of the executing tool; "" when none
+    tool_extra: int = 0          # parallel siblings of `tool` in the same batch
+    tool_started: float = 0.0    # time.monotonic() when the batch started
+    compacting: bool = False
+    net_bytes: int = 0           # response bytes of this call before its first token
+    _settled: int = field(default=0, repr=False)     # tokens of the finished calls
+    _chars: int = field(default=0, repr=False)       # streamed chars of this call
+    _token_seen: bool = field(default=False, repr=False)
+
+    def call_started(self) -> None:
+        """A model request went out: count its response bytes until a token."""
+        self.net_bytes = 0
+        self._token_seen = False
+
+    def add_bytes(self, n: int) -> None:
+        if not self._token_seen:
+            self.net_bytes += n
+
+    def stream(self, text: str) -> None:
+        """A reasoning or text chunk arrived: estimate at four chars a token."""
+        self._token_seen = True
+        self.net_bytes = 0
+        self._chars += len(text)
+        self.output_tokens = self._settled + self._chars // 4
+
+    def settle(self, output_tokens: int) -> None:
+        """The call ended: replace this call's estimate with the provider's count."""
+        self._settled += output_tokens if output_tokens > 0 else self._chars // 4
+        self._chars = 0
+        self.output_tokens = self._settled
+
+    def tool_begin(self, names: list[str]) -> None:
+        self.tool_started = time.monotonic()
+        self.tool_extra = max(0, len(names) - 1)
+        self.tool = names[0] if names else ""
+
+    def tool_end(self) -> None:
+        self.tool = ""
+        self.tool_extra = 0
+        self.tool_started = 0.0
+
+    def reset(self) -> None:
+        for name, spec in self.__dataclass_fields__.items():
+            setattr(self, name, spec.default)
+
+
+@dataclass
 class ToolContext:
     """Mutable state shared across tool calls in a js process."""
 
@@ -287,6 +343,8 @@ class ToolContext:
     last_output_tokens: int = 0
     last_max_output_tokens: int | None = None
     last_incomplete_reason: str | None = None
+    turn_status: TurnStatus = field(default_factory=TurnStatus)
+    net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
     _coverage_before_read: dict[Path, tuple[list[tuple[int, int]], bool]] = field(

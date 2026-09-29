@@ -557,7 +557,9 @@ async def _open_stream(
 
     async with AsyncExitStack() as cleanup:
         if isinstance(model.provider, (OpenAICompatibleProvider, AnthropicCompatibleProvider)):
-            await cleanup.enter_async_context(stream_transport.own_responses(model.provider.sdk_client._client))
+            await cleanup.enter_async_context(stream_transport.own_responses(
+                model.provider.sdk_client._client, stream_transport.current_call(),
+            ))
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
 
@@ -1021,6 +1023,26 @@ async def stream_model_async(
             dump_from=trace_request_from,
         )
 
+    # The request goes out here: open its network-channel record, and let the
+    # first reasoning or text chunk stand in for "connected" when the transport
+    # cannot report its handshake.
+    net_call = stream_transport.begin_call(
+        str(getattr(model.provider, "base_url", None) or provider_base_url or provider_id or "ai-gateway"),
+        "/".join(filter(None, (provider_id, model_id))),
+    )
+    net_token = stream_transport.set_call(net_call)
+    if net_call is not None:
+        _on_text, _on_reasoning = on_text, on_reasoning
+
+        def on_text(chunk: str) -> None:
+            net_call.first_token()
+            _on_text(chunk)
+
+        if _on_reasoning is not None:
+            def on_reasoning(chunk: str) -> None:
+                net_call.first_token()
+                _on_reasoning(chunk)
+
     reasoning_token = _reasoning_sink.set(on_reasoning)
     try:
         return await _stream_async(
@@ -1033,12 +1055,15 @@ async def stream_model_async(
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
+        if net_call is not None:
+            net_call.failed(exc)
         friendly = _friendly_provider_error(exc, provider_id=provider_id)
         if friendly is not None:
             raise friendly from exc
         raise
     finally:
         _reasoning_sink.reset(reasoning_token)
+        stream_transport.reset_call(net_token)
         try:
             await model.provider.aclose()
         except Exception:

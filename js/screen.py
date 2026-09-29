@@ -7,12 +7,13 @@ appended to the scrollback buffer; the input buffer is untouched.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import re
 import sys
 from collections.abc import Callable, Coroutine
 
-from prompt_toolkit.application import Application
+from prompt_toolkit.application import Application, get_app
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
@@ -20,13 +21,20 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.styles import Style
+from prompt_toolkit.output import ColorDepth
+from prompt_toolkit.styles import DynamicStyle, Style
 
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
+from .settings import is_hex_colour
 
-STATUS_STYLE = "bold #ffffff bg:#1b3a6b"
+STATUS_BG = "#00007f"
+STATUS_FG = "#ffffff"
+STATUS_STYLE = f"bold {STATUS_FG} bg:{STATUS_BG}"
 SCROLLBACK_LINES = 5000
+THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+TICK_BUSY_S = 0.1
+TICK_IDLE_S = 1.0
 
 # Skin-tone modifiers and variation selectors: the Linux console cannot draw
 # them, and prompt_toolkit's width for the sequence disagrees with fbcon's, so
@@ -34,6 +42,139 @@ SCROLLBACK_LINES = 5000
 # repaint. Dropped on TERM=linux; the base glyph stays.
 _CONSOLE_UNDRAWABLE = re.compile("[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F]")
 _ON_CONSOLE = os.environ.get("TERM") == "linux"
+
+
+# --- status bar ------------------------------------------------------------
+
+def status_style(fg: object, bg: object) -> str:
+    """The bar's prompt_toolkit style from two hex strings; a value that is not
+    `#rrggbb` falls back to its default."""
+    fg = fg if is_hex_colour(fg) else STATUS_FG
+    bg = bg if is_hex_colour(bg) else STATUS_BG
+    return f"bold {fg} bg:{bg}"
+
+
+@functools.lru_cache(maxsize=8)
+def _status_style_sheet(colours: str) -> Style:
+    return Style.from_dict({"status": colours})
+
+
+def format_count(n: int) -> str:
+    """Output tokens as a heartbeat: hundreds under 10k, then one-decimal k."""
+    if n < 10_000:
+        return f"{n // 100 * 100:,}"
+    return f"{n / 1000:.1f}k"
+
+
+def throbber_frame(now: float) -> str:
+    return THROBBER[int(now / TICK_BUSY_S) % len(THROBBER)]
+
+
+def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | None]:
+    """(phase, output_tokens) for the bar's centre group from a TurnStatus.
+
+    A running tool wins, then compaction, then response bytes before the first
+    token (when the net channel shows them), then the output-token count.
+    """
+    if status.tool:
+        extra = f" +{status.tool_extra}" if status.tool_extra else ""
+        elapsed = int(max(0.0, now - status.tool_started))
+        return f"{status.tool}{extra} {elapsed}s", None
+    if status.compacting:
+        return "compacting", None
+    if show_bytes and status.net_bytes:
+        return f"{status.net_bytes // 100 * 100:,}B", None
+    return "", status.output_tokens or None
+
+
+def status_line(
+    width: int,
+    *,
+    clock: str,
+    provider: str | None,
+    model: str | None,
+    context_tokens: int | None,
+    phase: str,
+    output_tokens: int | None,
+    throbber: str,
+    agent_id: str | None,
+    session_short: str | None,
+    cache_pct: int | None,
+) -> str:
+    """The status bar as a plain string of exactly `width` cells.
+
+    Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
+    while `throbber` is set, i.e. a turn runs), right `agent/session cache N%`.
+    Groups that do not fit give way in a fixed order: cache, then the model's
+    head, then the provider, then the centre count, then the agent id.
+    """
+    if width <= 0:
+        return ""
+    model_text = model or ""
+    show = {"cache": cache_pct is not None, "provider": bool(provider),
+            "count": output_tokens is not None, "agent": bool(agent_id)}
+
+    def groups() -> tuple[str, str, str]:
+        route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
+        left = " ".join(filter(None, (f"[{clock}]", route,
+                                      None if context_tokens is None else str(context_tokens))))
+        centre = ""
+        if throbber:
+            count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
+            centre = " ".join(filter(None, (throbber, phase, count)))
+        who = "/".join(filter(None, (agent_id if show["agent"] else "", session_short or "")))
+        right = " ".join(filter(None, (who, f"cache {cache_pct}%" if show["cache"] else "")))
+        return left, centre, right
+
+    def fits(left: str, centre: str, right: str) -> bool:
+        gaps = 4 if centre else (2 if right else 0)
+        return len(left) + len(centre) + len(right) + gaps <= width
+
+    def truncate_model() -> None:
+        nonlocal model_text
+        if len(model_text) > 12:
+            model_text = "…" + model_text[-12:]
+
+    steps = (
+        lambda: show.update(cache=False),
+        truncate_model,
+        lambda: show.update(provider=False),
+        lambda: show.update(count=False),
+        lambda: show.update(agent=False),
+    )
+    left, centre, right = groups()
+    for step in steps:
+        if fits(left, centre, right):
+            break
+        step()
+        left, centre, right = groups()
+
+    gap = width - len(left) - len(right)
+    if centre and gap >= len(centre) + 4:
+        before = max(2, (gap - len(centre)) // 2)
+        middle = " " * before + centre
+        line = left + middle + " " * (gap - len(middle)) + right
+    elif not centre and gap >= (2 if right else 0):
+        line = left + " " * gap + right
+    else:
+        # Still too wide: keep the clock, throbber and session, cut the left group.
+        tail = " ".join(filter(None, (centre, right)))
+        room = max(len(f"[{clock}]"), width - len(tail) - 1)
+        line = " ".join(filter(None, (left[:room], tail)))
+    return line[:width].ljust(width)
+
+
+def session_short(session_file) -> str:
+    """First 8 hex chars of a `<timestamp>-<hex>` session file stem."""
+    stem = getattr(session_file, "stem", "") or ""
+    return stem.rsplit("-", 1)[-1][:8]
+
+
+async def tick(app: Application, busy: Callable[[], bool]) -> None:
+    """Repaint the bar: every 0.1s while `busy()`, else once a second for the clock."""
+    while True:
+        app.invalidate()
+        await asyncio.sleep(TICK_BUSY_S if busy() else TICK_IDLE_S)
 
 
 class _AnsiLexer(Lexer):
@@ -236,7 +377,11 @@ def build_app(
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], None],
     on_eof: Callable[[], None],
+    status: Callable[[int], str] = lambda width: "",
+    status_colours: Callable[[], str] = lambda: STATUS_STYLE,
 ) -> tuple[Application, Scrollback]:
+    """`status(width)` renders the bar; `status_colours()` is its style, read on
+    every repaint so a changed setting shows on the next invalidate."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         history=history,
@@ -297,11 +442,24 @@ def build_app(
         else:
             b.start_completion(select_first=False)
 
+    def _status_text() -> str:
+        try:
+            return status(get_app().output.get_size().columns)
+        except Exception:  # noqa: BLE001 — the bar must never take the screen down
+            return " "
+
+    def _style() -> Style:
+        try:
+            colours = status_colours()
+        except Exception:  # noqa: BLE001
+            colours = STATUS_STYLE
+        return _status_style_sheet(colours)
+
     layout = Layout(
         HSplit([
             Window(BufferControl(buffer=scrollback.buffer, lexer=_AnsiLexer(), focusable=False),
                    wrap_lines=True),
-            Window(FormattedTextControl(lambda: " "), height=1, style="class:status"),
+            Window(FormattedTextControl(_status_text), height=1, style="class:status"),
             Window(BufferControl(buffer=input_buffer,
                                  input_processors=[],
                                  lexer=None),
@@ -312,7 +470,10 @@ def build_app(
     app = Application(
         layout=layout,
         key_bindings=kb,
-        style=Style.from_dict({"status": STATUS_STYLE}),
+        style=DynamicStyle(_style),
+        # Truecolor always: on TERM=linux prompt_toolkit would otherwise pick
+        # 4-bit and snap the bar's hex to the nearest of sixteen colours.
+        color_depth=ColorDepth.DEPTH_24_BIT,
         full_screen=True,
         mouse_support=False,
     )

@@ -148,6 +148,25 @@ token counts. In the standard async screen, **Ctrl-R** toggles retained reasonin
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
+The line above the input is the status bar: `[HH:MM] provider/model context`
+on the left, `agent/session cache N%` on the right, and while a turn runs a
+spinner in the middle with the output-token count, the running tool and its
+elapsed seconds, or `compacting`. On a narrow terminal it drops the cache
+figure first, then shortens the model name, then drops the provider, the
+token count and the agent id; the clock, spinner and session id stay. Its
+colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
+in truecolor on every terminal, including the Linux console.
+
+`ui.net` sets how much of the network shows, 0 to 3. At 1 only failures print
+(`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
+retrying; at 2 (the default) each
+model request, including subagents and compaction, also prints
+`*** Connecting` and `*** Connected ... Nms`, and the bar counts response
+bytes until the first token arrives; at 3 each retry, models.dev catalog
+refreshes and the per-call stream stats line (`▸ ms finish tok tok/s cache`)
+print as well. In the screen that stats
+line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
+
 A line typed while a turn runs is handled by `runtime.steer`:
 
 - `now` (default): the line joins the running turn. It reaches the model as a
