@@ -83,6 +83,7 @@ from .session_catalog import (
 )
 from .tool_binaries import resolve_binary
 from .toolkit import policy as tool_policy
+from .toolkit import task_jobs
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
@@ -1925,8 +1926,9 @@ def _queue_note(state: dict, note: str) -> None:
 
 
 def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
-    """``bundle`` carrying the reminders queued since the last user message."""
-    for note in state.pop("pending_notes", None) or ():
+    """``bundle`` carrying the reminders queued since the last user message,
+    and one for each background task that finished unread since then."""
+    for note in [*(state.pop("pending_notes", None) or ()), *task_jobs.completion_notes()]:
         bundle = attach.with_note(bundle, note)
     return bundle
 

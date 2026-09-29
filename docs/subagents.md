@@ -1,8 +1,8 @@
 # Subagents
 
 Subagents in `js` are implemented by the `task` tool and generated
-prompt-directory tools. They are parallel worker turns, not long-running managed
-processes with handles.
+prompt-directory tools. They are parallel worker turns. A `task` call waits for
+them, or with `background=true` returns a handle at once.
 
 Agents are created using prompt directories under `prompts/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
@@ -24,7 +24,7 @@ Schema:
 
 Rules:
 
-- `agent_id` is required.
+- `agent_id` is required to start workers.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional and resumes that worker agent session.
@@ -132,25 +132,49 @@ What exists today:
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
 
-## No Monitor/Stop Handles Yet
+## Foreground And Background
 
-A `task` call blocks until all child futures complete. One task returns the
-worker's text verbatim; a fan-out returns one `TASK_RESULTS` string with the
-results numbered in task order.
+A foreground `task` call blocks until all child futures complete. One task
+returns the worker's text verbatim; a fan-out returns one `TASK_RESULTS` string
+with the results numbered in task order.
+
+`background=true` starts the same fan-out and returns at once:
+
+```text
+task running in the background (handle t1): 2 tasks for agent `explore`. ...
+When it finishes its result is written to <state>/tool-results/task-t1-<random>.txt, ...
+HANDLE t1 RUNNING
+```
+
+The handle works like a shell handle, through the same tool:
+
+- `action="poll", handle="t1"`: still running (with how many workers are done),
+  or the result.
+- `action="wait", handle="t1", timeout=N`: block up to N seconds; without
+  `timeout`, until it ends.
+- `action="kill", handle="t1"`: cancel the workers.
+- `handle` defaults to the newest running task.
+
+Under the REPL the run is one `subagent` job on the REPL's loop
+(`js/toolkit/task_jobs.py`), so it outlives the turn that started it, shows in
+`/jobs`, and `/cancel <id>` stops it. Without a supervisor (`-p`) it runs on a
+private loop in a daemon thread and ends with the process.
+
+When a run started by the main agent finishes and the model has not read its
+result through poll, wait or kill, the next user message carries a
+`<js-reminder>` naming the handle and the result file (`cli._with_pending_notes`).
+A run a subagent started gets no reminder; that subagent polls it itself.
+
+Children run through the same `_prepare_fan_out` as a foreground call, so they
+get the same inherited context and, under `-C`, the same jail.
+
+Direct agent tools have no background form.
 
 Not implemented:
 
-- progress handles
-- polling child status
-- stopping a running child
-- listing active children
+- listing background tasks to the model
 - per-task timeout setting
-- max-worker setting
-- model-facing per-task model override
 - model-facing per-task endpoint override
-
-Those can be added later as runtime-managed job handles, but the current system
-does not have them.
 
 ## Endpoint And Model Overrides
 

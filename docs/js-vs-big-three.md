@@ -31,7 +31,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Fuzzy match on edit | no (nearest-line hint) | quote styles | 4 looser passes | NFKC + quotes |
 | Oversized result spill | byte + line continuation named | preview + path | none | bash/MCP only |
 | Long shell jobs | handle, never killed | backgrounded | session id | blocks |
-| Async subagents | no | yes, notification | yes, mailbox | ? |
+| Async subagents | handle + reminder (js-1g1.17) | yes, notification | yes, mailbox | ? |
 | Persistent code kernel | yes, live `NAMESPACE` | stub in source | fresh V8 per cell | fresh QuickJS |
 | Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
 | Branch / fork / rewind | no (designed) | yes | yes | yes |
@@ -97,7 +97,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **`read` prefixes every line with `N:hash|`, and `patch` can't use it.** It costs tokens on every read line. The stale guard already catches changes without it.
 
-**`task` blocks the parent until every child finishes.** A slow child stalls the whole turn. Claude Code and Codex return immediately and deliver the result later.
+**`task` blocks the parent until every child finishes.** Done in js-1g1.17. `task(background=true)` returns a handle at once, poll, wait and kill work as they do for shell handles, and a result the model has not read is named in a `<js-reminder>` on the next user message. A foreground call still blocks.
 
 **Lazy loading costs a round trip, and its ranking is weak.** "Do not load and call that tool in the same response." Discovery ranks by token overlap (`discovery.py:97`), while all three others use BM25. Claude Code expands tool references inline, within the same response.
 
@@ -140,7 +140,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | `compaction.py:567`, `runtime.py:1599` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | `compaction.microcompact` |
-| Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | `task` gets a job handle like `shell` |
+| Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | `discovery.ranked_entries` |
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | `fs._apply_edit` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | `_reconcile_read_delivery` |

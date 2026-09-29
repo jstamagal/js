@@ -306,6 +306,29 @@ def test_a_subagent_is_jailed(jailed, monkeypatch, tmp_path):
 
 
 @needs_bwrap
+def test_a_background_subagent_is_jailed(jailed, monkeypatch, tmp_path):
+    from js.toolkit import meta
+
+    prompts = prompt_dir(tmp_path, "worker")
+    jailed.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    seen: dict[str, object] = {}
+
+    async def turn(cfg, system, messages, telemetry, *, tool_context, **kwargs):
+        seen["ls"] = run_shell("ls -A ~", tool_context)[1]
+        seen["read"] = tool("read", tool_context, path="~/.zshrc")
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    started = meta.task(tasks=["work"], agent_id="worker", background=True, context=jailed)
+    handle = started.rsplit("HANDLE ", 1)[1].split()[0]
+    finished = meta.task(action="wait", handle=handle, timeout=60, context=jailed)
+
+    assert "done" in finished
+    assert ".zshrc" not in seen["ls"]
+    assert str(seen["read"]).startswith("ERROR:")
+
+
+@needs_bwrap
 def test_terminal_runs_in_the_jail(jailed, monkeypatch):
     pytest.importorskip("pexpect")
     pytest.importorskip("pyte")
