@@ -43,7 +43,7 @@ def _on(state, cfg, line: str) -> None:
 
 def _user_text(state, text: str) -> str:
     bundle = attach.UserMessageBundle({"role": "user", "content": text}, {"role": "user", "content": text})
-    return cli._with_pending_notes(state, bundle).runtime_message["content"]
+    return cli._with_notes(bundle, cli._take_pending_notes(state)).runtime_message["content"]
 
 
 # --- exec ----------------------------------------------------------------------
