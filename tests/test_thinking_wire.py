@@ -31,30 +31,42 @@ def _sse(events: list[dict]) -> bytes:
 
 
 def _anthropic_events(model: str, *, thought: str = _THOUGHT, signature: str = _SIGNATURE,
-                      text: str = "ok", tool: tuple[str, str] | None = None) -> list[dict]:
+                      text: str = "ok", tool: tuple[str, str] | None = None,
+                      redacted: str | None = None) -> list[dict]:
     events: list[dict] = [
         {"type": "message_start", "message": {
             "id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": [],
             "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 5, "output_tokens": 1}}},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": thought}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": signature}},
-        {"type": "content_block_stop", "index": 0},
     ]
+    n = 0
+    if redacted is not None:
+        # A redacted_thinking block arrives whole in its start event.
+        events += [
+            {"type": "content_block_start", "index": n, "content_block": {"type": "redacted_thinking", "data": redacted}},
+            {"type": "content_block_stop", "index": n},
+        ]
+        n += 1
+    events += [
+        {"type": "content_block_start", "index": n, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {"type": "content_block_delta", "index": n, "delta": {"type": "thinking_delta", "thinking": thought}},
+        {"type": "content_block_delta", "index": n, "delta": {"type": "signature_delta", "signature": signature}},
+        {"type": "content_block_stop", "index": n},
+    ]
+    n += 1
     if tool is None:
         events += [
-            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
-            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": text}},
-            {"type": "content_block_stop", "index": 1},
+            {"type": "content_block_start", "index": n, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": n, "delta": {"type": "text_delta", "text": text}},
+            {"type": "content_block_stop", "index": n},
         ]
         stop = "end_turn"
     else:
         call_id, name = tool
         events += [
-            {"type": "content_block_start", "index": 1,
+            {"type": "content_block_start", "index": n,
              "content_block": {"type": "tool_use", "id": call_id, "name": name, "input": {}}},
-            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
-            {"type": "content_block_stop", "index": 1},
+            {"type": "content_block_delta", "index": n, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+            {"type": "content_block_stop", "index": n},
         ]
         stop = "tool_use"
     events += [
@@ -71,10 +83,12 @@ class _Wire:
         self.model = model
         self.script = list(script or [])
         self.bodies: list[dict] = []
+        self.headers: list[httpx2.Headers] = []
 
     refuse: frozenset[int] = frozenset()
 
     def respond(self, request: httpx2.Request) -> httpx2.Response:
+        self.headers.append(request.headers)
         if len(self.bodies) in self.refuse:
             # Anthropic's 400 for a thinking block bound to another conversation.
             self.bodies.append(json.loads(request.content))
@@ -249,6 +263,39 @@ def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
 
     assert body["thinking"]["type"] == "enabled"
     assert "temperature" not in body and "top_k" not in body
+
+
+_BASES = {"opencode-go-anthropic": "https://opencode.ai/zen/go", "minimax": "https://api.minimax.io/anthropic/v1"}
+
+
+def _session_headers(monkeypatch, provider: str, cache_key: str | None) -> list[str | None]:
+    wire = _Wire("qwen3.8-flash")
+    wire.install(monkeypatch)
+
+    async def drive():
+        for _ in range(2):
+            await model_client.stream_model_async(
+                model_id="qwen3.8-flash", provider_id=provider, provider_base_url=_BASES[provider],
+                provider_api_key="fixture", messages=[ai.user_message("hi")], tools=None,
+                max_output_tokens=32000, reasoning_effort="low", on_text=lambda _c: None,
+                cache_key=cache_key,
+            )
+
+    asyncio.run(drive())
+    return [h.get("x-opencode-session") for h in wire.headers]
+
+
+def test_opencode_go_gets_the_session_key_as_its_session_header(monkeypatch):
+    assert _session_headers(monkeypatch, "opencode-go-anthropic", "js-agent-s1") == ["js-agent-s1"] * 2
+
+
+def test_opencode_go_without_a_session_key_still_gets_a_session_header(monkeypatch):
+    sent = _session_headers(monkeypatch, "opencode-go-anthropic", None)
+    assert all(sent)
+
+
+def test_other_anthropic_wire_providers_get_no_opencode_session_header(monkeypatch):
+    assert _session_headers(monkeypatch, "minimax", "js-agent-s1") == [None, None]
 
 
 # --- signatures -------------------------------------------------------------
@@ -505,6 +552,43 @@ def test_a_second_refusal_in_one_request_is_raised(claude):
     with pytest.raises(ai.ProviderBadRequestError):
         _turn(cfg, messages, context)
     assert len(wire.bodies) == 3
+
+
+# ai 0.5.2 has no redacted_thinking support: its stream parser emits no event
+# for the block and its message serializer writes only `thinking` blocks, so
+# the block never reaches the history and is never replayed. When the replay
+# that lacks it is refused, the signed-reasoning retry resends without any.
+
+_REDACTED = "REDACTED-opaque-1"
+
+
+def test_a_redacted_thinking_block_is_not_kept_or_replayed(claude):
+    cfg, wire, context = claude
+    wire.script = [{"redacted": _REDACTED}, {}]
+    messages = [{"role": "user", "content": "first"}]
+    _turn(cfg, messages, context)
+    messages.append({"role": "user", "content": "next"})
+    _turn(cfg, messages, context)
+
+    assert messages[1]["reasoning_parts"] == [
+        {"text": _THOUGHT, "provider_metadata": {"anthropic": {"signature": _SIGNATURE}}},
+    ]
+    assert _assistant_blocks(wire.bodies[1]) == [[_SIGNED_BLOCK, {"type": "text", "text": "ok"}]]
+
+
+def test_a_refused_replay_without_its_redacted_block_is_resent_without_signed_thinking(claude):
+    cfg, wire, context = claude
+    wire.script = [{"redacted": _REDACTED}, {}]
+    wire.refuse = frozenset({1})
+    messages = [{"role": "user", "content": "first"}]
+    _turn(cfg, messages, context)
+    messages.append({"role": "user", "content": "next"})
+    _turn(cfg, messages, context)
+
+    assert len(wire.bodies) == 3
+    assert _assistant_blocks(wire.bodies[2]) == [[{"type": "text", "text": "ok"}]]
+    assert "reasoning_parts" not in messages[1]
+    assert messages[-1]["content"] == "ok"
 
 
 def _signed(text: str, sig: str) -> ai.types.messages.ReasoningPart:

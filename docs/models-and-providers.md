@@ -213,6 +213,17 @@ replaying. If the provider still refuses a replayed signature ("Invalid
 item another account produced), the request is retried once with no signed
 reasoning in the history, and the history keeps none from then on, on disk too.
 
+Anthropic `redacted_thinking` blocks are lost in the `ai` SDK (0.5.2), in both
+directions. Its stream parser (`ai/providers/anthropic/protocol.py`) has no
+case for the block type, so the block produces no event and no
+`ReasoningPart`, and js never sees it. Its message serializer writes an
+assistant reasoning part only as a `thinking` block with a `signature`, so it
+cannot send a `redacted_thinking` block even if js stored one. A reply that
+held one is therefore replayed without it. When the provider refuses that
+replay, the retry above resends without signed reasoning
+(`tests/test_thinking_wire.py`). Keeping the block needs SDK support for it on
+both the parse and the serialize side.
+
 ### Reasoning display
 
 `ui.reasoning` controls presentation in the standard REPL and one-shot mode,
@@ -374,6 +385,11 @@ API key (`OPENCODE_GO_API_KEY`) but route over different transports:
   `https://opencode.ai/zen/go/v1`.
 - `opencode-go-anthropic` uses the Anthropic-compatible adapter
   (`sdk=anthropic`) at `https://opencode.ai/zen/go`.
+
+Every request to either one carries an `x-opencode-session` header: the
+session's cache key (`js-<agent>-<session>`), or a one-off id for a request
+with no session. opencode routes and caches by that header, and the Anthropic
+endpoint answers a request without it with 400 `MissingSessionID`.
 
 Both endpoints advertise their live catalog through the API. js does not apply a
 client-side allow-list — the endpoint is the source of truth, so the JSON bridge
