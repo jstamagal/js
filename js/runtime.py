@@ -1630,7 +1630,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         return changed
 
     net_role_token = stream_transport.set_role(
-        active_context.net_label, agent=cfg.agent_id, status=turn_status,
+        active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
     try:
         if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
@@ -1750,7 +1750,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             "n_tool_calls": len(pending_calls),
                         })
                     _net = stream_transport.net_level()
-                    if (_net >= 3) if _net is not None else trace:
+                    _label = active_context.net_label
+                    if (_net >= 3 and (_label or not suppress_output)) if _net is not None else trace:
                         _elapsed = time.time() - t0
                         _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
                         _cache = ""
@@ -1758,7 +1759,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
                             _cache = f"  cache {_pct:.0f}%"
                         _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                        print(f"  {C.GREY}▸ {int(_elapsed * 1000)}ms  "
+                        print(f"  {C.GREY}{_label + ': ' if _label else ''}▸ {int(_elapsed * 1000)}ms  "
                               f"finish={finish}  tool_calls={len(pending_calls)}  "
                               f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
                     break
@@ -1810,8 +1811,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
                             _end_turn("error")
                             raise
-                        stream_transport.say(3, f"Retry {transport_retries + 1}: "
-                                                f"{stream_transport.describe_failure(e)}")
+                        stream_transport.say_for_caller(3, f"Retry {transport_retries + 1}: "
+                                                           f"{stream_transport.describe_failure(e)}")
                         await asyncio.sleep(_backoff(transport_retries))
                         transport_retries += 1
                     else:
@@ -1828,6 +1829,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     _end_turn("error")
                     raise
             else:
+                stream_transport.report_held_failure()
                 print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
                 _end_turn("retry_budget_exhausted")
                 return
@@ -2043,6 +2045,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             _close_text()
             _commit_streamed_partial()
             _end_turn("cancelled")
+        else:
+            stream_transport.report_held_failure()
         raise
     finally:
         _close_reasoning()

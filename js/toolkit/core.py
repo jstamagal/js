@@ -260,7 +260,6 @@ class TurnStatus:
     tool_extra: int = 0          # parallel siblings of `tool` in the same batch
     tool_started: float = 0.0    # time.monotonic() when the batch started
     compacting: bool = False
-    compact_step: str = ""       # "3/8" when compaction reports steps
     net_bytes: int = 0           # response bytes of this call before its first token
     _settled: int = field(default=0, repr=False)     # tokens of the finished calls
     _chars: int = field(default=0, repr=False)       # streamed chars of this call

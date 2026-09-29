@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -27,7 +26,7 @@ import modelsdotdev
 from modelsdotdev._internal import data as modelsdotdev_data
 from modelsdotdev._internal import sync as modelsdotdev_sync
 
-from . import codex_auth, model_matching, paths, providers, settings as _settings
+from . import codex_auth, model_matching, paths, providers, settings as _settings, stream_transport
 
 _CATALOG_MAX_AGE = timedelta(hours=8)
 _STATUS_VERSION = 1
@@ -499,21 +498,21 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     if current is not None:
         _activate_database(current.db_path)
     if force:
-        print("*** updating models.dev cache...", file=sys.stderr)
+        stream_transport.say_or_print(3, "updating models.dev cache...")
         try:
             return refresh_catalog(force=True)
         except Exception as exc:
-            print(f"*** warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}")
             if current is not None:
                 _activate_database(current.db_path)
                 return current
             raise
     if catalog_is_stale(current):
-        print("*** updating models.dev cache...", file=sys.stderr)
+        stream_transport.say_or_print(3, "updating models.dev cache...")
         try:
             return refresh_catalog(force=True)
         except Exception as exc:
-            print(f"*** warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            stream_transport.say_or_print(1, f"warning: models.dev cache refresh failed: {type(exc).__name__}: {exc}")
             if current is not None:
                 _activate_database(current.db_path)
                 return current

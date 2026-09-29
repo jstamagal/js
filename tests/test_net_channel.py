@@ -11,13 +11,16 @@ import json
 import re
 import socket
 
+import dataclasses
+
 import ai
 import httpx2
 import pytest
+from test_status_bar import _cfg
 
-from js import model_client, stream_transport
+from js import model_client, runtime, stream_transport
 from js.model_client import ModelStreamResult
-from js.toolkit.core import TurnStatus
+from js.toolkit.core import ToolContext, TurnStatus
 
 
 @pytest.fixture
@@ -219,3 +222,110 @@ def test_roles_label_subagent_and_compaction_lines(sink):
     assert "Subagent 2" in plain[0] and "summarizer" in plain[0] and "api.deepseek.com" in plain[0]
     assert "deepseek/deepseek-v4-flash" in plain[1] and "api.deepseek.com" in plain[1]
     assert "Subagent 2" in plain[2] and re.search(r"\d+ms", plain[2])
+
+
+def _naming(lines: list[str], host: str) -> list[str]:
+    """The lines about `host`: a turn may also refresh the models.dev catalog."""
+    return [_plain(line) for line in lines if host in _plain(line)]
+
+
+def _turn(tmp_path, context: ToolContext, *, cfg=None) -> None:
+    asyncio.run(runtime.run_turn_async(
+        cfg or _cfg(tmp_path), "sys", [{"role": "user", "content": "go"}],
+        runtime.Telemetry(debug_log=None), tool_context=context, suppress_output=True,
+    ))
+
+
+def _flaky_model(monkeypatch, failures: list[Exception]) -> list[int]:
+    """`_stream_async` raises each of `failures` in turn, then answers."""
+    calls: list[int] = []
+
+    class _FakeProvider:
+        base_url = "https://nowhere.invalid/v1"
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeModel:
+        provider = _FakeProvider()
+
+    async def fake_stream_async(*, on_text, **_kwargs) -> ModelStreamResult:
+        calls.append(1)
+        if failures:
+            raise failures.pop(0)
+        on_text("OK")
+        return ModelStreamResult(
+            text="OK", tool_calls=[], reasoning="",
+            usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1),
+            finish_reason="stop", assistant_message=ai.assistant_message("OK"),
+        )
+
+    monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: _FakeModel())
+    monkeypatch.setattr(model_client, "_stream_async", fake_stream_async)
+    monkeypatch.setattr(runtime, "_backoff", lambda _n: 0)
+    return calls
+
+
+def test_turn_that_gives_up_on_dns_prints_one_line_at_level_1(monkeypatch, sink, tmp_path):
+    lines, level = sink
+    level["value"] = 1
+    calls = _flaky_model(monkeypatch, [_dns_failure() for _ in range(5)])
+
+    with pytest.raises(ai.ProviderAPIError):
+        _turn(tmp_path, ToolContext(cwd=tmp_path))
+
+    assert len(calls) > 1                       # the runtime retried
+    assert len(_naming(lines, "nowhere.invalid")) == 1
+
+
+def test_turn_retries_show_at_level_3_and_end_with_the_failure(monkeypatch, sink, tmp_path):
+    lines, level = sink
+    level["value"] = 3
+    calls = _flaky_model(monkeypatch, [_dns_failure() for _ in range(5)])
+
+    with pytest.raises(ai.ProviderAPIError):
+        _turn(tmp_path, ToolContext(cwd=tmp_path))
+
+    # Each call says Connecting (with the URL); each failure after it names the
+    # host alone: one per retry, then the one the runtime gave up on.
+    about_host = _naming(lines, "nowhere.invalid")
+    connecting = [line for line in about_host if "https://nowhere.invalid" in line]
+    failures = [line for line in about_host if line not in connecting]
+    assert len(connecting) == len(calls)
+    assert len(failures) == len(calls)
+
+
+def test_turn_that_recovers_by_retry_prints_nothing_at_level_1(monkeypatch, sink, tmp_path):
+    lines, level = sink
+    level["value"] = 1
+    calls = _flaky_model(monkeypatch, [_dns_failure()])
+
+    _turn(tmp_path, ToolContext(cwd=tmp_path))
+
+    assert len(calls) == 2
+    assert _naming(lines, "nowhere.invalid") == []
+
+
+def test_turn_counts_response_bytes_into_its_turn_status(sink, tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    context.turn_status = _RecordingStatus()
+
+    async def drive():
+        server = await asyncio.start_server(_serve_sse, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        cfg = dataclasses.replace(_cfg(tmp_path, model="t"),
+                                  provider_base_url=f"http://127.0.0.1:{port}/v1")
+        try:
+            await runtime.run_turn_async(
+                cfg, "sys", [{"role": "user", "content": "go"}],
+                runtime.Telemetry(debug_log=None), tool_context=context, suppress_output=True,
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(asyncio.wait_for(drive(), 20))
+
+    history = context.turn_status.__dict__["history"]
+    assert len([n for n in history if n > 0]) >= 2
+    assert context.turn_status.net_bytes == 0          # zeroed at turn end

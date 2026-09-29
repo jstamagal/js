@@ -158,11 +158,13 @@ colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
 `ui.net` sets how much of the network shows, 0 to 3. At 1 only failures print
-(`*** DNS failure: host`, `*** 429 ...`, timeouts); at 2 (the default) each
+(`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
+retrying; at 2 (the default) each
 model request, including subagents and compaction, also prints
 `*** Connecting` and `*** Connected ... Nms`, and the bar counts response
-bytes until the first token arrives; at 3 retries and the per-call stream stats
-line (`▸ ms finish tok tok/s cache`) print as well. In the screen that stats
+bytes until the first token arrives; at 3 each retry, models.dev catalog
+refreshes and the per-call stream stats line (`▸ ms finish tok tok/s cache`)
+print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
 
 Ctrl-C cancels the active turn and drops queued prompts. Already received text

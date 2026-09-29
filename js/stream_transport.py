@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import socket
+import sys
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -36,14 +37,25 @@ class NetSink:
     emit: Callable[[str], None]
 
 
+class FailureHold:
+    """The last failed request of a caller that retries: its failure line waits
+    here until the caller gives up (`report_held_failure`) or the next request
+    starts, which drops it."""
+
+    def __init__(self) -> None:
+        self.pending: BaseException | None = None
+
+
 @dataclass(frozen=True)
 class NetRole:
     """Who is calling: the main turn (label ""), "Subagent N", or "Compacting".
-    `status` is the TurnStatus the response bytes are counted into."""
+    `status` is the TurnStatus the response bytes are counted into. With a
+    `hold`, failures wait for the caller's verdict instead of printing."""
 
     label: str = ""
     agent: str = ""
     status: Any = None
+    hold: FailureHold | None = None
 
 
 _sink: NetSink | None = None
@@ -65,9 +77,40 @@ def net_level() -> int | None:
         return 0
 
 
-def set_role(label: str = "", *, agent: str = "", status: Any = None) -> contextvars.Token:
-    """Name the caller of the model requests this task makes from here on."""
-    return _role.set(NetRole(label=label, agent=agent, status=status))
+def set_role(label: str = "", *, agent: str = "", status: Any = None,
+             retries: bool = False) -> contextvars.Token:
+    """Name the caller of the model requests this task makes from here on.
+    `retries` means the caller retries failed requests and reports the one it
+    gives up on with `report_held_failure`."""
+    hold = FailureHold() if retries else None
+    return _role.set(NetRole(label=label, agent=agent, status=status, hold=hold))
+
+
+def report_held_failure() -> None:
+    """The caller gave up: print its last request failure at level 1."""
+    hold = _role.get().hold
+    if hold is None or hold.pending is None:
+        return
+    exc, hold.pending = hold.pending, None
+    say_for_caller(1, describe_failure(exc))
+
+
+def say_or_print(level: int, text: str) -> None:
+    """A network line that predates the channel: the channel decides while a
+    sink is installed; otherwise it prints to stderr as a `***` line."""
+    if _sink is None:
+        print(f"*** {text}", file=sys.stderr)
+    else:
+        say(level, text)
+
+
+def say_for_caller(level: int, text: str) -> None:
+    """`say`, prefixed with the calling role's label ("Subagent 2: ...")."""
+    say(level, _labelled(_role.get(), text))
+
+
+def _labelled(role: NetRole, text: str) -> str:
+    return f"{role.label}: {text}" if role.label else text
 
 
 def reset_role(token: contextvars.Token) -> None:
@@ -155,6 +198,8 @@ class NetCall:
         self._started = time.perf_counter()
         self._connected = False
         self._sent = False
+        if role.hold is not None:
+            role.hold.pending = None
         if role.status is not None:
             role.status.call_started()
         say(2, self._connecting_line())
@@ -192,8 +237,10 @@ class NetCall:
         self.connected()
 
     def failed(self, exc: BaseException) -> None:
-        prefix = f"{self._role.label}: " if self._role.label else ""
-        say(1, prefix + describe_failure(exc))
+        if self._role.hold is not None:
+            self._role.hold.pending = exc
+            return
+        say(1, _labelled(self._role, describe_failure(exc)))
 
     async def trace(self, event: str, info: dict[str, Any]) -> None:
         """httpcore2's `trace` request extension: the handshake is the connect."""

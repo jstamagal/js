@@ -26,6 +26,7 @@ from prompt_toolkit.styles import DynamicStyle, Style
 
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
+from .settings import is_hex_colour
 
 STATUS_BG = "#00007f"
 STATUS_FG = "#ffffff"
@@ -34,7 +35,6 @@ SCROLLBACK_LINES = 5000
 THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
-_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 # Skin-tone modifiers and variation selectors: the Linux console cannot draw
 # them, and prompt_toolkit's width for the sequence disagrees with fbcon's, so
@@ -49,8 +49,8 @@ _ON_CONSOLE = os.environ.get("TERM") == "linux"
 def status_style(fg: object, bg: object) -> str:
     """The bar's prompt_toolkit style from two hex strings; a value that is not
     `#rrggbb` falls back to its default."""
-    fg = fg if isinstance(fg, str) and _HEX_COLOUR.fullmatch(fg) else STATUS_FG
-    bg = bg if isinstance(bg, str) and _HEX_COLOUR.fullmatch(bg) else STATUS_BG
+    fg = fg if is_hex_colour(fg) else STATUS_FG
+    bg = bg if is_hex_colour(bg) else STATUS_BG
     return f"bold {fg} bg:{bg}"
 
 
@@ -81,7 +81,7 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
         elapsed = int(max(0.0, now - status.tool_started))
         return f"{status.tool}{extra} {elapsed}s", None
     if status.compacting:
-        return " ".join(filter(None, ("compacting", status.compact_step))), None
+        return "compacting", None
     if show_bytes and status.net_bytes:
         return f"{status.net_bytes // 100 * 100:,}B", None
     return "", status.output_tokens or None

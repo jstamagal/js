@@ -152,7 +152,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.net", "int", 2,
                 "Network display in the async screen: 0 nothing, 1 failures, 2 also "
                 "Connecting/Connected lines and a response byte counter on the status "
-                "bar until the first token, 3 also per-call stream stats."),
+                "bar until the first token, 3 also retries, catalog refreshes and "
+                "per-call stream stats."),
     SettingSpec("ui.status_bg", "str", "#00007f",
                 "Status bar background, #rrggbb. Drawn in truecolor on every terminal."),
     SettingSpec("ui.status_fg", "str", "#ffffff",
@@ -389,6 +390,11 @@ _FALSE_TOKENS = {"0", "false", "no", "off"}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 _HEX_COLOUR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
+
+def is_hex_colour(value: object) -> bool:
+    """True for a `#rrggbb` string, the form the `ui.status_*` colours take."""
+    return isinstance(value, str) and _HEX_COLOUR_RE.fullmatch(value) is not None
+
 # The only values `model.reasoning_effort` accepts. "off" disables reasoning
 # (stored as the literal "none"); everything else is rejected outright — no
 # default/auto/unset synonyms. Clearing the knob back to provider-default is
@@ -426,7 +432,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 f"custom one with `js --login`"
             )
         return text, None
-    if spec.key in {"ui.status_bg", "ui.status_fg"} and not _HEX_COLOUR_RE.fullmatch(text):
+    if spec.key in {"ui.status_bg", "ui.status_fg"} and not is_hex_colour(text):
         return None, f"expected a #rrggbb colour (got {text!r})"
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
