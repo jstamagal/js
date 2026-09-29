@@ -36,8 +36,8 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
 | Branch / fork / rewind | no (designed) | yes | yes | yes |
 | Session picker with search | no (designed) | yes | yes | yes |
-| Structured headless output | no | stream-json | `exec --json` | json + rpc |
-| Cost accounting | no | yes | tokens only | yes |
+| Structured headless output | yes, `-p --json` (done in js-1g1.18) | stream-json | `exec --json` | json + rpc |
+| Cost accounting | yes, `/cost` and the bar (done in js-1g1.19) | yes | tokens only | yes |
 | One config grammar (file = REPL) | yes | no | no | no |
 | Prompt-time code directives | yes | no | no | no |
 | Project memory walks up the tree | no, by design | yes | yes | yes |
@@ -149,16 +149,16 @@ pi retries once. Codex does not recover inside a normal turn.
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | resume path |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
-| Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | beside `alias` |
-| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | `screen.py` |
+| Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | done in js-1g1.23: `prompt_commands.py`, `~/.js/commands/NAME.md` |
+| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
 | Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |
-| Hooks that return context or block | Claude Code `utils/hooks.ts:418` | `events.py` |
+| Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
 | Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `kernel_bridge.py`, `kernel_client.py` |
 
 ## Entirely lacking
 
-- **Cost and cumulative token accounting.** There are per-call bench rows only.
-- **Structured headless output.** There's no stream-json from `-p`, no JSON-RPC and no SDK, so another agent can't drive js as an event stream.
+- **Cost and cumulative token accounting** (done in js-1g1.19: `usage.py`, `/cost`, the status bar).
+- **Structured headless output.** `-p --json` streams events (done in js-1g1.18: `headless.py`); there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
 - **Branch, fork and rewind of history.** (designed)
 - **An in-REPL picker, titles and search.** (designed)
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.
@@ -189,5 +189,5 @@ Hot spots over 441 commits in two months:
 3. **`Retry-After` plus a real retry budget.**
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
 5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.
-6. **stream-json output for `-p`.**
+6. **stream-json output for `-p`** (done in js-1g1.18).
 7. **Architecture #1 (settings projection) and #4 (delete the shims).**

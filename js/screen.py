@@ -12,13 +12,13 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
-from prompt_toolkit.enums import EditingMode
+from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
 from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
@@ -32,8 +32,9 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import keys
+from . import keys, pastes
 from . import messages as msgs
+from . import session_store
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
 from .settings import default_value, is_hex_colour
@@ -124,19 +125,24 @@ def status_line(
     agent_id: str | None,
     session_short: str | None,
     cache_pct: int | None,
+    cost: str | None = None,
 ) -> str:
     """The status bar as a plain string of exactly `width` cells.
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
-    while `throbber` is set, i.e. a turn runs), right `agent/session cache N%`.
+    while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
+    cost`, where `cost` is the session's spend (`usage.status_text`).
     Groups that do not fit give way in a fixed order: cache, then the model's
-    head, then the provider, then the centre count, then the agent id.
+    head, then the provider, then the centre count, then the cost, then the
+    agent id. The session name stays, elided with an ellipsis when it still
+    does not fit.
     """
     if width <= 0:
         return ""
     model_text = model or ""
+    session_text = session_short or ""
     show = {"cache": cache_pct is not None, "provider": bool(provider),
-            "count": output_tokens is not None, "agent": bool(agent_id)}
+            "count": output_tokens is not None, "agent": bool(agent_id), "cost": bool(cost)}
 
     def groups() -> tuple[str, str, str]:
         route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
@@ -146,8 +152,9 @@ def status_line(
         if throbber:
             count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
             centre = " ".join(filter(None, (throbber, phase, count)))
-        who = "/".join(filter(None, (agent_id if show["agent"] else "", session_short or "")))
-        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "")))
+        who = "/".join(filter(None, (agent_id if show["agent"] else "", session_text)))
+        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "",
+                                       cost if show["cost"] else "")))
         return left, centre, right
 
     def fits(left: str, centre: str, right: str) -> bool:
@@ -164,6 +171,7 @@ def status_line(
         truncate_model,
         lambda: show.update(provider=False),
         lambda: show.update(count=False),
+        lambda: show.update(cost=False),
         lambda: show.update(agent=False),
     )
     left, centre, right = groups()
@@ -182,6 +190,9 @@ def status_line(
         line = left + " " * gap + right
     else:
         # Still too wide: keep the clock, throbber and session, cut the left group.
+        room = width - len(f"[{clock}]") - 1 - (len(centre) + 1 if centre else 0)
+        session_text = _elide(session_text, room)
+        left, centre, right = groups()
         tail = " ".join(filter(None, (centre, right)))
         room = max(len(f"[{clock}]"), width - len(tail) - 1)
         line = " ".join(filter(None, (left[:room], tail)))
@@ -189,9 +200,17 @@ def status_line(
 
 
 def session_short(session_file) -> str:
-    """First 8 hex chars of a `<timestamp>-<hex>` session file stem."""
+    """The session as the bar names it: the first 8 hex chars of a generated
+    `<timestamp>-<hex>` stem, else the whole stem, the name it was given."""
     stem = getattr(session_file, "stem", "") or ""
-    return stem.rsplit("-", 1)[-1][:8]
+    return stem.rsplit("-", 1)[-1][:8] if session_store.is_generated(stem) else stem
+
+
+def _elide(text: str, room: int) -> str:
+    """`text` in at most `room` cells, cut short with an ellipsis."""
+    if len(text) <= room:
+        return text
+    return text[:room - 1] + "…" if room > 1 else ""
 
 
 async def tick(app: Application, busy: Callable[[], bool]) -> None:
@@ -497,7 +516,7 @@ def build_app(
     completer,
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], None],
-    on_eof: Callable[[], None],
+    on_eof: Callable[[], Awaitable | None],
     status: Callable[[int], str] = lambda width: "",
     status_colours: Callable[[], str] = lambda: STATUS_STYLE,
     editing_mode: Callable[[], str] = lambda: "emacs",
@@ -511,9 +530,14 @@ def build_app(
     opens the ex line, whose text goes to ``on_ex``. ``keymap`` names the keys
     of each action (`js.keys`); None is the defaults. The history_search key
     opens a reverse incremental search over ``history``. ``key_bindings`` are
-    added after the screen's own and win a shared key."""
+    added after the screen's own and win a shared key. ``on_eof`` runs on the
+    eof key at an empty input line and ends the app with `app.exit()`; an
+    awaitable it returns runs as the key's handler. A sent line's paste
+    markers (`js.pastes`) are expanded before ``on_line`` gets it; the
+    scrollback echoes the line as typed."""
     scrollback = Scrollback()
     input_buffer = Buffer(
+        name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
         completer=completer,
         complete_while_typing=False,
@@ -530,7 +554,7 @@ def build_app(
         input_buffer.reset()
         if line.strip():
             scrollback.append(f"{prompt}{line}\n")
-        await on_line(line.strip())
+        await on_line(pastes.expand(line).strip())
 
     editor = InputEditor(input_buffer, submit)
 
@@ -556,12 +580,11 @@ def build_app(
     def _ex_cancel(event) -> None:
         _ex_close(event.app)
 
-    def _ctrl_d(event) -> None:
+    def _ctrl_d(event):
         if input_buffer.text:
             input_buffer.delete()
-            return
-        on_eof()
-        event.app.exit()
+            return None
+        return on_eof()
 
     def _toggle_reasoning(event) -> None:
         if scrollback.toggle_reasoning():

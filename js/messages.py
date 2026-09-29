@@ -255,9 +255,18 @@ SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the inpu
 HELP_HEADING = Message("Commands:", banner=False)
 HELP_ROW = Message("  {usage} {doc}", banner=False)
 HELP_ALIAS = Message("Alias: {body}")
+HELP_PROMPT_COMMAND = Message("Command file {path}: {description}")
 HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with spaces.")
 HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
+COST_NONE = Message("No model calls in this session yet.")
+COST_TOTAL = Message("Session: {calls}, {cost}.")
+COST_TOKENS = Message(
+    "  input {input}: cache read {cache_read}, cache write {cache_write}. "
+    "Output {output}: reasoning {reasoning}.", banner=False)
+COST_MODEL = Message("  {model}: {calls}, {tokens} tokens, {cost}", banner=False)
+COST_UNPRICED = Message("no price")
+COST_PARTLY_PRICED = Message("{cost} + {calls} with no price")
 SESSION_TITLED = Message("Session titled: {title}")
 SESSION_TITLE = Message("{title}", banner=False)
 SESSION_UNTITLED = Message("This session has no title. /name <text> gives it one.")
@@ -306,6 +315,7 @@ CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A sta
 CMD_SKILL = Message(
     "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
 CMD_TURNS = Message("Count the messages in context.")
+CMD_COST = Message("Show the session's tokens and cost, in total and by model.")
 CMD_SESSION = Message("Open the session picker. Words after it start a search.")
 CMD_NAME = Message("Pin a title on this session, or print the one it has.")
 CMD_JOBS = Message("List running turns and subagents.")
@@ -320,6 +330,16 @@ CMD_CD = Message(
     "or a bound path.")
 CMD_ADD = Message("Under -C, show PATH in the jail: read-only, or read-write with :rw.")
 CMD_DROP = Message("Under -C, stop showing a path added with /add.")
+CMD_EXEC = Message(
+    "Run a shell command; its stdout goes to the model with the next message. In an "
+    "`on` handler it reads the event as JSON on stdin, and exit status 2 refuses a tool_call.")
+
+# --- /exec -------------------------------------------------------------------
+EXEC_QUEUED = Message("exec: {lines} queued for the next message.")
+EXEC_NO_OUTPUT = Message("exec: no output.")
+EXEC_EXITED = Message("exec: {command} exited {status}: {detail}", WARN)
+EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.", WARN)
+EXEC_FAILED = Message("exec: {command} did not start: {error}", WARN)
 
 # --- js --help ----------------------------------------------------------------
 
@@ -427,7 +447,8 @@ OPT_IGNORE_GLOBAL = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
 OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
 OPT_LAST = Message("Resume the most recently used session for this agent.")
-OPT_JSON = Message("With --list, print compact JSON objects one per line.")
+OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per line; "
+                   "with --list, print compact JSON objects one per line.")
 OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
 OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
 OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")
@@ -534,7 +555,7 @@ PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Print
 
 BAD_URL_SPEC = Message("-u: {error}", GRAVE)
 JAIL_REFUSED = Message("{error}", GRAVE)
-JSON_NEEDS_LIST = Message("--json requires --list.", GRAVE)
+JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.", GRAVE)
 LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
 LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.", GRAVE)
 NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}", GRAVE)

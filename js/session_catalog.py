@@ -4,7 +4,9 @@ Conversation files remain append-only JSONL.  Session metadata is an ignored
 control record in that same stream, one per start: the directory, agent and
 model, how it was started (`repl`, `-p`, `pipe`, `subagent`, `commit`) and the
 command line; a subagent run names its parent session, a branch its parent
-session and the id of the message it split at. `/name` appends a title record.
+session and the id of the message it split at. `/name` appends a title record;
+`/model` appends a model_switch record with the stamp it switched to and the
+one it left.
 Every record carries an `id` and a `parent` (`js.session_store`). Open-process
 state lives in adjacent hidden sidecars so it can be updated without touching
 conversation history.
@@ -24,10 +26,12 @@ from typing import Any
 from . import messages as msgs
 from . import session_store
 from . import session_text
+from . import usage as usage_mod
 
 _METADATA_KIND = "session_metadata"
 _METADATA_VERSION = 3
 _TITLE_KIND = "title"
+_MODEL_SWITCH_KIND = "model_switch"
 _LIVENESS_VERSION = 1
 
 
@@ -235,6 +239,14 @@ def append_title(session_file: Path, title: str) -> None:
     _append_record(session_file, {"kind": _TITLE_KIND, "ts": time.time(), "title": title})
 
 
+def record_model_switch(session_file: Path, *, stamp: dict[str, Any], previous: dict[str, Any]) -> None:
+    """Record a `/model` switch: `stamp` is what the session runs on now and
+    `previous` what it ran on before, each shaped as an assistant message's
+    stamp (model, provider, reasoning)."""
+    _append_record(session_file, {"kind": _MODEL_SWITCH_KIND, "ts": time.time(),
+                                  "stamp": dict(stamp), "previous": dict(previous)})
+
+
 def _records(path: Path):
     try:
         with path.open(encoding="utf-8") as stream:
@@ -269,12 +281,13 @@ def first_metadata(session_file: Path) -> dict[str, Any] | None:
 
 
 def last_stamp(session_file: Path) -> dict[str, Any] | None:
-    """The newest model record of a session: an assistant message's stamp, or a
-    start's model, whichever was written last. None when neither exists."""
+    """The newest model record of a session: an assistant message's stamp, a
+    `/model` switch's stamp, or a start's model, whichever was written last.
+    None when none exists."""
     last = None
     for _, record in _records(Path(session_file)):
         kind = record.get("kind")
-        if kind == "message" and isinstance(record.get("stamp"), dict):
+        if kind in ("message", _MODEL_SWITCH_KIND) and isinstance(record.get("stamp"), dict):
             stamp = record["stamp"]
             if isinstance(stamp.get("model"), str) and stamp["model"]:
                 last = stamp
@@ -287,12 +300,13 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
                    mode: str | None = None, command: list[str] | None = None) -> Path:
     """A new session in the parent's folder holding the parent's records up to
     and including the message record whose id is `message`, with its branch
-    point recorded. The copied records keep their ids."""
+    point recorded. The copied records keep their ids. Usage records are not
+    copied, so the branch's usage totals start at zero."""
     parent_file = Path(parent_file)
     kept: list[str] = []
     found = False
     for line, record in _records(parent_file):
-        if record.get("kind") in (_METADATA_KIND, _TITLE_KIND):
+        if record.get("kind") in (_METADATA_KIND, _TITLE_KIND, usage_mod.RECORD_KIND):
             continue
         kept.append(line if line.endswith("\n") else line + "\n")
         if record.get("id") == message and session_store.on_path(record) and record.get("kind") != "mark":

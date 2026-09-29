@@ -39,8 +39,14 @@ persists each completed turn.
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
+| `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
+| `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
+| `js/events.py` | event names, `on` handler table, handler refusals |
+| `js/hookexec.py` | `exec`: runs a command for the command layer; event JSON on stdin, exit 2 refuses |
+| `js/prompt_commands.py` | `~/.js/commands/NAME.md` as `/NAME`, argument placeholders |
+| `js/pastes.py` | large bracketed pastes kept behind `[paste #N ...]` markers |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
@@ -137,6 +143,13 @@ its role holds each request failure instead of printing it: the next request
 drops it, and the turn prints it (level 1) only when it gives up. The channel
 prints only while the async REPL has installed a sink; elsewhere every hook is
 a no-op, and the models.dev refresh lines print to stderr as before.
+
+`run_turn_async` also starts a usage meter (`js/usage.py`, a context variable)
+naming the session file and the `ToolContext.usage_chain` above it. Each
+model call it makes, and each compaction summary made inside it, is charged
+to those sessions; a summary made outside a turn is charged to the session it
+compacts. The meter's callback adds the call to the turn's totals, which
+`turn_end` carries, and hands it to the `event_sink` as a `usage` event.
 
 Provider request retry:
 

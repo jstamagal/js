@@ -11,6 +11,7 @@ from typing import Any
 from .. import paths
 from .. import session_store
 from .. import settings as _settings
+from ..events import RefusableOnly
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
@@ -269,6 +270,7 @@ async def _run_one_task_async(
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg
+    child_context.usage_chain = (Path(parent_cfg.session_file), *getattr(parent_context, "usage_chain", ()))
     child_context.net_label = f"Subagent {idx}"
     if Path(cfg.session_file) != Path(os.devnull):
         from ..session_catalog import record_session_start
@@ -276,7 +278,8 @@ async def _run_one_task_async(
         record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                              mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
-    messages.append({"role": "user", "content": prompt})
+    messages.append(M.note_time({"role": "user", "content": prompt}))
+    parent_hooks = getattr(parent_context, "tool_call_hooks", None)
     try:
         await run_turn_async(
             cfg,
@@ -288,6 +291,7 @@ async def _run_one_task_async(
             tool_context=child_context,
             suppress_output=True,
             sampling=sampling,
+            event_hooks=None if parent_hooks is None else RefusableOnly(parent_hooks),
         )
     except Exception as exc:  # noqa: BLE001
         return f"ERROR {type(exc).__name__}: {exc}"

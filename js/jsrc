@@ -24,8 +24,11 @@ set ui.status_fg #ffffff
 set ui.tools 1
 set ui.tools_preview_lines 12
 set ui.markdown on
+set ui.resume_exchanges 3
 set ui.editing_mode emacs
 set ui.paste_image_key c-v
+set ui.paste_collapse_lines 10
+set ui.paste_collapse_chars 1000
 set -ui.paste_image_command
 
 # --- history ---
@@ -85,6 +88,10 @@ set -runtime.debug_autolog_dir
 set runtime.transcript_log on
 set -runtime.transcript_log_dir
 set runtime.allow_inline_code on
+
+# --- events ---
+set events.exec_timeout_s 30
+set events.exec_output_bytes 65536
 
 # --- compact ---
 set compact.auto on

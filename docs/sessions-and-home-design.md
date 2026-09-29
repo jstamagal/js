@@ -371,7 +371,10 @@ How it is built (`js/jail.py`):
 - `/tmp` and `~/.js/tmp` are directories under `~/.js/state/jail/<pid>-…`,
   bound in the jail and also at their own path. They last for the js
   process, so a file one command leaves in `/tmp` is there for the next. The
-  file tools map `/tmp/…` and `~/.js/tmp/…` to them.
+  file tools map `/tmp/…` and `~/.js/tmp/…` to them, and `call_tool` maps
+  them back in every text result (`Jail.shown`), so the model never sees the
+  private directory. An image marker keeps the host path in its path field,
+  where the model client reads the image from.
 - PATH directories under a hidden tree are bound back with every symlinked
   directory on the way (`jail.reach`), so a venv interpreter that links into
   `~/.local/share/uv/python` still starts.

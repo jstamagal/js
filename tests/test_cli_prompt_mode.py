@@ -66,10 +66,11 @@ def _prompt_cfg(tmp_path: Path, prompts: Path, session_stem: str) -> Config:
     )
 
 
-def _continue_args(output: str) -> list[str]:
-    """The resume command printed after a saved one-shot answer, as argv."""
-    last = output.rstrip("\n").splitlines()[-1]
-    return shlex.split(last[last.index("js "):])
+def _continue_args(err: str) -> list[str]:
+    """The resume command a saved one-shot answer prints on stderr, as argv."""
+    prefix = msgs.CONTINUE_HINT.text(command="")
+    [line] = [line for line in err.splitlines() if prefix in line]
+    return shlex.split(line[line.index(prefix) + len(prefix):])
 
 
 def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
@@ -380,7 +381,8 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
 
     actual = cli._run_prompt("Can you write a recipe scraper?")
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out
     messages = load_messages(cfg.session_file)
     expected = [
         {"role": "user", "content": "Can you write a recipe scraper?"},
@@ -388,7 +390,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
     ]
     assert actual == 0
     assert output.splitlines()[0] == "I can write that scraper."
-    assert _continue_args(output)[-2:] == ["--session", "prompt"]
+    assert _continue_args(captured.err)[-2:] == ["--session", "prompt"]
     assert messages == expected
     sys_msg = calls[0]["messages"][0]
     assert sys_msg.role == "system"
@@ -459,11 +461,12 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
 
     actual = cli._run_prompt("Reply with MODEL_HINT_OK", model="hint-model")
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out
     session_file = next((session_store.folder_for(Path.cwd())).glob("*.jsonl"))
     assert actual == 0
     assert output.splitlines()[0] == "MODEL_HINT_OK"
-    assert _continue_args(output) == ["js", "--model", "hint-model", "--session", session_file.stem]
+    assert _continue_args(captured.err) == ["js", "--model", "hint-model", "--session", session_file.stem]
 
 
 def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_path, capsys):
@@ -488,10 +491,10 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
 
     actual = cli._run_prompt("continue", session="resume-env-model")
 
-    output = capsys.readouterr().out
+    err = capsys.readouterr().err
     assert actual == 0
     assert seen == ["from-js-model"]
-    assert _continue_args(output) == ["js", "--session", "resume-env-model"]
+    assert _continue_args(err) == ["js", "--session", "resume-env-model"]
 
 
 def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatch, tmp_path, capsys):
@@ -513,13 +516,43 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
     assert len(session_files) == 1
     session_file = session_files[0]
     assert captured.out.splitlines()[0] == "GENERATED_OK"
-    assert _continue_args(captured.out) == ["js", "--session", session_file.stem]
+    assert _continue_args(captured.err) == ["js", "--session", session_file.stem]
     assert load_messages(session_file) == [
         {"role": "user", "content": "Reply with GENERATED_OK"},
         {"role": "assistant", "content": "GENERATED_OK"},
     ]
     latest = json.loads((tmp_path / ".js" / "state" / "defaultagent" / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(session_file)
+
+
+def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("HINT_OK"))
+
+    assert cli._run_prompt("Reply with HINT_OK", session="hinted") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "HINT_OK\n"
+    assert _continue_args(captured.err) == ["js", "--session", "hinted"]
+
+
+def test_runtime_trace_shows_the_trace_on_stderr_in_prompt_mode(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("TRACE_OK"))
+    run_line = msgs.RUN_LINE.text(fields="")
+
+    for value, shown in (("on", True), ("off", False)):
+        monkeypatch.setenv("JS_TRACE", value)
+        assert cli._run_prompt("Reply with TRACE_OK", save=False) == 0
+        captured = capsys.readouterr()
+        assert captured.out == "TRACE_OK\n"
+        assert (run_line in captured.err) is shown
 
 
 def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_path, capsys):
@@ -849,10 +882,10 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
 
     actual = cli._run_prompt("continue", session="resume-model", model="resume-model-override")
 
-    output = capsys.readouterr().out
+    err = capsys.readouterr().err
     assert actual == 0
     assert seen == ["resume-model-override"]
-    assert _continue_args(output) == ["js", "--model", "resume-model-override", "--session", "resume-model"]
+    assert _continue_args(err) == ["js", "--model", "resume-model-override", "--session", "resume-model"]
 
 
 def test_short_session_and_agent_aliases_parse(monkeypatch):
@@ -887,11 +920,11 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
 
     actual = cli._run_prompt("Reply with SCOPED_SESSION_OK", agent="scoped", session="scoped-session")
 
-    output = capsys.readouterr().out
+    err = capsys.readouterr().err
     assert actual == 0
     # The resume hint must name the agent: an agent-less `js --session ...`
     # runs the `agent` setting and would continue the session under it.
-    assert _continue_args(output) == ["js", "--agent", "scoped", "--session", "scoped-session"]
+    assert _continue_args(err) == ["js", "--agent", "scoped", "--session", "scoped-session"]
     assert loaded_prompt_dirs[0].name == "scoped"
     assert load_messages(scoped_session) == [
         {"role": "user", "content": "scoped old"},
@@ -1390,6 +1423,36 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     expected_fields = {"agent", "name", "folder", "path", "mtime", "size", "user_turns", "in_flight", "cwd",
                        "caller_key", "job_id", "model", "mode", "title"}
     assert all(set(item) == expected_fields for item in records)
+
+
+def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    time.tzset()
+    try:
+        now = int(time.time()) // 60 * 60
+        # Folder order is a, b; time order is b-new, a-mid, b-old.
+        made = {}
+        for folder, name, age in (("a", "a-mid", 120), ("b", "b-old", 180), ("b", "b-new", 60)):
+            path = session_store.folder_for(tmp_path / folder) / f"{name}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"role":"user","content":"hi"}\n', encoding="utf-8")
+            os.utime(path, (now - age, now - age))
+            made[name] = now - age
+
+        assert cli._print_session_list(json_lines=True) == 0
+        records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [item["name"] for item in records] == ["b-new", "a-mid", "b-old"]
+
+        assert cli._print_session_list(json_lines=False) == 0
+        rows = capsys.readouterr().out.splitlines()[1:]
+        assert [row.split()[1] for row in rows] == ["b-new", "a-mid", "b-old"]
+        newest = rows[0]
+        assert time.strftime("%H:%M", time.localtime(made["b-new"])) in newest
+        assert time.strftime("%H:%M", time.gmtime(made["b-new"])) not in newest
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_list_flag_prints_the_session_list(monkeypatch):

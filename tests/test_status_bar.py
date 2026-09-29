@@ -220,6 +220,19 @@ def test_session_short_is_the_hex_of_the_session_stem(tmp_path):
     assert screen.session_short(path) == "b61643c8"
 
 
+def test_a_named_session_is_whole_or_elided_never_cut_mid_word(tmp_path):
+    name = screen.session_short(tmp_path / "model-swap-comparison.jsonl")
+    assert name == "model-swap-comparison"
+
+    for width in range(12, 120):
+        line = screen.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
+        assert len(line) == width
+        shown = line.rstrip().split()[-1].split("/")[-1]
+        if shown != name:
+            assert shown.endswith("…"), (width, line)
+            assert name.startswith(shown[:-1]), (width, line)
+
+
 def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path):
     context = ToolContext(cwd=tmp_path)
     seen: list[int] = []

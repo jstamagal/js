@@ -27,6 +27,7 @@ import ai
 from . import colors as C
 from . import context_budget
 from . import display
+from . import jail as _jail
 from . import messages as msgs
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
@@ -38,6 +39,7 @@ from . import tool_args
 from . import routing
 from . import compaction
 from . import stream_transport
+from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
@@ -599,6 +601,8 @@ class ToolErrorTracker:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record(self, tool_name: str, result: str) -> str:
+        if isinstance(result, _jail.Refusal):
+            return result
         with self._lock:
             if not result.startswith("ERROR"):
                 self.errors.pop(tool_name, None)
@@ -874,7 +878,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes)
@@ -932,9 +936,11 @@ class _DispatchProgress:
 
     stopped: threading.Event = field(default_factory=threading.Event)
     records: dict[str, tuple[_PendingToolCall, dict, Any]] = field(default_factory=dict)
+    finished: dict[str, float] = field(default_factory=dict)   # call id -> when its result came
 
     def record(self, pc: _PendingToolCall, args: dict, result: Any) -> None:
         self.records[pc.id] = (pc, args, result)
+        self.finished[pc.id] = time.time()
 
 
 def _dispatch_tool_calls(
@@ -1103,7 +1109,7 @@ async def _dispatch_fan_out_async(
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
         _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together)
@@ -1139,7 +1145,7 @@ async def _dispatch_async_tool(
         raise
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
-        result = f"ERROR running {tool.name}: {type(exc).__name__}: {exc}"
+        result = _jail.shown(f"ERROR running {tool.name}: {type(exc).__name__}: {exc}")
     raw_result = result
     result = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
@@ -1299,9 +1305,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              provider_api_key_override: str | None = None,
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
-             event_hooks: event_mod.EventHooks | None = None,
+             event_hooks: event_mod.EventHooks | event_mod.RefusableOnly | None = None,
              mcp_host: Any = None,
-             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None) -> None:
+             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
+             event_sink: Callable[[str, dict], None] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -1311,6 +1318,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     recorded, when another model call follows. It returns a user message or
     None, directly or as an awaitable. A returned message is appended there, so
     the model reads it before choosing its next tool call.
+
+    ``event_sink`` sees every event this turn emits, as ``(event, payload)``:
+    the `events.CANONICAL_EVENT_NAMES` the turn raises, with the turn's usage
+    totals added to ``turn_end``, and ``usage`` after each model call charged
+    to the session (`js.usage`). Subagent turns do not reach it.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -1420,9 +1432,20 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.context_budget_state = token_state
     active_context.vision_enabled = active_context.config.vision_enabled
 
-    def _emit_event(event: str, **payload: Any) -> list[event_mod.EventHook]:
+    if event_hooks is not None:
+        # Subagents started through this context answer to its tool_call guards.
+        active_context.tool_call_hooks = event_hooks
+
+    def _emit_event(event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
+        """Raise ``event`` to the ON hooks and the event sink; the emission, or
+        None when this turn has no hooks. ``sink_extra`` fields reach the sink only."""
+        if event_sink is not None:
+            try:
+                event_sink(event, {**payload, **(sink_extra or {})})
+            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
+                telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
         if event_hooks is None:
-            return []
+            return None
         emission = event_hooks.emit(event, **payload)
         for result in emission.results:
             if result.error:
@@ -1432,14 +1455,22 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     handler=result.hook.handler,
                     error=result.error,
                 )
-        return emission.hooks
+        return emission
 
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
         mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
 
+    turn_usage = usage_mod.Tally()
+
+    def _on_usage(call: usage_mod.CallUsage, session: usage_mod.UsageTotals) -> None:
+        turn_usage.add(call)
+        if event_sink is not None:
+            event_sink("usage", {**call.as_dict(), "session": session.as_dict()})
+
     def _end_turn(reason: str, **extra: Any) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id, **extra)
+        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id,
+                    sink_extra={"usage": turn_usage.as_dict()}, **extra)
 
     _emit_event(
         "turn_start",
@@ -1563,7 +1594,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
         if partial_reasoning:
             record["reasoning_content"] = partial_reasoning
-        messages.append(record)
+        messages.append(memory.note_time(record))
 
     def _close_text(reasoning_tokens: int | None = None) -> None:
         nonlocal answer_display
@@ -1696,7 +1727,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     result = await compaction.compact_now(
                         active_compact_cfg, system, messages, focus=focus, forced=True,
                         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                        tail_tokens=tail_tokens, context=active_context,
+                        tail_tokens=tail_tokens, context=active_context, emit=_emit_event,
                     )
             except Exception as exc:  # noqa: BLE001
                 msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
@@ -1740,6 +1771,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
+    usage_token = usage_mod.start(usage_mod.Meter(
+        (getattr(cfg, "session_file", None), *getattr(active_context, "usage_chain", ())),
+        on_call=_on_usage,
+    ))
     try:
         if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
             await active_registry.restore(prior_surface)
@@ -1827,6 +1862,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         finish = model_client.incomplete_finish_reason(incomplete_reason)
                     reasoning = result.reasoning
                     usage = result.usage
+                    usage_mod.record(usage, model=model, provider_id=provider_id)
                     active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
                     active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
                     active_context.last_incomplete_reason = incomplete_reason
@@ -2020,7 +2056,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
             ai_convo.append(_sanitize_assistant_message(assistant_message))
-            messages.append(history_assistant_record)
+            messages.append(memory.note_time(history_assistant_record))
             # Recorded in full now; a later ^C in this turn must not re-append it.
             streamed_text["value"] = ""
             streamed_reasoning.clear()
@@ -2058,13 +2094,19 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
             # turn; messages — persisted and replayed on every future turn — carries the
             # dehydrated stub so base64 is billed once.
-            for pc in pending_calls:
-                _emit_event(
+            for index, pc in enumerate(pending_calls):
+                emission = _emit_event(
                     "tool_call",
                     id=pc.id,
                     name=_canonical_tool_call_name(pc.name, active_registry),
                     arguments=_canonical_tool_args(pc.arguments()),
                 )
+                refusal = event_mod.refusal_of(emission)
+                if refusal and pc.validation_error is None:
+                    # An `on tool_call` handler refused it: the call never runs
+                    # and the model reads the refusal as its result.
+                    pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+                    telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
             # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
             # thread so the shared loop stays free while they execute. Fan-out (task /
             # named-agent) calls are awaited ON the loop instead, so a parent turn
@@ -2126,7 +2168,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             batch_tool_msgs.append(built)
                         else:
                             batch_media_msgs.append(built)
-                    messages.extend(_history_tool_result_message(canonical_pc, result_value))
+                    done_at = progress.finished.get(pc.id)
+                    messages.extend(memory.note_time(item, done_at)
+                                    for item in _history_tool_result_message(canonical_pc, result_value))
                 ai_convo.extend(batch_tool_msgs)
                 ai_convo.extend(batch_media_msgs)
             if error_tracker.limit_reached():
@@ -2139,7 +2183,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
                 final_error = {"role": "assistant", "content": failure}
                 ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-                messages.append(final_error)
+                messages.append(memory.note_time(final_error))
                 _emit_event("error", error=failure, retryable=False)
                 _end_turn("tool_error_limit")
                 return
@@ -2148,7 +2192,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 if inspect.isawaitable(steered):
                     steered = await steered
                 if steered is not None:
-                    messages.append(steered)
+                    messages.append(memory.note_time(steered))
                     ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
                     telemetry.event("steered", message_index=len(messages) - 1)
                     if not suppress_output:
@@ -2170,6 +2214,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         raise
     finally:
         _close_reasoning()
+        usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         turn_status.reset()
         if owns_mcp_host and mcp_host is not None:

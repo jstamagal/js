@@ -28,6 +28,13 @@ variable expands to the empty string (no error). Only valid identifier names
 
 This form is always on and needs no flag — it only reads the environment.
 
+js exports two variables before it expands a prompt:
+
+| Variable | Value |
+| --- | --- |
+| `JS_ROOT` | The directory holding js itself: the `js` package, `prompts/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
+| `JS_SHELL` | The shell the shell tool runs commands in (`shell.program`, resolved on PATH). |
+
 ### `!{subsystem args}` — inline directive
 
 ```text

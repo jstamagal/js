@@ -131,6 +131,14 @@ class Session:
         return 0.0
 
     @property
+    def name(self) -> str | None:
+        """The name `--session` takes for a session that was given one; None
+        for a generated name."""
+        if not self.path or not session_store.is_named(Path(self.path).stem):
+            return None
+        return session_store.display_name(Path(self.path))
+
+    @property
     def jailed(self) -> bool:
         """Whether the session started under `-C`, which jails it in its start
         directory."""
@@ -523,20 +531,29 @@ def tags_text(session: Session) -> str:
     return " · ".join(parts) if parts else "-"
 
 
+def name_tags_text(session: Session) -> str:
+    """The row's last column: the session's name when it has one, then its tags."""
+    tags = tags_text(session)
+    if session.name is None:
+        return tags
+    return session.name if tags == "-" else f"{session.name} · {tags}"
+
+
 _WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
 
 
 def header_line() -> str:
     return (f"  {'when':<{_WHEN}}  {'mode':<{_MODE}}  {'agent':<{_AGENT}}  {'dir':<{_DIR}} "
-            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} tags")
+            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} name · tags")
 
 
 def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
-    """A session row: marker, when, mode, agent, dir, turns, length, tags. A
-    nested branch shows its branch point in place of mode, agent and dir."""
+    """A session row: marker, when, mode, agent, dir, turns, length, then the
+    session's name when it has one and its tags. A nested branch shows its
+    branch point in place of mode, agent and dir."""
     session = item.session
     assert session is not None
-    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {tags_text(session)}")
+    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {name_tags_text(session)}")
     when = when_text(session.started if session.started is not None else session.when, now)
     if item.depth == 0:
         return (f"{marker} {when:<{_WHEN}}  {_fit(session.mode or '-', _MODE)}  "

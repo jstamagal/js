@@ -50,6 +50,7 @@ _GENERATED = (
     # Before this layout: UTC timestamp to the microsecond and 16 hex digits.
     re.compile(r"\d{8}T\d{12}Z-[0-9a-f]{16}"),
 )
+_TASK = re.compile(r"task-\d+-[0-9a-f]{4}")
 _TAIL_MIN = 4
 _RESERVE_TRIES = 64
 
@@ -97,6 +98,12 @@ def task_name(now: float | None = None) -> str:
 
 def is_generated(stem: str) -> bool:
     return any(pattern.fullmatch(stem) for pattern in _GENERATED)
+
+
+def is_named(stem: str) -> bool:
+    """Whether a session file's stem is a name someone gave it (`--session
+    NAME`): neither a generated name nor a subagent run's task name."""
+    return bool(stem) and not is_generated(stem) and _TASK.fullmatch(stem) is None
 
 
 def subagent_folder(parent_file: Path) -> Path:
@@ -298,8 +305,11 @@ def _linked(record: dict, record_id: str, parent: str | None) -> dict:
 
 def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     """Append `record` to `session_file` under an exclusive lock, with a fresh
-    id and its parent, and fsync. Returns the record as written."""
+    id and its parent, and fsync. Returns the record as written. A record for
+    os.devnull, the file of a session that is not saved, is discarded."""
     session_file = Path(session_file)
+    if session_file == Path(os.devnull):
+        return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
     key = str(session_file.resolve(strict=False))
     with open(session_file, "a+b") as stream:
