@@ -29,7 +29,7 @@ from . import model_client
 from . import model_metadata
 from . import routing
 from . import settings as _settings
-from . import tools as T
+from . import toolkit as T
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config
 

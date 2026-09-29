@@ -31,7 +31,7 @@ from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
 from . import providers
 from . import settings as _settings
-from . import tools as T
+from . import toolkit as T
 from . import tool_args
 from . import routing
 from . import compaction
@@ -824,7 +824,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
             _print_trace_result(name, result, started)
         return {}, result
 
-    active_registry = registry or T._REGISTRY
+    active_registry = registry or T.DEFAULT_REGISTRY
     context = tool_context or T.DEFAULT_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
@@ -1224,7 +1224,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         max_out = model_metadata.resolve_max_output(model, provider_id)
     ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
     error_tracker = ToolErrorTracker()
-    base_registry = tool_registry or T._REGISTRY
+    base_registry = tool_registry or T.DEFAULT_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.DEFAULT_CONTEXT
     # Delegation inherits this turn's effective settings, not a fresh env load

@@ -39,7 +39,6 @@ persists each completed turn.
 | `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/persona.py` | prompt-directory concatenation and `tools:` frontmatter |
-| `js/tools.py` | compatibility import of the default registry/context |
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly and selector matching |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |

@@ -13,17 +13,14 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "tool_call",
     "tool_result",
     "response",
-    "notice",
     "turn_start",
     "turn_end",
-    "subagent",
     "mcp_log",
     "mcp_progress",
     "mcp_resource_updated",
     "mcp_catalog_collision",
     "error",
     "cancel",
-    "idle",
 )
 
 _EVENT_SET = frozenset(CANONICAL_EVENT_NAMES)

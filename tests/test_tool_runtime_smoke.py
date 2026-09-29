@@ -10,7 +10,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import model_client, runtime, setcmd, settings, tools as runtime_tools
+from js import model_client, runtime, setcmd, settings, toolkit as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
