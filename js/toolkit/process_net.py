@@ -10,7 +10,6 @@ import mimetypes
 import os
 import re
 import shutil
-import sys
 import tempfile
 import threading
 import time
@@ -20,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .. import jail
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import (
@@ -71,15 +71,11 @@ _VAR_REF_RE = re.compile(r"\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)")
 
 def _resolve_shell(program: str) -> str | None:
     """The executable the shell tool runs: `shell.program` looked up on PATH
-    (or taken as given when it is a path). Windows runs COMSPEC."""
-    if sys.platform == "win32":
-        return os.environ.get("COMSPEC", "cmd.exe")
+    (or taken as given when it is a path)."""
     return shutil.which(program)
 
 
 def _shell_argv(shell_path: str, command: str) -> list[str]:
-    if sys.platform == "win32":
-        return [shell_path, "/C", command]
     flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
     return [shell_path, *flags, "-c", command]
 
@@ -292,8 +288,10 @@ def shell(
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
     try:
+        argv = jail.wrap(_shell_argv(shell_path, command), context, cwd=workdir,
+                         env=safe_env, extra_ro=(Path(shell_path),))
         process = start_capped(
-            _shell_argv(shell_path, command),
+            argv,
             cwd=str(workdir),
             env=safe_env,
             cap=cap,
@@ -555,7 +553,7 @@ def _request_body(headers: dict[str, str], body: str | None, json_body: Any) -> 
 
 
 def _download_target(save: str | None, context: ToolContext) -> Path | None:
-    return context.resolve_path(save) if save else None
+    return context.resolve_path(save, write=True) if save else None
 
 
 def _content_length(headers: Any) -> int | None:
@@ -739,7 +737,7 @@ def _fetch_file_url(
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc and parsed.netloc not in {"localhost", "127.0.0.1"}:
         return f"ERROR: unsupported file:// host {parsed.netloc!r}"
-    path = Path(urllib.request.url2pathname(parsed.path))
+    path = context.resolve_path(urllib.request.url2pathname(parsed.path))
     try:
         size = path.stat().st_size
         if save_target is not None:

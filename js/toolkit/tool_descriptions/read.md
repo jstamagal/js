@@ -10,6 +10,8 @@ optional `end_byte` (one past the last byte), for text with few or no line
 breaks: it returns raw text without line prefixes, one page at a time, and
 names the offset to continue from. A tool result too large to show inline is
 saved to a file; its notice names the path and the `range` that continues it.
+When js runs with `-C DIR`, a path outside DIR and the paths the operator bound
+is refused with one ERROR line.
 {{#if fs_search}}
 Find files and search contents with `fs_search`. This reads a known path.
 {{/if}}

@@ -6,7 +6,6 @@ import contextlib
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -76,12 +75,11 @@ class _StreamCapture:
 
 
 def _signal_tree(proc: subprocess.Popen) -> None:
-    """SIGKILL the child and, on POSIX, its whole process group (grandchildren
-    spawned into the session would otherwise survive a timeout kill and keep
-    the box busy). Returns without waiting for them to die."""
-    if sys.platform != "win32":
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
+    """SIGKILL the child and its whole process group (grandchildren spawned
+    into the session would otherwise survive a timeout kill and keep the box
+    busy). Returns without waiting for them to die."""
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):
         proc.kill()
 
@@ -192,9 +190,6 @@ def start_capped(
     line reads; a child holding it (ssh, an interactive shell) would consume
     the operator's keystrokes for as long as it runs.
     """
-    popen_kwargs: dict = {}
-    if sys.platform != "win32":
-        popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
@@ -202,7 +197,7 @@ def start_capped(
         stderr=subprocess.PIPE,
         cwd=cwd,
         env=env,
-        **popen_kwargs,
+        start_new_session=True,
     )
     captures = {"stdout": _StreamCapture(cap), "stderr": _StreamCapture(cap)}
     stop_readers = threading.Event()
@@ -210,17 +205,12 @@ def start_capped(
     def _reader(name: str, stream) -> None:
         capture = captures[name]
         try:
-            if sys.platform != "win32":
-                os.set_blocking(stream.fileno(), False)
+            os.set_blocking(stream.fileno(), False)
             while True:
                 if stop_readers.is_set():
                     return
                 try:
-                    chunk = (
-                        stream.read1(65536)
-                        if sys.platform == "win32"
-                        else os.read(stream.fileno(), 65536)
-                    )
+                    chunk = os.read(stream.fileno(), 65536)
                 except BlockingIOError:
                     stop_readers.wait(0.01)
                     continue

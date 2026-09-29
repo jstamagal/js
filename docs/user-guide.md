@@ -118,6 +118,9 @@ REPL commands:
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session
+/cd [dir]                      print or change the session's working directory
+/add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
+/drop <path>                   under -C, stop showing a path added with /add
 /reset
 /wipe
 exit
@@ -155,6 +158,19 @@ that differ from their defaults, `on` handlers, and aliases. On the next start
 the settings layer applies the `set` lines (and a setting's short name, e.g.
 `model X` is `set model X`) under env and `--extra`; the REPL then runs every
 other jsrc line through the command table.
+
+`/cd DIR` moves the session: js's working directory and the tools' move to
+`DIR`, and the next user message carries one `<js-reminder>` saying the working
+directory is now `DIR`. Under `-C`, `/cd` goes only to `DIR` or a bound path;
+anywhere else is refused with a pointer to `/add`. `/add PATH` (under `-C`
+only) shows `PATH` in the jail from the next tool call on, read-only, or
+read-write as `PATH:rw`; the file tools accept it at once. A kernel or terminal
+session already running sees it after a restart. `/drop PATH` takes back a path
+added with `/add`; the `-C` root cannot be dropped, and neither can the path
+the working directory is in. Each of the three tells the model once, and
+writes a `workspace:` mark to the session: resuming the session puts the
+working directory back, and under the same `-C` it puts the `/add` paths back.
+`/cd` and `/drop` wait for a running turn to end.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
@@ -286,10 +302,38 @@ js --ignore-local -p "prompt"
 js --ignore-global -p "prompt"
 ```
 
-`-C <dir>` runs as if launched from `<dir>` (like `git -C`): it changes into the
-directory before doing anything, so the working directory, project config
-lookup, and tools all see `<dir>`. The directory must exist — a missing or
-non-directory target prints an error and exits.
+`-C <dir>` keeps the agent in `<dir>`. js changes into the directory before
+doing anything, so the working directory, project config lookup, and tools all
+see `<dir>`, and it puts the tools in a jail:
+
+- Every tool that starts a process (`shell`, `kernel` and the toolbox on it,
+  `terminal_session`, the wiki converters) runs under bubblewrap. `<dir>` is
+  bound read-write at its real path. The system is read-only. `/home`, your
+  home, `/run/user`, network filesystems (NFS and the like), and any other
+  mount that shows your home are empty. The `PATH` directories under them are
+  bound back read-only, so the toolchains on `PATH` run. `/tmp` and `~/.js/tmp`
+  are directories private to this js process, shared by its commands and
+  removed when it exits. The network stays on. The command's environment is
+  `limits.shell_env_allow`, so provider keys are not in it.
+- The file tools (`read`, `write`, `patch`, `remove`, `undo`, `fs_search`,
+  `ast_search`, `list_dir`, `fetch file://` and `save=`, `browse` screenshots)
+  refuse a path outside `<dir>` and the bound paths with one `ERROR` line. A
+  path under `/tmp` or `~/.js/tmp` names the file the jailed commands see there.
+- Subagents run in the same jail.
+- The `jail.bind` setting shows more paths: a JSON list of `"path"`
+  (read-only) or `"path:rw"` entries. The default binds `~/.gitconfig`,
+  `~/.config/git`, `~/.local/share/uv` and `~/.cache/uv:rw`, so git and uv
+  work in the jail. Tools installed as symlinks into another tree (Homebrew,
+  `uv tool`) need that tree bound: `set jail.bind [..., "/home/linuxbrew"]`.
+
+`-C` needs `bwrap` (bubblewrap). Without it, or when a startup self-test of the
+jail fails, js prints one line and exits; nothing runs unjailed. A missing or
+non-directory target, or `/`, is refused the same way. The jail keeps the
+agent's context clean; it is not a defence against a hostile model. For a plain
+working directory without a jail, `cd <dir> && js`.
+
+Under `-C` the system prompt's `envctx` line says `confined=<dir>` and adds a
+rule line telling the model it is confined.
 
 `--ignore-local` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
@@ -421,10 +465,9 @@ Current prompt dirs:
 
 The `shell` tool runs commands with the `shell.program` setting:
 
-- Unix: `bash -o pipefail -c` by default. `set shell.program zsh` runs
-  `zsh -o pipefail -c`; any other program (such as `sh`) runs with `-c` and no
-  pipefail. A name is looked up on PATH; a path is used as given.
-- Windows: `COMSPEC /C`.
+`bash -o pipefail -c` by default. `set shell.program zsh` runs
+`zsh -o pipefail -c`; any other program (such as `sh`) runs with `-c` and no
+pipefail. A name is looked up on PATH; a path is used as given.
 
 The Python harness does not itself require `fzf` or `bat`. `fs_search` invokes the
 pinned `tools/bin/rg` installed by `just install`, falling back to PATH only

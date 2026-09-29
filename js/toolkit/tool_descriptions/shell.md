@@ -21,6 +21,10 @@ handle="3"` stops it. `handle` defaults to the most recent running job. Do a
 poll before assuming a long build or test run has failed.
 
 - Set `cwd` instead of `cd`.
+- When js runs with `-C DIR`, the command runs in a jail: DIR is writable, the
+  system is read-only, the home directory is empty except the tool directories
+  on PATH and the paths the operator bound, `/tmp` is private, and the network
+  is on.
 {{#if fs_search}}
 - Search with `fs_search`, not `grep`, `rg`, or `find`.
   Directory-only discovery: use `shell` with `fd --type d`.

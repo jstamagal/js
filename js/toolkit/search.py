@@ -502,6 +502,10 @@ def browse(
     url = text_or_default(url).strip()
     if not url:
         return "ERROR: url is required"
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme == "file":
+        # A local page is a file read; under `js -C` the jail decides it.
+        context.resolve_path(urllib.request.url2pathname(parsed_url.path))
     binary = resolve_binary("obscura")
     if binary is None:
         return "ERROR: obscura is not installed (expected in tools/bin or on PATH)"
@@ -527,7 +531,7 @@ def browse(
         # No extension check: obscura always writes PNG whatever the file is
         # called, and js detects images by magic bytes, not by suffix. Rejecting
         # `shot.jpg` would cost a turn and buy nothing.
-        shot_path = context.resolve_path(screenshot)
+        shot_path = context.resolve_path(screenshot, write=True)
         shot_path.parent.mkdir(parents=True, exist_ok=True)
         argv += ["--screenshot", str(shot_path)]
     if _is_private_ip_literal(url):

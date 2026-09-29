@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -370,6 +372,10 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
     timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
     max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
+    # The prompt's commands (envctx) report the shell the shell tool runs
+    # commands in, which is shell.program, not the operator's $SHELL.
+    program = str(settings.knob(getattr(cfg, "settings", None), "shell.program"))
+    os.environ["JS_SHELL"] = shutil.which(program) or program
     system = expand_prompt(
         spec.system,
         allow_code=allow_code,

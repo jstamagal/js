@@ -264,6 +264,20 @@ SESSION_TITLE = Message("{title}", banner=False)
 SESSION_UNTITLED = Message("This session has no title. /name <text> gives it one.")
 SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.", WARN)
 SESSION_PICKER_NOT_BUILT = Message("The session picker is not built yet. Name a session: --session NAME.", WARN)
+CWD_IS = Message("{path}", banner=False)
+CD_DONE = Message("Working directory: {path}")
+CD_NOT_A_DIR = Message("/cd: not a directory: {path}")
+CD_OUTSIDE_JAIL = Message("/cd: {path} is outside the jail at {root}; /add it first.")
+NO_JAIL = Message("There is no jail; /{verb} works under js -C DIR.")
+ADD_BAD = Message("/add: {error}")
+ADD_MISSING = Message("/add: no such path: {path}")
+ADD_DONE = Message(
+    "{path} is visible in the jail, {access}, from the next tool call. A running kernel or "
+    "terminal session sees it after a restart.")
+DROP_ROOT = Message("/drop: {path} is the -C root and cannot be dropped.")
+DROP_UNKNOWN = Message("/drop: {path} was not added with /add.")
+DROP_CWD = Message("/drop: the working directory is inside {path}; /cd out of it first.")
+DROP_DONE = Message("{path} is no longer visible in the jail.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
@@ -303,6 +317,11 @@ CMD_COMPACT = Message("Append a compaction summary mark.")
 CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
 CMD_REFRESH_MODEL_CATALOG = Message("Force-refresh the local models.dev catalog now.")
 CMD_QUIT = Message("Quit. A note is kept for the next turn.")
+CMD_CD = Message(
+    "Change the session's working directory; with no argument, print it. Under -C, only to DIR "
+    "or a bound path.")
+CMD_ADD = Message("Under -C, show PATH in the jail: read-only, or read-write with :rw.")
+CMD_DROP = Message("Under -C, stop showing a path added with /add.")
 
 # --- js --help ----------------------------------------------------------------
 
@@ -365,8 +384,11 @@ OPT_URL = Message(
     "Desugars to --extra model.id/provider.id/provider.base_url/provider.api_key, "
     "so an explicit --extra still wins.")
 OPT_CD = Message(
-    "Run as if launched from DIR, like git -C. It binds the working directory for every mode: "
-    "-p, the REPL, --commit and the rest. DIR must exist.")
+    "Keep the agent in DIR, for every mode: -p, the REPL, --commit and the rest. DIR is the "
+    "working directory. Every tool that starts a process runs under bubblewrap: DIR "
+    "read-write, the system read-only, /home hidden except PATH directories and jail.bind "
+    "entries, a private /tmp, the network on. File tools refuse paths outside DIR and the "
+    "bound paths. Needs bwrap.")
 OPT_DEBUG = Message(
     "In prompt and --bench modes, stream the concise per-turn diagnostics and the answer live to the terminal: "
     "run header, tool-call lines, per-call timing. The full request trace still goes only to the debug "
@@ -512,7 +534,7 @@ PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Print
 # --- Command-line flags ------------------------------------------------------
 
 BAD_URL_SPEC = Message("-u: {error}", GRAVE)
-CD_NOT_A_DIR = Message("-C target is not a directory: {path}", GRAVE)
+JAIL_REFUSED = Message("{error}", GRAVE)
 JSON_NEEDS_LIST = Message("--json requires --list.", GRAVE)
 LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
 LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.", GRAVE)

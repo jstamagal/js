@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1112,6 +1113,7 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
     assert calls == []
     assert capsys.readouterr().out == ""
 
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="-C needs bubblewrap")
 def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -1326,6 +1328,7 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
     assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
 
 
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="-C needs bubblewrap")
 def test_session_key_resumes_the_same_derived_session(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))

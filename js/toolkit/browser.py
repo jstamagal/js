@@ -245,7 +245,7 @@ def browser_probe(
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
 
-    base = context.resolve_path(output_dir) if output_dir else paths.browser_probes_dir()
+    base = context.resolve_path(output_dir, write=True) if output_dir else paths.browser_probes_dir()
     run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     report: dict[str, Any] = {

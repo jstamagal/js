@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
+from ... import jail
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
@@ -50,8 +51,7 @@ def slugify(text: str) -> str:
 
 
 def resolve_vault(vault: str, context: ToolContext) -> Path:
-    path = Path(os.path.expanduser(str(vault)))
-    return (path if path.is_absolute() else context.cwd / path).resolve()
+    return context.resolve_path(vault, write=True)
 
 
 def find_vault(path: Path) -> Path | None:
@@ -62,9 +62,11 @@ def find_vault(path: Path) -> Path | None:
 
 
 def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, str, str]:
+    """Run ``cmd`` with the allowlisted environment, in the jail under `js -C`."""
     env = {key: os.environ[key] for key in _ENV_ALLOW if key in os.environ}
+    argv = jail.wrap(cmd, context, cwd=context.cwd, env=env)
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+        proc = subprocess.run(argv, capture_output=True, timeout=timeout, env=env)
     except FileNotFoundError:
         return 127, "", f"command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:

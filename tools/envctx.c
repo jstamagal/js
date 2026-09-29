@@ -632,8 +632,17 @@ int main(void) {
          load, b3, b2, dfree, dtot);
 
   /* ---- session ---- */
-  const char *sh = getenv("SHELL"), *term = getenv("TERM"),
+  /* js exports JS_SHELL: the shell its shell tool runs commands in
+     (shell.program), which need not be the operator's login $SHELL. */
+  const char *sh = getenv("JS_SHELL"), *term = getenv("TERM"),
              *venv = getenv("VIRTUAL_ENV");
+  if (!sh || !*sh)
+    sh = getenv("SHELL");
+  /* js exports JS_JAIL under `js -C DIR`: the directory the tools are kept in */
+  const char *jail = getenv("JS_JAIL");
+  char jb[1024] = "";
+  if (jail && *jail)
+    tilde(jail, jb, sizeof jb);
   int pathdirs = 0, envn = 0;
   const char *P = getenv("PATH");
   if (P)
@@ -644,10 +653,11 @@ int main(void) {
   for (char **e = environ; *e; e++)
     envn++;
   const char *jsmode = getenv("JS_MODE");
-  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s%s%s\n",
+  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s%s%s%s%s\n",
          getenv("USER") ? getenv("USER") : "?", sh ? sh : "?",
          term ? term : "-", pkgmgr(), pathdirs + 1, envn,
          jsmode ? " mode=" : "", jsmode ? jsmode : "",
+         jb[0] ? " confined=" : "", jb,
          venv ? " venv=" : "",
          venv ? tilde(venv, b2, sizeof b2) : "",
          isfile("/.dockerenv") ? " container=docker" : "", wsl ? " wsl=1" : "",
@@ -1017,5 +1027,13 @@ int main(void) {
     printf("rule: js is%s in one-shot mode (not interactive chat): "
            "NEVER end the turn on a question — end on doing it.\n",
            jm ? "" : " possibly");
+  const char *jd = getenv("JS_JAIL");
+  if (jd && *jd) {
+    char jt[1024];
+    printf("rule: you are confined to %s (js -C): commands run in a jail where "
+           "the home directory is hidden and /tmp is private, and file tools "
+           "refuse paths outside %s and its bound paths.\n",
+           tilde(jd, jt, sizeof jt), jt);
+  }
   return 0;
 }

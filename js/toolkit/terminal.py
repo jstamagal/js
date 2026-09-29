@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import jail
 from .. import paths
 from . import fs
 from .core import Tool, ToolContext
@@ -273,20 +274,23 @@ def terminal_session(
         if not workdir.is_dir():
             return f"ERROR: no such directory: {workdir}"
         shell = os.environ.get("SHELL") or "/bin/sh"
+        env = dict(os.environ)
+        if jail.active() is not None:
+            # In the jail the command gets the shell tool's environment: the
+            # names in limits.shell_env_allow, so no provider key reaches it.
+            env = {key: os.environ[key] for key in context.shell_env_allow if key in os.environ}
+        env.update({"TERM": "xterm-256color", "COLUMNS": str(width), "LINES": str(height)})
+        argv = jail.wrap([shell, "-c", command], context, cwd=workdir, env=env,
+                         extra_ro=(Path(shell),))
         try:
             child = pexpect.spawn(
-                shell,
-                ["-c", command],
+                argv[0],
+                argv[1:],
                 cwd=str(workdir),
                 dimensions=(height, width),
                 timeout=None,
                 encoding=None,
-                env={
-                    **os.environ,
-                    "TERM": "xterm-256color",
-                    "COLUMNS": str(width),
-                    "LINES": str(height),
-                },
+                env=env,
             )
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
@@ -436,7 +440,7 @@ def terminal_snapshot(
     state["previous_lines"] = _render_lines(state["screen"])
     snapshot_n = state["snapshot_n"] + 1
     if raw_output_path:
-        target = context.resolve_path(raw_output_path)
+        target = context.resolve_path(raw_output_path, write=True)
     else:
         safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "-", session).strip("-") or "main"
         target = paths.terminal_snapshots_dir() / f"{safe_session}-{snapshot_n:02d}.png"

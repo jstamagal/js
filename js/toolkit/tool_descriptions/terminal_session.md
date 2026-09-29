@@ -20,3 +20,4 @@ proof the keys caused it); after `look`, passive change since last time.
 `terminal_snapshot` renders the screen as a PNG when text cannot show spacing,
 colour, borders, or clipping, and also resets that comparison baseline.
 {{/if}}
+When js runs with `-C DIR`, the command runs in the same jail as `shell`.

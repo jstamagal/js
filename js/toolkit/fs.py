@@ -45,11 +45,9 @@ _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 _TRASH_MAX_BYTES = 512 * 1024 * 1024
 
 
-def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str]) -> Path:
-    path = Path(os.path.expanduser(str(raw)))
-    if not path.is_absolute():
-        path = context.cwd / path
-    return Path(os.path.abspath(path))
+def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *,
+                            write: bool = False) -> Path:
+    return context.resolve_path(raw, write=write, follow=False)
 
 
 def _path_size_no_follow(path: Path, *, cap: int = _TRASH_MAX_BYTES + 1) -> int:
@@ -596,7 +594,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     raw_path = file_path or path
     if not raw_path:
         return "ERROR: file_path is required"
-    target = context.resolve_path(raw_path)
+    target = context.resolve_path(raw_path, write=True)
     if target.exists() and not overwrite:
         return (
             f"ERROR: {raw_path} already exists. To change part of it use patch; "
@@ -638,7 +636,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
 
 def remove(path: str, permanent: bool | None = False, context: ToolContext | None = None) -> str:
     assert context is not None
-    target = _resolve_path_no_follow(context, path)
+    target = _resolve_path_no_follow(context, path, write=True)
     if not target.exists() and not target.is_symlink():
         return f"ERROR: no such path: {target}"
     try:
@@ -665,9 +663,9 @@ def undo(path: str, context: ToolContext | None = None) -> str:
     context.invalidate_search_cache()
     # write/patch key snapshots under resolve_path (follows symlinks); remove keys
     # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
-    target = context.resolve_path(path)
+    target = context.resolve_path(path, write=True)
     if not context.snapshots.get(target):
-        no_follow = _resolve_path_no_follow(context, path)
+        no_follow = _resolve_path_no_follow(context, path, write=True)
         if context.snapshots.get(no_follow):
             target = no_follow
     try:
@@ -972,7 +970,7 @@ def patch(
                 return normalized
             pending.append(normalized)
 
-    target = context.resolve_path(raw_path)
+    target = context.resolve_path(raw_path, write=True)
     # Reject a non-regular target by type before any read: opening a FIFO with
     # no writer parks in open() forever, so read_bytes() never returns.
     if not target.exists():
@@ -1670,6 +1668,8 @@ def ast_search(
     if not prepared or all(source == updated for source, updated in prepared.values()):
         return "(no changes)"
 
+    for target in prepared:
+        context.resolve_path(target, write=True)
     for target in prepared:
         context.snapshot(target)
     apply_stderr = ""

@@ -48,6 +48,7 @@ from . import replcomplete
 from . import runtime
 from . import stats
 from . import home as _home
+from . import jail as _jail
 from . import paths as _paths
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt
@@ -1820,6 +1821,130 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+# /cd, /add and /drop: where the session works. Each change queues one
+# reminder for the next user message and records a `workspace:` mark, so a
+# resumed session works in the same place.
+
+_CD_NOTICE = "<js-reminder>The working directory is now {path}.</js-reminder>"
+_ADD_NOTICE = "<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>"
+_DROP_NOTICE = "<js-reminder>{path} is no longer visible inside the jail.</js-reminder>"
+
+
+def _access(bind: _jail.Bind) -> str:
+    return "read-write" if bind.rw else "read-only"
+
+
+def _queue_note(state: dict, note: str) -> None:
+    state.setdefault("pending_notes", []).append(note)
+
+
+def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
+    """``bundle`` carrying the reminders queued since the last user message."""
+    for note in state.pop("pending_notes", None) or ():
+        bundle = attach.with_note(bundle, note)
+    return bundle
+
+
+def _set_working_dir(path: Path) -> None:
+    os.chdir(path)
+    runtime.T.STOCK_CONTEXT.cwd = path
+
+
+def _record_workspace(cfg: Config) -> None:
+    if cfg.session_file == Path(os.devnull):
+        return
+    jail = _jail.active()
+    M.append_workspace_mark(
+        cfg.session_file,
+        root=str(jail.root) if jail is not None else None,
+        cwd=str(runtime.T.STOCK_CONTEXT.cwd),
+        binds=[bind.spec() for bind in jail.added] if jail is not None else [],
+    )
+
+
+def _restore_workspace(cfg: Config) -> None:
+    """Put a resumed session back where its last /cd, /add or /drop left it.
+    The /add binds come back only under a jail with the same -C root; the
+    working directory only where the jail shows it."""
+    mark = M.last_workspace(cfg.session_file)
+    if mark is None:
+        return
+    jail = _jail.active()
+    if jail is not None and mark.get("root") == str(jail.root):
+        for spec in mark.get("binds") or ():
+            try:
+                bind = _jail.parse_bind(spec)
+            except ValueError:
+                continue
+            if bind.path.exists():
+                jail.add(bind)
+    cwd = Path(str(mark.get("cwd") or ""))
+    setting = settings.knob(getattr(cfg, "settings", None), "jail.bind")
+    if cwd.is_absolute() and cwd.is_dir() and (jail is None or jail.bound(cwd, setting)):
+        _set_working_dir(cwd)
+
+
+def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
+    context = runtime.T.STOCK_CONTEXT
+    raw = arg.strip()
+    if not raw:
+        msgs.say(msgs.CWD_IS, path=context.cwd)
+        return None
+    target = Path(os.path.expanduser(raw))
+    target = (target if target.is_absolute() else context.cwd / target).resolve()
+    if not target.is_dir():
+        return msgs.CD_NOT_A_DIR.said(path=target)
+    jail = _jail.active()
+    if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "jail.bind")):
+        return msgs.CD_OUTSIDE_JAIL.said(path=target, root=jail.root)
+    _set_working_dir(target)
+    _queue_note(state, _CD_NOTICE.format(path=target))
+    _record_workspace(cfg)
+    msgs.say(msgs.CD_DONE, path=target)
+    return None
+
+
+def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
+    jail = _jail.active()
+    if jail is None:
+        return msgs.NO_JAIL.said(verb="add")
+    spec = arg.strip()
+    if spec and not spec.startswith(("/", "~")):
+        spec = str(runtime.T.STOCK_CONTEXT.cwd / spec)
+    try:
+        bind = _jail.parse_bind(spec)
+    except ValueError as exc:
+        return msgs.ADD_BAD.said(error=exc)
+    if not bind.path.exists():
+        return msgs.ADD_MISSING.said(path=bind.path)
+    jail.add(bind)
+    _queue_note(state, _ADD_NOTICE.format(path=bind.path, access=_access(bind)))
+    _record_workspace(cfg)
+    msgs.say(msgs.ADD_DONE, path=bind.path, access=_access(bind))
+    return None
+
+
+def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
+    jail = _jail.active()
+    if jail is None:
+        return msgs.NO_JAIL.said(verb="drop")
+    raw = arg.strip()
+    path = Path(os.path.abspath(runtime.T.STOCK_CONTEXT.cwd / os.path.expanduser(raw)))
+    if path.resolve() == jail.root:
+        return msgs.DROP_ROOT.said(path=path)
+    dropped = next((bind for bind in jail.added if bind.path == path), None)
+    if dropped is None:
+        return msgs.DROP_UNKNOWN.said(path=path)
+    jail.drop(path)
+    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "jail.bind")):
+        jail.add(dropped)
+        return msgs.DROP_CWD.said(path=path)
+    _queue_note(state, _DROP_NOTICE.format(path=path))
+    _record_workspace(cfg)
+    msgs.say(msgs.DROP_DONE, path=path)
+    return None
+
+
 _LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
@@ -1864,6 +1989,9 @@ COMMANDS: dict[str, Command] = {
     "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
                                      msgs.CMD_REFRESH_MODEL_CATALOG),
     "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
+    "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
+    "add": Command(_cmd_add, "add <path>[:rw]", msgs.CMD_ADD, complete="path"),
+    "drop": Command(_cmd_drop, "drop <path>", msgs.CMD_DROP, complete="path", turn_state=True),
 }
 
 
@@ -2119,6 +2247,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         else cfg
     )
     messages = M.load_replay_messages(cfg.session_file)
+    _restore_workspace(cfg)
     before_len = len(messages)
     try:
         user_bundle = attach.build_user_message(
@@ -2894,6 +3023,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         msgs.say(msgs.FAILED, error=e)
         return
     user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+    user_bundle = _with_pending_notes(state, user_bundle)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
@@ -3252,6 +3382,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             continue
 
         user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
+        user_bundle = _with_pending_notes(state, user_bundle)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)
@@ -3586,11 +3717,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     if args.cd:
-        cd_target = Path(args.cd).expanduser()
-        if not cd_target.is_dir():
-            msgs.warn(msgs.CD_NOT_A_DIR, path=cd_target)
+        # -C is the jail: every tool that starts a process runs under
+        # bubblewrap, and the file tools stay inside DIR and the bound paths.
+        try:
+            jailed = _jail.enter(Path(args.cd).expanduser())
+        except _jail.JailError as exc:
+            msgs.warn(msgs.JAIL_REFUSED, error=exc)
             return 2
-        os.chdir(cd_target)
+        os.chdir(jailed.root)
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
@@ -3885,6 +4019,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     messages = M.load_replay_messages(cfg.session_file)
+    _restore_workspace(cfg)
     if messages:
         msgs.say(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message"))
     elif args.session is not None:

@@ -211,9 +211,8 @@ already came back as a handle keep running.
 The command's stdin is `/dev/null` and it has no controlling terminal, so it
 never reads the keystrokes meant for js's input line.
 
-Unix runs `shell.program` (default `bash`) with `-c`. bash and zsh also get
-`-o pipefail`, so a pipeline reports the failure of any stage. Windows uses
-`COMSPEC /C`.
+`shell` runs `shell.program` (default `bash`) with `-c`. bash and zsh also get
+`-o pipefail`, so a pipeline reports the failure of any stage.
 
 The command's environment holds only the names in `limits.shell_env_allow` and
 the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
@@ -222,6 +221,14 @@ carries an `environment=filtered unset=NAME allowed=… present=…` line after 
 exit line.
 
 Use `cwd` instead of writing `cd ... && ...` in the command.
+
+Under `js -C DIR` the command runs under bubblewrap (`js/jail.py`): DIR
+read-write at its real path, the system read-only, `/home`, the home,
+`/run/user` and network filesystems empty except the `PATH` directories under
+them (read-only) and the `jail.bind` entries, a `/tmp` and `~/.js/tmp` private
+to the js process, the network shared, `--die-with-parent`. `kernel`,
+`terminal_session` and the wiki converters run in the same jail. The file tools
+refuse paths outside DIR and the bound paths with one `ERROR` line.
 
 ### `fetch`
 

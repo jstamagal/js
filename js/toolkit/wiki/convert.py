@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ... import jail
 from ... import paths
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
@@ -71,7 +72,7 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
     spreadsheet = ext in _SPREADSHEET_EXT
     target = _SPREADSHEET_FILTER if spreadsheet else "txt"
-    with TemporaryDirectory(prefix="js-wiki-", dir=paths.tmp_dir()) as tmp:
+    with TemporaryDirectory(prefix="js-wiki-", dir=jail.scratch_dir()) as tmp:
         rc, out, err = run(
             ["soffice", "--headless", "--convert-to", target, "--outdir", tmp, str(p)],
             context,
@@ -131,6 +132,8 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
 
     # media → copy to vault assets, return an Obsidian embed
     vault_path = resolve_vault(vault, context) if vault else find_vault(p)
+    if vault_path is not None:
+        vault_path = context.resolve_path(vault_path, write=True)
     if ext in IMG_EXT:
         embed = "(pass vault= to copy into assets/)"
         if vault_path:

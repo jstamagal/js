@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
+from .. import jail as _jail
 from .. import settings as _settings
 from ..paths import state_root
 
@@ -340,6 +341,7 @@ class ToolContext:
     kernel_wait_seconds: int = _knob("kernel.wait_seconds")  # seconds a kernel call waits for a submitted cell
     shell_wait_seconds: int = _knob("shell.wait_seconds")  # seconds a shell call waits before returning a handle
     shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
+    jail_bind: tuple[str, ...] = field(default_factory=lambda: tuple(_settings.default_value("jail.bind")))
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
@@ -368,10 +370,19 @@ class ToolContext:
         default_factory=dict, init=False, repr=False
     )
 
-    def resolve_path(self, raw: str | os.PathLike[str]) -> Path:
+    def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
+                     follow: bool = True) -> Path:
+        """``raw`` as an absolute host path, symlinks resolved (all but the last
+        component when ``follow`` is false). Under `js -C` it raises JailError
+        for a path the jail does not show, or shows read-only when ``write``."""
         path = Path(os.path.expanduser(str(raw)))
         if not path.is_absolute():
             path = self.cwd / path
+        jail = _jail.active()
+        if jail is not None:
+            return jail.confine(path, write=write, follow=follow, setting=self.jail_bind)
+        if not follow:
+            return Path(os.path.abspath(path))
         return path.resolve()
 
     def remember_read(
@@ -807,7 +818,10 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         filtered[key] = coerce_value(value, schema_type)
     if "context" in known and not declares_context:
         filtered["context"] = context
-    result = tool.handler(**filtered)
+    try:
+        result = tool.handler(**filtered)
+    except _jail.JailError as exc:
+        return f"ERROR: {exc}"
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
