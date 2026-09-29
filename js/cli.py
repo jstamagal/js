@@ -2464,13 +2464,26 @@ async def _close_session_mcp_host(state: dict) -> None:
         await host.close()
 
 
-async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
+def _restore_history_forms(messages: list[dict], user_bundle, steered: list, before_len: int) -> None:
+    """Swap the turn's provider-facing user messages for their history forms."""
+    _replace_runtime_user_message(messages, user_bundle.runtime_message,
+                                  user_bundle.history_message, before_len)
+    for bundle in steered:
+        _replace_runtime_user_message(messages, bundle.runtime_message,
+                                      bundle.history_message, before_len)
+
+
+async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
+                   steer=None, steered=()) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
     caller — persists partial work and heals orphaned tool_calls, mirroring the
     legacy blocking KeyboardInterrupt path, then re-raises so the job ends
     cancelled.
+
+    ``steer`` hands the runtime lines typed during the turn; ``steered`` holds
+    the bundles it has handed over, so their history forms are persisted.
     """
     try:
         before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
@@ -2493,6 +2506,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
             event_hooks=state.get("events"),
             mcp_host=state.get("mcp_host"),
+            steer=steer,
         )
         after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
         if after_turn_sampling != before_turn_sampling:
@@ -2508,12 +2522,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         if after_turn_lock != before_turn_lock:
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        _replace_runtime_user_message(
-            state["messages"],
-            user_bundle.runtime_message,
-            user_bundle.history_message,
-            before_len,
-        )
+        _restore_history_forms(state["messages"], user_bundle, steered, before_len)
         _persist_turn_messages(cfg, state["messages"])
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
@@ -2530,12 +2539,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-            _replace_runtime_user_message(
-                state["messages"],
-                user_bundle.runtime_message,
-                user_bundle.history_message,
-                before_len,
-            )
+            _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
@@ -2547,56 +2551,123 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
     except Exception as e:  # noqa: BLE001
         print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-            _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
-                                          user_bundle.history_message, before_len)
+            _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(cfg, state["messages"])
         else:
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
         M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
 
 
-async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -> None:
+def _steer_mode(state: dict) -> str:
+    return settings.steer_mode(
+        settings.get_dotted(state["settings"], ("runtime", "steer"), settings.DEFAULT_STEER)
+    )
+
+
+def _take_queued(queue: asyncio.Queue) -> list[str]:
+    """Every line waiting in ``queue``, in order. Loop-thread only."""
+    lines = []
+    while True:
+        try:
+            lines.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            return lines
+        queue.task_done()
+
+
+async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
+                         steer_inbox: list[str] | None = None) -> None:
     """Serialize main turns: one at a time, pulled FIFO from the input queue.
     This is what keeps state['messages'] single-writer while the input line
-    stays live — the producer (`_repl_main`) never blocks on a turn."""
+    stays live — the producer (`_repl_main`) never blocks on a turn.
+
+    ``steer_inbox`` holds lines typed during a turn at runtime.steer=now. The
+    running turn takes them at its next tool boundary; what it never reached
+    runs as one message right after it. At runtime.steer=batch, the lines
+    queued behind a turn run as one message.
+    """
+    steer_inbox = steer_inbox if steer_inbox is not None else []
     while True:
         line = await queue.get()
         try:
-            prompt_text, line_attachments = attach.split_repl_attachments(line)
-            input_event = _emit_repl_event(
-                state, telemetry, "input", text=prompt_text, attachments=line_attachments
-            )
-            if _event_results_changed_sampling(input_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(input_event.results):
-                _sync_model_from_live_settings(state)
-            input_changed_keys = _event_result_changed_keys(input_event.results)
-            if _changed_provider_key(input_changed_keys):
-                _sync_provider_from_live_settings(state, input_changed_keys)
-            if _changed_lock_subagent_model_key(input_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            try:
-                turn_cfg = _cfg_for_live_state(cfg, state)
-                user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-            except ValueError as e:
-                # AttachmentError (a ValueError) or a login-gate routing error from
-                # re-resolving the live model: degrade to one friendly line, keep the REPL.
-                print(f"{C.ORANGE}error: {e}{C.RESET}")
-                continue
-            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-            before_len = len(state["messages"])
-            state["messages"].append(user_bundle.runtime_message)
-            _append_turn(cfg, user_bundle.history_message)
-            job = sup.spawn(
-                _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop),
-                kind="turn",
-                label=prompt_text[:40],
-            )
-            with contextlib.suppress(asyncio.CancelledError):
-                await job.task  # _do_turn persists partial work on cancel; keep looping
+            if _steer_mode(state) == "batch":
+                line = "\n".join([line, *_take_queued(queue)])
+            await _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+            while steer_inbox:
+                leftover = "\n".join(steer_inbox)
+                steer_inbox.clear()
+                if (sink := _transcript_sink(telemetry)) is not None:
+                    sink.write_user(leftover)
+                await _run_repl_turn(leftover, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
         finally:
             queue.task_done()
+
+
+async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
+    """Run ``line`` as one supervised turn and wait for it to end."""
+    prompt_text, line_attachments = attach.split_repl_attachments(line)
+    input_event = _emit_repl_event(
+        state, telemetry, "input", text=prompt_text, attachments=line_attachments
+    )
+    if _event_results_changed_sampling(input_event.results):
+        state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
+    if _event_results_changed_model(input_event.results):
+        _sync_model_from_live_settings(state)
+    input_changed_keys = _event_result_changed_keys(input_event.results)
+    if _changed_provider_key(input_changed_keys):
+        _sync_provider_from_live_settings(state, input_changed_keys)
+    if _changed_lock_subagent_model_key(input_changed_keys):
+        _sync_tool_registry_from_live_settings(cfg, state)
+    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+    try:
+        turn_cfg = _cfg_for_live_state(cfg, state)
+        user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+    except ValueError as e:
+        # AttachmentError (a ValueError) or a login-gate routing error from
+        # re-resolving the live model: degrade to one friendly line, keep the REPL.
+        print(f"{C.ORANGE}error: {e}{C.RESET}")
+        return
+    state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+    before_len = len(state["messages"])
+    state["messages"].append(user_bundle.runtime_message)
+    _append_turn(cfg, user_bundle.history_message)
+    steered: list[attach.UserMessageBundle] = []
+
+    async def take_steer() -> dict | None:
+        # The inbox is loop-owned: it is read and cleared here, on the loop.
+        # Attachment reads and encoding run in the executor. Settings that an
+        # input hook changes apply from the next turn, through _do_turn's
+        # post-turn delta sync.
+        if not steer_inbox:
+            return None
+        text = "\n".join(steer_inbox)
+        steer_inbox.clear()
+        steer_text, steer_attachments = attach.split_repl_attachments(text)
+        _emit_repl_event(state, telemetry, "input", text=steer_text, attachments=steer_attachments)
+        try:
+            built = await loop.run_in_executor(
+                None, attach.build_user_message, steer_text, steer_attachments, turn_cfg
+            )
+        except ValueError as e:
+            print(f"{C.ORANGE}error: {e}{C.RESET}")
+            return None
+        bundle = attach.UserMessageBundle(
+            {**built.runtime_message, "steered": True},
+            {**built.history_message, "steered": True},
+        )
+        steered.append(bundle)
+        if (sink := _transcript_sink(telemetry)) is not None:
+            sink.write_user(text)
+        return bundle.runtime_message
+
+    job = sup.spawn(
+        _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
+                 steer=take_steer, steered=steered),
+        kind="turn",
+        label=prompt_text[:40],
+    )
+    with contextlib.suppress(asyncio.CancelledError):
+        await job.task  # _do_turn persists partial work on cancel; keep looping
 
 
 def _is_turn_state_command(line: str) -> bool:
@@ -2611,31 +2682,29 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     """Drop every pending input line, balancing task_done() so the teardown
     queue.join() still completes. Loop-thread only — asyncio.Queue is not
     thread-safe, so this never runs from the _handle_command executor hop."""
-    dropped = 0
-    while True:
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        queue.task_done()
-        dropped += 1
-    return dropped
+    return len(_take_queued(queue))
 
 
 async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. The screen has three regions (scrollback, status, input); turn
     output lands in the scrollback and never touches the input line. ^C cancels
-    the active turn instead of killing the process; new prompts queue behind a
-    running turn."""
+    the active turn instead of killing the process; a line typed during a turn
+    steers it or queues behind it, per runtime.steer."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
     sup = supervisor.Supervisor(loop)
     supervisor.set_current(sup)
     queue: asyncio.Queue = asyncio.Queue()
+    steer_inbox: list[str] = []
     consumer = loop.create_task(
-        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop)
+        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
     )
+
+    def drop_pending() -> int:
+        dropped = _drain_queue(queue) + len(steer_inbox)
+        steer_inbox.clear()
+        return dropped
 
     async def on_line(line: str) -> None:
         if not line:
@@ -2644,7 +2713,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             # Drop pending input without touching the active turn. Handled
             # here (not in _handle_command) because the queue is loop-owned
             # and _handle_command runs on an executor thread.
-            flushed = _drain_queue(queue)
+            flushed = drop_pending()
             print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
             return
         if _is_turn_state_command(line) and sup.turn_active():
@@ -2655,6 +2724,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             if not state["running"]:
                 app.exit()
+            return
+        if sup.turn_active() and _steer_mode(state) == "now":
+            # The turn writes it to the transcript where the model receives it.
+            steer_inbox.append(line)
             return
         if (sink := _transcript_sink(telemetry)) is not None:
             sink.write_user(line)
@@ -2669,7 +2742,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if sup.turn_active():
             n = sup.cancel_kind("turn")
             print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
-        flushed = _drain_queue(queue)
+        flushed = drop_pending()
         if flushed:
             print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
 

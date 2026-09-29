@@ -1,6 +1,8 @@
 Run one command with `$SHELL -c` and return exit code, stdout, and stderr.
 Output is capped and marked where it was cut, so do not pipe through `head` or
-`tail` just to shrink it.
+`tail` just to shrink it. Stdin is `/dev/null` and there is no terminal: a
+command that reads input gets end-of-file, and a password or confirmation
+prompt gets no answer.
 
 A command does not have to finish before you get an answer. The call waits
 `timeout` seconds (default from `shell.wait_seconds`); a command that finishes

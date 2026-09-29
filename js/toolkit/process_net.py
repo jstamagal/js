@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
 import html
 import json
 import mimetypes
@@ -71,6 +72,10 @@ _JOBS: dict[str, _ShellJob] = {}
 _JOB_SEQ = 0
 _JOBS_LOCK = threading.Lock()
 KEEP_FINISHED_JOBS = 5
+# Jobs a shell call is blocked waiting on right now, keyed by id() of the
+# ToolContext that made the call. A cancelled turn kills these (see
+# interrupt_inflight); a job whose call already returned a handle is not here.
+_BLOCKING: dict[int, list[_ShellJob]] = {}
 
 
 class _ShellJob:
@@ -111,6 +116,38 @@ def _find_job(handle: str | None) -> _ShellJob | None:
         if running:
             return running[-1]
         return next(reversed(_JOBS.values()), None) if _JOBS else None
+
+
+@contextlib.contextmanager
+def _blocking_on(context: ToolContext | None, job: _ShellJob):
+    key = id(context)
+    with _JOBS_LOCK:
+        _BLOCKING.setdefault(key, []).append(job)
+    try:
+        yield
+    finally:
+        with _JOBS_LOCK:
+            jobs = _BLOCKING.get(key, [])
+            if job in jobs:
+                jobs.remove(job)
+            if not jobs:
+                _BLOCKING.pop(key, None)
+
+
+def interrupt_inflight(context: Any) -> int:
+    """Kill the commands a shell call on ``context`` is blocked waiting on.
+
+    The runtime calls this on the event loop when the turn running that call
+    is cancelled. The worker thread cannot be cancelled; killing the process
+    tree makes its wait return, so the turn ends now instead of at the call's
+    wait deadline. It only signals: the worker collects the output.
+    Returns how many jobs were signalled.
+    """
+    with _JOBS_LOCK:
+        jobs = list(_BLOCKING.get(id(context), ()))
+    for job in jobs:
+        job.process.send_kill()
+    return len(jobs)
 
 
 @atexit.register
@@ -196,7 +233,7 @@ def shell(
     assert context is not None
     action = (text_or_default(action, "run") or "run").strip().lower()
     if action in ("poll", "wait", "kill"):
-        return _shell_job_action(action, handle, timeout, description)
+        return _shell_job_action(action, handle, timeout, description, context)
     if action != "run":
         return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill"
     command = text_or_default(command)
@@ -237,7 +274,8 @@ def shell(
     job = _ShellJob(_next_job_id(), command, process, shell_path, keep_ansi, cap)
     job.allowed, job.safe_env = allowed, safe_env
     _register_job(job)
-    result = process.wait(wait_s)
+    with _blocking_on(context, job):
+        result = process.wait(wait_s)
     if result is None:
         # The command outlived the window. It is NOT killed: a long build or
         # test run finishing on its own beats one killed at an arbitrary
@@ -247,7 +285,8 @@ def shell(
     return _render_finished(job, result, description, allowed, safe_env, since_last=False)
 
 
-def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None) -> str:
+def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None,
+                      context: ToolContext | None = None) -> str:
     job = _find_job(handle)
     if job is None:
         return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
@@ -260,7 +299,8 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
         return f"killed handle {job.id} after {job.process.elapsed():.0f}s\n" + _render_finished(
             job, result, description, job.allowed, job.safe_env, since_last=True)
     wait_s = 0 if action == "poll" else int_or_default(timeout, _settings.DEFAULT_SHELL_WAIT_SECONDS, minimum=1)
-    result = job.process.wait(wait_s)
+    with _blocking_on(context, job):
+        result = job.process.wait(wait_s)
     if result is None:
         return _render_running(job, job.process.elapsed())
     return _render_finished(job, result, description, job.allowed, job.safe_env, since_last=True)

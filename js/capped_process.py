@@ -70,15 +70,19 @@ class _StreamCapture:
             return bytes(self._kept), self._truncated
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill the child and, on POSIX, its whole process group (grandchildren
+def _signal_tree(proc: subprocess.Popen) -> None:
+    """SIGKILL the child and, on POSIX, its whole process group (grandchildren
     spawned into the session would otherwise survive a timeout kill and keep
-    the box busy)."""
+    the box busy). Returns without waiting for them to die."""
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):
         proc.kill()
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    _signal_tree(proc)
     proc.wait()
 
 
@@ -150,6 +154,11 @@ class CappedProcess:
             return None
         return self._collect(rc)
 
+    def send_kill(self) -> None:
+        """Kill the whole tree without waiting; a blocked ``wait`` then returns."""
+        if self._result is None:
+            _signal_tree(self.proc)
+
     def kill(self) -> CappedProcessResult:
         """Kill the whole tree and return what was captured before it died."""
         if self._result is not None:
@@ -173,12 +182,17 @@ def start_capped(
     still blocked past that (a backgrounded grandchild deliberately keeps the
     pipe open) is stopped and the parent's read end is closed.
     Intentionally-spawned daemons are not killed.
+
+    The child's stdin is /dev/null. js's own stdin is the terminal the input
+    line reads; a child holding it (ssh, an interactive shell) would consume
+    the operator's keystrokes for as long as it runs.
     """
     popen_kwargs: dict = {}
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         argv,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,

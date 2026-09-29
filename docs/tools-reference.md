@@ -171,7 +171,12 @@ A command that outlives the wait comes back as `HANDLE n RUNNING` with the
 output so far and keeps running. `poll` returns new output without blocking,
 `wait` blocks up to `timeout` more seconds, `kill` stops the whole process
 tree. Finished jobs are kept for five more calls so a late `poll` still finds
-its output. Live jobs are killed when js exits.
+its output. Live jobs are killed when js exits. When ^C cancels the turn, the
+command a `run` or `wait` call is blocked on is killed with it; jobs that
+already came back as a handle keep running.
+
+The command's stdin is `/dev/null` and it has no controlling terminal, so it
+never reads the keystrokes meant for js's input line.
 
 Unix uses `$SHELL -c`, fallback `/bin/sh -c`. Windows uses `COMSPEC /C`.
 

@@ -4,7 +4,7 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import asyncio
 import contextlib
 import inspect
@@ -1067,16 +1067,20 @@ async def _dispatch_async_tool(
 
 
 def _interrupt_inflight(tool_context: ToolContext) -> None:
-    """Tell a live external process that the cell its tool call started is abandoned.
+    """Stop the external process a cancelled turn's tool call is blocked on.
 
     A worker thread running a sync tool cannot be cancelled, so a cancelled turn
     leaves the call running to its own deadline. The kernel tool owns a process
     that outlives the call, and a cell left executing there would sit behind the
-    next call; interrupting it makes the drain short and the kernel idle.
+    next call; interrupting it makes the drain short and the kernel idle. A
+    shell call blocked on its command gets that command's process tree killed,
+    so ^C ends the turn now rather than when the shell wait runs out.
     """
     from .toolkit import kernel as kernel_tool
+    from .toolkit import process_net
 
     kernel_tool.interrupt_inflight(tool_context)
+    process_net.interrupt_inflight(tool_context)
 
 
 async def _dispatch_batch(
@@ -1184,8 +1188,10 @@ async def _dispatch_batch(
 # --------------------------------------------------------------------------
 
 def _last_user_message_index(messages: list[dict]) -> int | None:
+    """Index of the message that opened the current turn. A steered message
+    joined a turn already running, so it does not open one."""
     for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx].get("role") == "user":
+        if messages[idx].get("role") == "user" and not messages[idx].get("steered"):
             return idx
     return None
 
@@ -1204,11 +1210,17 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None,
-             mcp_host: Any = None) -> None:
+             mcp_host: Any = None,
+             steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
     `messages` in place so the caller can persist new entries.
+
+    ``steer`` is called at each tool boundary: after a batch's results are
+    recorded, when another model call follows. It returns a user message or
+    None, directly or as an awaitable. A returned message is appended there, so
+    the model reads it before choosing its next tool call.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -1627,7 +1639,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_registry.on_change = save_surface
         durable_side_effects_started = False
         overflow_recovered = 0
-        for _ in range(cfg.max_tool_iterations):
+        for iteration in range(cfg.max_tool_iterations):
             # --- One model call with retry on retriable transport errors ---
             text = ""
             pending_calls: list[_PendingToolCall] = []
@@ -2013,6 +2025,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 _emit_event("error", error=failure, retryable=False)
                 _end_turn("tool_error_limit")
                 return
+            if steer is not None and iteration + 1 < cfg.max_tool_iterations:
+                steered = steer()
+                if inspect.isawaitable(steered):
+                    steered = await steered
+                if steered is not None:
+                    messages.append(steered)
+                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
+                    telemetry.event("steered", message_index=len(messages) - 1)
+                    if not suppress_output:
+                        print(f"{C.GREY}(→ steered){C.RESET}", flush=True)
 
         print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
         _end_turn("max_iterations")
