@@ -406,6 +406,10 @@ globs (`"*:ban"`, `wiki_*:lazy`) and `tag:NAME` pulls in a tag from
 entries means the model gets no tools. `/tools` shows the resolved table.
 Details: [tool-system.md](tool-system.md).
 
+A run without `--agent` uses the `agent` setting: `set agent autocoder` in
+`~/.js/jsrc` or a project `.js/jsrc`, or `JS_AGENT=autocoder`. The built-in
+value is `defaultagent`.
+
 Current prompt dirs:
 
 - `defaultagent`: main orchestrator prompt. Selects core tools, `task`,

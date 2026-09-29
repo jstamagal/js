@@ -24,7 +24,7 @@ from typing import Any
 from collections.abc import Callable
 
 from .. import settings as _settings
-from ..paths import STOCK_AGENT, state_root
+from ..paths import state_root
 
 
 Handler = Callable[..., Any]
@@ -538,7 +538,7 @@ class ToolContext:
         if session == Path(os.devnull).resolve(strict=False):
             store = None
         else:
-            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or STOCK_AGENT
+            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("agent")
             safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"

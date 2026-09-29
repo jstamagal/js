@@ -6,6 +6,9 @@
 # `set -key` leaves a setting unset. `/set` with no argument lists every setting
 # and its value; `/show <key>` shows one with its help text.
 
+# --- agent ---
+set agent defaultagent
+
 # --- model ---
 set model.id deepseek/deepseek-v4-flash
 set -model.max_output_tokens

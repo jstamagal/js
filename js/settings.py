@@ -90,6 +90,11 @@ class SettingSpec:
 
 # Every knob. Order here is the order `show` uses.
 REGISTRY: tuple[SettingSpec, ...] = (
+    # --- agent ---
+    SettingSpec("agent", "str",
+                "Agent a run uses when neither --agent nor --commit names one: a prompt "
+                "directory id, letters, digits, '_' or '-'. Read once at startup, so a "
+                "`set` here reaches later runs through /save."),
     # --- model ---
     SettingSpec("model.id", "str",
                 "Default model id; unprefixed ids route through AI Gateway.",

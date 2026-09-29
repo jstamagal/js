@@ -406,6 +406,33 @@ def jsrc_paths(
     return list(dict.fromkeys(paths))
 
 
+def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
+    """The agent a run uses: ``agent_id`` (from --agent or --commit) when
+    given, else the ``agent`` setting from ``settings``. Raises ValueError for
+    an id that is not letters, digits, '_' or '-'."""
+    return validate_agent_id(agent_id or _settings.knob(settings, "agent"))
+
+
+def resolve_agent_id(
+    agent_id: str | None = None,
+    *,
+    extras: list[str] | None = None,
+    cwd: Path | None = None,
+    ignore_local_config: bool = False,
+    ignore_global_config: bool = False,
+    presets: list[str] | None = None,
+) -> str:
+    """The agent `from_env` picks for the same arguments, without building a
+    Config: ``agent_id`` beats env JS_AGENT, which beats the jsrc layers."""
+    config_paths = jsrc_paths(
+        (cwd or Path.cwd()).resolve(strict=False),
+        ignore_local_config=ignore_local_config,
+        ignore_global_config=ignore_global_config,
+        presets=presets,
+    )
+    return agent_from_settings(_settings.collect_settings(config_paths=config_paths, extras=extras), agent_id)
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -433,8 +460,6 @@ def from_env(
     pkg = Path(__file__).resolve().parent
     js_root = pkg.parent
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
-    agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _paths.STOCK_AGENT))
-
     config_paths = jsrc_paths(
         project_dir,
         ignore_local_config=ignore_local_config,
@@ -451,6 +476,7 @@ def from_env(
         config_paths=config_paths,
         extras=extras,
     )
+    agent_id = agent_from_settings(js_root_settings, agent_id)
     sampling_setscript = Sampling.from_mapping(jsrc_settings.get("sampling", {}))
     sampling_env = Sampling.from_env(env)
     sampling_cli = _sampling_from_extras(extras)

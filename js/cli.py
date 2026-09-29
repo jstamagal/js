@@ -65,6 +65,7 @@ from .config import (
     derive_session_name,
     from_env,
     jsrc_paths,
+    resolve_agent_id,
     validate_agent_id,
     vision_enabled_for_model,
 )
@@ -302,13 +303,28 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     if cfg.session_file == Path(os.devnull) or not state.get("messages"):
         return
     resume = "js"
-    if cfg.agent_id != _paths.STOCK_AGENT:
+    # A bare `js --session` runs the `agent` setting, so the hint names the
+    # agent unless both this run and that setting are on the js/jsrc default.
+    stock = settings.default_value("agent")
+    if cfg.agent_id != stock or settings.knob(cfg.settings, "agent") != stock:
         resume += f" --agent {shlex.quote(cfg.agent_id)}"
     model = state.get("model")
     if isinstance(model, str) and model:
         resume += f" --model {shlex.quote(model)}"
     resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
     msgs.say(msgs.RESUME_HINT, command=resume)
+
+
+def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
+    """The agent this invocation runs: --agent, --commit, then the `agent`
+    setting, resolved as `from_env` resolves it."""
+    return resolve_agent_id(
+        args.agent or ("commit" if args.commit else None),
+        extras=args.extras,
+        ignore_local_config=args.ignore_local,
+        ignore_global_config=args.ignore_global,
+        presets=presets,
+    )
 
 
 def _print_session_list(*, json_lines: bool) -> int:
@@ -3506,9 +3522,7 @@ def main(argv: list[str] | None = None) -> int:
             msgs.warn(msgs.LAST_WITH_SESSION)
             return 2
         try:
-            last_agent = validate_agent_id(
-                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
-            )
+            last_agent = _invocation_agent(args, presets)
         except ValueError as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2
@@ -3519,10 +3533,7 @@ def main(argv: list[str] | None = None) -> int:
         args.session = resolved_last
     if args.session_key is not None:
         try:
-            mode_agent = "commit" if args.commit else None
-            effective_agent = validate_agent_id(
-                args.agent or mode_agent or os.environ.get("JS_AGENT", _paths.STOCK_AGENT)
-            )
+            effective_agent = _invocation_agent(args, presets)
         except ValueError as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2

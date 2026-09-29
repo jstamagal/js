@@ -129,9 +129,15 @@ Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
 do not need to be copied into `jsrc`.
 
-Agent/session env remains accepted for compatibility (`JS_AGENT`, `JS_SESSION`),
-but CLI code threads selected agent/session through `Config` instead of mutating
-`os.environ`. Artifact mode is threaded through `ToolContext`.
+The agent a run uses is the `agent` setting (`JS_AGENT`, default
+`defaultagent` in `js/jsrc`). `set agent autocoder` in a `jsrc` file picks it for
+every run under that file; `JS_AGENT` beats the `jsrc` files, and `--agent` or
+`--commit` beats both. `--last` and `--session-key` resolve the agent the same
+way. The agent is read once at startup: `/set agent` in the REPL does not switch
+the running session, and `/save` carries it to later runs. `JS_SESSION` is still
+read from the environment. CLI code threads the selected agent and session
+through `Config` instead of mutating `os.environ`. Artifact mode is threaded
+through `ToolContext`.
 
 `limits.task_max_depth` and `limits.subagent_max_workers` have only their
 canonical names, `JS_LIMITS_TASK_MAX_DEPTH` and `JS_LIMITS_SUBAGENT_MAX_WORKERS`.
