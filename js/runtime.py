@@ -43,6 +43,7 @@ from . import stream_transport
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay, StderrReasoning
+from . import reasoning as reasoning_rules
 from .toolkit.core import ToolContext, ToolResult, call_is_read_only, call_scope, call_tool, call_tool_async
 from .toolkit.registry import ToolRegistry
 
@@ -1310,7 +1311,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
     if max_out is None:
         max_out = model_metadata.resolve_max_output(model, provider_id)
-    ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
+    ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
@@ -1653,7 +1654,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             nonlocal changed, ai_convo
             changed = True
             token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
+            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
             _trace_req["sent"] = 0
             _trace_req["schemas"] = True
             active_context.compacted_during_turn = True
@@ -1883,7 +1884,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         )
                         if action == "cleared":
                             token_state.reset()
-                            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id)
+                            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
                             _trace_req["sent"] = 0
                             _trace_req["schemas"] = True
                             active_context.compacted_during_turn = True
@@ -1986,6 +1987,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if reasoning:
                 history_assistant_record["reasoning_content"] = reasoning
             assert result is not None
+            signed_reasoning = (
+                model_client.signed_reasoning_parts(result.assistant_message)
+                if assistant_message_override is None else None
+            )
+            if signed_reasoning:
+                history_assistant_record["reasoning_parts"] = signed_reasoning
+                history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
             if not isinstance(provider_metadata, dict):
                 provider_metadata = None
             incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
@@ -2132,7 +2140,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     steered = await steered
                 if steered is not None:
                     messages.append(steered)
-                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
+                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id, model_id=model))
                     telemetry.event("steered", message_index=len(messages) - 1)
                     if not suppress_output:
                         msgs.say(msgs.STEERED, flush=True)

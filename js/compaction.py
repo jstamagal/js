@@ -565,9 +565,17 @@ def _run_pre_hook(cfg: Config) -> str:
     return stdout.strip()
 
 
+# Signatures and encrypted reasoning items: opaque to the summarizer.
+_SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from")
+
+
 def _summary_prompt(messages: list[dict], focus: str, guidance: str) -> str:
     headings = "\n".join(f"## {h}" for h in _COMPACTION_HEADINGS)
-    payload = json.dumps(messages, ensure_ascii=False, indent=2, default=str)
+    readable = [
+        {k: v for k, v in m.items() if k not in _SIGNED_REASONING_KEYS} if isinstance(m, dict) else m
+        for m in messages
+    ]
+    payload = json.dumps(readable, ensure_ascii=False, indent=2, default=str)
     extra = ""
     if focus:
         extra += f"\nFocus: {focus.strip()}\n"

@@ -126,6 +126,11 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
     return _heal_orphaned_tool_calls(messages)
 
 
+# An assistant message's reasoning: the text, and the signed parts with the
+# provider and model they came from (`model_client.signed_reasoning_parts`).
+_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from"})
+
+
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
     """Project history to the tool-call-only reasoning view.
 
@@ -134,8 +139,8 @@ def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
     """
     out: list[dict] = []
     for msg in messages:
-        if msg.get("role") == "assistant" and "reasoning_content" in msg and not msg.get("tool_calls"):
-            cleaned = {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if msg.get("role") == "assistant" and not msg.get("tool_calls") and _REASONING_KEYS & msg.keys():
+            cleaned = {k: v for k, v in msg.items() if k not in _REASONING_KEYS}
             out.append(cleaned)
         else:
             out.append(msg)
