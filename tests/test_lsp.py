@@ -130,6 +130,9 @@ def test_server_requests_are_answered(project):
     (root / "a.fake").write_text("x\n")
 
     run(context, operation="hover", file_path=str(root / "a.fake"), line=1, character=1)
+    # The server reads messages in order, so once it answers shutdown it has
+    # logged the reply js wrote before that request.
+    lsp_mod.shutdown_servers()
 
     replies = [m for m in sent(log) if "method" not in m and m.get("id") == 1001]
     assert replies and replies[0]["result"] == [None]
