@@ -185,7 +185,18 @@ newline, and Esc then `:` opens the ex line at the bottom:
 Notes and `:w` saves live in the platform data `notes/` directory
 (`paths.notes_dir()`).
 
-Ctrl-C cancels the active turn and drops queued prompts. Already received text
+A line typed while a turn runs is handled by `runtime.steer`:
+
+- `now` (default): the line joins the running turn. It reaches the model as a
+  user message at the next tool boundary, after the tool results and before
+  the next model call, and `(→ steered)` marks the spot. Several lines typed
+  before the boundary go in together, in order. If the turn makes no further
+  tool call, the lines go in as one message right after it ends.
+- `batch`: the lines wait for the turn to end and then go in as ONE message.
+- `one`: each line is its own turn, in order.
+
+Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
+drops them without touching the turn. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
 recorded progress can be discarded; completed tool work is preserved.
 

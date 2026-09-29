@@ -47,6 +47,10 @@ DEFAULT_DOWNLOAD_TIMEOUT_S = 300
 DEFAULT_MAX_DOWNLOAD_BYTES = 0        # 0 = unlimited; a download streams to disk
 DEFAULT_INLINE_CODE_TIMEOUT_S = 300
 DEFAULT_TRACE = True
+# What a line typed while a turn runs does: now = join the running turn at its
+# next tool boundary, batch = one message after the turn, one = one turn per line.
+STEER_MODES: tuple[str, ...] = ("now", "batch", "one")
+DEFAULT_STEER = "now"
 DEFAULT_MAX_READ_LINES = 2_000
 DEFAULT_MAX_FILE_BYTES = 2_000_000
 DEFAULT_MAX_READ_BYTES = 256 * 1024
@@ -253,6 +257,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
+    SettingSpec("runtime.steer", "str", DEFAULT_STEER,
+                "What a line typed while a turn runs does. now: it reaches the model "
+                "at the turn's next tool boundary, as a user message (a turn with no "
+                "boundary left gets it after it ends, as with batch). batch: every "
+                "line typed during the turn goes in as ONE message after it ends. "
+                "one: each line is its own turn, in order."),
     SettingSpec("runtime.debug_autolog", "bool", True,
                 "Append the full request trace (unclipped system prompt, tool-schema "
                 "JSON, and the messages sent each call) to logs/<agent>/<session>.log "
@@ -397,6 +407,12 @@ REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", "minimal", "low", "medium", "
 _REASONING_EFFORT_ERROR = "expected off|minimal|low|medium|high|xhigh|max"
 
 
+def steer_mode(value: Any) -> str:
+    """The runtime.steer mode ``value`` names, or the default for anything else."""
+    text = str(value or "").strip().lower()
+    return text if text in STEER_MODES else DEFAULT_STEER
+
+
 def parse_bool(raw: str) -> bool | None:
     v = raw.strip().lower()
     if v in _TRUE_TOKENS:
@@ -417,6 +433,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if v not in REASONING_EFFORT_VALUES:
             return None, _REASONING_EFFORT_ERROR
         return ("none" if v == "off" else v), None
+    if spec.key == "runtime.steer":
+        v = text.lower()
+        if v not in STEER_MODES:
+            return None, "expected " + "|".join(STEER_MODES)
+        return v, None
     if spec.key == "provider.id" and text:
         from . import providers as _providers
 

@@ -13,7 +13,7 @@ from js.toolkit.process_net import shell
 def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path):
     context = ToolContext(cwd=tmp_path)
     result = shell(
-        "printf 'IMPORTANT_PROGRESS_LINE\\n'; sleep 1; printf 'LATE_LINE\\n'; exit 7",
+        "printf 'IMPORTANT_PROGRESS_LINE\\n'; sleep 3; printf 'LATE_LINE\\n'; exit 7",
         timeout=1,
         context=context,
     )
