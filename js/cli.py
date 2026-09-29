@@ -29,7 +29,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
 
-from . import attach, codex_auth, colors as C
+from . import attach, clipimage, codex_auth, colors as C
 from . import compaction
 from . import display as display_mod
 from . import dotenv
@@ -3329,6 +3329,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         status_colours=lambda: _status_colours(state),
         editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
         on_ex=on_ex,
+        key_bindings=clipimage.key_bindings(lambda: state["settings"]),
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
@@ -3421,6 +3422,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
     mcp_loop = asyncio.Runner()
     interrupt_armed = False
+    session.key_bindings = clipimage.key_bindings(lambda: state["settings"])
     while state["running"]:
         try:
             line = session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}")).strip()

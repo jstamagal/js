@@ -143,6 +143,15 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.editing_mode", "str",
                 "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
                 "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),
+    SettingSpec("ui.paste_image_key", "str",
+                "Key that pastes the clipboard image into the input line as [image #N]; "
+                "the image is sent with the line like an @path image. prompt_toolkit "
+                "key names, space-separated: c-v, escape v. Unset binds no key."),
+    SettingSpec("ui.paste_image_command", "str",
+                "Command that prints the clipboard image. Unset = `wl-paste --type "
+                "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
+                "under X11.",
+                empty=EMPTY_NONE),
     # --- provider ---
     SettingSpec("provider.id", "str",
                 "Explicit js provider id, e.g. deepseek, openai-codex, ollama.",
@@ -411,6 +420,21 @@ def is_hex_colour(value: object) -> bool:
     """True for a `#rrggbb` string, the form the `ui.status_*` colours take."""
     return isinstance(value, str) and _HEX_COLOUR_RE.fullmatch(value) is not None
 
+
+def is_key_name(value: object) -> bool:
+    """True for a key prompt_toolkit can bind: key names separated by spaces,
+    e.g. `c-v` or `escape v`. The form `ui.paste_image_key` takes."""
+    from prompt_toolkit.key_binding import KeyBindings
+
+    keys = value.split() if isinstance(value, str) else []
+    if not keys:
+        return False
+    try:
+        KeyBindings().add(*keys)
+    except ValueError:
+        return False
+    return True
+
 # The only values `model.reasoning_effort` accepts: the effort ladder in
 # js/reasoning.py, with its bottom stop "none" spelled "off" (stored as the
 # literal "none"). Everything else is rejected outright — no
@@ -463,6 +487,10 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if text not in ("emacs", "vi"):
             return None, msgs.EXPECTED_ONE_OF.text(choices="emacs|vi")
         return text, None
+    if spec.key == "ui.paste_image_key":
+        if not is_key_name(text):
+            return None, msgs.EXPECTED_KEY.text(value=text)
+        return " ".join(text.split()), None
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
             return None, msgs.EXPECTED_URL.text(value=text)
