@@ -73,20 +73,20 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
     full = build_default_registry()
 
     assert names(select([])) == []
-    assert names(select(["*"])) == names(full)
+    assert names(select(["*:lazy"])) == names(full)
 
-    fs_names = set(names(select(["fs_*"])))
+    fs_names = set(names(select(["fs_*:lazy"])))
     assert fs_names == {"fs_search"}
 
-    assert names(select(["wiki_*"])) == ["wiki_convert", "wiki_write", "wiki_finish_ingest"]
-    assert names(select(["grep"])) == []
-    assert names(select(["read", "Read", "fs_read", "unknown", "read"])) == ["read"]
+    assert names(select(["wiki_*:lazy"])) == ["wiki_convert", "wiki_write", "wiki_finish_ingest"]
+    assert names(select(["grep:lazy"])) == []
+    assert names(select(["read:lazy", "Read:lazy", "fs_read:lazy", "unknown:lazy", "read:lazy"])) == ["read"]
     # prompt-dir agents are selectable by name and reachable via a prefix glob
     # (discovered from prompts/, so adding/removing an agent dir never snaps this).
     prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
     assert prompt_agents, "prompts/ should expose at least one agent dir"
-    assert names(select(prompt_agents)) == prompt_agents
-    assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*"]))
+    assert names(select([f"{name}:eager" for name in prompt_agents])) == prompt_agents
+    assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*:eager"]))
 
 
 def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
@@ -94,7 +94,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
         tmp_path,
         (
             "tools:\n"
-            "  - wiki_*\n"
+            "  - wiki_*:lazy\n"
             "model: primary-model\n"
             "secondary_model: backup-model\n"
             "sampling:\n"
@@ -106,7 +106,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("wiki_*",)
+    assert spec.tool_selectors == ("wiki_*:lazy",)
     assert spec.model == "primary-model"
     assert spec.secondary_model == "backup-model"
     assert spec.sampling == {"temperature": 0.2}
@@ -116,17 +116,17 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
 def test_yaml_zero_file_wins_over_legacy_markdown_zero_file(tmp_path, capsys):
     prompts = write_prompt_dir(
         tmp_path,
-        "tools:\n  - plan\n",
+        "tools:\n  - plan:lazy\n",
         ("01.md", "BODY\n"),
     )
     (prompts / "00-tools.md").write_text(
-        "---\ntools:\n  - shell\n---\nLEGACY BODY\n",
+        "---\ntools:\n  - shell:lazy\n---\nLEGACY BODY\n",
         encoding="utf-8",
     )
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("plan",)
+    assert spec.tool_selectors == ("plan:lazy",)
     assert spec.system == "BODY\n"
     assert capsys.readouterr().err == ""
 
@@ -152,14 +152,14 @@ def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
 def test_legacy_frontmatter_zero_file_still_loads_tools_once(tmp_path, capsys):
     prompts = write_prompt_dir(
         tmp_path,
-        "---\ntools:\n  - shell\n---\nLEGACY BODY\n",
+        "---\ntools:\n  - shell:lazy\n---\nLEGACY BODY\n",
         ("01.md", "BODY\n"),
         zero_name="00-tools.md",
     )
 
     spec = persona.load_prompt_spec(prompts)
 
-    assert spec.tool_selectors == ("shell",)
+    assert spec.tool_selectors == ("shell:lazy",)
     assert spec.system == "LEGACY BODY\n\nBODY\n"
     first_note = capsys.readouterr().err
     assert "00-tools.md frontmatter manifests are deprecated" in first_note
@@ -182,7 +182,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
 
     (repo_root / "myagent").mkdir()
     (repo_root / "myagent" / "00-tools.yaml").write_text(
-        "tools:\n  - wiki_*\nmodel: repo-model\n", encoding="utf-8"
+        "tools:\n  - wiki_*:lazy\nmodel: repo-model\n", encoding="utf-8"
     )
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
 
@@ -197,7 +197,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     )
 
     assert spec.system == "PROJECT PROMPT\n"
-    assert spec.tool_selectors == ("wiki_*",)
+    assert spec.tool_selectors == ("wiki_*:lazy",)
     assert spec.model == "repo-model"
 
 
@@ -212,7 +212,7 @@ def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(
     project_root.mkdir()
 
     (repo_root / "myagent").mkdir()
-    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - wiki_*\n", encoding="utf-8")
+    (repo_root / "myagent" / "00-tools.yaml").write_text("tools:\n  - wiki_*:lazy\n", encoding="utf-8")
     (repo_root / "myagent" / "01-prompt.md").write_text("REPO PROMPT\n", encoding="utf-8")
 
     (project_root / "myagent").mkdir()
@@ -255,7 +255,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
 
 
 def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
-    registry = select(["plan"])
+    registry = select(["plan:lazy"])
     (tmp_path / "note.txt").write_text("unselected tool must not read this", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 

@@ -973,7 +973,7 @@ def test_tool_display_keys_are_canonical_tool_names():
 
 
 def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
-    registry = build_default_registry().select(["read", "write", "task", "shell", "fs_search"])
+    registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "shell:lazy", "fs_search:lazy"])
     specs = registry.openai_specs()
     alias_map = {"read": "Read", "write": "Write", "task": "Task"}
 
@@ -997,7 +997,7 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
         live_settings,
         '/set tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
     )
-    registry = build_default_registry().select(["read", "write"])
+    registry = build_default_registry().select(["read:lazy", "write:lazy"])
 
     assert result.error is None
     alias_map = runtime._resolve_alias_profile(live_settings, "openai-test", None)
@@ -1017,7 +1017,7 @@ def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config()
         '{"match":["openai"],"aliases":{"read":"Read"}}'
         ']',
     )
-    registry = build_default_registry().select(["read"])
+    registry = build_default_registry().select(["read:lazy"])
 
     assert result.error is None
     assert runtime._resolve_alias_profile(live_settings, "openai-test", None, registry) == {
@@ -1054,7 +1054,7 @@ def test_resolve_alias_profile_matches_model_or_provider_substring():
 
 
 def test_registry_aliased_resolves_noncase_variant_alias_to_canonical():
-    base = build_default_registry().select(["read", "write"])
+    base = build_default_registry().select(["read:lazy", "write:lazy"])
     aliased = base.aliased({"read": "view_file"})
     # A non-case-variant alias dispatches back to the canonical handler.
     assert aliased.resolve("view_file").name == "read"

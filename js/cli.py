@@ -63,6 +63,7 @@ from .config import (
 )
 from .session_catalog import acquire_session, catalog_sessions, last_session_model, record_session_start
 from .tool_binaries import resolve_binary
+from .toolkit import policy as tool_policy
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
@@ -1300,6 +1301,7 @@ HELP_TEXT = f"""\
   {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
   {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
   {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
+  {C.YELLOW}/tools{C.RESET}           show each tool's state (eager/lazy/ban) and the entry that decided it
   {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
   {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
   {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
@@ -1538,6 +1540,19 @@ def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
     return None, arg.strip(), True
 
 
+def _print_tool_chain(state: dict, cfg: Config) -> None:
+    """Every tool with its resolved state and the chain entry that decided it."""
+    full = _registry_for(_cfg_for_live_state(cfg, state))
+    try:
+        config = tool_policy.load_tools_config()
+        rules = tool_policy.expand(state.get("tool_selectors", ()), config, f"agent {cfg.agent_id!r}")
+    except tool_policy.ToolPolicyError as exc:
+        print(f"{C.ORANGE}{exc}{C.RESET}")
+        return
+    for row in tool_policy.render_table(tool_policy.resolve(full.tools, rules), config.bans):
+        print(row)
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in {"exit", "quit", ":q"}:
@@ -1634,6 +1649,9 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if line == "/turns":
         print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}")
+        return True
+    if line == "/tools":
+        _print_tool_chain(state, cfg)
         return True
     if line == "/session":
         print(f"{C.CYAN}{cfg.session_file}{C.RESET}")

@@ -1,8 +1,8 @@
 model: deepseek/deepseek-v4-flash   # commitbot floor — a weak local default once reverted files mid-split and lost work
 tools:
-  - read
-  - write
-  - fs_search
-  - patch
-  - undo
-  - shell
+  - read:eager
+  - write:eager
+  - fs_search:eager
+  - patch:eager
+  - undo:eager
+  - shell:eager

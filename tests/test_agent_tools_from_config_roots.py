@@ -40,14 +40,14 @@ def test_agent_in_a_config_root_becomes_a_selectable_tool(tmp_path):
     registry = cli._registry_for(_cfg((root,)))
 
     assert registry.resolve("reviewer") is not None
-    assert "reviewer" in registry.select(["reviewer"]).by_name
+    assert "reviewer" in registry.select(["reviewer:lazy"]).by_name
 
 
 def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):
     root = tmp_path / "agents"
     _agent_dir(root, "triage")
 
-    cli._registry_for(_cfg((root,))).select(["triage"])
+    cli._registry_for(_cfg((root,))).select(["triage:lazy"])
 
     assert "matched no tool" not in capsys.readouterr().err
 

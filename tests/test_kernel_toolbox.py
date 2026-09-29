@@ -355,7 +355,7 @@ def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
     root = Path(__file__).resolve().parents[1]
     spec = yaml.safe_load((root / "prompts" / "twotool" / "00-tools.yaml").read_text())
 
-    assert spec["tools"] == ["kernel", "toolbox", "shell"]
+    assert spec["tools"] == ["kernel:eager", "toolbox:eager", "shell:eager"]
     assert (root / "prompts" / "twotool" / "01-prompt.md").read_text().strip()
 
 

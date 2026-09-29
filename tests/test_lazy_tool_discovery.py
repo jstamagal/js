@@ -74,7 +74,7 @@ def _cfg(tmp_path: Path, settings: dict | None = None) -> Config:
 
 
 def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
-    allowed = build_default_registry().select(["browser_probe", "terminal_session", "read"])
+    allowed = build_default_registry().select(["browser_probe:lazy", "terminal_session:lazy", "read:lazy"])
     surface = allowed.lazy_surface(tmp_path)
 
     assert "tool_discovery" in _names(surface)
@@ -112,7 +112,7 @@ def test_discovery_name_is_reserved_from_generated_agents(tmp_path):
 
     assert registry.resolve("tool_discovery") is None
     assert registry.resolve("helper_agent") is not None
-    surface = registry.select(["helper_agent"]).lazy_surface(tmp_path)
+    surface = registry.select(["helper_agent:lazy"]).lazy_surface(tmp_path)
     assert _spec_names(surface.openai_specs()).count("tool_discovery") == 1
     assert [item["id"] for item in json.loads(surface.discover(kind="native"))["results"]] == [
         "native:helper_agent"
@@ -120,7 +120,7 @@ def test_discovery_name_is_reserved_from_generated_agents(tmp_path):
 
 
 def test_discovery_name_cannot_be_taken_by_an_alias(tmp_path):
-    allowed = build_default_registry().select(["read", "browser_probe"])
+    allowed = build_default_registry().select(["read:lazy", "browser_probe:lazy"])
     surface = allowed.aliased({"read": "tool_discovery"}).lazy_surface(tmp_path)
 
     assert _spec_names(surface.openai_specs()) == _spec_names(allowed.lazy_surface(tmp_path).openai_specs())
@@ -129,7 +129,7 @@ def test_discovery_name_cannot_be_taken_by_an_alias(tmp_path):
 
 
 def test_loading_native_tool_changes_only_current_surface(tmp_path):
-    allowed = build_default_registry().select(["browser_probe", "read"])
+    allowed = build_default_registry().select(["browser_probe:lazy", "read:lazy"])
     first = allowed.lazy_surface(tmp_path)
 
     assert "browser_probe" not in _spec_names(first.openai_specs())
@@ -151,7 +151,7 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
         "Open the page and report visual defects.\n",
         encoding="utf-8",
     )
-    allowed = build_default_registry().select(["skill", "browser_probe"])
+    allowed = build_default_registry().select(["skill:lazy", "browser_probe:lazy"])
     surface = allowed.lazy_surface(tmp_path)
 
     skills_found = json.loads(surface.discover(kind="skill"))["results"]
@@ -162,7 +162,7 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert loaded["loaded"] == ["browser_probe"]
     assert surface.resolve("browser_probe") is not None
 
-    forbidden = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+    forbidden = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
     denied = json.loads(forbidden.discover(load="skill:inspect"))
     assert denied["instructions"] == "Open the page and report visual defects.\n"
     assert denied["loaded"] == []
@@ -179,7 +179,7 @@ def test_skill_load_distinguishes_denied_and_missing_requirements(tmp_path):
         "Inspect the target.\n",
         encoding="utf-8",
     )
-    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+    surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
 
     loaded = json.loads(surface.discover(load="skill:inspect"))
 
@@ -193,7 +193,7 @@ def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path
     skills.mkdir(parents=True)
     path = _skill_file(skills, "notes")
     path.write_text("---\ndescription: Take notes\n---\nOriginal body.\n", encoding="utf-8")
-    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path)
+    surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
     path.write_text("---\ndescription: Take notes\n---\nUpdated body.\n", encoding="utf-8")
     loaded = json.loads(surface.discover(load="skill:notes"))
     assert loaded["instructions"] == "Updated body.\n", "instructions must load from disk on demand"
@@ -208,7 +208,7 @@ def test_explicit_skill_kind_is_not_hijacked_by_mcp_query_word(tmp_path, monkeyp
         encoding="utf-8",
     )
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
-    surface = build_default_registry().select(["skill"]).lazy_surface(tmp_path, mcp_host=host)
+    surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path, mcp_host=host)
 
     results = json.loads(
         asyncio.run(surface.discover_async(kind="skill", query="mcp"))
@@ -228,7 +228,7 @@ def test_discovery_loaded_state_is_kind_aware_for_native_skill_and_mcp(tmp_path,
     )
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
     surface = build_default_registry().select(
-        ["skill", "terminal_session"]
+        ["skill:lazy", "terminal_session:lazy"]
     ).lazy_surface(tmp_path, mcp_host=host)
 
     surface.discover(load="native:terminal_session")
@@ -265,7 +265,7 @@ def test_repeated_skill_requirements_warn_without_breaking_valid_discovery(tmp_p
     )
 
     surface = build_default_registry().select(
-        ["skill", "read", "browser_probe"]
+        ["skill:lazy", "read:lazy", "browser_probe:lazy"]
     ).lazy_surface(tmp_path)
 
     results = json.loads(surface.discover(kind="skill"))["results"]
@@ -298,7 +298,7 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
         "system",
         messages,
         runtime.Telemetry(None),
-        tool_registry=build_default_registry().select(["browser_probe", "read"]),
+        tool_registry=build_default_registry().select(["browser_probe:lazy", "read:lazy"]),
         tool_context=ToolContext(cwd=tmp_path),
     )
 
@@ -335,7 +335,7 @@ def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, 
         "system",
         messages,
         runtime.Telemetry(None),
-        tool_registry=build_default_registry().select(["read", "browser_probe"]),
+        tool_registry=build_default_registry().select(["read:lazy", "browser_probe:lazy"]),
         tool_context=ToolContext(cwd=tmp_path),
     )
 
@@ -361,7 +361,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
         return next(results)
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
-    registry = build_default_registry().select(["browser_probe", "read"])
+    registry = build_default_registry().select(["browser_probe:lazy", "read:lazy"])
     cfg = _cfg(
         tmp_path,
         {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"browser_probe": "Probe"}}]}},
@@ -413,7 +413,7 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
         "system",
         [{"role": "user", "content": "inspect"}],
         runtime.Telemetry(None),
-        tool_registry=build_default_registry().select(["browser_probe", "read"]),
+        tool_registry=build_default_registry().select(["browser_probe:lazy", "read:lazy"]),
         tool_context=context,
     )
 
@@ -424,7 +424,7 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
 def test_persisted_call_names_canonicalize_even_for_unloaded_lazy_tools(tmp_path):
     from js.runtime import _canonical_tool_call_name
 
-    allowed = build_default_registry().select(["read", "browser_probe"])
+    allowed = build_default_registry().select(["read:lazy", "browser_probe:lazy"])
     surface = allowed.aliased({"browser_probe": "Probe"}).lazy_surface(tmp_path)
     batch = surface.dispatch_registry()
     # browser_probe is lazy and unloaded: no Tool object in this batch,

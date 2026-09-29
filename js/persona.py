@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from .promptexpand import expand_prompt
+from .toolkit import policy
 from . import settings
 
 
@@ -109,18 +110,7 @@ def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, st
 
 
 def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, list):
-        raise ValueError(f"tools frontmatter in {path} must be a list")
-    selectors: list[str] = []
-    for item in raw:
-        if not isinstance(item, str):
-            raise ValueError(f"tools frontmatter in {path} must contain only strings")
-        selector = item.strip()
-        if selector:
-            selectors.append(selector)
-    return tuple(selectors)
+    return policy.parse_entries(raw, str(path))
 
 
 # Sampling params an agent may set in its YAML manifest. Transport-specific
@@ -350,6 +340,9 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
                 reasoning_effort=spec.reasoning_effort,
                 max_output_tokens=spec.max_output_tokens,
             )
+    # Tag references resolve against tools.yaml here, so a bad tag or a tag
+    # cycle fails the prompt load with one line instead of a later traceback.
+    policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
     spec = _expand_spec(spec, cfg)
     return spec
 

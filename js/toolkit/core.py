@@ -222,6 +222,11 @@ class Tool:
     required: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     input_schema: dict[str, Any] | None = None
+    # True when the tool writes nothing: no files, no processes, no remote
+    # state. It defines the intrinsic `tag:read_only` of tools.yaml.
+    read_only: bool = False
+    # Catalog label shown by tool_discovery (fs, shell, search, agent, ...).
+    source: str = "native"
 
     def openai_spec(self) -> dict:
         parameters = self.input_schema if self.input_schema is not None else {

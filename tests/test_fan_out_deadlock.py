@@ -95,7 +95,7 @@ def test_nested_fan_out_does_not_deadlock_bounded_pool(monkeypatch, tmp_path):
     # a pool thread while the parent/child fan-out waits are outstanding.
     worker = tmp_path / "prompts" / "worker"
     worker.mkdir(parents=True)
-    (worker / "00-tools.yaml").write_text("tools:\n  - task\n  - plan\n", encoding="utf-8")
+    (worker / "00-tools.yaml").write_text("tools:\n  - task:lazy\n  - plan:lazy\n", encoding="utf-8")
     (worker / "01-body.md").write_text("WORKER\n", encoding="utf-8")
     prompt_root = worker.parent
 

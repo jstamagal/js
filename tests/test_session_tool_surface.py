@@ -22,7 +22,7 @@ def test_loaded_tools_survive_next_turn_and_fresh_context(tmp_path, monkeypatch)
         return next(results)
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', stream)
     cfg = _cfg(tmp_path)
-    registry = build_default_registry().select(['shell'])
+    registry = build_default_registry().select(['shell:lazy'])
     for prompt in ('load it', 'use it'):
         messages = [{'role': 'user', 'content': prompt}]
         runtime.run_turn(cfg, 'system', messages, runtime.Telemetry(None),
@@ -40,7 +40,7 @@ def test_unloaded_calls_explain_recovery_without_spending_retry_budget(monkeypat
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(results))
     messages = [{'role': 'user', 'content': 'run'}]
     runtime.run_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
-                     tool_registry=build_default_registry().select(['shell']),
+                     tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     errors = [m['content'] for m in messages if m.get('role') == 'tool']
     assert len(errors) == 3
@@ -57,14 +57,14 @@ def test_tool_surface_reset_and_policy_reduction(tmp_path, monkeypatch):
         return next(responses)
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', stream)
     cfg = _cfg(tmp_path)
-    for selectors in (['shell'], ['read']):
+    for selectors in (['shell:lazy'], ['read:lazy']):
         runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
                          tool_registry=build_default_registry().select(selectors),
                          tool_context=ToolContext(cwd=tmp_path))
     assert 'shell' not in emitted[2]
     memory.append_mark(cfg.session_file, 'session_reset')
     runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
-                     tool_registry=build_default_registry().select(['shell']),
+                     tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     assert 'shell' not in emitted[3]
 
@@ -76,7 +76,7 @@ def test_sessionless_loading_does_not_fsync_devnull(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(results))
     messages = [{'role': 'user', 'content': 'load'}]
     runtime.run_turn(replace(_cfg(tmp_path), session_file=Path('/dev/null')), 'system', messages,
-                     runtime.Telemetry(None), tool_registry=build_default_registry().select(['shell']),
+                     runtime.Telemetry(None), tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     result = next(m['content'] for m in messages if m.get('role') == 'tool')
     assert json.loads(result)['loaded'] == ['shell']
@@ -94,7 +94,7 @@ def test_surface_marks_survive_compaction_but_not_reset(tmp_path):
 
 
 def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path):
-    surface = build_default_registry().select(['shell']).aliased({'shell': 'Run'}).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['shell:lazy']).aliased({'shell': 'Run'}).lazy_surface(tmp_path)
     frozen = surface.dispatch_registry()
     for registry in (surface, frozen):
         for name, expected in [('Run', 'native:shell'), ('read', 'not allowed'), ('imaginary', 'unknown tool')]:
@@ -117,7 +117,7 @@ def test_load_does_not_authorize_sibling_and_next_call_can_recover(tmp_path, mon
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(responses))
     messages = [{'role': 'user', 'content': 'run'}]
     runtime.run_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
-                     tool_registry=build_default_registry().select(['shell']), tool_context=ToolContext(cwd=tmp_path))
+                     tool_registry=build_default_registry().select(['shell:lazy']), tool_context=ToolContext(cwd=tmp_path))
     results = {m['tool_call_id']: m['content'] for m in messages if m.get('role') == 'tool'}
     assert 'same response' in results['early']
     assert '<retry>' not in results['early']
@@ -134,7 +134,7 @@ def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
         return _result(text='ready')
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', stream)
     runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
-                     tool_registry=build_default_registry().select(['shell']), tool_context=ToolContext(cwd=tmp_path))
+                     tool_registry=build_default_registry().select(['shell:lazy']), tool_context=ToolContext(cwd=tmp_path))
     assert seen == ['Run', 'tool_discovery']
 
 
@@ -159,7 +159,7 @@ def test_cancelled_mcp_restore_closes_owned_host(tmp_path, monkeypatch):
     async def run():
         try:
             await runtime.run_turn_async(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
-                tool_registry=build_default_registry().select(['shell']), tool_context=ToolContext(cwd=tmp_path))
+                tool_registry=build_default_registry().select(['shell:lazy']), tool_context=ToolContext(cwd=tmp_path))
         except asyncio.CancelledError:
             pass
         else:
@@ -177,20 +177,20 @@ def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
                MCPServer('Unused', 'unused', 'stdio', command='fake'))
     async def run():
         host = MCPHost(MCPConfiguration(servers, MCPPolicy()), client_factory=FakeClient)
-        surface = build_default_registry().select(['shell']).lazy_surface(tmp_path, mcp_host=host)
+        surface = build_default_registry().select(['shell:lazy']).lazy_surface(tmp_path, mcp_host=host)
         await surface.discover_async(source='Alpha')
         name = sorted(host.remote_tools)[0]
         surface.discover(load=f'mcp:{name}')
         state = surface.snapshot()
         await host.close()
         replacement = MCPHost(MCPConfiguration(servers, MCPPolicy()), client_factory=FakeClient)
-        resumed = build_default_registry().select(['shell']).lazy_surface(tmp_path, mcp_host=replacement)
+        resumed = build_default_registry().select(['shell:lazy']).lazy_surface(tmp_path, mcp_host=replacement)
         await resumed.restore(state)
         assert resumed.resolve(name) is not None
         assert set(replacement.clients) == {'Alpha'}
         await replacement.close()
         denied = MCPHost(MCPConfiguration(servers, MCPPolicy(server_deny=('Alpha',))), client_factory=FakeClient)
-        restricted = build_default_registry().select(['shell']).lazy_surface(tmp_path, mcp_host=denied)
+        restricted = build_default_registry().select(['shell:lazy']).lazy_surface(tmp_path, mcp_host=denied)
         await restricted.restore(state)
         assert restricted.resolve(name) is None
         assert not denied.clients
@@ -201,7 +201,7 @@ def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
 def test_every_request_trace_lists_published_names():
     import io
     from js import model_client
-    tools = model_client.tool_specs_to_ai_tools(build_default_registry().select(['shell']).openai_specs())
+    tools = model_client.tool_specs_to_ai_tools(build_default_registry().select(['shell:lazy']).openai_specs())
     for schemas in (True, False):
         sink = io.StringIO()
         model_client._emit_request_trace(sink=sink, model_id='offline', provider_id=None,
@@ -217,7 +217,7 @@ def test_skill_restore_retains_activated_native_tools_without_rereading_body(tmp
     from test_lazy_tool_discovery import _skill_file
     path = _skill_file(tmp_path / '.agents' / 'skills', 'inspect')
     path.write_text('---\ndescription: Inspect\ntools:\n  - shell\n---\nDo inspection.\n')
-    registry = build_default_registry().select(['skill', 'shell'])
+    registry = build_default_registry().select(['skill:lazy', 'shell:lazy'])
     surface = registry.lazy_surface(tmp_path)
     surface.discover(load='skill:inspect')
     state = surface.snapshot()

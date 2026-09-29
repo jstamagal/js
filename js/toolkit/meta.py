@@ -592,7 +592,7 @@ def _task_params(flags: tuple[str, ...]) -> dict:
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
         Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}, "overwrite": {"type": "boolean", "default": False, "description": "Replace an existing plan with the same name and version."}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",)),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",), read_only=True),
         Tool(
             "task",
             load_description("task", flags=flags),

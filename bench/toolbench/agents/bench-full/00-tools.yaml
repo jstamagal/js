@@ -1,9 +1,9 @@
 tools:
-  - shell
-  - read
-  - write
-  - patch
-  - remove
-  - undo
-  - fs_search
-  - fetch
+  - shell:eager
+  - read:eager
+  - write:eager
+  - patch:eager
+  - remove:eager
+  - undo:eager
+  - fs_search:eager
+  - fetch:eager

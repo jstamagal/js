@@ -17,7 +17,7 @@ def _write_agent(root: Path) -> Path:
     max_tokens default + four benchmarks exercising every max_tokens case."""
     d = root / ".js" / "agents" / "jokertest"
     d.mkdir(parents=True)
-    (d / "00-tools.yaml").write_text("max_tokens: 4096\ntools:\n  - read\n", encoding="utf-8")
+    (d / "00-tools.yaml").write_text("max_tokens: 4096\ntools:\n  - read:lazy\n", encoding="utf-8")
     (d / "01-prompt.md").write_text("# Role\nYou answer tersely.", encoding="utf-8")
     (d / "02-prompt.md").write_text("PWD is {{PWD}}", encoding="utf-8")
     (d / "02-benchmark.md").write_text("---\nmax_tokens: 512\n---\n\nName 5 facts about Germany.", encoding="utf-8")

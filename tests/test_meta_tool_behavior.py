@@ -128,7 +128,7 @@ def test_skill_loads_from_native_js_skills_dir(tmp_path):
 
 def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
     context = ToolContext(cwd=tmp_path)
-    context.tool_registry = select(["shell"])
+    context.tool_registry = select(["shell:lazy"])
     _write_skill(
         tmp_path / ".agents" / "skills",
         "legacy",

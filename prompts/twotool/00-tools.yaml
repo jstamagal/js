@@ -9,6 +9,6 @@
 # there. If an env somehow lacks them the kernel tool returns one clear ERROR
 # naming the package and shell still works.
 tools:
-  - kernel
-  - toolbox
-  - shell
+  - kernel:eager
+  - toolbox:eager
+  - shell:eager

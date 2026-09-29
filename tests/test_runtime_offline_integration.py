@@ -676,7 +676,7 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", "fs_search", "shell", "task", aliases={"read": "Read", "write": "Write", "task": "Task"}))
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
     messages = [{"role": "user", "content": "Use tools if needed."}]
-    registry = build_default_registry().select(["read", "write", "task", "fs_search", "shell"])
+    registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "fs_search:lazy", "shell:lazy"])
 
     runtime.run_turn(
         cfg,
@@ -716,7 +716,7 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
             },
         },
     )
-    registry = build_default_registry().select(["read"])
+    registry = build_default_registry().select(["read:lazy"])
     messages = [{"role": "user", "content": "Use tools if needed."}]
 
     runtime.run_turn(
@@ -754,7 +754,7 @@ def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypa
             },
         },
     )
-    registry = build_default_registry().select(["read", "write"])
+    registry = build_default_registry().select(["read:lazy", "write:lazy"])
     messages = [{"role": "user", "content": "Use tools if needed."}]
 
     runtime.run_turn(
@@ -784,7 +784,7 @@ def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tm
     # configured profile the default lowercase names must be sent verbatim.
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4")
     messages = [{"role": "user", "content": "Use tools if needed."}]
-    registry = build_default_registry().select(["read", "write", "task", "fs_search", "shell"])
+    registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "fs_search:lazy", "shell:lazy"])
 
     runtime.run_turn(
         cfg,
@@ -914,7 +914,7 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", aliases={"read": "Read"}))
     cfg = offline_config(tmp_path, model="openai/proxy-claude-sonnet-4", settings=_CLAUDE_ALIAS_SETTINGS)
-    registry = build_default_registry().select(["read"])
+    registry = build_default_registry().select(["read:lazy"])
     messages = [{"role": "user", "content": "read note"}]
 
     runtime.run_turn(

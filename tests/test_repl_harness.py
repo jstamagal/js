@@ -569,7 +569,7 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
 def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkeypatch, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: [task]\n---\nSYSTEM\n", encoding="utf-8")
+    (cfg.prompts_dir / "00-tools.md").write_text("---\ntools: [task:lazy]\n---\nSYSTEM\n", encoding="utf-8")
     seen: list[tuple[bool, bool]] = []
 
     class SessionStub:

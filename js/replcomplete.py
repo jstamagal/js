@@ -54,6 +54,7 @@ COMMANDS: tuple[str, ...] = (
     "/wipe",
     "/persona",
     "/turns",
+    "/tools",
     "/session",
     "/jobs",
     "/cancel",

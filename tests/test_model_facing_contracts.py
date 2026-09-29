@@ -8,7 +8,7 @@ from js.toolkit.registry import build_default_registry
 
 
 def _specs(*names: str) -> dict[str, dict]:
-    registry = build_default_registry().select(names)
+    registry = build_default_registry().select([f"{name}:eager" for name in names])
     return {
         spec["function"]["name"]: spec["function"]
         for spec in registry.openai_specs()

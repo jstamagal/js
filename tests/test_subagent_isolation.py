@@ -112,7 +112,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
     ):
         worker = root / "worker"
         worker.mkdir(parents=True)
-        (worker / "00-tools.yaml").write_text(f"tools:\n  - {tool}\n", encoding="utf-8")
+        (worker / "00-tools.yaml").write_text(f"tools:\n  - {tool}:lazy\n", encoding="utf-8")
         (worker / "01-body.md").write_text(body, encoding="utf-8")
 
     def from_env_stub(*, save_session: bool = True):
@@ -283,7 +283,7 @@ def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_
 def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeypatch, tmp_path, stale_context):
     import js.config as config
 
-    prompts = prompt_dir(tmp_path, "worker", "tools: [plan]\n", "WORKER RULES\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools: [plan:lazy]\n", "WORKER RULES\n")
     rules = tmp_path / "AGENTS.md"
     rules.write_text("SHARED RULES\n")
     cfg = replace(
@@ -321,7 +321,7 @@ def test_parent_dispatch_passes_effective_config_and_shared_instructions(monkeyp
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "task"))
     asyncio.run(real_run(
         cfg, "PARENT", [{"role": "user", "content": "delegate"}], runtime.Telemetry(debug_log=None),
-        tool_context=context, tool_registry=build_default_registry().select(["task"]),
+        tool_context=context, tool_registry=build_default_registry().select(["task:lazy"]),
         model_override="effective-model", provider_id_override="openai",
         provider_base_url_override="https://offline.invalid/v1", provider_api_key_override="test-key",
         reasoning_effort_override="low", max_output_override=321, suppress_output=True,
@@ -365,7 +365,7 @@ def test_subagent_boolean_task_max_depth_falls_back_to_default(monkeypatch, tmp_
     assert "BOOL_DEPTH_DONE" in actual
 
 def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - undo:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "owned.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -393,7 +393,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
 
 
 def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - write\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - write:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     target = tmp_path / "guard.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -420,7 +420,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
 
 
 def test_subagent_search_cache_is_fresh(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - fs_search\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - fs_search:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
@@ -461,7 +461,7 @@ def test_task_return_clears_the_parent_search_cache(monkeypatch, tmp_path):
 
 
 def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - plan\n", "WORKERX SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "workerx", "tools:\n  - plan:lazy\n", "WORKERX SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen: dict[str, object] = {}
 
@@ -487,7 +487,7 @@ def test_agent_id_loads_real_persona_tools_and_creates_session(monkeypatch, tmp_
 
 
 def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan\n", "WORKER SYSTEM\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n", "WORKER SYSTEM\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     registry = build_default_registry(prompts_root=prompts.parent)
     tool = registry.resolve("worker")
@@ -511,7 +511,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
 
 
 def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     seen_tools: list[list[str]] = []
     seen_message_counts: list[int] = []
@@ -623,10 +623,10 @@ def test_subagent_reresolves_mcp_policy_and_cannot_see_parent_server(monkeypatch
 
 
 def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp_path):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path)
-    parent.tool_registry = select(["shell", "write"])
+    parent.tool_registry = select(["shell:lazy", "write:lazy"])
     seen: dict[str, list[str]] = {}
 
     def completion_stub(**kwargs):
@@ -643,7 +643,7 @@ def test_subagent_does_not_inherit_parent_selected_tool_surface(monkeypatch, tmp
 
 @pytest.mark.parametrize("body", ["X", "é", "😀"])
 def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp_path, body):
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
 
@@ -665,7 +665,7 @@ def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
     # The adversary's repro: with a single per-child budget equal to the whole
     # aggregate budget, one fat child fills it and the aggregate re-clip slices
     # the short siblings away. Fair-share (budget//N) must keep them all visible.
-    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan\n")
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=400)
 
