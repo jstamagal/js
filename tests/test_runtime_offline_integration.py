@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 import re
+import time
 from types import SimpleNamespace
 
 import ai
@@ -633,6 +634,43 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
     assert "needle" in tool_result["result"]
     assert emitted[-1][0] == "turn_end"
     assert emitted[-1][1]["reason"] == "stop"
+
+
+def test_records_persisted_at_turn_end_carry_the_time_each_message_happened(monkeypatch, tmp_path):
+    """A turn is persisted when it ends; each record's ts is when its message
+    happened: the tool call when the model sent it, the result when the tool
+    finished, the reply when it came."""
+    from js import memory
+
+    (tmp_path / "note.txt").write_text("needle\n", encoding="utf-8")
+    calls: list[dict] = []
+
+    def stream_stub(**kwargs):
+        calls.append(kwargs)
+        time.sleep(0.05)
+        if len(calls) == 1:
+            return model_tool_call_result("read", [json.dumps({"file_path": "note.txt"})])
+        return model_text_result("DONE")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read"))
+    cfg = offline_config(tmp_path)
+    messages = [{"role": "user", "content": "Read note.txt."}]
+
+    runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False,
+                     tool_context=ToolContext(cwd=tmp_path), suppress_output=True)
+    time.sleep(0.05)
+    written_after = time.time()
+    memory.persist_messages(cfg.session_file, messages)
+
+    records = [json.loads(line) for line in cfg.session_file.read_text(encoding="utf-8").splitlines()]
+    turn = [record for record in records if record.get("kind") == "message"
+            and record["message"]["role"] != "user"]
+    call = next(r for r in turn if any(c["id"] == "call_test" for c in r["message"].get("tool_calls") or ()))
+    result = next(r for r in turn if r["message"].get("tool_call_id") == "call_test")
+    reply = next(r for r in turn if r["message"]["role"] == "assistant" and r["message"]["content"] == "DONE")
+    assert call["ts"] <= result["ts"] < reply["ts"]
+    assert reply["ts"] - result["ts"] >= 0.04
+    assert all(record["ts"] < written_after for record in turn)
 
 
 def test_run_turn_emits_turn_end_after_fatal_error(monkeypatch, tmp_path):

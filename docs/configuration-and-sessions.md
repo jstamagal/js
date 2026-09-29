@@ -532,6 +532,11 @@ first. A start or title record's `parent` is the message or mark it follows,
 and no record names it as its parent. Replay reads the file in order and does
 not use ids.
 
+A record's `ts` is when its message happened. The operator's message is written
+when the turn starts; the rest of a turn is written when the turn ends, and
+each of those records still carries its own time: an assistant message when
+the model's response finished, a tool result when the tool finished.
+
 Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record

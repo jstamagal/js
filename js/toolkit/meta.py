@@ -276,7 +276,7 @@ async def _run_one_task_async(
         record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                              mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
-    messages.append({"role": "user", "content": prompt})
+    messages.append(M.note_time({"role": "user", "content": prompt}))
     try:
         await run_turn_async(
             cfg,
