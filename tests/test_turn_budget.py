@@ -13,6 +13,7 @@ import pytest
 from js import compaction, model_client, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
+from js.turn_budget import TurnConvo
 from test_lazy_tool_discovery import _cfg, _result
 
 
@@ -65,3 +66,41 @@ def test_overflow_cleared_resends_the_rebuilt_conversation_from_the_top(monkeypa
     assert calls[1]["trace_request_from"] == 0
     assert calls[1]["trace_request_schemas"] is True
     assert messages[-1]["content"] == "ok"
+
+
+# --------------------------------------------------------------------------
+# TurnConvo
+# --------------------------------------------------------------------------
+
+def _convo(messages):
+    return TurnConvo("SYSTEM", messages, provider_id=None, model="offline-test")
+
+
+def test_the_convo_is_the_sdk_form_of_the_history():
+    convo = _convo([{"role": "user", "content": "hi"}])
+    assert [m.role for m in convo.ai] == ["system", "user"]
+    assert (convo.sent, convo.schemas) == (0, True)
+
+
+def test_a_rebuild_replaces_the_list_and_restarts_the_trace():
+    messages = [{"role": "user", "content": "hi"}]
+    convo = _convo(messages)
+    before = convo.ai
+    convo.traced()
+    assert (convo.sent, convo.schemas) == (2, False)
+    messages.append({"role": "assistant", "content": "hello"})
+    convo.rebuild()
+    assert [m.role for m in before] == ["system", "user"]
+    assert [m.role for m in convo.ai] == ["system", "user", "assistant"]
+    assert (convo.sent, convo.schemas) == (0, True)
+
+
+def test_added_records_extend_the_convo_without_a_system_message():
+    messages = [{"role": "user", "content": "hi"}]
+    convo = _convo(messages)
+    convo.traced()
+    nudge = {"role": "user", "content": "go on"}
+    messages.append(nudge)
+    convo.add([nudge])
+    assert [m.role for m in convo.ai] == ["system", "user", "user"]
+    assert (convo.sent, convo.schemas) == (2, False)

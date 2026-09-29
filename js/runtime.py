@@ -50,6 +50,7 @@ from . import reasoning as reasoning_rules
 from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
                            call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
+from .turn_budget import TurnConvo
 
 
 _UNSET = object()
@@ -1412,7 +1413,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
     if max_out is None:
         max_out = model_metadata.resolve_max_output(model, provider_id)
-    ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
+    convo = TurnConvo(system, messages, provider_id=provider_id, model=model)
     error_tracker = ToolErrorTracker()
     base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
@@ -1662,7 +1663,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # the trace sink (autolog file / --debug-file), never to stdout — decoupled
     # from the concise `trace` flag that drives the run/stats/tool lines on the terminal.
     _trace_sink = getattr(telemetry, "trace_sink", None)
-    _trace_req = {"sent": 0, "schemas": True}
 
     active_compact_cfg = replace(
         cfg,
@@ -1695,7 +1695,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         clear old tool-result bodies, summarize the history before the current
         user message, then summarize the current turn itself keeping only its
         tail. Returns True when the history changed."""
-        nonlocal ai_convo
         if not force and not compaction.get_bool(active_compact_cfg, "auto"):
             return False
         context_window = _budget_context_window()
@@ -1731,7 +1730,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                    "forced_recovery": force}
         flight_data = {"budget": asdict(status), "tools": specs,
                        "usage_anchor": vars(token_state).get("_anchor"),
-                       "ai_messages": ai_convo}
+                       "ai_messages": convo.ai}
         chars_per_token = token_state.calibrated_chars_per_token(
             system=system, messages=messages, tools=ai_tools_for_budget,
         )
@@ -1747,12 +1746,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             return remaining > status.effective_input_limit
 
         def _history_changed() -> None:
-            nonlocal changed, ai_convo
+            nonlocal changed
             changed = True
             token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-            _trace_req["sent"] = 0
-            _trace_req["schemas"] = True
+            convo.rebuild()
             active_context.compacted_during_turn = True
             compaction.history_rewritten(active_context)
 
@@ -1853,7 +1850,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         """Shed history after the provider said, or showed, that the request
         overflowed: clear old tool results, else summarize. True when the
         history changed and the request is worth sending again."""
-        nonlocal ai_convo
         action, _cleared, _reclaimed = compaction.recover_overflow(
             messages, overflow_recovered, cfg=active_compact_cfg,
             system=system, error=error,
@@ -1861,13 +1857,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                          "max_output_tokens": max_out,
                          "usage_anchor": vars(token_state).get("_anchor"),
                          "tools": active_registry.openai_specs(),
-                         "ai_messages": ai_convo},
+                         "ai_messages": convo.ai},
         )
         if action == "cleared":
             token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-            _trace_req["sent"] = 0
-            _trace_req["schemas"] = True
+            convo.rebuild()
             active_context.compacted_during_turn = True
             compaction.history_rewritten(active_context)
             return True
@@ -1943,7 +1937,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         "prompt",
                         model=model,
                         provider_id=provider_id,
-                        message_count=len(ai_convo),
+                        message_count=len(convo.ai),
                         tool_count=len(specs),
                         tool_names=[spec["function"]["name"] for spec in specs],
                     )
@@ -1953,7 +1947,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         provider_id=provider_id,
                         provider_base_url=provider_base_url,
                         provider_api_key=provider_api_key,
-                        messages=ai_convo,
+                        messages=convo.ai,
                         tools=ai_tools,
                         max_output_tokens=call_max_out,
                         reasoning_effort=effort,
@@ -1965,14 +1959,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         sampling=sampling,
                         trace_request=_trace_sink is not None,
                         trace_sink=_trace_sink,
-                        trace_request_schemas=_trace_req["schemas"],
-                        trace_request_from=_trace_req["sent"],
+                        trace_request_schemas=convo.schemas,
+                        trace_request_from=convo.sent,
                         cache_key=_cache_key,
                         stream_idle_seconds=stream_idle,
                     )
                     if _trace_sink is not None:
-                        _trace_req["sent"] = len(ai_convo)
-                        _trace_req["schemas"] = False
+                        convo.traced()
                     # Await the native async primitive; tolerate a sync override (a
                     # test stub patched onto stream_model_async that returns a result
                     # directly) so the seam accepts either shape.
@@ -2132,9 +2125,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                         dropped = memory.drop_signed_reasoning(messages)
                         telemetry.event("signed_reasoning_dropped", model=model, messages=dropped,
                                         error=f"{type(e).__name__}: {e}")
-                        ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-                        _trace_req["sent"] = 0
-                        _trace_req["schemas"] = True
+                        convo.rebuild()
                         compaction.history_rewritten(active_context)
                         continue
                     if e.is_retryable:
@@ -2257,7 +2248,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
             if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
                 assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
-            ai_convo.append(_sanitize_assistant_message(assistant_message))
+            convo.ai.append(_sanitize_assistant_message(assistant_message))
             messages.append(memory.note_time(history_assistant_record))
             # Recorded in full now; a later ^C in this turn must not re-append it.
             streamed_text["value"] = ""
@@ -2298,7 +2289,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     resumes_sent += 1
                     nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
                     messages.append(nudge)
-                    ai_convo.extend(model_client.history_to_ai_messages("", [nudge], provider_id=provider_id, model_id=model))
+                    convo.add([nudge])
                     telemetry.event("max_output_resume", model=model, n=resumes_sent,
                                     incomplete_reason=incomplete_reason)
                     if not suppress_output:
@@ -2311,7 +2302,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 return
 
             # --- Dispatch tools, append result messages ---
-            # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
+            # convo.ai carries the heavy form (image bytes embedded in tool messages) for THIS
             # turn; messages — persisted and replayed on every future turn — carries the
             # dehydrated stub so base64 is billed once.
             for index, pc in enumerate(pending_calls):
@@ -2394,8 +2385,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     done_at = progress.finished.get(pc.id)
                     messages.extend(memory.note_time(item, done_at)
                                     for item in _history_tool_result_message(canonical_pc, result_value))
-                ai_convo.extend(batch_tool_msgs)
-                ai_convo.extend(batch_media_msgs)
+                convo.ai.extend(batch_tool_msgs)
+                convo.ai.extend(batch_media_msgs)
             if error_tracker.limit_reached():
                 name, last_error = next(
                     ((_canonical_tool_call_name(pc.name, active_registry), result_value)
@@ -2405,7 +2396,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 )
                 failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
                 final_error = {"role": "assistant", "content": failure}
-                ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
+                convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
                 messages.append(memory.note_time(final_error))
                 _emit_event("error", error=failure, retryable=False)
                 _end_turn("tool_error_limit")
@@ -2416,7 +2407,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     steered = await steered
                 if steered is not None:
                     messages.append(memory.note_time(steered))
-                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id, model_id=model))
+                    convo.add([steered])
                     telemetry.event("steered", message_index=len(messages) - 1)
                     if not suppress_output:
                         msgs.say(msgs.STEERED, flush=True)
