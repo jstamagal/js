@@ -489,6 +489,12 @@ def test_async_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, h
     sent, log = home
     _stub_prompt_session(monkeypatch, [])
     lines = ["first", "second"]
+    queues = []
+    turn_consumer = cli._turn_consumer
+
+    def recording_consumer(queue, *args, **kwargs):
+        queues.append(queue)
+        return turn_consumer(queue, *args, **kwargs)
 
     class AppStub:
         def __init__(self, on_line, on_eof):
@@ -497,6 +503,9 @@ def test_async_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, h
         async def run_async(self):
             for line in lines:
                 await self._on_line(line)
+            # EOF cancels a running turn, so it is pressed once the turns end.
+            for queue in queues:
+                await queue.join()
             self._on_eof()
 
         def exit(self):
@@ -505,6 +514,7 @@ def test_async_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, h
         def invalidate(self):
             pass
 
+    monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
     monkeypatch.setattr(cli.screen, "build_app",
                         lambda *, on_line, on_eof, **_kw: (AppStub(on_line, on_eof), cli.screen.Scrollback()))
     monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
