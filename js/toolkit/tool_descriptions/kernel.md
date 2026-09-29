@@ -81,6 +81,27 @@ If the kernel process actually dies (a segfault, an `os._exit`, the OOM killer)
 the result says so plainly and names the cell. That is the one case where
 everything is gone and `restart=true` plus a rebuild is the answer.
 
+Calling js tools from a cell: the namespace holds `tools`, and
+`tools.<name>(...)` calls the js tool `<name>` and returns its result as a
+Python value, so a loop over files or a filter over search hits runs in the
+cell and only what you print comes back:
+
+    src = tools.read("setup.py", show_line_numbers=False)
+    hits = tools.fs_search(pattern="TODO", output_mode="files_with_matches")
+    print(len(src.splitlines()), hits.splitlines()[:5])
+
+- Keyword arguments are the tool's parameters, as in a direct call. Positional
+  arguments fill them in order: `tools.read("setup.py")` is
+  `tools.read(file_path="setup.py")`.
+- The value is the text a direct call returns, whole: the result caps apply to
+  what the cell prints, not to what a tool returns into it.
+- A refusal or failure raises `tools.ToolError` with the `ERROR` text.
+- Each call runs as a direct call would: only tools you can call yourself, with
+  the same argument checks, path limits, and read-before-write rule. A file a
+  cell reads counts as read for a later `patch`.
+- `tools.names()` lists what a cell can call. `kernel`, `toolbox`, subagent
+  tools, and MCP tools are not callable from a cell; call them directly.
+
 Practical notes:
 - Intermediate state survives here and not in a one-shot script.
 - A named function shows up in `NAMESPACE` and stays callable; a pasted block
