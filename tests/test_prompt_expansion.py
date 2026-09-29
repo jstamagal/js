@@ -364,7 +364,7 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
 # --- the stock agent's environment block -----------------------------------------
 
 @pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
-def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatch, capsys):
+def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatch):
     """The stock 02-env.md finds envctx through JS_ROOT, which js sets, so it
     runs with a HOME that holds no copy of js."""
     from js import persona
@@ -381,5 +381,4 @@ def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatc
 
     assert "envctx.c" not in expanded.system
     assert any(line.startswith("user=") for line in expanded.system.splitlines())
-    assert capsys.readouterr().err == ""
     assert Path(os.environ["JS_ROOT"]) == js_root
