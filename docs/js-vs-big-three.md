@@ -84,7 +84,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Retry gives up after two attempts and ignores `Retry-After`.** ✔ The check is `transport_retries == 2` (`runtime.py:1816`), and "retry-after" appears nowhere in js. A 429 with a 30-second `Retry-After` kills a turn in about 3 seconds. Claude Code retries 10 times, and all three honour the header.
 
-**A direct Anthropic provider gets no thinking.** ✔ `steers_via_effort` covers only Codex, OpenAI-SDK and implicit gateway endpoints (`model_client.py:912`). The comment promises a "budget (below)", but that budget exists only for DeepSeek. A Claude model on the direct API runs with thinking off whatever `reasoning` says.
+**A direct Anthropic provider gets no thinking.** Done in js-1g1.12: every provider on the anthropic SDK now takes `reasoning` as thinking, adaptive with an effort on Claude 4.6 and later and a token budget on the rest (`reasoning.anthropic_thinking`). Before, `steers_via_effort` covered only Codex, OpenAI-SDK and implicit gateway endpoints, and a Claude model on the direct API ran with thinking off whatever `reasoning` said.
 
 **A turn cut off by max output tokens just ends.** It drops the dangling calls and tells the user to retry (`runtime.py:1844-1858`). Claude Code escalates to 64k and then sends up to 3 resume nudges. pi fails the calls and keeps looping.
 
@@ -137,7 +137,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | `runtime.py:1813`, `_backoff` |
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | `capped_process._StreamCapture` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | `runtime.py:1948` |
-| Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | `memory.py`, `codex_provider.py:306` |
+| Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | done in js-1g1.12: `reasoning_parts` on the assistant record, replayed to the same provider and model |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | `compaction.py:567`, `runtime.py:1599` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | `compaction.microcompact` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | `task` gets a job handle like `shell` |
@@ -189,7 +189,7 @@ Hot spots over 441 commits in two months:
 1. **Shell head+tail with a raw spill.** It's cheap, and today js silently loses the one line that matters.
 2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget.**
-4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
+4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures (done in js-1g1.12).
 5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.
 6. **stream-json output for `-p`.**
 7. **Architecture #1 (settings projection) and #4 (delete the shims).**

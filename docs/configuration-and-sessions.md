@@ -489,6 +489,12 @@ Every assistant message record carries a `stamp`: the model, provider and
 reasoning level it was written under. Resume uses the last stamp (or the last
 start record's model, whichever came later).
 
+An assistant message whose reasoning came signed (an Anthropic thinking
+signature, a Codex encrypted reasoning item) also carries `reasoning_parts`,
+each part's text and provider metadata, and `reasoning_from`, the provider and
+model that signed them. Replay sends the signed parts back only to that
+provider and model.
+
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
 newest title is the session's name in `--list --json`.
 
