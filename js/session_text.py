@@ -139,6 +139,8 @@ class _Transcript:
     # cut the replay, and the entries they cut are superseded.
     replay: list[dict] = field(default_factory=list)
     calls: dict[str, _Call] = field(default_factory=dict)
+    # Record id -> message number, for naming a branch point by its number.
+    numbers: dict[str, int] = field(default_factory=dict)
 
     def feed(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -154,11 +156,13 @@ class _Transcript:
             self._metadata(record)
         elif kind == "message":
             self._message(record.get("message"), ts, record.get("stamp"), replayed=True)
+            self._number(record)
         elif kind == "mark" and isinstance(record.get("marker"), str):
             self._mark(record["marker"])
         elif kind is None and record.get("role") in {"user", "assistant", "tool", "system"}:
             # Sessions predating the record envelope stored bare messages.
             self._message(record, None, None, replayed=False)
+            self._number(record)
 
     def _metadata(self, record: dict) -> None:
         if self.started_ts is None and isinstance(record.get("ts"), (int, float)):
@@ -173,9 +177,13 @@ class _Transcript:
             self.first_model = record["model"]
         branch = record.get("branched_from")
         if self.branched is None and isinstance(branch, dict) and isinstance(branch.get("session"), str):
-            number = branch.get("message")
+            number = self.numbers.get(branch.get("message")) if isinstance(branch.get("message"), str) else None
             self.branched = session_store.display_name(Path(branch["session"])) + (
                 f" #{number:04d}" if isinstance(number, int) else "")
+
+    def _number(self, record: dict) -> None:
+        if isinstance(record.get("id"), str):
+            self.numbers[record["id"]] = self.count
 
     def _mark(self, marker: str) -> None:
         from . import memory

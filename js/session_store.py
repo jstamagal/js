@@ -14,18 +14,31 @@ A name resolves in the current directory's folder first, then in every folder.
 A name found in more than one other folder is refused with the paths. A
 generated name also resolves from a unique tail of at least four characters
 (`6d65`), the same way.
+
+Every record of a session file carries an `id`, eight hex digits unique within
+the file, and a `parent`. The message and mark records form the conversation
+path: each one's parent is the id of the message or mark before it in the file,
+null for the first. A start or title record's parent is the message or mark it
+was written after; nothing names it as parent. `id` and `parent` are the first
+two keys of every record `append` writes. A branch is a new file whose copied
+records keep their ids, so the parent's message it split at is named by id.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import secrets
+import threading
 import time
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from . import messages as msgs
 from . import paths
@@ -182,3 +195,166 @@ def read_latest(agent_state_dir: Path) -> Path | None:
     if not isinstance(session_file, str) or not Path(session_file).is_file():
         return None
     return Path(session_file)
+
+
+# --- record ids ------------------------------------------------------------------
+
+_ID_BYTES = 4
+_PATH_KINDS = frozenset({"message", "mark"})
+_HEAD = re.compile(rb'^\{"id":"([^"]+)","parent":(?:null|"[^"]*"),"(kind|role)":"([^"]*)"')
+_CACHED_CHAINS = 64
+
+
+def on_path(record: dict) -> bool:
+    """Whether a record is on the conversation path: a message or a mark, or a
+    bare message of a session that predates the record envelope."""
+    kind = record.get("kind")
+    return kind in _PATH_KINDS or (kind is None and "role" in record)
+
+
+def new_id(taken: set[str]) -> str:
+    while True:
+        candidate = secrets.token_hex(_ID_BYTES)
+        if candidate not in taken:
+            return candidate
+
+
+@dataclass
+class _Chain:
+    """The ids of one session file and the id of its last path record."""
+
+    device: int
+    inode: int
+    offset: int = 0
+    taken: set[str] = field(default_factory=set)
+    leaf: str | None = None
+
+    def feed(self, line: bytes) -> None:
+        head = _HEAD.match(line)
+        if head is not None:
+            record_id = head.group(1).decode("utf-8", errors="replace")
+            path = head.group(2) == b"role" or head.group(3).decode("utf-8", errors="replace") in _PATH_KINDS
+        elif b'"id"' in line:
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
+            if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+                return
+            record_id, path = record["id"], on_path(record)
+        else:
+            return
+        self.taken.add(record_id)
+        if path:
+            self.leaf = record_id
+
+
+_chains_lock = threading.Lock()
+_chains: OrderedDict[str, _Chain] = OrderedDict()
+
+
+def _chain(key: str, fd: int) -> tuple[_Chain, bool]:
+    """The chain of the file open at `fd`, brought up to its end, and whether
+    the file ends inside a line."""
+    info = os.fstat(fd)
+    chain = _chains.pop(key, None)
+    if chain is None or (chain.device, chain.inode) != (info.st_dev, info.st_ino) or info.st_size < chain.offset:
+        chain = _Chain(info.st_dev, info.st_ino)
+    data = os.pread(fd, info.st_size - chain.offset, chain.offset) if info.st_size > chain.offset else b""
+    end = data.rfind(b"\n") + 1
+    for line in data[:end].splitlines():
+        chain.feed(line)
+    chain.offset += end
+    _chains[key] = chain
+    while len(_chains) > _CACHED_CHAINS:
+        _chains.popitem(last=False)
+    return chain, end < len(data)
+
+
+def _encode(record: dict) -> bytes:
+    return (json.dumps(record, separators=(",", ":"), default=str) + "\n").encode("utf-8")
+
+
+def _linked(record: dict, record_id: str, parent: str | None) -> dict:
+    return {"id": record_id, "parent": parent, **{k: v for k, v in record.items() if k not in ("id", "parent")}}
+
+
+def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
+    """Append `record` to `session_file` under an exclusive lock, with a fresh
+    id and its parent, and fsync. Returns the record as written."""
+    session_file = Path(session_file)
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    key = str(session_file.resolve(strict=False))
+    with open(session_file, "a+b") as stream:
+        fd = stream.fileno()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with _chains_lock:
+            chain, torn = _chain(key, fd)
+            linked = _linked(record, new_id(chain.taken), chain.leaf)
+            # A line a crashed writer left unfinished is closed first, so this
+            # record does not run into it.
+            data = (b"\n" if torn else b"") + _encode(linked)
+            stream.write(data)
+            stream.flush()
+            os.fsync(fd)
+            chain.taken.add(linked["id"])
+            if on_path(linked):
+                chain.leaf = linked["id"]
+            chain.offset = os.fstat(fd).st_size
+    return linked
+
+
+def link_lines(lines: Iterable[str]) -> tuple[list[str], int]:
+    """`lines` of a session file with an id and a parent given to every record
+    that has none, and how many were given one. A line that is not a JSON
+    object is kept as it is."""
+    taken: set[str] = set()
+    records: list[tuple[str, dict | None]] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            record = None
+        record = record if isinstance(record, dict) else None
+        if record is not None and isinstance(record.get("id"), str):
+            taken.add(record["id"])
+        records.append((line, record))
+    out: list[str] = []
+    leaf: str | None = None
+    given = 0
+    for line, record in records:
+        if record is None:
+            out.append(line if line.endswith("\n") else line + "\n")
+            continue
+        if isinstance(record.get("id"), str):
+            out.append(line if line.endswith("\n") else line + "\n")
+        else:
+            record = _linked(record, new_id(taken), leaf)
+            taken.add(record["id"])
+            given += 1
+            out.append(_encode(record).decode("utf-8"))
+        if on_path(record):
+            leaf = record["id"]
+    return out, given
+
+
+def link_file(session_file: Path) -> int:
+    """Rewrite `session_file` once with an id and a parent on every record that
+    has none, keeping its modification time. Returns how many records were
+    given one; with none to give, the file is left untouched."""
+    session_file = Path(session_file)
+    with open(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        info = os.fstat(stream.fileno())
+        lines, given = link_lines(stream.read().splitlines(keepends=True))
+        if not given:
+            return 0
+        staging = session_file.with_name(f".{session_file.name}.{secrets.token_hex(4)}.tmp")
+        with open(staging, "w", encoding="utf-8", errors="surrogateescape") as out:
+            out.writelines(lines)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(staging, info.st_mode & 0o7777)
+        os.utime(staging, ns=(info.st_atime_ns, info.st_mtime_ns))
+        os.replace(staging, session_file)
+    return given

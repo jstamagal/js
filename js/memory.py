@@ -1,8 +1,10 @@
 """JSONL conversation persistence. Lock-protected, fsync-after-write,
 version-tagged. Loader ignores records it doesn't understand.
 
-An assistant message record carries a `stamp`: the model, provider and
-reasoning level it was written under. Every write brings the session's `.txt`
+Every record carries an `id` and a `parent` (`js.session_store.append`); replay
+reads the file in order and does not use them. An assistant message record
+carries a `stamp`: the model, provider and reasoning level it was written
+under. Every write brings the session's `.txt`
 transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
@@ -10,13 +12,13 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from . import messages as msgs
+from . import session_store
 from . import session_text
 
 SCHEMA_VERSION = 1
@@ -31,11 +33,8 @@ class Record:
     marker: str | None = None       # set when kind == "mark"
     stamp: dict | None = None       # set on an assistant message: model, provider, reasoning
 
-    def to_jsonline(self) -> str:
-        return json.dumps(
-            {k: v for k, v in self.__dict__.items() if v is not None},
-            default=str,
-        )
+    def as_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if v is not None}
 
     @classmethod
     def from_dict(cls, d: dict) -> Record | None:
@@ -233,10 +232,7 @@ def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> lis
 
 
 def _append(memory_file: Path, rec: Record, *, refresh: bool = True) -> None:
-    with _open_locked(memory_file, "a") as f:
-        f.write(rec.to_jsonline() + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    session_store.append(memory_file, rec.as_dict())
     if refresh:
         session_text.refresh(memory_file)
 

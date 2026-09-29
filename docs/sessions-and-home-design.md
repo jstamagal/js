@@ -1,7 +1,7 @@
 # Sessions, the ~/.js home, and the fixes around them
 
 Design agreed with the operator on 2026-09-29. Built: the migration in §1
-(js-1g1.1) and §2 Storage (js-1g1.2). The rest is not built yet.
+(js-1g1.1), §2 Storage (js-1g1.2) and record ids. The rest is not built yet.
 Beads: epic js-1g1.
 
 The harness is for the agent. Layouts and formats here are chosen first for
@@ -27,7 +27,15 @@ ways:
 
 The automatic migration stays. The fixed one:
 
-1. Moves each old location into the layout below, as today.
+1. Moves each old location into the layout below. Of the old config and
+   data directories only the entries js reads move (config: `jsrc`,
+   `config.toml`, `JS.md`, `JS.local.md`, `agents`, `skills`, `toolbox`,
+   `tools.yaml`, `.env`, `logins.toml`, `models-cache.json`; data:
+   `sessions`, `state`, `logs`, `transcript`, `modelsdotdev`, `notes`,
+   `commit-backups`). Anything else (`sessions2`, `logs2`, `workspace`,
+   `jsrc.bak`, `js.zsh`, which a shell sources by its path) is left in place
+   with one line naming it, so nothing lands in `~/.js` that js does not
+   use. `~/inbox/agents/js` moves whole to `~/.js/work`.
 2. Converts every moved agent to `agent.yaml` in the same step. A tools
    entry is kept only when it matches a tool: a `tag:` entry, a glob that
    matches at least one tool, or a name that is a tool or an agent in the
@@ -141,7 +149,23 @@ tags: js · linux admin
   starts record the model; `/model` mid-session writes nothing.
 - The session records how it was started: `repl`, `-p`, or piped, plus the
   command line.
-- A branch records its parent session and the message index it split at.
+- Every record carries an `id` (eight hex digits, unique within the file)
+  and a `parent`. Message and mark records form the path: each one's parent
+  is the message or mark before it in the file, null for the first. Start and
+  title records hang off the path record they follow. Replay reads the file
+  in order.
+
+  ```
+  {"id":"3f9a0c12","parent":null,"kind":"message","ts":…,"version":1,"message":{"role":"user","content":"APE"}}
+  {"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":…,"version":1,"message":{"role":"assistant",…},"stamp":{…}}
+  ```
+- A branch is its own file holding the parent's records up to the branch
+  point, ids kept. It records its parent session and the `id` of the message
+  it split at, not an index: indexes shift when the tool-result heal or a
+  rollback rewrites the replayed list. The `.txt` shows that message's
+  `#NNNN`; ids are not in the `.txt`.
+- The migration (§1) rewrites each re-filed session once to give its records
+  ids and parents, so old and new sessions have one format.
 - `/name <text>` appends a pinned title record. There are no model-written
   titles: the operator's first message is nearly always "APE", and
   generated titles in other harnesses are usually wrong.

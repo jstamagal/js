@@ -727,6 +727,8 @@ HOME_REFILED = Message("Filed {reason} from {source} by start directory")
 HOME_WOULD_REFILE = Message("Would file {reason} from {source} by start directory")
 HOME_SESSION_IN_USE = Message("a js process has it open")
 HOME_NOT_EMPTY = Message("not empty after filing its sessions")
+HOME_UNUSED = Message("Left in place, js does not use it: {source}")
+HOME_WOULD_LEAVE_UNUSED = Message("Would leave in place, js does not use it: {source}")
 
 # --- Agent manifests to agent.yaml -------------------------------------------
 
@@ -745,7 +747,7 @@ AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives"
 
 SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
 SESSION_NOT_RESERVED = Message("No free session name in {folder}")
-SESSION_BRANCH_PAST_END = Message("{path} has {messages} messages, not {message}")
+SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
     "History may be incomplete.", WARN)
