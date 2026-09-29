@@ -11,6 +11,7 @@ import inspect
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -63,6 +64,8 @@ from . import setcmd
 from . import skills
 from . import settings
 from . import stream_transport
+from . import headless
+from . import usage as usage_mod
 from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
@@ -1836,8 +1839,33 @@ def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _cost_text(tally: usage_mod.Tally) -> str:
+    if not tally.priced:
+        return msgs.COST_UNPRICED.text()
+    dollars = usage_mod.format_dollars(tally.cost)
+    if tally.unpriced_calls:
+        return msgs.COST_PARTLY_PRICED.text(cost=dollars, calls=msgs.plural(tally.unpriced_calls, "call"))
+    return dollars
+
+
+def _cmd_cost(arg: str, state: dict, cfg: Config) -> str | None:
+    live = usage_mod.totals(cfg.session_file)
+    if live.calls == 0:
+        msgs.say(msgs.COST_NONE)
+        return None
+    msgs.say(msgs.COST_TOTAL, calls=msgs.plural(live.calls, "call"), cost=_cost_text(live))
+    msgs.say(msgs.COST_TOKENS, input=f"{live.input_tokens:,}", cache_read=f"{live.cache_read_tokens:,}",
+             cache_write=f"{live.cache_write_tokens:,}", output=f"{live.output_tokens:,}",
+             reasoning=f"{live.reasoning_tokens:,}")
+    for model, tally in live.by_model.items():
+        msgs.say(msgs.COST_MODEL, model=model, calls=msgs.plural(tally.calls, "call"),
+                 tokens=f"{tally.input_tokens + tally.output_tokens:,}", cost=_cost_text(tally))
+    return None
+
+
 def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
+    usage_mod.forget(cfg.session_file)
     state["messages"].clear()
     if bak:
         msgs.say(msgs.WIPE_ROTATED, path=bak.name)
@@ -2167,6 +2195,7 @@ COMMANDS: dict[str, Command] = {
                      msgs.CMD_SKILL),
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
                      "turns", msgs.CMD_TURNS),
+    "cost": Command(_cmd_cost, "cost", msgs.CMD_COST),
     "session": Command(_cmd_session, "session [query]", msgs.CMD_SESSION, turn_state=True),
     "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
@@ -2378,7 +2407,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
                 presets: list[str] | None = None,
                 stats_json: str | None = None, stats_csv: str | None = None,
-                caller_key: str | None = None, announce_generated: bool | None = None) -> int:
+                caller_key: str | None = None, announce_generated: bool | None = None,
+                events: headless.JsonEvents | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         msgs.warn(msgs.PROMPT_EMPTY)
@@ -2457,6 +2487,15 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     messages = M.load_replay_messages(cfg.session_file)
     _restore_workspace(cfg)
     before_len = len(messages)
+    if events is not None:
+        saved = cfg.session_file != Path(os.devnull)
+        events.emit(
+            "session", version=headless.SCHEMA_VERSION,
+            id=_session_hint_arg(cfg) if saved else None,
+            file=str(cfg.session_file) if saved else None,
+            resumed=before_len > 0, agent=cfg.agent_id, model=cfg.model, provider=cfg.provider_id,
+            cwd=str(Path.cwd()), usage=usage_mod.totals(cfg.session_file).as_dict(),
+        )
     try:
         user_bundle = attach.build_user_message(
             prompt,
@@ -2485,6 +2524,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
         "call_stats": call_stats,
     }
+    if events is not None:
+        turn_kwargs["event_sink"] = events.runtime_event
     if reasoning_override is not None:
         turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
@@ -2573,11 +2614,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     content = message["content"].strip()
                     if (sink := _transcript_sink(telemetry)) is not None:
                         sink.write_assistant(content)
-                    with _mute_transcript_tee(_transcript_sink(telemetry)):
-                        display_mod.print_answer(
-                            content, sys.stdout,
-                            markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
-                        )
+                    if events is None:
+                        with _mute_transcript_tee(_transcript_sink(telemetry)):
+                            display_mod.print_answer(
+                                content, sys.stdout,
+                                markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
+                            )
                 if save:
                     _maybe_auto_compact(cfg, {
                         "system": system,
@@ -2603,6 +2645,63 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         msgs.warn(msgs.NO_ASSISTANT_RESPONSE)
     return 1
 
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+_json_events: headless.JsonEvents | None = None
+
+
+def _json_run(run: Callable[[], int]) -> int:
+    """Run `run` as a `--json` headless run: stdout carries only JSON events,
+    everything else printed goes to stderr, and the last event is `result`. A
+    run that fails without an `error` event gets one carrying the last line
+    printed to stderr."""
+    global _json_events
+    events = headless.JsonEvents(sys.stdout)
+    err = headless.LastLine(sys.stderr)
+    _json_events = events
+    try:
+        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
+            try:
+                code = run()
+            except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
+                msgs.warn(msgs.FAILED, error=_error_text(exc))
+                code = 1
+    finally:
+        _json_events = None
+    if code != 0 and not events.errored:
+        _emit_failure(events, err.last_line, code)
+    opened = events.session
+    events.emit(
+        "result", ok=code == 0, exit_code=code, text=events.final_text if code == 0 else "",
+        session=None if opened is None else opened.get("id"),
+        usage=None if opened is None else usage_mod.totals(
+            Path(opened["file"]) if opened.get("file") else None).as_dict(),
+    )
+    return code
+
+
+def _emit_failure(events: headless.JsonEvents, line: str, code: int) -> None:
+    message = _WARN_MARK.sub("", _ANSI.sub("", line))
+    events.emit("error", message=message or f"exit {code}", retryable=False)
+
+
+_WARN_MARK = re.compile(r"^\*+\s*")
+
+
+def _run_prompt_json(prompt: str, **kwargs) -> int:
+    """`_run_prompt` with its run written to stdout as JSON events
+    (`js.headless`). A failure without an `error` event gets one carrying the
+    last line printed to stderr before `_run_prompt` returned."""
+    events = _json_events
+    if events is None:
+        return _json_run(lambda: _run_prompt_json(prompt, **kwargs))
+    code = _run_prompt(prompt, events=events, **kwargs)
+    if code != 0 and not events.errored:
+        _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
+    return code
 
 
 def _accepts_kwarg(func, name: str) -> bool:
@@ -3381,6 +3480,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
         agent_id=cfg.agent_id,
         session_short=screen.session_short(cfg.session_file),
         cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
+        cost=usage_mod.status_text(usage_mod.totals(cfg.session_file)),
     )
 
 
@@ -3994,6 +4094,24 @@ def _main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
+    if _json_run_requested(args):
+        return _json_run(lambda: _run_args(args, dispatch_argv))
+    return _run_args(args, dispatch_argv)
+
+
+def _json_run_requested(args: argparse.Namespace) -> bool:
+    """Whether the command line is a `--json` headless run: a prompt or piped
+    stdin, and no mode that refuses `--json` or prints its own output."""
+    if not args.json or args.list or (args.prompt is None and sys.stdin.isatty()):
+        return False
+    return not (
+        args.commit or args.bench or args.compact or args.printonly is not None
+        or args.login is not None or args.logout or args.providers_json or args.logins_json
+        or args.models_json is not None or args.list_models is not None
+    )
+
+
+def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     if args.url:
         # Desugar before anything reads args.extras. Prepended, not appended, so
@@ -4041,7 +4159,10 @@ def _main(argv: list[str] | None = None) -> int:
     # real environment always wins. `just run` already did this via the
     # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
     dotenv.load()
-    if args.json and not args.list:
+    if args.json and not args.list and (
+        (args.prompt is None and sys.stdin.isatty())
+        or args.commit or args.bench or args.compact or args.printonly is not None
+    ):
         msgs.warn(msgs.JSON_NEEDS_LIST)
         return 2
     if args.list:
@@ -4241,18 +4362,19 @@ def _main(argv: list[str] | None = None) -> int:
             and args.session is None
             and os.environ.get("JS_SESSION") is None
         )
-        result = _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                             agent=args.agent, session=args.session, save=not args.no_save,
-                             caller_key=args.session_key, announce_generated=generated_session,
-                             reasoning=args.reasoning, maxout=args.max_out,
-                             show_continue=not args.quiet,
-                             extras=args.extras,
-                             ignore_local_config=args.ignore_local,
-                             ignore_global_config=args.ignore_global,
-                             files=args.files,
-                             stdin_attachment=stdin_attachment,
-                             presets=presets,
-                             stats_json=args.stats_json, stats_csv=args.stats_csv)
+        run = _run_prompt_json if args.json else _run_prompt
+        result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                     agent=args.agent, session=args.session, save=not args.no_save,
+                     caller_key=args.session_key, announce_generated=generated_session,
+                     reasoning=args.reasoning, maxout=args.max_out,
+                     show_continue=not args.quiet,
+                     extras=args.extras,
+                     ignore_local_config=args.ignore_local,
+                     ignore_global_config=args.ignore_global,
+                     files=args.files,
+                     stdin_attachment=stdin_attachment,
+                     presets=presets,
+                     stats_json=args.stats_json, stats_csv=args.stats_csv)
         if args.no_save:
             msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result

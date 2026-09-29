@@ -26,6 +26,7 @@ from typing import Any
 from . import messages as msgs
 from . import session_store
 from . import session_text
+from . import usage as usage_mod
 
 _METADATA_KIND = "session_metadata"
 _METADATA_VERSION = 3
@@ -299,12 +300,13 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
                    mode: str | None = None, command: list[str] | None = None) -> Path:
     """A new session in the parent's folder holding the parent's records up to
     and including the message record whose id is `message`, with its branch
-    point recorded. The copied records keep their ids."""
+    point recorded. The copied records keep their ids. Usage records are not
+    copied, so the branch's usage totals start at zero."""
     parent_file = Path(parent_file)
     kept: list[str] = []
     found = False
     for line, record in _records(parent_file):
-        if record.get("kind") in (_METADATA_KIND, _TITLE_KIND):
+        if record.get("kind") in (_METADATA_KIND, _TITLE_KIND, usage_mod.RECORD_KIND):
             continue
         kept.append(line if line.endswith("\n") else line + "\n")
         if record.get("id") == message and session_store.on_path(record) and record.get("kind") != "mark":

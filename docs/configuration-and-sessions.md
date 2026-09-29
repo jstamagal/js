@@ -525,14 +525,15 @@ The memory file is append-only JSONL. Records have:
 {"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
 {"id":"5e6f7a80","parent":"c2d81e5a","kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
 {"id":"91aa02bc","parent":"5e6f7a80","kind":"title","ts":1781190004.0,"title":"parser fix"}
+{"id":"0d4e7b19","parent":"5e6f7a80","kind":"usage","version":1,"ts":1781190005.0,"call":{"model":"m","provider":"p","input_tokens":8120,"output_tokens":41,"cache_read_tokens":6000,"cache_write_tokens":0,"reasoning_tokens":0,"cost":0.0031},"totals":{"calls":3,"...":"...","by_model":{}}}
 ```
 
 Every record starts with an `id`, eight hex digits unique within the file, and
 a `parent`. Message and mark records form the conversation path: each one's
 `parent` is the id of the message or mark before it in the file, `null` for the
 first. A start or title record's `parent` is the message or mark it follows,
-and no record names it as its parent. Replay reads the file in order and does
-not use ids.
+and no record names it as its parent. A `usage` record is placed the same way.
+Replay reads the file in order and does not use ids.
 
 A record's `ts` is when its message happened. The operator's message is written
 when the turn starts; the rest of a turn is written when the turn ends, and
@@ -543,7 +544,8 @@ Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record
 names its `parent_session` file. A branch is a new file holding the parent's
-records up to the message it split at, ids kept; its start record's
+records up to the message it split at, ids kept, except the `usage` records,
+so its usage totals start at zero; its start record's
 `branched_from` names the parent session file and the `id` of that message,
 and the `.txt` shows the message's number. The start record is not
 conversation context and the message loader ignores it. Adjacent hidden
@@ -601,6 +603,34 @@ mark gets no reminder.
 
 The message loader ignores `system:`, `prompt_seen:`, `turn_mode:` and every
 other mark; they remain in JSONL as audit notes.
+
+## Usage And Cost
+
+Every model call a session makes is charged to it (`js/usage.py`): the turn's
+own calls, the compaction summaries made for it, and the calls of the `task`
+workers it started, which are charged to their own session and to every
+session above them. A call adds its input, output, cache-read, cache-write and
+reasoning tokens. `input_tokens` counts every prompt token, cache reads and
+writes included, for every provider.
+
+A call's cost comes from the models.dev catalog js caches (a lookup of a
+provider that is not built in refreshes a stale catalog, as any provider
+lookup does): fresh input, cache reads, cache writes and output each at
+their own rate per million tokens, cache rates falling back to the input rate,
+and the price tier whose `min_context` the prompt reaches. A call that names a
+provider is priced only from that provider's catalog row (or the row its SDK
+or login maps to; a Codex login is priced at OpenAI's API rates), so a local
+server's model is not charged an API price. A call with no provider goes
+through the gateway and takes the routed row. A model with no price counts
+tokens only and adds to `unpriced_calls`.
+
+Each call appends a `usage` record holding the call and the session's totals
+after it. The newest one is where a resumed session's totals start; `/wipe`
+starts them again at zero. `/cost` prints the totals, the tokens by kind, and
+each model's share. The status bar shows the session's cost; `+` after it
+means some calls had no price, and a session with no priced call shows its
+token count instead. `js -p --json` carries the same figures in its `usage`
+events ([Headless JSON Events](headless-json.md)).
 
 ## Wipe And Backups
 

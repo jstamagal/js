@@ -13,7 +13,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, runtime, session_store, supervisor
+from js import cli, runtime, session_store, supervisor, usage
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
@@ -616,3 +616,18 @@ def test_last_finds_the_latest_session_from_another_directory(monkeypatch, tmp_p
 
     [session] = _all_sessions()
     assert [m["content"] for m in load_messages(session)] == ["one", "OK", "two", "OK"]
+
+
+def test_a_branch_starts_its_usage_totals_at_zero(tmp_path):
+    parent = session_store.reserve(session_store.folder_for(tmp_path))
+    record_session_start(parent, cwd=tmp_path, agent="defaultagent", mode="repl")
+    M.append_message(parent, {"role": "user", "content": "m1"})
+    usage.charge(parent, usage.CallUsage(model="m", provider=None, input_tokens=50))
+    M.append_message(parent, {"role": "assistant", "content": "m2"})
+    split = [record for record in _lines(parent) if record["kind"] == "message"][1]["id"]
+
+    branch = branch_session(parent, split, cwd=tmp_path, agent="defaultagent", mode="repl")
+
+    assert usage.load(parent).input_tokens == 50
+    assert usage.load(branch).calls == 0
+    assert [m["content"] for m in load_messages(branch)] == ["m1", "m2"]
