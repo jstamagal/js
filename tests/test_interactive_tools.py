@@ -18,6 +18,8 @@ from js.toolkit.registry import build_default_registry
 from js.toolkit.terminal import close_terminal_sessions, terminal_session, terminal_snapshot
 from test_lazy_tool_discovery import _cfg, _result
 
+pytestmark = pytest.mark.usefixtures("chromium_cache")
+
 
 def _chromium_is_installed() -> bool:
     """Report whether the Chromium build browser_probe drives is on disk.

@@ -42,6 +42,25 @@ def isolated_user_profile(monkeypatch, tmp_path):
             monkeypatch.delenv(name, raising=False)
 
 @pytest.fixture(scope="session")
+def _worker_cache_home(tmp_path_factory):
+    """A cache home shared by one worker's tests, seeded from the invoking
+    user's fontconfig cache. Copied, so the user's cache is only read."""
+    root = tmp_path_factory.mktemp("cache-home")
+    real_fonts = os.path.join(os.path.expanduser("~"), ".cache", "fontconfig")
+    if os.path.isdir(real_fonts):
+        shutil.copytree(real_fonts, root / "fontconfig", symlinks=True)
+    return root
+
+
+@pytest.fixture
+def chromium_cache(monkeypatch, _worker_cache_home):
+    """Chromium started in a fresh HOME rebuilds the fontconfig cache before it
+    opens a page. XDG_CACHE_HOME points at the worker's cache home, so a
+    launch finds a warm one."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(_worker_cache_home))
+
+
+@pytest.fixture(scope="session")
 def fresh_model_catalog(tmp_path_factory):
     """The bundled models.dev catalog, recorded as refreshed at session start.
 
