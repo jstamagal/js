@@ -4,6 +4,14 @@ import sys
 from pathlib import Path
 
 from js import cli, login_cli, logins, paths, providers
+from js import messages as msgs
+
+BASE_URL_PROMPT = msgs.LOGIN_ASK_BASE_URL.text()
+KEY_PROMPTS = {msgs.LOGIN_ASK_KEY.text(), msgs.LOGIN_ASK_KEY_OPTIONAL.text(), msgs.LOGIN_ASK_KEY_KEEP.text()}
+
+
+def _env_key_prompt(name: str, value: str) -> str:
+    return msgs.LOGIN_ASK_ENV_KEY.text(name=name, key=login_cli._mask(value))
 
 
 def _reset_logins() -> None:
@@ -73,9 +81,9 @@ def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp
 
     def scripted_input(prompt, *, default=None, secret=False):
         prompts.append(prompt)
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if "use it?" in prompt:
+        if prompt == _env_key_prompt("DEEPSEEK_API_KEY", "sk-env-deepseek"):
             return "y"
         raise AssertionError(f"unexpected prompt: {prompt}")
 
@@ -85,7 +93,7 @@ def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp
         assert login is not None
         assert login.provider_api_key == "sk-env-deepseek"
         assert login.provider_base_url == "https://api.deepseek.com"
-        assert any("ENV:DEEPSEEK_API_KEY" in p for p in prompts)
+        assert _env_key_prompt("DEEPSEEK_API_KEY", "sk-env-deepseek") in prompts
     finally:
         _reset_logins()
 
@@ -95,11 +103,11 @@ def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_pa
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-decoy")
 
     def scripted_input(prompt, *, default=None, secret=False):
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if "use it?" in prompt:
+        if prompt == _env_key_prompt("DEEPSEEK_API_KEY", "sk-env-decoy"):
             return "n"
-        if prompt.startswith("Enter API Key"):
+        if prompt in KEY_PROMPTS:
             return "sk-typed-real"
         raise AssertionError(f"unexpected prompt: {prompt}")
 
@@ -141,9 +149,9 @@ def test_collect_api_login_enter_keeps_empty_base_url_for_official_provider(tmp_
 
     def fake_input(prompt, *, default=None, secret=False):
         prompted[prompt] = default
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if prompt.startswith("Enter API Key"):
+        if prompt in KEY_PROMPTS:
             return "sk-test"
         raise AssertionError(f"unexpected prompt: {prompt}")
 
@@ -151,7 +159,7 @@ def test_collect_api_login_enter_keeps_empty_base_url_for_official_provider(tmp_
     try:
         login = login_cli._collect_api_login("openai", "openai", providers.provider_for_login("openai"))
         assert login is not None
-        assert prompted["Base URL"] == ""
+        assert prompted[BASE_URL_PROMPT] == ""
         assert login.provider_base_url is None
         assert login.provider_api_key == "sk-test"
     finally:
@@ -166,9 +174,9 @@ def test_collect_api_login_variable_provider_prompts_with_default_and_keeps_ente
 
     def fake_input(prompt, *, default=None, secret=False):
         prompted[prompt] = default
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if prompt.startswith("Enter API Key"):
+        if prompt in KEY_PROMPTS:
             return ""
         raise AssertionError(f"unexpected prompt: {prompt}")
 
@@ -177,7 +185,7 @@ def test_collect_api_login_variable_provider_prompts_with_default_and_keeps_ente
         provider = providers.provider_for_login("vllm")
         login = login_cli._collect_api_login("vllm", "openai", provider)
         assert login is not None
-        assert prompted["Base URL"] == "http://127.0.0.1:8000/v1"
+        assert prompted[BASE_URL_PROMPT] == "http://127.0.0.1:8000/v1"
         assert login.provider_base_url == "http://127.0.0.1:8000/v1"
     finally:
         _reset_logins()
@@ -190,9 +198,9 @@ def test_collect_api_login_variable_provider_prompts_even_with_env_base(tmp_path
 
     def fake_input(prompt, *, default=None, secret=False):
         prompted[prompt] = default
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if prompt.startswith("Enter API Key"):
+        if prompt in KEY_PROMPTS:
             return ""
         raise AssertionError(f"unexpected prompt: {prompt}")
 
@@ -201,7 +209,7 @@ def test_collect_api_login_variable_provider_prompts_even_with_env_base(tmp_path
         provider = providers.provider_for_login("vllm")
         login = login_cli._collect_api_login("vllm", "openai", provider)
         assert login is not None
-        assert prompted["Base URL"] == "http://gpu-box.test/v1"
+        assert prompted[BASE_URL_PROMPT] == "http://gpu-box.test/v1"
         assert login.provider_base_url == "http://gpu-box.test/v1"
     finally:
         _reset_logins()
@@ -242,9 +250,9 @@ def test_run_login_caches_server_model_metadata(monkeypatch, tmp_path: Path):
     logins.set_config_dir(tmp_path)
 
     def fake_input(prompt, *, default=None, secret=False):
-        if prompt == "Base URL":
+        if prompt == BASE_URL_PROMPT:
             return default
-        if prompt.startswith("Enter API Key"):
+        if prompt in KEY_PROMPTS:
             return ""
         raise AssertionError(f"unexpected prompt: {prompt}")
 

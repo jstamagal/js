@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from js import cli, runtime, settings
+from js import messages as msgs
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -538,7 +539,7 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
 
 # Agent drivers read this stderr line after a headless run as the signal that
 # the next round cannot resume (docs/configuration-and-sessions.md).
-NO_SAVE_WARNING = "session not saved; resume unavailable"
+NO_SAVE_WARNING = msgs.NOT_SAVED_NO_RESUME.line()
 
 
 def test_js_pipe_modes_no_save_pass_save_false(monkeypatch, capsys):
@@ -965,7 +966,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     first = capsys.readouterr().out
     cli._maybe_auto_compact(cfg, state)
     second = capsys.readouterr().out
-    assert "50% full" in first
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.50) in first
     assert second == ""
     assert calls == []
 
@@ -974,7 +975,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     assert state["auto_compact"].notified is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert "50% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.50) in capsys.readouterr().out
 
 
 def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
@@ -1080,7 +1081,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
 
     assert len(calls) == 2
     assert [call["forced"] for call in calls] == [False, False]
-    assert capsys.readouterr().out.count("80% full") == 2
+    assert capsys.readouterr().out.count(msgs.AUTO_COMPACT_ARMED.line(fullness=0.80)) == 2
 
 
 def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_path, capsys):
@@ -1100,7 +1101,7 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
-    assert "80% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.80) in capsys.readouterr().out
 
 
 def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, capsys):
@@ -1167,7 +1168,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
-    assert "90% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.90) in capsys.readouterr().out
 
 
 def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, tmp_path, capsys):
@@ -1186,7 +1187,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
-    assert "50% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.50) in capsys.readouterr().out
 
 
 def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(monkeypatch, tmp_path, capsys):
@@ -1206,7 +1207,7 @@ def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(
     cli._maybe_auto_compact(cfg, _auto_state())
 
     assert calls == []
-    assert "75% full" in capsys.readouterr().out
+    assert msgs.AUTO_COMPACT_ARMED.line(fullness=0.75) in capsys.readouterr().out
 
 
 def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):

@@ -700,7 +700,7 @@ def _package_settings() -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise DefaultsError(f"js: defaults file missing: {path}") from None
+        raise DefaultsError(msgs.DEFAULTS_MISSING.line(path=path)) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -708,8 +708,8 @@ def _package_settings() -> dict:
     for lineno, raw in enumerate(text.splitlines(), 1):
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
-            problem = result.error or "not a set line"
-            raise DefaultsError(f"js: {path}:{lineno}: {problem}")
+            problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.text()
+            raise DefaultsError(msgs.DEFAULTS_BAD_LINE.line(location=f"{path}:{lineno}", error=problem))
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = parsed[1].split(maxsplit=1)[0] if parsed[0] == "set" else parsed[0]
@@ -718,7 +718,7 @@ def _package_settings() -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise DefaultsError(f"js: {path}: no line for {', '.join(unlisted)}")
+        raise DefaultsError(msgs.DEFAULTS_UNLISTED.line(path=path, keys=", ".join(unlisted)))
     _package_cache = (path, settings)
     return settings
 
@@ -784,7 +784,7 @@ def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
                 continue
             result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
             if result.error:
-                warnings.append(f"{path}:{lineno}: {result.error}")
+                warnings.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=result.error))
         stack.pop()
 
     for path in paths:

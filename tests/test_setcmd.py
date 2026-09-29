@@ -5,6 +5,7 @@ import copy
 import pytest
 
 from js import setcmd, settings
+from js import messages as msgs
 
 
 @pytest.mark.parametrize(
@@ -316,7 +317,7 @@ def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: 
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == f"unknown knob: {key}"
+    assert result.error == msgs.UNKNOWN_SETTING.text(key=key)
     assert live_settings == before
 
 
@@ -377,7 +378,7 @@ def test_apply_config_line_rejects_set_without_value():
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "set needs a key and value: 'set model.id'"
+    assert result.error == msgs.SET_NEEDS_TWO.text(line="set model.id")
 
 
 def test_registry_defaults_seed_and_env_overrides_roundtrip():
@@ -452,7 +453,7 @@ def test_set_dash_key_clears_map_subkey():
 
 def test_set_dash_unknown_knob_errors():
     result = setcmd.set_command({}, "-nope.nope")
-    assert result.error == "unknown knob: nope.nope"
+    assert result.error == msgs.UNKNOWN_SETTING.text(key="nope.nope")
 
 
 # --------------------------------------------------------------------------

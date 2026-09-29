@@ -19,6 +19,7 @@ import pytest
 from js import config as jsconfig
 from js import paths
 from js import settings as jssettings
+from js import messages as msgs
 from js.toolkit import ToolContext
 from js.toolkit import kernel as kmod
 from js.toolkit import toolbox as tbmod
@@ -258,7 +259,7 @@ def test_the_render_clips_long_output_and_says_how_many_lines_it_hid(ctx, monkey
 
     assert "line 4" in screen
     assert "line 5" not in screen
-    assert "... 35 more lines (full text went to the model)" in screen
+    assert msgs.KERNEL_MORE_LINES.text(count=35) in screen
 
 
 def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
