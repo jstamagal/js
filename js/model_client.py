@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import json
 import time
 from dataclasses import dataclass
@@ -581,14 +582,23 @@ def _usage_from_stream(stream: ai.models.Stream) -> ai.types.usage.Usage | None:
         return None
 
 
+# The reasoning callback of the `stream_model_async` call running in this
+# context. `stream_model_async` sets it around its `_stream_async` call and
+# `_stream_async` routes each `ReasoningDelta` chunk to it; concurrent streams
+# run in separate asyncio tasks, so each sees its own value.
+_reasoning_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "js_reasoning_sink", default=None,
+)
+
+
 async def _stream_async(
     model: ai.Model,
     messages: list[ai.messages.Message],
     tools: list[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
     on_text: Callable[[str], None],
-    on_reasoning: Callable[[str], None] | None = None,
 ) -> ModelStreamResult:
+    on_reasoning = _reasoning_sink.get()
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -1011,6 +1021,7 @@ async def stream_model_async(
             dump_from=trace_request_from,
         )
 
+    reasoning_token = _reasoning_sink.set(on_reasoning)
     try:
         return await _stream_async(
             model=model,
@@ -1018,7 +1029,6 @@ async def stream_model_async(
             tools=tools,
             params=params,
             on_text=on_text,
-            on_reasoning=on_reasoning,
         )
     except routing.ProviderNotLoggedInError:
         raise
@@ -1028,6 +1038,7 @@ async def stream_model_async(
             raise friendly from exc
         raise
     finally:
+        _reasoning_sink.reset(reasoning_token)
         try:
             await model.provider.aclose()
         except Exception:
