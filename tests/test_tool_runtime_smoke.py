@@ -962,9 +962,11 @@ def test_history_tool_result_message_dehydrates_image(tmp_path):
 
 
 def test_tool_display_keys_are_canonical_tool_names():
+    from js import display
+
     canonical = {t.name for t in build_default_registry().tools}
-    extra = set(runtime._TOOL_DISPLAY) - canonical
-    assert not extra, f"_TOOL_DISPLAY has non-canonical keys: {extra}"
+    extra = set(display._BODY_ARG) - canonical
+    assert not extra, f"display._BODY_ARG has non-canonical keys: {extra}"
 
 
 def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():

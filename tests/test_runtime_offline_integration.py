@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 import re
+from types import SimpleNamespace
 
 import ai
 import ai.types.messages
@@ -1437,6 +1438,16 @@ def _trace_registry():
     return ToolRegistry(tools=tools, aliases={name: name for name in ("big", "boom", "slow")})
 
 
+def _tools_context(level: int) -> ToolContext:
+    context = ToolContext(cwd="/tmp")
+    context.config = SimpleNamespace(settings={"ui": {"tools": level, "tools_preview_lines": 3}})
+    return context
+
+
+def _marker_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if line.startswith("> ")]
+
+
 def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     """The trace used to print only the call half of every exchange, so a run
     could show `tool_discovery {...}` and never whether it returned anything."""
@@ -1448,23 +1459,38 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
 
     runtime._dispatch_tool_calls(
         calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+        runtime.ToolErrorTracker(), registry, _tools_context(1),
     )
 
     lines = _trace_lines(capsys)
-    result_lines = [line for line in lines
-                    if ("big" in line and "6089" in line) or ("boom" in line and "ms" in line)]
-    assert len(result_lines) == 2
-    assert "big" in result_lines[0] and "6089" in result_lines[0] and "200" in result_lines[0]
-    assert "ms" in result_lines[0]
-    # Capped hard: a 6 KB result never reaches the terminal whole.
-    big_preview = lines[lines.index(result_lines[0]) + 1]
-    assert len(big_preview) < 400
-    assert "truncated" in big_preview and "6089" in big_preview
-    # The error is the reason the trace is on, so it survives intact.
-    error_preview = lines[lines.index(result_lines[1]) + 1]
-    assert "ERROR: tool_discovery found no native tool matching" in error_preview
-    assert "truncated" not in error_preview
+    # ui.tools 1: one line per exchange, carrying the marker and the metrics.
+    assert len(lines) == 2
+    assert lines == _marker_lines(lines)
+    assert "big" in lines[0] and "6089B" in lines[0] and "200L" in lines[0]
+    assert "boom" in lines[1] and re.search(r"\b\d+B \d+L\b", lines[1])
+
+
+def test_trace_at_level_two_shows_the_first_lines_then_shown_over_total(capsys):
+    registry = _trace_registry()
+    calls = [
+        runtime._PendingToolCall("c1", "big", ["{}"]),
+        runtime._PendingToolCall("c2", "boom", ["{}"]),
+    ]
+
+    runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 256 * 1024, True,
+        runtime.ToolErrorTracker(), registry, _tools_context(2),
+    )
+
+    lines = _trace_lines(capsys)
+    assert len(_marker_lines(lines)) == 2
+    big = lines.index("> big")
+    assert lines[big + 1:big + 4] == [f"line {index} with some words in it" for index in range(3)]
+    assert lines[big + 4] == "..."
+    metrics = lines[big + 5]
+    assert re.search(r"\b\d+/6089B\b", metrics) and "3/200L" in metrics
+    # A short error is shown whole.
+    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
 
 
 def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys):
@@ -1474,13 +1500,13 @@ def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(ca
 
     runtime._dispatch_tool_calls(
         calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+        runtime.ToolErrorTracker(), registry, _tools_context(2),
     )
 
     lines = _trace_lines(capsys)
-    assert sum(1 for line in lines if line.lstrip().startswith("▸")) == 2
-    assert any("big" in line and "ms" in line for line in lines)
-    assert any("nope" in line and "ms" in line for line in lines)
+    markers = _marker_lines(lines)
+    assert len(markers) == 2
+    assert markers[0].startswith("> big") and markers[1].startswith("> nope")
     assert any("invalid arguments for big" in line for line in lines)
     assert any("unknown tool" in line and "nope" in line for line in lines)
 
@@ -1493,10 +1519,10 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
     asyncio.run(runtime._dispatch_async_tool(
         runtime._PendingToolCall("c1", "slow", ["{}"]),
         runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, ToolContext(cwd="/tmp"),
+        runtime.ToolErrorTracker(), registry, _tools_context(3),
     ))
 
     lines = _trace_lines(capsys)
-    assert any(line.lstrip().startswith("▸ slow") for line in lines)
-    assert any("slow" in line and re.search(r"\b12\s*B\b", line) and "1 line" in line for line in lines)
-    assert any(line.strip() == "async result" for line in lines)
+    assert _marker_lines(lines) == ["> slow"]
+    assert "async result" in lines
+    assert any("slow" in line and "12B" in line and "1L" in line for line in lines)

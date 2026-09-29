@@ -161,6 +161,16 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Status bar background, #rrggbb. Drawn in truecolor on every terminal."),
     SettingSpec("ui.status_fg", "str", "#ffffff",
                 "Status bar foreground, #rrggbb."),
+    SettingSpec("ui.tools", "int", 1,
+                "Tool exchange display: 0 nothing, 1 one metrics line per exchange, "
+                "2 the call plus the first ui.tools_preview_lines result lines and "
+                "shown/total metrics, 3 the call plus the whole result."),
+    SettingSpec("ui.tools_preview_lines", "int", 12,
+                "Lines of a tool's command and of its result shown at ui.tools 2."),
+    SettingSpec("ui.markdown", "bool", True,
+                "Render assistant Markdown on a terminal: finished blocks are "
+                "highlighted once, the open block stays live. Off writes the text "
+                "as it arrives. Output that is not a terminal is always plain text."),
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
@@ -470,9 +480,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             value = int(text)
         except ValueError:
             return None, "expected an integer"
-        if spec.key in {"ui.reasoning", "ui.net"} and value not in range(4):
+        if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
             return None, "expected an integer from 0 to 3"
-        if spec.key in {"limits.max_tool_calls_per_message", "limits.subagent_max_workers"} and value < 1:
+        if spec.key in {
+            "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
+        } and value < 1:
             return None, "expected an integer >= 1"
         return value, None
     if kind == "float":

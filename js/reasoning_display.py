@@ -6,6 +6,7 @@ from typing import Protocol
 
 from . import colors as C
 from .context_budget import estimate_text_tokens
+from .display import clean
 
 
 class ReasoningDisplay(Protocol):
@@ -15,6 +16,8 @@ class ReasoningDisplay(Protocol):
 
 
 def grey(text: str) -> str:
+    """Reasoning text in grey, control sequences removed."""
+    text = clean(text)
     rendered = "\n".join(f"{C.GREY}{line}{C.RESET}" for line in text.split("\n"))
     return rendered.removesuffix(C.GREY + C.RESET) if text.endswith("\n") else rendered
 

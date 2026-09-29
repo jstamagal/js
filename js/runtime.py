@@ -27,6 +27,7 @@ from jsonschema import validators as jsonschema_validators
 
 from . import colors as C
 from . import context_budget
+from . import display
 from .text_bytes import byte_size, byte_prefix, cap_text
 from . import model_metadata
 from . import providers
@@ -287,6 +288,9 @@ class Telemetry:
     trace_sink: object = None  # a .write()-able sink for the full request trace, or None
     transcript_log: object = None  # visible transcript sink; never raises
     reasoning_factory: Callable[[int], ReasoningDisplay] | None = None
+    # Builds the answer Display for a screen that owns the terminal; None means
+    # a Display over sys.stdout.
+    display_factory: Callable[[bool], display.Display] | None = None
 
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
@@ -485,98 +489,52 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 
 
 # --------------------------------------------------------------------------
-# Pretty tool trace
+# Tool trace
 # --------------------------------------------------------------------------
 
-# Per-tool arg display: which args to show, in what order, how to truncate.
-# None = show all args as a compact one-liner.
-
-_TOOL_DISPLAY: dict[str, list[tuple[str, int]]] = {
-    # (arg_name, max_len) — max_len 0 means hide it. Keyed by CANONICAL tool names only;
-    # _dispatch resolves aliases to the canonical name before formatting.
-    "shell":          [("command", 120), ("cwd", 40), ("action", 10), ("handle", 10), ("description", 60)],
-    "read":           [("file_path", 80), ("path", 80), ("range", 0)],
-    "write":          [("file_path", 80), ("path", 80), ("content", 0), ("overwrite", 0)],
-    "patch":          [("file_path", 80), ("path", 80), ("old_string", 30), ("new_string", 0), ("edits", 0)],
-    "fs_search":      [("pattern", 60), ("path", 40), ("output_mode", 20)],
-    "fetch":          [("url", 100), ("raw", 0)],
-}
+def _tool_settings(tool_context: ToolContext | None) -> Any:
+    """Live settings for the display dials; `/set ui.tools 3` reaches the next exchange."""
+    context = tool_context or T.DEFAULT_CONTEXT
+    return getattr(getattr(context, "config", None), "settings", None)
 
 
-def _pretty_args(name: str, args: dict) -> str:
-    """Format tool args for the trace line. Tool-specific pretty printing."""
-    display = _TOOL_DISPLAY.get(name)
-    if display is None:
-        # Unknown tool — compact JSON dump, truncated
-        return _short_default(args)
-
-    parts: list[str] = []
-    for key, maxlen in display:
-        if maxlen == 0:
-            continue
-        val = args.get(key)
-        if val is None:
-            continue
-        s = str(val)
-        if len(s) > maxlen:
-            s = s[:maxlen - 3] + "..."
-        parts.append(f"{key}={C.CYAN}{s}{C.MAGENTA}")
-
-    if not parts:
-        return ""
-    return " ".join(parts)
-
-
-def _short_default(args: dict) -> str:
-    """Fallback compact JSON for unknown tools."""
-    try:
-        s = json.dumps(args, default=str, ensure_ascii=False)
-    except (TypeError, ValueError):
-        s = str(args)
-    return s if len(s) <= 80 else s[:77] + "..."
-
-
-# A trace has to carry both halves of an exchange or it is a call log, not a
-# trace. These caps are what keep the response half printable: _cap_result lets
-# a result run to limits.max_tool_results_per_turn_bytes (256 KB by default),
-# and dumping that to the terminal is worse than printing nothing. Errors get a
-# longer budget because a short `ERROR: ...` is usually the entire reason
-# someone turned the trace on.
-_TRACE_PREVIEW_CHARS = 240
-_TRACE_ERROR_PREVIEW_CHARS = 900
-
-
-def _trace_result_text(result: Any) -> tuple[str, bool]:
-    """Flatten one tool result to (text, is_error) for the trace line."""
-    if isinstance(result, ToolResult):
-        return result.dehydrated(), result.is_error
-    text = result if isinstance(result, str) else str(result)
-    return text, text.lstrip().startswith("ERROR")
-
-
-def _print_trace_result(name: str, result: Any, started: float) -> None:
-    """Print the response half of one traced tool exchange, hard-capped.
-
-    Two lines at most: a header carrying elapsed ms, the real byte count and the
-    line count, then a whitespace-collapsed preview with an explicit truncation
-    marker when there is more."""
-    elapsed_ms = int((time.time() - started) * 1000)
-    text, is_error = _trace_result_text(result)
-    size = len(text.encode("utf-8", errors="replace"))
-    lines = text.count("\n") + 1 if text else 0
-    color = C.ORANGE if is_error else C.GREY
-    print(
-        f"  {color}◂ {name}{C.RESET} {C.GREY}{elapsed_ms}ms  {size} B  {lines} line"
-        f"{'' if lines == 1 else 's'}{C.RESET}",
-        flush=True,
-    )
-    preview = " ".join(text.split())
-    if not preview:
+def _show_trace(telemetry: Telemetry, text: str) -> None:
+    """Put one piece of a tool exchange on the screen and in the visible transcript."""
+    if not text:
         return
-    budget = _TRACE_ERROR_PREVIEW_CHARS if is_error else _TRACE_PREVIEW_CHARS
-    if len(preview) > budget:
-        preview = preview[:budget] + f" […truncated, {size} B total]"
-    print(f"    {color}{preview}{C.RESET}", flush=True)
+    sink = getattr(telemetry, "transcript_log", None)
+    mute = getattr(sink, "mute_tee", None)
+    with mute() if callable(mute) else contextlib.nullcontext():
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    write_plain = getattr(sink, "write_plain", None)
+    if callable(write_plain):
+        write_plain(text)
+
+
+def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
+                args: dict | None, *, malformed: bool = False) -> None:
+    settings = _tool_settings(tool_context)
+    _show_trace(telemetry, display.render_tool_call(
+        name, args, display.tools_level(settings),
+        preview=display.preview_lines(settings), malformed=malformed,
+    ))
+
+
+def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
+                  *, args: dict | None = None, with_call: bool = False, malformed: bool = False) -> None:
+    """Print the result half of an exchange. `with_call` prints the call header
+    in the same write, so exchanges that finish concurrently stay whole."""
+    settings = _tool_settings(tool_context)
+    level = display.tools_level(settings)
+    preview = display.preview_lines(settings)
+    call = (
+        display.render_tool_call(name, args, level, preview=preview, malformed=malformed)
+        if with_call else ""
+    )
+    _show_trace(telemetry, call + display.render_tool_result(
+        name, result, level, preview=preview, args=args,
+    ))
 
 
 def _repair_jsonish(raw: str) -> dict:
@@ -841,38 +799,37 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
               error_tracker: ToolErrorTracker | None = None,
               registry: ToolRegistry | None = None,
-              tool_context: ToolContext | None = None) -> tuple[dict, str]:
-    """Parse + execute one tool call. Returns (parsed_args, result_string)."""
-    started = time.time()
+              tool_context: ToolContext | None = None,
+              trace_together: bool = False) -> tuple[dict, str]:
+    """Parse + execute one tool call. Returns (parsed_args, result_string).
+
+    `trace_together` prints the call header with the result instead of before
+    the call runs; concurrent calls use it so their exchanges do not interleave."""
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
-        if trace:
-            print(f"  {C.MAGENTA}▸ {name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
+        if trace and not trace_together:
+            _trace_call(telemetry, tool_context, name, None, malformed=True)
         telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {name}: {e}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
         if trace:
-            _print_trace_result(name, result, started)
+            _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True)
         return {}, result
 
     active_registry = registry or T.DEFAULT_REGISTRY
     context = tool_context or T.DEFAULT_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
-    if trace:
-        pretty = _pretty_args(trace_name, args)
-        if pretty:
-            print(f"  {C.MAGENTA}▸ {trace_name}{C.RESET} {pretty}{C.RESET}", flush=True)
-        else:
-            print(f"  {C.MAGENTA}▸ {trace_name}{C.RESET}", flush=True)
+    if trace and not trace_together:
+        _trace_call(telemetry, context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes)
         if trace:
-            _print_trace_result(trace_name, capped, started)
+            _trace_result(telemetry, context, trace_name, capped, args=args, with_call=trace_together)
         return args, capped
 
     started = time.time()
@@ -889,7 +846,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     capped = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, result, capped, context)
     if trace:
-        _print_trace_result(tool.name, capped, started)
+        _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together)
     return args, capped
 
 
@@ -917,18 +874,19 @@ def _dispatch_tool_calls(
     registry: ToolRegistry,
     tool_context: ToolContext,
     progress: _DispatchProgress | None = None,
+    trace_together: bool = False,
 ) -> list[tuple[_PendingToolCall, dict, str]]:
     """Dispatch one assistant batch.
 
     All `task` calls from the same assistant turn run concurrently, non-task
     tools run sequentially, then restores the original result order before
-    appending tool messages.
+    appending tool messages. `trace_together` is set when other calls run
+    beside this batch; concurrent `task` calls always trace together.
     """
     records: list[tuple[dict, str] | None] = [None] * len(tool_calls)
     for idx, pc in enumerate(tool_calls):
         if pc.validation_error is None:
             continue
-        started = time.time()
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
         result = pc.validation_error if pc.unavailable or pc.refused else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
@@ -938,9 +896,7 @@ def _dispatch_tool_calls(
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
         if trace:
-            pretty = _pretty_args(pc.name, args)
-            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET}" + (f" {pretty}{C.RESET}" if pretty else ""), flush=True)
-            _print_trace_result(pc.name, recorded, started)
+            _trace_result(telemetry, tool_context, pc.name, recorded, args=args, with_call=True)
         records[idx] = (args, recorded)
         if progress is not None:
             progress.record(pc, args, recorded)
@@ -962,6 +918,7 @@ def _dispatch_tool_calls(
                     None,
                     registry,
                     tool_context,
+                    trace_together or len(task_indices) > 1,
                 )
                 for idx in task_indices
             }
@@ -989,6 +946,7 @@ def _dispatch_tool_calls(
             error_tracker,
             registry,
             tool_context,
+            trace_together,
         )
         if progress is not None:
             progress.record(pc, *records[idx])
@@ -1008,6 +966,7 @@ async def _dispatch_fan_out_async(
     error_tracker: ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
+    trace_together: bool = False,
 ) -> tuple[_PendingToolCall, dict, str]:
     """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
     turns on the current loop (never a dispatch thread). Mirrors ``_dispatch``'s
@@ -1015,31 +974,28 @@ async def _dispatch_fan_out_async(
     from a threaded one to the caller."""
     from .toolkit import meta
 
-    started = time.time()
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as e:
-        if trace:
-            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
+        if trace and not trace_together:
+            _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {pc.name}: {e}"
         recorded = error_tracker.record(pc.name, result)
         if trace:
-            _print_trace_result(pc.name, recorded, started)
+            _trace_result(telemetry, tool_context, pc.name, recorded, with_call=trace_together, malformed=True)
         return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
     trace_name = tool.name if tool is not None else pc.name
-    if trace:
-        pretty = _pretty_args(trace_name, args)
-        line = f"  {C.MAGENTA}▸ {trace_name}{C.RESET} {pretty}{C.RESET}" if pretty else f"  {C.MAGENTA}▸ {trace_name}{C.RESET}"
-        print(line, flush=True)
+    if trace and not trace_together:
+        _trace_call(telemetry, tool_context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes)
         if trace:
-            _print_trace_result(trace_name, recorded, started)
+            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, with_call=trace_together)
         return pc, args, recorded
 
     started = time.time()
@@ -1053,7 +1009,7 @@ async def _dispatch_fan_out_async(
         result = f"ERROR running {tool.name}: {type(e).__name__}: {e}"
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
-        _print_trace_result(tool.name, recorded, started)
+        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together)
     return pc, args, recorded
 
 
@@ -1061,25 +1017,21 @@ async def _dispatch_async_tool(
     pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
     error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
 ) -> tuple[_PendingToolCall, dict, Any]:
-    started = time.time()
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
         result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
         if trace:
-            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {C.ORANGE}<malformed args>{C.RESET}", flush=True)
-            _print_trace_result(pc.name, result, started)
+            _trace_result(telemetry, tool_context, pc.name, result, with_call=True, malformed=True)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
         result = registry.unavailable_error(pc.name)
         if trace:
-            print(f"  {C.MAGENTA}▸ {pc.name}{C.RESET} {_pretty_args(pc.name, args)}{C.RESET}", flush=True)
-            _print_trace_result(pc.name, result, started)
+            _trace_result(telemetry, tool_context, pc.name, result, args=args, with_call=True)
         return pc, args, result
     if trace:
-        pretty = _pretty_args(tool.name, args)
-        print(f"  {C.MAGENTA}▸ {tool.name}{C.RESET}" + (f" {pretty}{C.RESET}" if pretty else ""), flush=True)
+        _trace_call(telemetry, tool_context, tool.name, args)
     started = time.time()
     try:
         result = await call_tool_async(tool, args, tool_context)
@@ -1095,7 +1047,7 @@ async def _dispatch_async_tool(
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
-        _print_trace_result(tool.name, result, started)
+        _trace_result(telemetry, tool_context, tool.name, result, args=args)
     return pc, args, result
 
 
@@ -1158,7 +1110,7 @@ async def _dispatch_batch(
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="js-runtime-leaf") as executor:
             future = loop.run_in_executor(
                 executor, _dispatch_tool_calls, calls, telemetry, cap_bytes,
-                trace, error_tracker, registry, tool_context, progress,
+                trace, error_tracker, registry, tool_context, progress, concurrent,
             )
             try:
                 await asyncio.shield(future)
@@ -1176,10 +1128,16 @@ async def _dispatch_batch(
     async def async_call(i: int) -> None:
         if progress.stopped.is_set():
             return
-        dispatch = _dispatch_fan_out_async if i in fan_out else _dispatch_async_tool
-        record = await dispatch(tool_calls[i], telemetry, cap_bytes, trace,
-                                error_tracker, registry, tool_context)
+        if i in fan_out:
+            record = await _dispatch_fan_out_async(tool_calls[i], telemetry, cap_bytes, trace,
+                                                   error_tracker, registry, tool_context, concurrent)
+        else:
+            record = await _dispatch_async_tool(tool_calls[i], telemetry, cap_bytes, trace,
+                                                error_tracker, registry, tool_context)
         progress.record(*record)
+
+    # Pure fan-out batches run every call at once; their exchanges print whole.
+    concurrent = bool(fan_out) and not async_leaves and len(tool_calls) > 1
 
     jobs: list[asyncio.Task] = []
     try:
@@ -1416,11 +1374,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         except Exception:  # noqa: BLE001 — registry internals
             _ntools = "?"
         _bits.append(f"tools={_ntools}")
-        print(f"  {C.CYAN}▸ run{C.RESET} {C.GREY}{'  '.join(_bits)}{C.RESET}", flush=True)
+        print(f"{display.CHROME}run  {'  '.join(_bits)}{C.RESET}", flush=True)
 
-    # Streaming text: open WHITE once at first chunk, close RESET + newline
-    # once after the stream completes. Avoids per-chunk escape wrapping.
-    text_started = {"value": False}
+    # One Display per streamed answer, opened at its first chunk and finished
+    # when the stream ends.
+    answer_display: display.Display | None = None
+    markdown = display.markdown_enabled(getattr(cfg, "settings", None))
     # Text already displayed but not yet recorded. The assistant record is only
     # built after the stream completes, so a ^C mid-stream would otherwise leave
     # the answer on screen and nothing in history.
@@ -1463,6 +1422,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         return contextlib.nullcontext()
 
     def _emit_text(t: str) -> None:
+        nonlocal answer_display
         if not t:
             return
         if reasoning_display is not None:
@@ -1476,13 +1436,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             write_chunk = getattr(_transcript_log, "write_assistant_chunk", None)
             if callable(write_chunk):
                 write_chunk(t)
-        if not text_started["value"]:
-            with _muted_transcript_tee():
-                sys.stdout.write(C.WHITE)
-            text_started["value"] = True
         with _muted_transcript_tee():
-            sys.stdout.write(t)
-            sys.stdout.flush()
+            if answer_display is None:
+                factory = telemetry.display_factory
+                answer_display = (
+                    factory(markdown) if factory is not None
+                    else display.Display.for_stream(sys.stdout, markdown=markdown)
+                )
+            answer_display.chunk("text", t)
 
     def _commit_streamed_partial() -> None:
         """Record received text and reasoning before cancellation.
@@ -1502,21 +1463,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         messages.append(record)
 
     def _close_text(reasoning_tokens: int | None = None) -> None:
-        if not suppress_output and text_started["value"]:
+        nonlocal answer_display
+        if not suppress_output and answer_display is not None:
             if _transcript_log is not None:
                 end_stream = getattr(_transcript_log, "end_assistant_stream", None)
                 if callable(end_stream):
                     end_stream()
             with _muted_transcript_tee():
-                sys.stdout.write(C.RESET + "\n")
-                sys.stdout.flush()
-        text_started["value"] = False
+                answer_display.finish()
+        answer_display = None
         _close_reasoning(reasoning_tokens)
 
     # Full request trace: dump system prompt + full tool schemas once (first
     # model call), then only the newly-sent messages each call. This goes ONLY to
     # the trace sink (autolog file / --debug-file), never to stdout — decoupled
-    # from the concise `trace` flag that drives the `▸` lines on the terminal.
+    # from the concise `trace` flag that drives the run/stats/tool lines on the terminal.
     _trace_sink = getattr(telemetry, "trace_sink", None)
     _trace_req = {"sent": 0, "schemas": True}
 
@@ -1803,14 +1764,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                             _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
                             _cache = f"  cache {_pct:.0f}%"
                         _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                        print(f"  {C.GREY}{_label + ': ' if _label else ''}▸ {int(_elapsed * 1000)}ms  "
+                        print(f"{display.CHROME}{_label + ': ' if _label else ''}{int(_elapsed * 1000)}ms  "
                               f"finish={finish}  tool_calls={len(pending_calls)}  "
                               f"{_out_tok} tok  {_tps:.1f} tok/s{_ttft}{_cache}{C.RESET}", flush=True)
                     break
                 except ai.ProviderAPIError as e:
-                    # Terminate any partially streamed text (RESET + newline) before
-                    # we retry or abort, so the next attempt's output doesn't
-                    # concatenate onto the truncated first attempt with color still open.
+                    # Finish any partially streamed text before we retry or abort,
+                    # so the next attempt's output starts on its own line.
                     _close_text()
                     if (
                         compaction.is_context_overflow_error(e)
@@ -1874,7 +1834,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     raise
             else:
                 stream_transport.report_held_failure()
-                print(f"  {C.ORANGE}▸ tool-loop retry budget exhausted{C.RESET}")
+                print(f"{C.ORANGE}*** Tool-loop retry budget exhausted.{C.RESET}")
                 _end_turn("retry_budget_exhausted")
                 return
 
@@ -2088,7 +2048,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                     if not suppress_output:
                         print(f"{C.GREY}(→ steered){C.RESET}", flush=True)
 
-        print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
+        print(f"{C.ORANGE}*** Tool loop hit max iterations: {cfg.max_tool_iterations}{C.RESET}")
         _end_turn("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
         # turn_start is emitted unconditionally and every normal/handled exit

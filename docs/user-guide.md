@@ -109,6 +109,7 @@ REPL commands:
 /on [event handler]           list or register event hooks
 /set model.reasoning_effort high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
+/set ui.tools 3                show every tool call and its whole result
 /set compact.auto off
 /on turn_start set compact.auto off
 /turns
@@ -164,7 +165,7 @@ retrying; at 2 (the default) each
 model request, including subagents and compaction, also prints
 `*** Connecting` and `*** Connected ... Nms`, and the bar counts response
 bytes until the first token arrives; at 3 each retry, models.dev catalog
-refreshes and the per-call stream stats line (`▸ ms finish tok tok/s cache`)
+refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
 
@@ -177,6 +178,24 @@ A line typed while a turn runs is handled by `runtime.steer`:
   tool call, the lines go in as one message right after it ends.
 - `batch`: the lines wait for the turn to end and then go in as ONE message.
 - `one`: each line is its own turn, in order.
+
+Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
+one line per exchange, `> read: 4054B 292L`, with the exit status when a shell
+command exits nonzero; `2` shows the call with its command highlighted, the
+first `ui.tools_preview_lines` lines of the result, `...` when there is more,
+and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
+`3` shows the call and the whole result, with the text of a `read` source file
+highlighted. Calls that run at the same time, such as parallel `task` calls,
+print each exchange whole when it finishes. Each exchange the screen shows has
+one `>` line, so `grep '] > shell'` over a saved transcript finds every shell
+call made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
+output, tool arguments and model text are stripped of escape sequences and
+control bytes before the terminal sees them.
+
+Assistant Markdown is rendered on a terminal: each finished block (paragraph,
+list, fenced code) is highlighted once and stays put; only the block still
+being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
+Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
 drops them without touching the turn. Already received text
