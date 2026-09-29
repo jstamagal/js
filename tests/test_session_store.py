@@ -4,6 +4,7 @@ lookup across folders. Every test runs in the tmp HOME the conftest installs."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -12,7 +13,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, runtime, session_store
+from js import cli, runtime, session_store, supervisor
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
@@ -235,13 +236,26 @@ def test_the_async_repl_stamps_each_answer_with_the_model_it_ran_on(monkeypatch,
 
     monkeypatch.chdir(_dir(tmp_path, "work"))
 
+    first_turn_started = asyncio.Event()
+
     async def turn(cfg, system, messages, telemetry, **kwargs):
+        first_turn_started.set()
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
+
+    async def script(on_line):
+        await on_line("first")
+        # A queued line takes the live model when its turn starts, so /model
+        # waits until the first turn has started and ended.
+        await first_turn_started.wait()
+        for job in supervisor.get_current().jobs("turn"):
+            await job.task
+        await on_line("/model model-y")
+        await on_line("second")
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     cfg = from_env()
 
-    run_async(monkeypatch, cfg, ["first", "/model model-y", "second"], model="model-x")
+    run_async(monkeypatch, cfg, script, model="model-x")
 
     records = [json.loads(line) for line in cfg.session_file.read_text(encoding="utf-8").splitlines()]
     stamps = [record["stamp"]["model"] for record in records
