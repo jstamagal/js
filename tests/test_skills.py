@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 
@@ -21,7 +22,7 @@ def _write(path: Path, text: str) -> Path:
 def _catalog(tmp_path: Path, package: Path, global_dir: Path) -> SkillCatalog:
     return discover_skills(
         tmp_path,
-        package_dir=package,
+        builtin_dir=package,
         global_dir=global_dir,
         user_dir=tmp_path / "user-agents-skills",
     )
@@ -270,3 +271,51 @@ def test_user_invocation_ignores_other_lines_and_rejects_unknown_names(tmp_path)
         expand_user_invocation(catalog, "/skill nosuch")
     with pytest.raises(SkillInvocationError):
         expand_user_invocation(catalog, "/skill")
+
+
+_BUILTIN_NINE = {
+    "code-review",
+    "codebase-design",
+    "diagnosing-bugs",
+    "grill-me",
+    "grilling",
+    "handoff",
+    "improve-codebase-architecture",
+    "wait-what",
+    "wayfinder",
+}
+
+
+def test_fresh_install_lists_the_builtin_skills(tmp_path):
+    catalog = discover_skills(tmp_path / "project")
+
+    builtin = {skill.name for skill in catalog.skills if skill.source == "builtin"}
+    assert builtin == _BUILTIN_NINE
+    assert catalog.get("grill-me").model_invocable is False
+    assert catalog.get("grilling").model_invocable is True
+    # grill-me is an alias that sends the model to grilling.
+    assert "grilling" in catalog.load("grill-me", user=True)
+
+
+def test_user_skill_shadows_builtin_of_same_name(tmp_path):
+    global_dir = tmp_path / "global"
+    mine = _write(global_dir / "grilling" / "SKILL.md", "my grilling")
+
+    catalog = discover_skills(tmp_path / "project", global_dir=global_dir)
+
+    assert catalog.get("grilling").source == "global"
+    assert catalog.get("grilling").path == mine
+    assert catalog.load("grilling") == "my grilling"
+
+
+def test_each_builtin_skill_names_its_upstream_source():
+    from js.skills import BUILTIN_SKILLS_DIR
+
+    for skill_md in BUILTIN_SKILLS_DIR.glob("*/SKILL.md"):
+        sources = [
+            line for line in skill_md.read_text().splitlines() if line.startswith("SOURCE: ")
+        ]
+        assert len(sources) == 1, skill_md
+        assert re.fullmatch(
+            r"SOURCE: https://github\.com/[\w.-]+/[\w.-]+/tree/[0-9a-f]{40}/\S+", sources[0]
+        ), skill_md

@@ -305,6 +305,41 @@ tools-outdated:
 tools-upgrade:
     uv run python scripts/refresh_tool_releases.py
 
+# show what moved upstream in each built-in skill (js/skills/*) since the commit
+# its SOURCE: line names. upstream is a git checkout of that repo.
+#   just skills-diff                 # ~/matt-skills
+#   just skills-diff /path/to/skills
+skills-diff upstream=(env_var('HOME') / "matt-skills"):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    up="{{ upstream }}"
+    if ! git -C "$up" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "!! no git checkout at $up" >&2
+        exit 1
+    fi
+    echo "upstream: $up at $(git -C "$up" rev-parse --short HEAD)"
+    for skill_md in js/skills/*/SKILL.md; do
+        name=$(basename "$(dirname "$skill_md")")
+        source=$(sed -n 's/^SOURCE: //p' "$skill_md" | head -n 1)
+        if [ -z "$source" ]; then
+            echo "!! $name: no SOURCE: line" >&2
+            continue
+        fi
+        rest=${source#*/tree/}
+        commit=${rest%%/*}
+        path=${rest#*/}
+        if ! git -C "$up" cat-file -e "$commit^{commit}" 2>/dev/null; then
+            echo "!! $name: commit ${commit:0:7} is not in $up (fetch it)" >&2
+            continue
+        fi
+        if git -C "$up" diff --quiet "$commit" HEAD -- "$path"; then
+            echo "$name: unchanged upstream since ${commit:0:7}"
+        else
+            echo "== $name: $path changed upstream since ${commit:0:7}"
+            git -C "$up" --no-pager diff "$commit" HEAD -- "$path"
+        fi
+    done
+
 # remove all generated/local build state (all of it is gitignored).
 clean:
     -rm -rf build dist .coverage coverage.xml htmlcov .pytest_cache .ruff_cache

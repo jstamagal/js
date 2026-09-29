@@ -16,6 +16,8 @@ from . import paths
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _MAX_DESCRIPTION = 500
+# The skills js ships, vendored as js/skills/<name>/SKILL.md.
+BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 @dataclass(frozen=True)
@@ -79,13 +81,13 @@ class SkillCatalog:
         cls,
         project_dir: Path,
         *,
-        package_dir: Path | None = None,
+        builtin_dir: Path | None = None,
         global_dir: Path | None = None,
         user_dir: Path | None = None,
     ) -> SkillCatalog:
         return discover_skills(
             project_dir,
-            package_dir=package_dir,
+            builtin_dir=builtin_dir,
             global_dir=global_dir,
             user_dir=user_dir,
         )
@@ -215,20 +217,24 @@ def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tup
 def discover_skills(
     project_dir: Path,
     *,
-    package_dir: Path | None = None,
+    builtin_dir: Path | None = None,
     global_dir: Path | None = None,
     user_dir: Path | None = None,
 ) -> SkillCatalog:
-    """Index package, user, global, and project skills without retaining their bodies."""
+    """Index built-in, global, and project skills without retaining their bodies.
 
-    package_root = package_dir or Path(__file__).resolve().parent / "skills"
+    Layers run lowest first, so a global or project skill shadows a built-in
+    one of the same name.
+    """
+
+    builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
     global_root = global_dir or paths.global_skills_dir()
     user_root = user_dir or Path.home() / ".agents" / "skills"
     # Within a scope the cross-client dir (.agents/skills) is scanned first and
     # the js-native dir last, so native wins a name collision — with a warning,
     # because two same-named skills in one scope is ambiguity, not layering.
     layers = (
-        ("package", (package_root,)),
+        ("builtin", (builtin_root,)),
         ("global", (user_root, global_root)),
         ("project", (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")),
     )

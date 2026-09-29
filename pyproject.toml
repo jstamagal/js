@@ -58,7 +58,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js" = ["tool_releases.json"]
+"js" = ["tool_releases.json", "skills/**/*"]
 "js.toolkit" = ["tool_descriptions/*/*.md", "toolbox_examples/*.py"]
 
 # dev tooling for agents hacking this code (and for the justfile quality

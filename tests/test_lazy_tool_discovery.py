@@ -9,6 +9,7 @@ import ai.types.messages
 import ai.types.usage
 
 from js import context_budget, runtime
+from js import skills as skills_mod
 from js.config import Config
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy
@@ -16,6 +17,11 @@ from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
+
+
+def _without_builtin_skills(monkeypatch, tmp_path):
+    """Leave only the test's own skills in the catalog."""
+    monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", tmp_path / "no-builtin-skills")
 
 
 def _skill_file(root, name):
@@ -144,6 +150,7 @@ def test_loading_native_tool_changes_only_current_surface(tmp_path):
 
 def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    _without_builtin_skills(monkeypatch, tmp_path)
     skills = tmp_path / ".agents" / "skills"
     skills.mkdir(parents=True)
     _skill_file(skills, "inspect").write_text(
@@ -234,6 +241,7 @@ def test_explicit_skill_kind_is_not_hijacked_by_mcp_query_word(tmp_path, monkeyp
 
 def test_discovery_loaded_state_is_kind_aware_for_native_skill_and_mcp(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    _without_builtin_skills(monkeypatch, tmp_path)
     skills = tmp_path / ".agents" / "skills"
     skills.mkdir(parents=True)
     _skill_file(skills, "terminal_session").write_text(
@@ -266,6 +274,7 @@ def test_discovery_loaded_state_is_kind_aware_for_native_skill_and_mcp(tmp_path,
 
 def test_repeated_skill_requirements_warn_without_breaking_valid_discovery(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    _without_builtin_skills(monkeypatch, tmp_path)
     skills = tmp_path / ".agents" / "skills"
     skills.mkdir(parents=True)
     _skill_file(skills, "inspect").write_text(
