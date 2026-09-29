@@ -316,10 +316,12 @@ class _OwnedCoreStream:
 
 @asynccontextmanager
 async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None,
+                        on_request: Callable[[], None] | None = None,
                         on_bytes: Callable[[], None] | None = None):
     """Close this model request's byte iterators when its stream scope exits.
     With a `call`, its handshake and response bytes feed the network channel.
-    `on_bytes` is called for every response chunk read."""
+    `on_request` is called as each request is sent and `on_bytes` for every
+    response chunk read."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
@@ -332,12 +334,15 @@ async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None,
                 cleanup.push_async_callback(wrapper.aclose)
 
         async def trace(request: httpx2.Request) -> None:
+            if on_request is not None:
+                on_request()
             if call is not None:
                 call.request_sent()
                 request.extensions = {**request.extensions, "trace": call.trace}
 
         response_hooks = client.event_hooks["response"]
-        request_hooks = client.event_hooks["request"] if call is not None else []
+        request_hooks = (client.event_hooks["request"]
+                         if call is not None or on_request is not None else [])
         response_hooks.append(own)
         request_hooks.append(trace)
         try:

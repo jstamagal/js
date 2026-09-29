@@ -256,6 +256,25 @@ def test_keep_alive_bytes_hold_off_the_idle_watchdog(tmp_path):
     assert len(server.arrivals) == 1
 
 
+def test_building_the_sdk_client_does_not_count_as_silence(tmp_path, monkeypatch):
+    # The first client in a process imports the provider SDK; stand in for
+    # that with a build slower than the idle limit.
+    from ai.providers.openai.provider import OpenAICompatibleProvider
+    build = OpenAICompatibleProvider._make_sdk_client
+
+    def slow_build(self, **kwargs):
+        time.sleep(0.6)
+        return build(self, **kwargs)
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "_make_sdk_client", slow_build)
+    server, messages, error = _served_turn(
+        tmp_path, [_answer("first try")], {"stream_idle_seconds": 0.3})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "first try"}
+    assert len(server.arrivals) == 1
+
+
 def test_a_stream_that_stays_silent_gives_up_after_the_budget(tmp_path):
     server, _messages, error = _served_turn(
         tmp_path, [_silent(after_headers=True)],

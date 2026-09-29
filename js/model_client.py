@@ -664,6 +664,18 @@ def build_tool_result_messages(
     ]
 
 
+def _sdk_client(model: ai.Model) -> Any:
+    """The OpenAI or Anthropic SDK client of ``model``'s provider, built on
+    first use; None for any other provider. Building the first one in a
+    process imports the provider SDK, about a second of blocking work."""
+    from ai.providers.anthropic.provider import AnthropicCompatibleProvider
+    from ai.providers.openai.provider import OpenAICompatibleProvider
+
+    if isinstance(model.provider, (OpenAICompatibleProvider, AnthropicCompatibleProvider)):
+        return model.provider.sdk_client
+    return None
+
+
 @asynccontextmanager
 async def _open_stream(
     *,
@@ -671,6 +683,7 @@ async def _open_stream(
     messages: list[ai.messages.Message],
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None = None,
+    on_request: Callable[[], None] | None = None,
     on_bytes: Callable[[], None] | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
@@ -679,19 +692,18 @@ async def _open_stream(
     Keeping the test seam here lets offline tests supply a public
     :class:`ai.models.Stream` without reaching into SDK internals.
 
-    ``on_bytes`` is called for each response body chunk the transport reads.
+    ``on_request`` is called as each HTTP request is sent and ``on_bytes`` for
+    each response body chunk the transport reads.
     The OpenAI and Anthropic SDK clients retry nothing themselves: every retry
     runs under js's budget (js/retry.py).
     """
-    from ai.providers.anthropic.provider import AnthropicCompatibleProvider
-    from ai.providers.openai.provider import OpenAICompatibleProvider
-
     async with AsyncExitStack() as cleanup:
-        if isinstance(model.provider, (OpenAICompatibleProvider, AnthropicCompatibleProvider)):
-            sdk_client = model.provider.sdk_client
+        sdk_client = _sdk_client(model)
+        if sdk_client is not None:
             sdk_client.max_retries = 0
             await cleanup.enter_async_context(stream_transport.own_responses(
-                sdk_client._client, stream_transport.current_call(), on_bytes=on_bytes,
+                sdk_client._client, stream_transport.current_call(),
+                on_request=on_request, on_bytes=on_bytes,
             ))
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
@@ -753,9 +765,13 @@ async def _stream_async(
     finish_reason: str | None = None
     idle = _idle_seconds.get() or None
     loop = asyncio.get_running_loop()
-    # The idle deadline moves forward on every response byte and every event.
-    # It covers the wait for the response headers too.
-    deadline = asyncio.timeout(idle)
+    # The idle deadline starts when the request is sent and moves forward on
+    # every response byte and every event, so it covers the wait for the
+    # response headers but not the SDK's own setup before the request (its
+    # first request in a process imports the SDK). For a provider whose
+    # requests js does not see, it starts at once.
+    sees_request = _sdk_client(model) is not None
+    deadline = asyncio.timeout(None if sees_request else idle)
     try:
         async with deadline:
 
@@ -763,7 +779,7 @@ async def _stream_async(
                 if idle is not None and not deadline.expired():
                     deadline.reschedule(loop.time() + idle)
 
-            async with _open_stream(**kwargs, on_bytes=alive) as stream:
+            async with _open_stream(**kwargs, on_request=alive, on_bytes=alive) as stream:
                 async for event in stream:
                     alive()
                     event_metadata = getattr(event, "provider_metadata", None)
