@@ -152,6 +152,16 @@ None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword con
 
 ## Part 2: Split `run_turn_async` into its own modules
 
+> Done in js-1g1.32 as `js/turn_stream.py` (`TurnEvents`, `StreamSink`),
+> `js/turn_surface.py` (`SurfaceJournal`), `js/turn_budget.py` (`TurnConvo`,
+> `TurnBudget`) and `js/turn_call.py` (`ModelCaller`, `CallLimits`). The call
+> is a turn-scoped `ModelCaller` rather than a `call_model` function, because
+> overflow rounds and the one escalated resend are counted across the turn's
+> calls. The resilience settings are read once per turn as `CallLimits`, not
+> as `TurnSetting` rows, because `compaction.summarize` and the `/login` test
+> read the same settings from the store through `js/retry.py`. The code is the
+> reference now; the text below is the plan as written.
+
 ### Current structure (js/runtime.py at `31900da`)
 
 `run_turn_async` spans 1275–~2160, about 885 lines, with 19 parameters. It has 13 top-level closures, 3 more nested inside them, and 8 `nonlocal` statements.

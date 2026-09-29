@@ -52,7 +52,7 @@ class StdoutSink:
     """Default sink: print the event's `text` exactly as code prints today.
 
     Streaming text (name == "stream") is written without a trailing newline so a
-    chunk stream reads identically to the current `_emit_text` path; everything
+    chunk stream reads identically to `StreamSink.text` (js/turn_stream.py); everything
     else prints as a line. This is the byte-for-byte fallback for flag-off mode.
     """
 

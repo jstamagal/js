@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 import asyncio
 import contextlib
+import functools
 import inspect
 import json
 import hashlib
@@ -16,7 +17,7 @@ import sys
 import threading
 from pathlib import Path
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import events as event_mod
@@ -34,8 +35,6 @@ from . import paths
 from . import providers
 from . import settings as _settings
 from . import turn_settings as _turn_settings
-from .retry import backoff as _backoff, retry_after_seconds
-from . import retry
 from . import toolkit as T
 from . import tool_args
 from . import routing
@@ -45,11 +44,16 @@ from . import stream_transport
 from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
-from .reasoning_display import ReasoningDisplay, StderrReasoning
+from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
 from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
                            call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
+from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
+from .turn_surface import SurfaceJournal
+from .turn_stream import StreamSink, TurnEvents
+from .turn_call import (CallLimits, ModelCaller, ModelReply, ModelRequest, cut_off_by_cap,
+                        dangling_arguments)
 
 
 _UNSET = object()
@@ -280,38 +284,6 @@ def _is_retriable(exc: BaseException) -> bool:
     return False
 
 
-def _escalated_max_output(cut_at: int | None, ceiling: int | None, escalation: int,
-                          room: int | None) -> int | None:
-    """The larger output cap for resending a cut-off reply, or None when there
-    is none. `escalation` is held to the model's known output ceiling and to
-    `room`, what the window has left after the prompt; it must exceed
-    `cut_at`, the cap the reply was cut at."""
-    if escalation <= 0:
-        return None
-    target = escalation if ceiling is None else min(escalation, ceiling)
-    if room is not None:
-        target = min(target, room)
-    if target <= 0 or (cut_at is not None and target <= cut_at):
-        return None
-    return target
-
-
-def _silent_overflow(usage: Any, context_window: int | None, *, cut_by_cap: bool) -> int | None:
-    """The prompt tokens of a reply whose input the provider cut to fit its
-    window without an error, else None. Two signs: prompt tokens over the
-    window, or a reply cut by its cap with no output and a prompt filling 99%
-    of the window. The SDK's input_tokens already counts cache reads."""
-    if not context_window or context_window <= 0 or usage is None:
-        return None
-    reported = context_budget.usage_from_provider(usage)
-    prompt = reported.prompt_tokens
-    if prompt > context_window:
-        return prompt
-    if cut_by_cap and not reported.output_tokens and prompt >= context_window * 0.99:
-        return prompt
-    return None
-
-
 # Sent as a user message after a reply cut off by its output-token cap.
 MAX_OUTPUT_RESUME_NUDGE = (
     "Output token limit hit. Resume directly, no apology, no recap of what you were doing. "
@@ -515,17 +487,7 @@ def _assistant_message_with_tool_calls(
 
 
 def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) -> bool:
-    return any(not tool_args.is_json_object(pc.arguments()) for pc in pending_calls)
-
-
-def _cut_off_by_cap(incomplete_reason: str | None, pending_calls: list[_PendingToolCall]) -> bool:
-    """A reply stopped by its output-token cap with nothing runnable: no tool
-    call, or one whose arguments the cut left unfinished."""
-    return (
-        bool(incomplete_reason)
-        and compaction.is_max_output_incomplete(incomplete_reason)
-        and (not pending_calls or _incomplete_has_dangling_tool_args(pending_calls))
-    )
+    return dangling_arguments(pc.arguments() for pc in pending_calls)
 
 
 def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
@@ -1358,14 +1320,383 @@ async def _dispatch_batch(
 # Turn loop
 # --------------------------------------------------------------------------
 
-def _last_user_message_index(messages: list[dict]) -> int | None:
-    """Index of the message that opened the current turn. A steered message or
-    a resume nudge joined a turn already running, so it does not open one."""
-    for idx in range(len(messages) - 1, -1, -1):
-        message = messages[idx]
-        if message.get("role") == "user" and not message.get("steered") and not message.get("resume_nudge"):
-            return idx
-    return None
+def _turn_request(cfg: Config, *, model_override: str | None, provider_id_override: str | None,
+                  provider_base_url_override: str | None, provider_api_key_override: str | None,
+                  reasoning_effort_override: Any, max_output_override: Any,
+                  sampling: Sampling | None) -> ModelRequest:
+    """What this turn's model calls send: ``cfg`` with the overrides that are set."""
+    model = model_override or cfg.model
+    provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
+    max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
+    if max_out is None:
+        max_out = model_metadata.resolve_max_output(model, provider_id)
+    return ModelRequest(
+        model=model,
+        provider_id=provider_id,
+        base_url=provider_base_url_override if provider_base_url_override is not None else cfg.provider_base_url,
+        api_key=provider_api_key_override if provider_api_key_override is not None else cfg.provider_api_key,
+        effort=cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override,
+        max_out=max_out,
+        thinking_budget=getattr(cfg, "thinking_budget", None),
+        headers=getattr(cfg, "provider_headers", None),
+        extra=routing.provider_extra_params(cfg),
+        sampling=sampling,
+        cache_key=_cache_key(cfg),
+    )
+
+
+def _cache_key(cfg: Config) -> str | None:
+    """One conversation, one cache key: OpenAI-compatible endpoints use it to
+    route a request to the machine already holding that conversation's prefix.
+    Keyed on the session rather than the agent so two concurrent sessions do
+    not contend for one prefix. A session-less run sends no key and falls back
+    to the provider's own longest-prefix matching."""
+    session_file = getattr(cfg, "session_file", None)
+    if session_file is None or Path(session_file).name in ("", os.devnull, "null"):
+        return None
+    return f"js-{cfg.agent_id}-{Path(session_file).stem}"
+
+
+def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
+                          registry: ToolRegistry, event_hooks: Any) -> context_budget.TokenState:
+    """Set ``context`` up for this turn and return its token state, which
+    persists across the turns of one context."""
+    # Delegation inherits this turn's effective settings, not a fresh env load
+    # or a stale config left on a reused context. Do not mutate the caller's cfg.
+    context.config = replace(
+        cfg, model=request.model, provider_id=request.provider_id,
+        provider_base_url=request.base_url, provider_api_key=request.api_key,
+        reasoning_effort=request.effort, max_output_tokens=request.max_out,
+        vision_enabled=vision_enabled_for_model(request.model, getattr(cfg, "settings", None)),
+    )
+    context.tool_registry = registry
+    context.agent_id = cfg.agent_id
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
+    _turn_settings.install(context, cfg)
+    install_context_window_overrides(cfg)
+    context.model = request.model
+    context.last_incomplete_reason = None
+    context.last_output_tokens = 0
+    context.last_max_output_tokens = request.max_out
+    context.compacted_during_turn = False
+    context.context_tokens = 0
+    context.tokens_until_compaction = None
+    context.turn_status.reset()
+    chars_per_token = compaction.get_float(cfg, "chars_per_token")
+    token_state = getattr(context, "context_budget_state", None)
+    if not isinstance(token_state, context_budget.TokenState):
+        token_state = context_budget.TokenState(chars_per_token=chars_per_token)
+    else:
+        token_state.chars_per_token = chars_per_token
+    context.context_budget_state = token_state
+    context.vision_enabled = context.config.vision_enabled
+    if event_hooks is not None:
+        # Subagents started through this context answer to its tool_call guards.
+        context.tool_call_hooks = event_hooks
+    return token_state
+
+
+def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolRegistry,
+                  resolve_window: Callable[[], int | None]) -> None:
+    """Print the run line: model, provider, window, output cap, effort, vision, tools."""
+    model, provider_id = request.model, request.provider_id
+    if provider_id:
+        provider_label = provider_id
+        base = request.base_url or "provider-default"
+    else:
+        provider_label = "ai-sdk"
+        base = model.split(":")[0] if ":" in model else "ai-gateway"
+    # ctx is the number that decides when compaction fires and how much room
+    # is left to work in; max_out only bounds one reply. Showing the second
+    # without the first invites reading 128000 as the window.
+    ctx = compaction.configured_context_window(context.config, resolve_window)
+    bits = [f"model={model}",
+            f"provider={provider_label}",
+            f"base={base}",
+            f"ctx={ctx if ctx else 'unknown'}",
+            f"max_out={request.max_out if request.max_out is not None else 'provider-default'}"]
+    if request.effort:
+        bits.append(f"effort={request.effort}")
+    bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
+    try:
+        ntools = len(registry.openai_specs())
+    except Exception:  # noqa: BLE001 — registry internals
+        ntools = "?"
+    bits.append(f"tools={ntools}")
+    print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(bits))}{C.RESET}", flush=True)
+
+
+def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:
+    """Mark a skill the user invoked in the turn's opening message as loaded."""
+    opening = _last_user_message_index(messages)
+    user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
+    note_skill_loaded = getattr(registry, "note_skill_loaded", None)
+    if user_skill and callable(note_skill_loaded):
+        note_skill_loaded(user_skill)
+
+
+def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, system: str,
+                      messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
+                      context: ToolContext, token_state: context_budget.TokenState,
+                      telemetry: Telemetry, events: TurnEvents, sink: StreamSink,
+                      suppress_output: bool) -> tuple[list[_PendingToolCall], str | None, ToolRegistry]:
+    """Append the reply to the history and the convo. Returns the tool calls
+    to run, the reply's incomplete reason, and the registry that authorizes
+    the calls: the surface this model call saw."""
+    result = reply.result
+    text = result.text
+    pending_calls = [
+        _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
+        for call in result.tool_calls
+    ]
+    provider_metadata, incomplete_reason = reply.provider_metadata, reply.incomplete_reason
+    assistant_message_override: ai.messages.Message | None = None
+    if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
+        notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
+        telemetry.event(
+            "tool_call_dropped",
+            reason="incomplete_truncated_args",
+            incomplete_reason=incomplete_reason,
+            n_tool_calls=len(pending_calls),
+            tools=[pc.name for pc in pending_calls],
+        )
+        if not suppress_output:
+            sink.text(("\n\n" if text else "") + notice)
+            sink.close()
+        text = f"{text}\n\n{notice}" if text else notice
+        pending_calls = []
+        assistant_message_override = ai.assistant_message(text)
+
+    # Freeze dispatch authorization to the schemas this model call saw.
+    # Discovery may mutate the turn surface while this batch runs, but a
+    # newly loaded tool is callable only after its schema is emitted on
+    # the next model iteration.
+    dispatch_registry = registry.dispatch_registry()
+    batch_diagnostic_suffix = ""
+    if pending_calls:
+        pending_calls, batch_stats = _normalize_tool_call_batch(
+            pending_calls,
+            dispatch_registry,
+            getattr(
+                cfg,
+                "max_tool_calls_per_message",
+                _settings.default_value("limits.max_tool_calls_per_message"),
+            ),
+        )
+        telemetry.event(
+            "tool_call_batch_normalized",
+            received=batch_stats.received,
+            retained=batch_stats.retained,
+            duplicate=batch_stats.duplicate,
+            invalid=batch_stats.invalid,
+            capped=batch_stats.capped,
+        )
+        if batch_stats.capped:
+            diagnostic = (
+                "Tool-call batch limit reached: "
+                f"retained {batch_stats.retained} distinct calls and rejected "
+                f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
+            )
+            batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
+            text += batch_diagnostic_suffix
+
+    record: dict = {"role": "assistant", "content": text}
+    if pending_calls:
+        record["tool_calls"] = [
+            {"id": pc.id, "type": "function",
+             "function": {"name": pc.name, "arguments": pc.arguments()}}
+            for pc in pending_calls
+        ]
+    if result.reasoning:
+        record["reasoning_content"] = result.reasoning
+    if not isinstance(provider_metadata, dict):
+        provider_metadata = None
+    incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
+    if provider_metadata:
+        record["provider_metadata"] = provider_metadata
+    if incomplete_reason:
+        record["incomplete_reason"] = incomplete_reason
+    assistant_message = assistant_message_override or result.assistant_message
+    if result.tool_calls:
+        assistant_message = _assistant_message_with_tool_calls(
+            assistant_message,
+            pending_calls,
+            diagnostic_suffix=batch_diagnostic_suffix,
+        )
+    # The signed parts as this turn replays them, after batch normalization.
+    signed_reasoning = (
+        model_client.signed_reasoning_parts(assistant_message)
+        if assistant_message_override is None else None
+    )
+    if signed_reasoning:
+        record["reasoning_parts"] = signed_reasoning
+        record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
+    if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
+        assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
+    convo.ai.append(_sanitize_assistant_message(assistant_message))
+    messages.append(memory.note_time(record))
+    # Recorded in full now; a later ^C in this turn must not re-append it.
+    sink.clear()
+    token_state.record_provider_usage(
+        None if reply.usage_stale else result.usage,
+        message_count=len(messages),
+        messages=messages,
+        system=system,
+        tools=reply.ai_tools,
+    )
+    current_tokens, _estimate, used_provider = token_state.current_context_tokens(
+        system=system,
+        messages=messages,
+        tools=reply.ai_tools,
+    )
+    context.context_tokens = current_tokens
+    context.context_tokens_used_provider_usage = used_provider
+    if text:
+        payload = {"text": text, "finish_reason": reply.finish}
+        if incomplete_reason:
+            payload["incomplete_reason"] = incomplete_reason
+        events.emit("response", **payload)
+    return pending_calls, incomplete_reason, dispatch_registry
+
+
+def _send_resume_nudge(messages: list[dict], convo: TurnConvo, *, n: int, limit: int,
+                       incomplete_reason: str | None, model: str, telemetry: Telemetry,
+                       suppress_output: bool) -> None:
+    """Keep the partial reply and ask the model to carry on from where the
+    cap cut it."""
+    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
+    messages.append(nudge)
+    convo.add([nudge])
+    telemetry.event("max_output_resume", model=model, n=n, incomplete_reason=incomplete_reason)
+    if not suppress_output:
+        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=n, limit=limit)
+
+
+async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Config, trace: bool,
+                               messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
+                               dispatch_registry: ToolRegistry, context: ToolContext,
+                               error_tracker: ToolErrorTracker, telemetry: Telemetry,
+                               events: TurnEvents) -> list[tuple[_PendingToolCall, dict, Any]]:
+    """Run the batch and append its results to the history and the convo.
+    Returns the (call, arguments, result) records of the calls that ran.
+
+    convo.ai carries the heavy form (image bytes embedded in tool messages)
+    for THIS turn; messages, persisted and replayed on every future turn,
+    carries the dehydrated stub so base64 is billed once."""
+    for index, pc in enumerate(pending_calls):
+        emission = events.emit(
+            "tool_call",
+            id=pc.id,
+            name=_canonical_tool_call_name(pc.name, registry),
+            arguments=_canonical_tool_args(pc.arguments()),
+        )
+        refusal = event_mod.refusal_of(emission)
+        if refusal and pc.validation_error is None:
+            # An `on tool_call` handler refused it: the call never runs
+            # and the model reads the refusal as its result.
+            pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+            telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
+    # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
+    # thread so the shared loop stays free while they execute. Fan-out (task /
+    # named-agent) calls are awaited ON the loop instead, so a parent turn
+    # never parks a dispatch thread its descendants need (see _dispatch_batch).
+    # A read that repeats an earlier one returns a stub naming it only
+    # while that earlier result is still in the history the model sees.
+    context.keep_shown_reads(_tool_results_in(messages))
+    progress = _DispatchProgress()
+    context.turn_status.tool_begin([_canonical_tool_call_name(pc.name, registry) for pc in pending_calls])
+    try:
+        dispatch_records = await _dispatch_batch(
+            pending_calls,
+            telemetry,
+            cfg.max_tool_result_bytes,
+            trace,
+            error_tracker,
+            dispatch_registry,
+            context,
+            asyncio.get_running_loop(),
+            progress,
+        )
+    finally:
+        context.turn_status.tool_end()
+        # Also runs on cancellation, before the REPL persists the turn
+        # and balances genuinely unanswered calls with orphan markers.
+        dispatch_records = [progress.records[pc.id] for pc in pending_calls
+                            if pc.id in progress.records]
+        capped = _cap_batch_results(
+            [r for _, _, r in dispatch_records],
+            getattr(cfg, "max_tool_results_per_turn_bytes", 0),
+        )
+        reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
+        for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
+            _reconcile_read_delivery(
+                _canonical_tool_call_name(pc.name, registry),
+                args,
+                old_result,
+                new_result,
+                context,
+                pc.id,
+            )
+            reconciled.append((pc, args, new_result))
+        dispatch_records = reconciled
+        context.settle_reads()
+        # A batch's tool results must stay contiguous: the SDK's history
+        # check ends the pending tool-call window at the first following
+        # user/assistant message, so an image's user FilePart inserted
+        # between two tool results orphans every later one. Collect the
+        # batch's tool messages first, then the media that follows it.
+        batch_tool_msgs: list[ai.messages.Message] = []
+        batch_media_msgs: list[ai.messages.Message] = []
+        for pc, _args, result_value in dispatch_records:
+            canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, registry))
+            events.emit(
+                "tool_result",
+                id=pc.id,
+                name=canonical_pc.name,
+                result=result_value,
+            )
+            for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
+                if built.role == "tool":
+                    batch_tool_msgs.append(built)
+                else:
+                    batch_media_msgs.append(built)
+            done_at = progress.finished.get(pc.id)
+            messages.extend(memory.note_time(item, done_at)
+                            for item in _history_tool_result_message(canonical_pc, result_value))
+        convo.ai.extend(batch_tool_msgs)
+        convo.ai.extend(batch_media_msgs)
+    return dispatch_records
+
+
+def _record_tool_error_limit(dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
+                             registry: ToolRegistry, messages: list[dict], convo: TurnConvo,
+                             events: TurnEvents) -> None:
+    """End the turn on an assistant message naming the last failed call."""
+    name, last_error = next(
+        ((_canonical_tool_call_name(pc.name, registry), result_value)
+         for pc, _, result_value in reversed(dispatch_records)
+         if isinstance(result_value, str) and result_value.startswith("ERROR")),
+        (dispatch_records[-1][0].name, dispatch_records[-1][2]),
+    )
+    failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
+    convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
+    messages.append(memory.note_time({"role": "assistant", "content": failure}))
+    events.emit("error", error=failure, retryable=False)
+    events.end("tool_error_limit")
+
+
+async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]], messages: list[dict],
+                      convo: TurnConvo, telemetry: Telemetry, suppress_output: bool) -> None:
+    """Append the message ``steer`` returns, if any, at this tool boundary."""
+    steered = steer()
+    if inspect.isawaitable(steered):
+        steered = await steered
+    if steered is not None:
+        messages.append(memory.note_time(steered))
+        convo.add([steered])
+        telemetry.event("steered", message_index=len(messages) - 1)
+        if not suppress_output:
+            msgs.say(msgs.STEERED, flush=True)
 
 
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
@@ -1404,27 +1735,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     reloading config; unset values fall back to the Config values. The sync
     ``run_turn`` below wraps this for callers not yet on the async runtime.
     """
-    model = model_override or cfg.model
-    provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
-    provider_base_url = provider_base_url_override if provider_base_url_override is not None else cfg.provider_base_url
-    provider_api_key = provider_api_key_override if provider_api_key_override is not None else cfg.provider_api_key
-    effort = cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override
-    max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
-    if max_out is None:
-        max_out = model_metadata.resolve_max_output(model, provider_id)
-    ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-    error_tracker = ToolErrorTracker()
+    request = _turn_request(
+        cfg, model_override=model_override, provider_id_override=provider_id_override,
+        provider_base_url_override=provider_base_url_override,
+        provider_api_key_override=provider_api_key_override,
+        reasoning_effort_override=reasoning_effort_override, max_output_override=max_output_override,
+        sampling=sampling,
+    )
+    model, provider_id = request.model, request.provider_id
+    convo = TurnConvo(system, messages, provider_id=provider_id, model=model)
     base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
-    # Delegation inherits this turn's effective settings, not a fresh env load
-    # or a stale config left on a reused context. Do not mutate the caller's cfg.
-    active_context.config = replace(
-        cfg, model=model, provider_id=provider_id,
-        provider_base_url=provider_base_url, provider_api_key=provider_api_key,
-        reasoning_effort=effort, max_output_tokens=max_out,
-        vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)),
-    )
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
@@ -1433,1010 +1755,112 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
-    surface_file = getattr(cfg, "session_file", None)
-    if surface_file is not None and Path(surface_file).resolve() == Path(os.devnull):
-        surface_file = None
-    surface_scope = {"version": 1, "agent_id": cfg.agent_id, "cwd": str(active_context.cwd.resolve())}
-    prior_surface = memory.load_tool_surface(surface_file) if surface_file is not None else None
-    last_surface = active_registry.snapshot()
-
-    def save_surface(state: dict) -> None:
-        nonlocal last_surface
-        if state != last_surface:
-            if surface_file is not None:
-                memory.append_tool_surface(surface_file, {**surface_scope, **state})
-            last_surface = state
-
-    active_context.tool_registry = active_registry
-    active_context.agent_id = cfg.agent_id
-    active_context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
-    # One conversation, one cache key: OpenAI-compatible endpoints use it to route
-    # a request to the machine already holding that conversation's prefix. Keyed on
-    # the session rather than the agent so two concurrent sessions do not contend
-    # for one prefix. A session-less run sends no key and falls back to the
-    # provider's own longest-prefix matching.
-    _session_file = getattr(cfg, "session_file", None)
-    _cache_key = (
-        f"js-{cfg.agent_id}-{Path(_session_file).stem}"
-        if _session_file is not None and Path(_session_file).name not in ("", os.devnull, "null")
-        else None
-    )
-    _turn_settings.install(active_context, cfg)
-    install_context_window_overrides(cfg)
-    active_context.model = model
-    active_context.last_incomplete_reason = None
-    active_context.last_output_tokens = 0
-    active_context.last_max_output_tokens = max_out
-    active_context.compacted_during_turn = False
-    active_context.context_tokens = 0
-    active_context.tokens_until_compaction = None
+    surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
+                             cwd=active_context.cwd, registry=active_registry)
+    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks)
     turn_status = active_context.turn_status
-    turn_status.reset()
-    chars_per_token = compaction.get_float(cfg, "chars_per_token")
-    token_state = getattr(active_context, "context_budget_state", None)
-    if not isinstance(token_state, context_budget.TokenState):
-        token_state = context_budget.TokenState(chars_per_token=chars_per_token)
-    else:
-        token_state.chars_per_token = chars_per_token
-    active_context.context_budget_state = token_state
-    active_context.vision_enabled = active_context.config.vision_enabled
 
-    if event_hooks is not None:
-        # Subagents started through this context answer to its tool_call guards.
-        active_context.tool_call_hooks = event_hooks
-
-    def _emit_event(event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
-        """Raise ``event`` to the ON hooks and the event sink; the emission, or
-        None when this turn has no hooks. ``sink_extra`` fields reach the sink only."""
-        if event_sink is not None:
-            try:
-                event_sink(event, {**payload, **(sink_extra or {})})
-            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
-                telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
-        if event_hooks is None:
-            return None
-        emission = event_hooks.emit(event, **payload)
-        for result in emission.results:
-            if result.error:
-                telemetry.event(
-                    "event_handler_error",
-                    event=emission.event,
-                    handler=result.hook.handler,
-                    error=result.error,
-                )
-        return emission
-
+    events = TurnEvents(event_hooks, event_sink, telemetry, model=model, provider_id=provider_id)
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
-        mcp_host.event_sink = lambda event, **payload: _emit_event(event, **payload)
-
-    turn_usage = usage_mod.Tally()
-
-    def _on_usage(call: usage_mod.CallUsage, session: usage_mod.UsageTotals) -> None:
-        turn_usage.add(call)
-        if event_sink is not None:
-            event_sink("usage", {**call.as_dict(), "session": session.as_dict()})
-
-    def _end_turn(reason: str, **extra: Any) -> None:
-        _emit_event("turn_end", reason=reason, model=model, provider_id=provider_id,
-                    sink_extra={"usage": turn_usage.as_dict()}, **extra)
-
-    _emit_event(
-        "turn_start",
-        model=model,
-        provider_id=provider_id,
-        message_count=len(messages),
-    )
+        mcp_host.event_sink = events.emit
+    events.start(len(messages))
 
     trace = trace_override if trace_override is not None else cfg.trace
+    resolve_window = functools.partial(_resolve_context_window, model, provider_id, request.base_url)
     if trace:
-        if provider_id:
-            _provider_label = provider_id
-            _base = provider_base_url or "provider-default"
-        else:
-            _provider_label = "ai-sdk"
-            if ":" in model:
-                _base = model.split(":")[0]
-            else:
-                _base = "ai-gateway"
-        # ctx is the number that decides when compaction fires and how much room
-        # is left to work in; max_out only bounds one reply. Showing the second
-        # without the first invites reading 128000 as the window.
-        _ctx_for_banner = compaction.configured_context_window(
-            active_context.config,
-            lambda: _resolve_context_window(model, provider_id, provider_base_url),
-        )
-        _bits = [f"model={model}",
-                 f"provider={_provider_label}",
-                 f"base={_base}",
-                 f"ctx={_ctx_for_banner if _ctx_for_banner else 'unknown'}",
-                 f"max_out={max_out if max_out is not None else 'provider-default'}"]
-        if effort:
-            _bits.append(f"effort={effort}")
-        _bits.append(f"vision={'on' if active_context.vision_enabled else 'off'}")
-        try:
-            _ntools = len(active_registry.openai_specs())
-        except Exception:  # noqa: BLE001 — registry internals
-            _ntools = "?"
-        _bits.append(f"tools={_ntools}")
-        print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(_bits))}{C.RESET}", flush=True)
+        _trace_banner(request, active_context, active_registry, resolve_window)
 
-    # One Display per streamed answer, opened at its first chunk and finished
-    # when the stream ends.
-    answer_display: display.Display | None = None
-    markdown = display.markdown_enabled(getattr(cfg, "settings", None))
-    # Text already displayed but not yet recorded. The assistant record is only
-    # built after the stream completes, so a ^C mid-stream would otherwise leave
-    # the answer on screen and nothing in history.
-    streamed_text = {"value": ""}
-    _transcript_log = getattr(telemetry, "transcript_log", None)
-    streamed_reasoning: list[str] = []
-    reasoning_display: ReasoningDisplay | None = None
-    reasoning_level = _settings.knob(getattr(cfg, "settings", None), "ui.reasoning")
-    if not isinstance(reasoning_level, int) or reasoning_level not in range(4):
-        reasoning_level = _settings.default_value("ui.reasoning")
-
-    def _emit_reasoning(chunk: str) -> None:
-        nonlocal reasoning_display
-        if not chunk:
-            return
-        streamed_reasoning.append(chunk)
-        turn_status.stream(chunk)
-        if suppress_output or reasoning_level == 0:
-            return
-        if reasoning_display is None:
-            factory = telemetry.reasoning_factory
-            reasoning_display = (
-                factory(reasoning_level) if factory is not None
-                else StderrReasoning(reasoning_level, sys.stderr)
-            )
-        reasoning_display.append(chunk)
-
-    def _close_reasoning(tokens: int | None = None) -> None:
-        nonlocal reasoning_display
-        if reasoning_display is not None:
-            reasoning_display.finish(tokens)
-            reasoning_display = None
-
-    def _muted_transcript_tee():
-        mute = getattr(_transcript_log, "mute_tee", None)
-        if callable(mute):
-            return mute()
-        return contextlib.nullcontext()
-
-    def _emit_text(t: str) -> None:
-        nonlocal answer_display
-        if not t:
-            return
-        if reasoning_display is not None:
-            reasoning_display.answer_started()
-        streamed_text["value"] += t
-        turn_status.stream(t)
-        _emit_event("stream", text=t)
-        if suppress_output:
-            return
-        if _transcript_log is not None:
-            write_chunk = getattr(_transcript_log, "write_assistant_chunk", None)
-            if callable(write_chunk):
-                write_chunk(t)
-        with _muted_transcript_tee():
-            if answer_display is None:
-                factory = telemetry.display_factory
-                answer_display = (
-                    factory(markdown) if factory is not None
-                    else display.Display.for_stream(sys.stdout, markdown=markdown)
-                )
-            answer_display.chunk("text", t)
-
-    def _commit_streamed_partial() -> None:
-        """Record received text and reasoning before cancellation.
-
-        A partial assistant record marks progress even when its reasoning was
-        hidden, so the caller preserves the turn rather than discarding it.
-        """
-        partial = streamed_text["value"]
-        partial_reasoning = "".join(streamed_reasoning)
-        streamed_text["value"] = ""
-        streamed_reasoning.clear()
-        if not partial and not partial_reasoning:
-            return
-        record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
-        if partial_reasoning:
-            record["reasoning_content"] = partial_reasoning
-        messages.append(memory.note_time(record))
-
-    def _close_text(reasoning_tokens: int | None = None) -> None:
-        nonlocal answer_display
-        if not suppress_output and answer_display is not None:
-            if _transcript_log is not None:
-                end_stream = getattr(_transcript_log, "end_assistant_stream", None)
-                if callable(end_stream):
-                    end_stream()
-            with _muted_transcript_tee():
-                answer_display.finish()
-        answer_display = None
-        _close_reasoning(reasoning_tokens)
-
-    # Full request trace: dump system prompt + full tool schemas once (first
-    # model call), then only the newly-sent messages each call. This goes ONLY to
-    # the trace sink (autolog file / --debug-file), never to stdout — decoupled
-    # from the concise `trace` flag that drives the run/stats/tool lines on the terminal.
-    _trace_sink = getattr(telemetry, "trace_sink", None)
-    _trace_req = {"sent": 0, "schemas": True}
-
-    active_compact_cfg = replace(
-        cfg,
-        model=model,
-        provider_id=provider_id,
-        provider_base_url=provider_base_url,
-        provider_api_key=provider_api_key,
+    sink = StreamSink(telemetry, turn_status, events, settings=getattr(cfg, "settings", None),
+                      suppress_output=suppress_output)
+    budget = TurnBudget(
+        replace(cfg, model=model, provider_id=provider_id,
+                provider_base_url=request.base_url, provider_api_key=request.api_key),
+        convo, token_state, active_context, telemetry=telemetry, turn_status=turn_status,
+        emit=events.emit, resolve_window=resolve_window, max_out=request.max_out,
     )
-
-    def _budget_context_window() -> int:
-        return compaction.configured_context_window(
-            active_compact_cfg,
-            lambda: _resolve_context_window(model, provider_id, provider_base_url),
-        )
-
-    def _budget_buffer_tokens() -> int:
-        return compaction.get_nonnegative_int(active_compact_cfg, "buffer_tokens")
-
-    def _active_preserve_from() -> int | None:
-        return _last_user_message_index(messages)
-
-    async def _maybe_compact_request_for_budget(
-        *,
-        phase: str,
-        specs: list[dict],
-        force: bool = False,
-    ) -> bool:
-        """Bring the next request under budget. Escalates in three steps, each
-        costlier than the last and each stopping as soon as the budget is met:
-        clear old tool-result bodies, summarize the history before the current
-        user message, then summarize the current turn itself keeping only its
-        tail. Returns True when the history changed."""
-        nonlocal ai_convo
-        if not force and not compaction.get_bool(active_compact_cfg, "auto"):
-            return False
-        context_window = _budget_context_window()
-        if context_window <= 0 and not force:
-            return False
-        ai_tools_for_budget = model_client.tool_specs_to_ai_tools(specs) if specs else None
-        reserved = context_window - compaction.effective_context_window(active_compact_cfg, context_window)
-        buffer_tokens = min(_budget_buffer_tokens(), max(0, reserved))
-        status = token_state.budget_status(
-            system=system,
-            messages=messages,
-            tools=ai_tools_for_budget,
-            context_window=context_window if context_window > 0 else None,
-            output_reserve_tokens=max(0, reserved - buffer_tokens),
-            buffer_tokens=buffer_tokens,
-        )
-        active_context.context_tokens = status.current_context_tokens
-        active_context.tokens_until_compaction = status.tokens_until_compaction
-        telemetry.event(
-            "context_budget",
-            phase=phase,
-            context_tokens=status.current_context_tokens,
-            context_window=status.context_window,
-            effective_input_limit=status.effective_input_limit,
-            tokens_until_compaction=status.tokens_until_compaction,
-            used_provider_usage=status.used_provider_usage,
-        )
-        if not (force or status.should_compact):
-            return False
-        trigger = {"phase": phase, "context_tokens": status.current_context_tokens,
-                   "context_window": context_window,
-                   "effective_input_limit": status.effective_input_limit,
-                   "forced_recovery": force}
-        flight_data = {"budget": asdict(status), "tools": specs,
-                       "usage_anchor": vars(token_state).get("_anchor"),
-                       "ai_messages": ai_convo}
-        chars_per_token = token_state.calibrated_chars_per_token(
-            system=system, messages=messages, tools=ai_tools_for_budget,
-        )
-        reclaimed = 0
-        changed = False
-
-        def _over_budget(reclaimed_chars: int) -> bool:
-            # The provider-anchored count minus what was removed, in the
-            # currency the anchor was calibrated in.
-            if status.effective_input_limit is None:
-                return False
-            remaining = status.current_context_tokens - int(reclaimed_chars / chars_per_token)
-            return remaining > status.effective_input_limit
-
-        def _history_changed() -> None:
-            nonlocal changed, ai_convo
-            changed = True
-            token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-            _trace_req["sent"] = 0
-            _trace_req["schemas"] = True
-            active_context.compacted_during_turn = True
-            compaction.history_rewritten(active_context)
-
-        def _clear() -> bool:
-            """Clear old tool-result bodies; True when that brought the
-            request under budget."""
-            nonlocal reclaimed
-            cleared, chars = compaction.clear_for_budget(
-                messages, cfg=active_compact_cfg, system=system, trigger=trigger,
-                flight_data=flight_data, over_budget=lambda more: _over_budget(reclaimed + more),
-            )
-            if not cleared:
-                return False
-            reclaimed += chars
-            _history_changed()
-            telemetry.event("context_results_cleared", phase=phase, cleared=cleared)
-            return not (force or _over_budget(reclaimed))
-
-        # 1. Old tool-result bodies are the bulk of a long turn and cost no
-        #    model call to drop. Rewriting them mid-history busts the prompt
-        #    cache, so while the cache is warm a summary of the earlier turns
-        #    goes first and clearing waits for step 3. A cold cache, or a
-        #    provider that already refused the request (force), clears first.
-        clearing_deferred = not (force or compaction.cache_expired(active_compact_cfg, active_context))
-        if clearing_deferred:
-            telemetry.event("context_clearing_deferred", phase=phase,
-                            cache_age_s=time.time() - active_context.last_request_at)
-        elif _clear():
-            return True
-
-        summary_failed = False
-
-        async def _summarize(preserve_from: int | None, focus: str, *, tail_tokens: int | None = None) -> bool:
-            nonlocal reclaimed, summary_failed
-            if compaction.auto_paused(active_compact_cfg, active_context):
-                telemetry.event("context_compaction_skipped", phase=phase, reason="paused_after_failures")
-                return False
-            before_chars = compaction.history_chars(messages)
-            turn_status.compacting = True
-            try:
-                with stream_transport.net_role("Compacting"):
-                    result = await compaction.compact_now(
-                        active_compact_cfg, system, messages, focus=focus, forced=True,
-                        preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-                        tail_tokens=tail_tokens, context=active_context, emit=_emit_event,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
-                telemetry.event("context_compaction_failed", phase=phase,
-                                error=f"{type(exc).__name__}: {exc}")
-                if (paused := compaction.record_auto_failure(active_compact_cfg, active_context)) is not None:
-                    msgs.say_said(paused, file=sys.stderr, flush=True)
-                summary_failed = True
-                return False
-            finally:
-                turn_status.compacting = False
-            if not compaction.compacted(result):
-                telemetry.event("context_compaction_skipped", phase=phase, reason=result)
-                return False
-            reclaimed += before_chars - compaction.history_chars(messages)
-            _history_changed()
-            telemetry.event("context_compacted", phase=phase, result=result)
-            return True
-
-        # 2. Summarize everything before the current user message, which stays
-        #    verbatim along with the turn's work so far.
-        preserve_from = _active_preserve_from()
-        if (preserve_from is not None and preserve_from > 0
-                and compaction.prefix_worth_summarizing(messages, preserve_from)
-                and await _summarize(preserve_from, f"{phase} context budget")
-                and (force or not _over_budget(reclaimed))):
-            return True
-        # 3. Clearing deferred in step 1 runs now whatever the cache: a summary
-        #    of the current turn rewrites the whole history too, and when
-        #    summaries are paused or failing it is the only step left.
-        if clearing_deferred and _clear():
-            return True
-        # 4. The current turn alone is over budget: summarize it too, keeping
-        #    its most recent tail so the model can carry on from the summary.
-        #    A provider rejection (force) says the request did not fit no matter
-        #    what the budget believed, so keep half as much tail each round.
-        #    A summary that already failed in this check is not retried here.
-        if summary_failed:
-            return changed
-        tail_tokens = compaction.get_int(active_compact_cfg, "tail_tokens")
-        if force:
-            history_tokens = int(compaction.history_chars(messages) / chars_per_token)
-            tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_recovered
-        keep_from = compaction.tail_start(messages, tail_tokens, chars_per_token)
-        if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
-            await _summarize(None, f"{phase} context budget: current turn over budget",
-                             tail_tokens=tail_tokens)
-        elif not changed:
-            telemetry.event("context_compaction_skipped", phase=phase, reason="tail_fills_budget")
-        return changed
-
-    async def _recover_overflow(error: BaseException) -> bool:
-        """Shed history after the provider said, or showed, that the request
-        overflowed: clear old tool results, else summarize. True when the
-        history changed and the request is worth sending again."""
-        nonlocal ai_convo
-        action, _cleared, _reclaimed = compaction.recover_overflow(
-            messages, overflow_recovered, cfg=active_compact_cfg,
-            system=system, error=error,
-            flight_data={"context_window": _budget_context_window(),
-                         "max_output_tokens": max_out,
-                         "usage_anchor": vars(token_state).get("_anchor"),
-                         "tools": active_registry.openai_specs(),
-                         "ai_messages": ai_convo},
-        )
-        if action == "cleared":
-            token_state.reset()
-            ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-            _trace_req["sent"] = 0
-            _trace_req["schemas"] = True
-            active_context.compacted_during_turn = True
-            compaction.history_rewritten(active_context)
-            return True
-        return await _maybe_compact_request_for_budget(
-            phase="overflow_recovery",
-            specs=_aliased_tool_specs(active_registry.openai_specs(), alias_map),
-            force=True,
-        )
+    limits = CallLimits.from_settings(getattr(cfg, "settings", None))
+    caller = ModelCaller(
+        request, limits, convo=convo, budget=budget, sink=sink, events=events, telemetry=telemetry,
+        context=active_context, turn_status=turn_status, registry=active_registry,
+        alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
+        call_stats=call_stats, trace=trace, suppress_output=suppress_output,
+    )
+    error_tracker = ToolErrorTracker()
 
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
     usage_token = usage_mod.start(usage_mod.Meter(
         (getattr(cfg, "session_file", None), *getattr(active_context, "usage_chain", ())),
-        on_call=_on_usage,
+        on_call=events.on_usage,
     ))
     try:
-        if prior_surface is not None and all(prior_surface.get(k) == v for k, v in surface_scope.items()):
-            await active_registry.restore(prior_surface)
-        last_surface = active_registry.snapshot()
-        active_registry.on_change = save_surface
-        opening = _last_user_message_index(messages)
-        user_skill = skills.user_invoked_skill(messages[opening].get("content")) if opening is not None else None
-        note_skill_loaded = getattr(active_registry, "note_skill_loaded", None)
-        if user_skill and callable(note_skill_loaded):
-            note_skill_loaded(user_skill)
+        await surface.restore()
+        _note_user_skill(messages, active_registry)
         durable_side_effects_started = False
-        overflow_recovered = 0
-        live_settings = getattr(cfg, "settings", None)
-        retry_budget = retry.Budget.from_settings(live_settings)
-        stream_idle = retry.idle_seconds(live_settings)
-        max_output_escalation = int(_settings.knob(live_settings, "runtime.max_output_escalation") or 0)
-        max_output_resumes = int(_settings.knob(live_settings, "runtime.max_output_resumes") or 0)
-        max_output_escalated = False
         resumes_sent = 0
         for iteration in range(cfg.max_tool_iterations):
-            # --- One model call with retry on retriable transport errors ---
-            text = ""
-            pending_calls: list[_PendingToolCall] = []
-            finish: str | None = None
-            reasoning = ""
-            result: model_client.ModelStreamResult | None = None
-            usage = None
-            provider_metadata: dict[str, Any] | None = None
-            incomplete_reason: str | None = None
-            budget_checked = False
-            transport_retries = 0
-            # The cap this call runs under: max_out, or the escalated cap for
-            # the one resend of a reply cut off by max_out.
-            call_max_out = max_out
-            # The reply's usage counts history that silent-overflow recovery
-            # has since shed.
-            usage_stale = False
-            signed_reasoning_dropped = False
-            # Retries, overflow rounds (a provider rejection or a silent
-            # overflow), one escalated resend and its fallback, and one resend
-            # without signed reasoning.
-            for attempt in range(retry_budget.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 3):
-                t0 = time.time()
-                streamed_text["value"] = ""
-                try:
-                    if mcp_host is not None:
-                        await mcp_host.before_model_call()
-                    specs = _aliased_tool_specs(active_registry.openai_specs(), alias_map)
-                    if not budget_checked:
-                        await _maybe_compact_request_for_budget(
-                            phase="midturn" if durable_side_effects_started else "preflight",
-                            specs=specs,
-                        )
-                        budget_checked = True
-                    ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
-                    _emit_event(
-                        "prompt",
-                        model=model,
-                        provider_id=provider_id,
-                        message_count=len(ai_convo),
-                        tool_count=len(specs),
-                        tool_names=[spec["function"]["name"] for spec in specs],
-                    )
-                    streamed_reasoning.clear()
-                    _res = model_client.stream_model_async(
-                        model_id=model,
-                        provider_id=provider_id,
-                        provider_base_url=provider_base_url,
-                        provider_api_key=provider_api_key,
-                        messages=ai_convo,
-                        tools=ai_tools,
-                        max_output_tokens=call_max_out,
-                        reasoning_effort=effort,
-                        on_text=_emit_text,
-                        on_reasoning=_emit_reasoning,
-                        thinking_budget=getattr(cfg, "thinking_budget", None),
-                        provider_headers=getattr(cfg, "provider_headers", None),
-                        provider_extra=routing.provider_extra_params(cfg),
-                        sampling=sampling,
-                        trace_request=_trace_sink is not None,
-                        trace_sink=_trace_sink,
-                        trace_request_schemas=_trace_req["schemas"],
-                        trace_request_from=_trace_req["sent"],
-                        cache_key=_cache_key,
-                        stream_idle_seconds=stream_idle,
-                    )
-                    if _trace_sink is not None:
-                        _trace_req["sent"] = len(ai_convo)
-                        _trace_req["schemas"] = False
-                    # Await the native async primitive; tolerate a sync override (a
-                    # test stub patched onto stream_model_async that returns a result
-                    # directly) so the seam accepts either shape.
-                    result = await _res if inspect.isawaitable(_res) else _res
-                    _close_text(getattr(result.usage, "reasoning_tokens", None))
-                    text = result.text
-                    pending_calls = [
-                        _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
-                        for call in result.tool_calls
-                    ]
-                    finish = result.finish_reason
-                    provider_metadata = (
-                        getattr(result, "provider_metadata", None)
-                        or getattr(result.assistant_message, "provider_metadata", None)
-                    )
-                    incomplete_reason = (
-                        getattr(result, "incomplete_reason", None)
-                        or model_client.incomplete_reason_from_metadata(provider_metadata)
-                    )
-                    if incomplete_reason:
-                        finish = model_client.incomplete_finish_reason(incomplete_reason)
-                    reasoning = result.reasoning
-                    usage = result.usage
-                    usage_mod.record(usage, model=model, provider_id=provider_id)
-                    active_context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-                    active_context.last_cached_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0) if usage else 0
-                    active_context.last_incomplete_reason = incomplete_reason
-                    active_context.last_max_output_tokens = call_max_out
-                    _cache_break = compaction.note_response(
-                        active_context, model_key=f"{provider_id}/{model}",
-                        cache_read=active_context.last_cached_tokens if usage else None, now=time.time(),
-                    )
-                    if _cache_break is not None:
-                        telemetry.event("prompt_cache_break", model=model, line=_cache_break)
-                        stream_transport.say_for_caller(2, _cache_break)
-                    telemetry.event("turn_complete", model=model,
-                                    latency_ms=int((time.time() - t0) * 1000),
-                                    finish_reason=finish, n_tool_calls=len(pending_calls),
-                                    incomplete_reason=incomplete_reason,
-                                    prompt_tokens=active_context.last_prompt_tokens,
-                                    cached_tokens=active_context.last_cached_tokens)
-                    _out_tok = 0
-                    if usage:
-                        _out_tok = int(getattr(usage, "output_tokens", 0)
-                                       or getattr(usage, "completion_tokens", 0) or 0)
-                    active_context.last_output_tokens = _out_tok
-                    turn_status.settle(_out_tok)
-                    if call_stats is not None:
-                        # Stream-isolated numbers (model_client clocks `ai.stream` itself,
-                        # free of run_turn's setup/bookkeeping) for honest tok/s and TTFT.
-                        _stream_s = result.elapsed_s or (time.time() - t0)
-                        call_stats.append({
-                            "ttft_s": result.first_token_s,
-                            "stream_s": result.elapsed_s,
-                            "output_tokens": _out_tok,
-                            "prompt_tokens": active_context.last_prompt_tokens,
-                            "cached_tokens": active_context.last_cached_tokens,
-                            "tok_per_s": (_out_tok / _stream_s) if _stream_s > 0 else 0.0,
-                            "finish_reason": finish,
-                            "n_tool_calls": len(pending_calls),
-                        })
-                    _net = stream_transport.net_level()
-                    _label = active_context.net_label
-                    if (_net >= 3 and (_label or not suppress_output)) if _net is not None else trace:
-                        _elapsed = time.time() - t0
-                        _tps = (_out_tok / _elapsed) if _elapsed > 0 else 0.0
-                        _cache = ""
-                        if active_context.last_prompt_tokens > 0 and active_context.last_cached_tokens > 0:
-                            _pct = 100.0 * active_context.last_cached_tokens / active_context.last_prompt_tokens
-                            _cache = f"  cache {_pct:.0f}%"
-                        _ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-                        _stats = msgs.CALL_STATS.text(
-                            ms=int(_elapsed * 1000), finish=finish, tool_calls=len(pending_calls),
-                            tokens=_out_tok, tps=_tps, ttft=_ttft, cache=_cache)
-                        print(f"{display.CHROME}{_label + ': ' if _label else ''}{_stats}{C.RESET}", flush=True)
-                    cut_by_cap = _cut_off_by_cap(incomplete_reason, pending_calls)
-                    # Reply text already on the screen or stdout. Sending the
-                    # request again would print a second reply after it.
-                    shown = not suppress_output and bool(streamed_text["value"])
-                    # A compact.context_window above the catalog's says the
-                    # real window is larger than the catalog knows.
-                    window = max(
-                        _resolve_context_window(model, provider_id, provider_base_url) or 0,
-                        compaction.get_int(active_compact_cfg, "context_window", 0),
-                    ) or None
-                    silent = _silent_overflow(usage, window, cut_by_cap=cut_by_cap)
-                    if silent is not None and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS:
-                        # The provider took more input than the window holds, so
-                        # it cut the input: shed history and ask again. A reply
-                        # already shown is kept, and the shed history serves the
-                        # next request.
-                        _close_text()
-                        overflow_recovered += 1
-                        overflow = compaction.SilentOverflowError(silent, window)
-                        telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
-                                        attempt=attempt, round=overflow_recovered, kept_reply=shown)
-                        if await _recover_overflow(overflow):
-                            if not shown:
-                                continue
-                            usage_stale = True
-                    prompt_tokens = context_budget.usage_from_provider(usage).prompt_tokens
-                    if (
-                        not max_output_escalated
-                        and cut_by_cap
-                        and not shown
-                        and model_client.sends_max_output(provider_id)
-                        and (escalated := _escalated_max_output(
-                            call_max_out if call_max_out is not None else _out_tok or None,
-                            model_metadata.resolve_max_output(model, provider_id),
-                            max_output_escalation,
-                            window - prompt_tokens if window and prompt_tokens else None,
-                        )) is not None
-                    ):
-                        # Cut off by its cap: send the same request once more
-                        # with room to finish, before any resume nudge.
-                        _close_text()
-                        max_output_escalated = True
-                        telemetry.event("max_output_escalated", model=model,
-                                        max_output_tokens=call_max_out, escalated_to=escalated)
-                        stream_transport.say_for_caller(
-                            2, msgs.MAX_OUTPUT_ESCALATED.text(before=call_max_out or "default", after=escalated))
-                        call_max_out = escalated
-                        continue
-                    break
-                except ai.ProviderAPIError as e:
-                    # Finish any partially streamed text before we retry or abort,
-                    # so the next attempt's output starts on its own line.
-                    _close_text()
-                    if call_max_out != max_out and not e.is_retryable:
-                        # The provider refused the escalated cap, often as a
-                        # context-length error because prompt plus cap passes
-                        # the window. The configured cap fit before: carry on
-                        # at it, where resume nudges take over.
-                        telemetry.event("max_output_escalation_rejected", model=model,
-                                        error=f"{type(e).__name__}: {e}", escalated_to=call_max_out)
-                        call_max_out = max_out
-                        continue
-                    if (
-                        compaction.is_context_overflow_error(e)
-                        and overflow_recovered < compaction.MAX_OVERFLOW_ROUNDS
-                    ):
-                        overflow_recovered += 1
-                        telemetry.event(
-                            "context_overflow_error",
-                            model=model,
-                            error=f"{type(e).__name__}: {e}",
-                            attempt=attempt,
-                            round=overflow_recovered,
-                        )
-                        if await _recover_overflow(e):
-                            continue
-                    if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
-                        # The provider refused a replayed signature (an edit js
-                        # made before it, or a system or tool change): replay
-                        # the history without signed reasoning, once.
-                        signed_reasoning_dropped = True
-                        dropped = memory.drop_signed_reasoning(messages)
-                        telemetry.event("signed_reasoning_dropped", model=model, messages=dropped,
-                                        error=f"{type(e).__name__}: {e}")
-                        ai_convo = model_client.history_to_ai_messages(system, messages, provider_id=provider_id, model_id=model)
-                        _trace_req["sent"] = 0
-                        _trace_req["schemas"] = True
-                        compaction.history_rewritten(active_context)
-                        continue
-                    if e.is_retryable:
-                        telemetry.event("retriable_error", model=model,
-                                        error=f"{type(e).__name__}: {e}", attempt=attempt)
-                        wait = retry_after_seconds(e)
-                        too_long = retry_budget.too_long(wait)
-                        if transport_retries >= retry_budget.attempts or too_long:
-                            if too_long:
-                                telemetry.event("retry_after_too_long", model=model,
-                                                retry_after=wait, limit=retry_budget.max_wait)
-                            _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=True)
-                            _end_turn("error")
-                            raise
-                        delay = wait if wait is not None else _backoff(transport_retries)
-                        transport_retries += 1
-                        retry.announce(transport_retries, retry_budget, delay, e)
-                        await asyncio.sleep(delay)
-                    else:
-                        telemetry.event("fatal_error", model=model,
-                                        error=f"{type(e).__name__}: {e}")
-                        _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
-                        _end_turn("error")
-                        raise
-                except (ai.ConfigurationError, ai.InstallationError, ai.UnsupportedProviderError, ValueError) as e:
-                    _close_text()
-                    telemetry.event("fatal_error", model=model,
-                                    error=f"{type(e).__name__}: {e}")
-                    _emit_event("error", error=f"{type(e).__name__}: {e}", retryable=False)
-                    _end_turn("error")
-                    raise
-            else:
+            reply = await caller.call(phase="midturn" if durable_side_effects_started else "preflight")
+            if reply is None:
                 stream_transport.report_held_failure()
                 msgs.say(msgs.RETRY_BUDGET_EXHAUSTED)
-                _end_turn("retry_budget_exhausted")
+                events.end("retry_budget_exhausted")
                 return
-
-            assistant_message_override: ai.messages.Message | None = None
-            if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
-                notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
-                telemetry.event(
-                    "tool_call_dropped",
-                    reason="incomplete_truncated_args",
-                    incomplete_reason=incomplete_reason,
-                    n_tool_calls=len(pending_calls),
-                    tools=[pc.name for pc in pending_calls],
-                )
-                if not suppress_output:
-                    _emit_text(("\n\n" if text else "") + notice)
-                    _close_text()
-                text = f"{text}\n\n{notice}" if text else notice
-                pending_calls = []
-                assistant_message_override = ai.assistant_message(text)
-
-            # Freeze dispatch authorization to the schemas this model call saw.
-            # Discovery may mutate the turn surface while this batch runs, but a
-            # newly loaded tool is callable only after its schema is emitted on
-            # the next model iteration.
-            dispatch_registry = active_registry.dispatch_registry()
-            batch_diagnostic_suffix = ""
-            if pending_calls:
-                pending_calls, batch_stats = _normalize_tool_call_batch(
-                    pending_calls,
-                    dispatch_registry,
-                    getattr(
-                        cfg,
-                        "max_tool_calls_per_message",
-                        _settings.default_value("limits.max_tool_calls_per_message"),
-                    ),
-                )
-                telemetry.event(
-                    "tool_call_batch_normalized",
-                    received=batch_stats.received,
-                    retained=batch_stats.retained,
-                    duplicate=batch_stats.duplicate,
-                    invalid=batch_stats.invalid,
-                    capped=batch_stats.capped,
-                )
-                if batch_stats.capped:
-                    diagnostic = (
-                        "Tool-call batch limit reached: "
-                        f"retained {batch_stats.retained} distinct calls and rejected "
-                        f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
-                    )
-                    batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
-                    text += batch_diagnostic_suffix
-
-            # --- Record the assistant turn ---
-            history_assistant_record: dict = {"role": "assistant", "content": text}
-            if pending_calls:
-                history_assistant_record["tool_calls"] = [
-                    {"id": pc.id, "type": "function",
-                     "function": {"name": pc.name, "arguments": pc.arguments()}}
-                    for pc in pending_calls
-                ]
-            if reasoning:
-                history_assistant_record["reasoning_content"] = reasoning
-            assert result is not None
-            if not isinstance(provider_metadata, dict):
-                provider_metadata = None
-            incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
-            if provider_metadata:
-                history_assistant_record["provider_metadata"] = provider_metadata
-            if incomplete_reason:
-                history_assistant_record["incomplete_reason"] = incomplete_reason
-            assistant_message = assistant_message_override or result.assistant_message
-            if result.tool_calls:
-                assistant_message = _assistant_message_with_tool_calls(
-                    assistant_message,
-                    pending_calls,
-                    diagnostic_suffix=batch_diagnostic_suffix,
-                )
-            # The signed parts as this turn replays them, after batch normalization.
-            signed_reasoning = (
-                model_client.signed_reasoning_parts(assistant_message)
-                if assistant_message_override is None else None
+            pending_calls, incomplete_reason, dispatch_registry = _record_assistant(
+                reply, cfg=cfg, request=request, system=system, messages=messages, convo=convo,
+                registry=active_registry, context=active_context, token_state=token_state,
+                telemetry=telemetry, events=events, sink=sink, suppress_output=suppress_output,
             )
-            if signed_reasoning:
-                history_assistant_record["reasoning_parts"] = signed_reasoning
-                history_assistant_record["reasoning_from"] = reasoning_rules.reasoning_origin(provider_id, model)
-            if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
-                assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
-            ai_convo.append(_sanitize_assistant_message(assistant_message))
-            messages.append(memory.note_time(history_assistant_record))
-            # Recorded in full now; a later ^C in this turn must not re-append it.
-            streamed_text["value"] = ""
-            streamed_reasoning.clear()
             durable_side_effects_started = True
-            token_state.record_provider_usage(
-                None if usage_stale else usage,
-                message_count=len(messages),
-                messages=messages,
-                system=system,
-                tools=ai_tools,
-            )
-            current_tokens, _estimate, used_provider = token_state.current_context_tokens(
-                system=system,
-                messages=messages,
-                tools=ai_tools,
-            )
-            active_context.context_tokens = current_tokens
-            active_context.context_tokens_used_provider_usage = used_provider
-            if text:
-                payload = {"text": text, "finish_reason": finish}
-                if incomplete_reason:
-                    payload["incomplete_reason"] = incomplete_reason
-                _emit_event("response", **payload)
             resuming = (
                 not pending_calls
-                and resumes_sent < max_output_resumes
+                and resumes_sent < limits.max_output_resumes
                 and iteration + 1 < cfg.max_tool_iterations
-                and _cut_off_by_cap(incomplete_reason, pending_calls)
+                and cut_off_by_cap(incomplete_reason, [])
             )
             if incomplete_reason and not suppress_output and not resuming:
                 msgs.warn(msgs.RESPONSE_INCOMPLETE, reason=incomplete_reason)
-
+            if resuming:
+                resumes_sent += 1
+                _send_resume_nudge(messages, convo, n=resumes_sent, limit=limits.max_output_resumes,
+                                   incomplete_reason=incomplete_reason, model=model,
+                                   telemetry=telemetry, suppress_output=suppress_output)
+                continue
             if not pending_calls:
-                if resuming:
-                    # Keep the partial reply and ask the model to carry on
-                    # from where the cap cut it.
-                    resumes_sent += 1
-                    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
-                    messages.append(nudge)
-                    ai_convo.extend(model_client.history_to_ai_messages("", [nudge], provider_id=provider_id, model_id=model))
-                    telemetry.event("max_output_resume", model=model, n=resumes_sent,
-                                    incomplete_reason=incomplete_reason)
-                    if not suppress_output:
-                        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=resumes_sent, limit=max_output_resumes)
-                    continue
                 if incomplete_reason:
-                    _end_turn("incomplete", finish_reason=finish, incomplete_reason=incomplete_reason)
+                    events.end("incomplete", finish_reason=reply.finish, incomplete_reason=incomplete_reason)
                 else:
-                    _end_turn("stop")
+                    events.end("stop")
                 return
-
-            # --- Dispatch tools, append result messages ---
-            # ai_convo carries the heavy form (image bytes embedded in tool messages) for THIS
-            # turn; messages — persisted and replayed on every future turn — carries the
-            # dehydrated stub so base64 is billed once.
-            for index, pc in enumerate(pending_calls):
-                emission = _emit_event(
-                    "tool_call",
-                    id=pc.id,
-                    name=_canonical_tool_call_name(pc.name, active_registry),
-                    arguments=_canonical_tool_args(pc.arguments()),
-                )
-                refusal = event_mod.refusal_of(emission)
-                if refusal and pc.validation_error is None:
-                    # An `on tool_call` handler refused it: the call never runs
-                    # and the model reads the refusal as its result.
-                    pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
-                    telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
-            # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
-            # thread so the shared loop stays free while they execute. Fan-out (task /
-            # named-agent) calls are awaited ON the loop instead, so a parent turn
-            # never parks a dispatch thread its descendants need (see _dispatch_batch).
-            # A read that repeats an earlier one returns a stub naming it only
-            # while that earlier result is still in the history the model sees.
-            active_context.keep_shown_reads(_tool_results_in(messages))
-            progress = _DispatchProgress()
-            turn_status.tool_begin([_canonical_tool_call_name(pc.name, active_registry) for pc in pending_calls])
-            try:
-                dispatch_records = await _dispatch_batch(
-                    pending_calls,
-                    telemetry,
-                    cfg.max_tool_result_bytes,
-                    trace,
-                    error_tracker,
-                    dispatch_registry,
-                    active_context,
-                    asyncio.get_running_loop(),
-                    progress,
-                )
-            finally:
-                turn_status.tool_end()
-                # Also runs on cancellation, before the REPL persists the turn
-                # and balances genuinely unanswered calls with orphan markers.
-                dispatch_records = [progress.records[pc.id] for pc in pending_calls
-                                    if pc.id in progress.records]
-                capped = _cap_batch_results(
-                    [r for _, _, r in dispatch_records],
-                    getattr(cfg, "max_tool_results_per_turn_bytes", 0),
-                )
-                reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
-                for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
-                    _reconcile_read_delivery(
-                        _canonical_tool_call_name(pc.name, active_registry),
-                        args,
-                        old_result,
-                        new_result,
-                        active_context,
-                        pc.id,
-                    )
-                    reconciled.append((pc, args, new_result))
-                dispatch_records = reconciled
-                active_context.settle_reads()
-                # A batch's tool results must stay contiguous: the SDK's history
-                # check ends the pending tool-call window at the first following
-                # user/assistant message, so an image's user FilePart inserted
-                # between two tool results orphans every later one. Collect the
-                # batch's tool messages first, then the media that follows it.
-                batch_tool_msgs: list[ai.messages.Message] = []
-                batch_media_msgs: list[ai.messages.Message] = []
-                for pc, _args, result_value in dispatch_records:
-                    canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, active_registry))
-                    _emit_event(
-                        "tool_result",
-                        id=pc.id,
-                        name=canonical_pc.name,
-                        result=result_value,
-                    )
-                    for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
-                        if built.role == "tool":
-                            batch_tool_msgs.append(built)
-                        else:
-                            batch_media_msgs.append(built)
-                    done_at = progress.finished.get(pc.id)
-                    messages.extend(memory.note_time(item, done_at)
-                                    for item in _history_tool_result_message(canonical_pc, result_value))
-                ai_convo.extend(batch_tool_msgs)
-                ai_convo.extend(batch_media_msgs)
+            dispatch_records = await _record_tool_results(
+                pending_calls, cfg=cfg, trace=trace, messages=messages, convo=convo,
+                registry=active_registry, dispatch_registry=dispatch_registry, context=active_context,
+                error_tracker=error_tracker, telemetry=telemetry, events=events,
+            )
             if error_tracker.limit_reached():
-                name, last_error = next(
-                    ((_canonical_tool_call_name(pc.name, active_registry), result_value)
-                     for pc, _, result_value in reversed(dispatch_records)
-                     if isinstance(result_value, str) and result_value.startswith("ERROR")),
-                    (dispatch_records[-1][0].name, dispatch_records[-1][2]),
-                )
-                failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
-                final_error = {"role": "assistant", "content": failure}
-                ai_convo.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-                messages.append(memory.note_time(final_error))
-                _emit_event("error", error=failure, retryable=False)
-                _end_turn("tool_error_limit")
+                _record_tool_error_limit(dispatch_records, registry=active_registry, messages=messages,
+                                         convo=convo, events=events)
                 return
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
-                steered = steer()
-                if inspect.isawaitable(steered):
-                    steered = await steered
-                if steered is not None:
-                    messages.append(memory.note_time(steered))
-                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id, model_id=model))
-                    telemetry.event("steered", message_index=len(messages) - 1)
-                    if not suppress_output:
-                        msgs.say(msgs.STEERED, flush=True)
+                await _take_steer(steer, messages, convo, telemetry, suppress_output)
 
         msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
-        _end_turn("max_iterations")
+        events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
         # turn_start is emitted unconditionally and every normal/handled exit
         # already emitted turn_end; only cancellation (CancelledError /
         # KeyboardInterrupt — BaseException, not Exception) reaches here
         # unbalanced, so pair turn_start with a turn_end before propagating.
         if not isinstance(_turn_exc, Exception):
-            _close_text()
-            _commit_streamed_partial()
-            _end_turn("cancelled")
+            sink.close()
+            sink.commit_partial(messages)
+            events.end("cancelled")
         else:
             stream_transport.report_held_failure()
         raise
     finally:
-        _close_reasoning()
+        sink.close_reasoning()
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         turn_status.reset()

@@ -18,7 +18,7 @@ import httpx2
 import pytest
 from test_status_bar import _cfg
 
-from js import model_client, runtime, stream_transport
+from js import model_client, runtime, stream_transport, turn_call
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
 
@@ -261,7 +261,7 @@ def _flaky_model(monkeypatch, failures: list[Exception]) -> list[int]:
 
     monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: _FakeModel())
     monkeypatch.setattr(model_client, "_stream_async", fake_stream_async)
-    monkeypatch.setattr(runtime, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
     return calls
 
 

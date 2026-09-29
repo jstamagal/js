@@ -7,7 +7,7 @@ from dataclasses import replace
 import ai
 import pytest
 
-from js import compaction, model_client, runtime
+from js import compaction, model_client, runtime, turn_call
 from js import settings as _settings
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -83,7 +83,7 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         return _result(text="recovered")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(runtime, "_backoff", lambda _: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _: 0)
     messages = []
     for i in range(81):
         messages.extend([

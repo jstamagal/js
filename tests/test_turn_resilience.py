@@ -14,7 +14,7 @@ import ai
 import httpx
 import pytest
 
-from js import compaction, model_client, runtime, settings
+from js import compaction, model_client, retry, runtime, settings, turn_call
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -25,7 +25,7 @@ from test_lazy_tool_discovery import _cfg
 def offline_metadata(monkeypatch):
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
-    monkeypatch.setattr(runtime, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
 
 
 def _config(tmp_path, runtime_settings: dict | None = None, *, window: int = 1_000_000, **fields):
@@ -220,14 +220,14 @@ def _rate_limited(headers: dict[str, str]) -> ai.ProviderAPIError:
 
 
 def test_retry_after_reads_seconds_milliseconds_and_http_dates():
-    assert runtime.retry_after_seconds(_rate_limited({"retry-after": "7"})) == 7
-    assert runtime.retry_after_seconds(_rate_limited({"retry-after-ms": "250"})) == 0.25
+    assert retry.retry_after_seconds(_rate_limited({"retry-after": "7"})) == 7
+    assert retry.retry_after_seconds(_rate_limited({"retry-after-ms": "250"})) == 0.25
     # retry-after-ms is the more precise of the two and wins.
-    assert runtime.retry_after_seconds(_rate_limited({"retry-after-ms": "250", "retry-after": "7"})) == 0.25
+    assert retry.retry_after_seconds(_rate_limited({"retry-after-ms": "250", "retry-after": "7"})) == 0.25
     when = format_datetime(datetime.now(UTC) + timedelta(seconds=30), usegmt=True)
-    assert 25 <= runtime.retry_after_seconds(_rate_limited({"retry-after": when})) <= 31
-    assert runtime.retry_after_seconds(_rate_limited({})) is None
-    assert runtime.retry_after_seconds(_rate_limited({"retry-after": "soon"})) is None
+    assert 25 <= retry.retry_after_seconds(_rate_limited({"retry-after": when})) <= 31
+    assert retry.retry_after_seconds(_rate_limited({})) is None
+    assert retry.retry_after_seconds(_rate_limited({"retry-after": "soon"})) is None
 
 
 # --------------------------------------------------------------------------
