@@ -198,7 +198,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Editing the list retags every shown session at the next session end.",
                 empty=EMPTY_NONE),
     SettingSpec("tags.threshold", "float",
-                "Lowest Jev score (0 to 1) a tag needs to be kept on a session."),
+                "Lowest Jev score, 0 to 1, a tag needs to be kept on a session."),
     SettingSpec("tags.max", "int",
                 "Most tags a session keeps, highest score first."),
     SettingSpec("tags.messages", "int",
