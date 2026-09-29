@@ -59,6 +59,7 @@ set kernel.render_max_lines 24
 set kernel.wait_seconds 5
 
 # --- shell ---
+set shell.program bash
 set shell.wait_seconds 30
 
 # --- runtime ---

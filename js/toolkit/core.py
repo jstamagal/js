@@ -339,6 +339,7 @@ class ToolContext:
     kernel_render_max_lines: int = _knob("kernel.render_max_lines")  # per-section line cap on that render
     kernel_wait_seconds: int = _knob("kernel.wait_seconds")  # seconds a kernel call waits for a submitted cell
     shell_wait_seconds: int = _knob("shell.wait_seconds")  # seconds a shell call waits before returning a handle
+    shell_program: str = _knob("shell.program")  # program the shell tool runs commands with
     kernel_session: Any = None            # the live IPython kernel, one per process
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)

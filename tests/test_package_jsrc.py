@@ -233,7 +233,8 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n",
+        "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n"
+        "set shell.program zsh\n",
         encoding="utf-8",
     )
     cfg = from_env(save_session=False, cwd=project)
@@ -254,6 +255,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     assert context.user_agent == "knob-agent/3"
     assert context.terminal_cols == 71
     assert context.terminal_rows == 29
+    assert context.shell_program == "zsh"
 
 
 def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tmp_path):

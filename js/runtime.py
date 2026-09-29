@@ -1298,6 +1298,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.subagent_max_workers = getattr(cfg, "subagent_max_workers", active_context.subagent_max_workers)
     live_settings = getattr(cfg, "settings", None)
     active_context.user_agent = _settings.knob(live_settings, "tools.user_agent")
+    active_context.shell_program = _settings.knob(live_settings, "shell.program")
     active_context.terminal_cols = _settings.knob(live_settings, "tools.terminal_cols")
     active_context.terminal_rows = _settings.knob(live_settings, "tools.terminal_rows")
     active_context.last_incomplete_reason = None

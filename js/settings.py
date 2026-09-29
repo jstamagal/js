@@ -230,6 +230,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Line cap per section of that terminal render, so a 4000-line cell "
                 "cannot scroll the screen away. The hidden count is always shown, and "
                 "the model still gets the untrimmed output."),
+    SettingSpec("shell.program", "str",
+                "Program the `shell` tool runs commands with: a name looked up on "
+                "PATH, or a path. bash and zsh run with `-o pipefail`, so a pipeline "
+                "fails when any stage fails."),
     SettingSpec("shell.wait_seconds", "int",
                 "Seconds a `shell` call waits for its command before returning a "
                 "handle to poll. The command keeps running; nothing is killed by "

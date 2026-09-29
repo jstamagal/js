@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -61,10 +62,33 @@ _CELL_CLOSE_RE = re.compile(r"(?i)</t[dh]\s*>")
 
 
 
-def _default_shell() -> str:
+# Shells whose `-o pipefail` makes a pipeline fail when any stage fails, so
+# `false | cat` reports exit 1. Other shells run the command as given.
+_PIPEFAIL_SHELLS = frozenset({"bash", "zsh"})
+# `$NAME` and `${NAME...}` references in a command's text.
+_VAR_REF_RE = re.compile(r"\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _resolve_shell(program: str) -> str | None:
+    """The executable the shell tool runs: `shell.program` looked up on PATH
+    (or taken as given when it is a path). Windows runs COMSPEC."""
     if sys.platform == "win32":
         return os.environ.get("COMSPEC", "cmd.exe")
-    return os.environ.get("SHELL", "/bin/sh")
+    return shutil.which(program)
+
+
+def _shell_argv(shell_path: str, command: str) -> list[str]:
+    if sys.platform == "win32":
+        return [shell_path, "/C", command]
+    flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
+    return [shell_path, *flags, "-c", command]
+
+
+def _filtered_references(command: str, allowed: set[str]) -> list[str]:
+    """Names the command references that are set in js's environment but kept
+    out of the command's."""
+    names = set(_VAR_REF_RE.findall(command))
+    return sorted(name for name in names if name in os.environ and name not in allowed)
 
 
 # Commands the shell tool started that had not exited when their call returned.
@@ -188,12 +212,13 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
     parts = [f"shell={job.shell_path}", f"exit={result.returncode}"]
     if description:
         parts.append(f"description={description}")
-    if result.returncode:
+    filtered = _filtered_references(job.command, allowed)
+    if filtered:
         allowed_names = ",".join(sorted(allowed)) or "<none>"
         present_names = ",".join(sorted(safe_env)) or "<none>"
         parts.append(
             "environment=filtered "
-            f"allowed={allowed_names} present={present_names}; "
+            f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
             "names not allowed by limits.shell_env_allow or the env parameter are unset"
         )
     if stdout:
@@ -255,8 +280,10 @@ def shell(
         managed_bin = str(TOOLS_DIR)
         inherited = safe_env.get("PATH", "")
         safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
-    shell_path = _default_shell()
-    shell_arg = "/C" if sys.platform == "win32" else "-c"
+    program = str(getattr(context, "shell_program", "") or _settings.default_value("shell.program"))
+    shell_path = _resolve_shell(program)
+    if shell_path is None:
+        return f"ERROR: shell.program {program!r} is not an executable on PATH"
     cap = int(context.max_bash_output_bytes)
     ceiling = int(getattr(context, "max_bash_output_ceiling", 0) or 0)
     if ceiling > 0:
@@ -266,7 +293,7 @@ def shell(
     context.invalidate_search_cache()
     try:
         process = start_capped(
-            [shell_path, shell_arg, command],
+            _shell_argv(shell_path, command),
             cwd=str(workdir),
             env=safe_env,
             cap=cap,

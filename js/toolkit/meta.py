@@ -45,6 +45,7 @@ _INHERITED_FIELDS = (
     "kernel_render_max_lines",
     "kernel_wait_seconds",
     "shell_wait_seconds",
+    "shell_program",
     "model",
 )
 

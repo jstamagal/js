@@ -269,14 +269,16 @@ anchors, and supports snapshot-backed structural rewrite previews and applies.
 
 ## Shell
 
-`shell` uses the environment shell:
+`shell` runs the `shell.program` setting:
 
-- Unix: `$SHELL -c`, fallback `/bin/sh -c`
+- Unix: `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
+  shells run with `-c` alone
 - Windows: `COMSPEC /C`
 
 It passes a small allowlist of environment variables by default. Extra env var
 names can be requested through the `env` parameter if the parent process has
-them.
+them. A result names the filtered variables only when the command references
+one of them.
 
 The tool output includes:
 
@@ -323,7 +325,7 @@ For another Python project, the behavior to preserve is:
 - read-before-write state in context
 - exact patch/multi-patch behavior
 - in-process undo snapshots
-- `$SHELL`/`COMSPEC` shell execution
+- `shell.program`/`COMSPEC` shell execution
 - task parallelism and child context isolation
 - Claude provider-facing name transform based on model string only
 - canonical persisted history
