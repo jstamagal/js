@@ -371,3 +371,43 @@ def test_a_read_of_content_starting_with_error_is_a_value(ctx):
 
     assert "LINES 2" in result
     assert "MISSING RAISED" in result
+
+
+
+def model_read(context: ToolContext, call_id: str, file_path: str) -> str:
+    """A read the model makes as call ``call_id``."""
+    _, result = runtime._dispatch(
+        "read", json.dumps({"file_path": file_path, "show_line_numbers": False}),
+        runtime.Telemetry(None), cap_bytes=256 * 1024, registry=build_default_registry(),
+        tool_context=context, call_id=call_id,
+    )
+    return result
+
+
+@needs_kernel
+def test_a_cell_read_of_lines_the_model_already_saw_returns_the_lines(ctx):
+    (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
+    shown = model_read(ctx, "r1", "notes.txt")
+    ctx.settle_reads()
+    ctx.keep_shown_reads({"r1": shown})
+    assert "r1" in model_read(ctx, "r2", "notes.txt")
+    ctx.settle_reads()
+
+    result = cell(
+        "text = tools.read('notes.txt', show_line_numbers=False)\n"
+        "print('LINES', text.splitlines())\n",
+        ctx,
+    )
+
+    assert "LINES ['alpha', 'beta']" in result
+
+
+@needs_kernel
+def test_a_cell_read_does_not_count_as_shown_to_the_model(ctx):
+    (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
+    cell("tools.read('notes.txt', show_line_numbers=False)", ctx)
+    ctx.settle_reads()
+
+    again = model_read(ctx, "r2", "notes.txt")
+
+    assert again.splitlines() == ["alpha", "beta"]

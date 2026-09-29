@@ -46,16 +46,22 @@ _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 # recorded per call, so the runtime can narrow one call's coverage after it
 # clips that call's result.
 _CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_call_id", default=None)
+# False while the running call's result goes to code (a kernel cell) rather
+# than to the model's history.
+_FOR_MODEL: contextvars.ContextVar[bool] = contextvars.ContextVar("js_tool_call_for_model", default=True)
 _anonymous_calls = itertools.count()
 
 
 @contextmanager
-def call_scope(call_id: str):
-    """Run the body as tool call ``call_id``."""
+def call_scope(call_id: str, *, for_model: bool = True):
+    """Run the body as tool call ``call_id``. ``for_model`` is False when the
+    result goes to code rather than to the model's history."""
     token = _CALL_ID.set(call_id)
+    model_token = _FOR_MODEL.set(for_model)
     try:
         yield
     finally:
+        _FOR_MODEL.reset(model_token)
         _CALL_ID.reset(token)
 
 
@@ -706,7 +712,10 @@ class ToolContext:
     def shown_read(self, path: Path, key: tuple) -> str | None:
         """The id of the read call that showed the model the text read key
         ``key`` of ``path`` renders, when that result is still in its
-        history; None otherwise."""
+        history; None otherwise. A call whose result goes to code gets None:
+        the code needs the lines, not a note about the model's history."""
+        if not _FOR_MODEL.get():
+            return None
         with self._coverage_lock:
             entry = self._shown_reads.get(path, {}).get(key)
         return entry[0] if entry else None
@@ -714,10 +723,10 @@ class ToolContext:
     def offer_read(self, path: Path, key: tuple, text: str) -> None:
         """Record that the read call running in this thread returned ``text``
         for read key ``key`` of ``path``. It counts as shown once the runtime
-        settles the batch without clipping it. A read outside a tool call
-        records nothing."""
+        settles the batch without clipping it. A read outside a tool call, or
+        one whose result goes to code, records nothing."""
         call_id = _CALL_ID.get()
-        if call_id is None:
+        if call_id is None or not _FOR_MODEL.get():
             return
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         with self._coverage_lock:

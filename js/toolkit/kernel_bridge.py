@@ -286,7 +286,7 @@ class ToolBridge:
             return {"error": refusal}
         started = time.monotonic()
         try:
-            with call_scope(call_id), registry_scope(registry, observer):
+            with call_scope(call_id, for_model=False), registry_scope(registry, observer):
                 result = call_tool(tool, arguments, context)
         except Exception as exc:  # noqa: BLE001 - a failing handler is the cell's exception
             failure = f"{type(exc).__name__}: {exc}"
