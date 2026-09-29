@@ -1128,10 +1128,11 @@ def _emit_repl_event(
     return emission
 
 
-def _hook_emitter(state: dict):
-    """``emit(event, **payload)`` into the state's `on` handlers; None without any."""
+def _compact_hooks(state: dict) -> dict:
+    """The ``emit`` keyword a compaction call takes: the state's `on` handler
+    table, when the state has one."""
     hook_table = state.get("events")
-    return None if hook_table is None else hook_table.emit
+    return {} if hook_table is None else {"emit": hook_table.emit}
 
 
 def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
@@ -1177,7 +1178,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
                 lambda: runtime._resolve_context_window(
                     active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
                 ),
-                emit=_hook_emitter(state),
+                **_compact_hooks(state),
             )
     finally:
         turn_status.compacting = False
@@ -1883,7 +1884,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         compact_cfg = _cfg_for_live_state(cfg, state)
         with stream_transport.net_role("Compacting"):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
-                                                 focus=focus, forced=forced, emit=_hook_emitter(state))
+                                                 focus=focus, forced=forced, **_compact_hooks(state))
     except Exception as e:  # noqa: BLE001
         return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
     msgs.say(msgs.COMPACTION_DONE, result=result)
