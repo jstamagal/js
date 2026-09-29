@@ -298,8 +298,11 @@ def _linked(record: dict, record_id: str, parent: str | None) -> dict:
 
 def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     """Append `record` to `session_file` under an exclusive lock, with a fresh
-    id and its parent, and fsync. Returns the record as written."""
+    id and its parent, and fsync. Returns the record as written. A record for
+    os.devnull, the file of a session that is not saved, is discarded."""
     session_file = Path(session_file)
+    if session_file == Path(os.devnull):
+        return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
     key = str(session_file.resolve(strict=False))
     with open(session_file, "a+b") as stream:

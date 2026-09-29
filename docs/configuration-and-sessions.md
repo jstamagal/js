@@ -123,7 +123,7 @@ name, which wins when both are set. Default values are the lines in `js/jsrc`.
 | `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
 | `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
 | `JS_DEBUG` | `runtime.debug` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs. |
+| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs (on stderr in one-shot mode). |
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
@@ -412,7 +412,8 @@ last stamp (see below) unless the run names them with `--model` or
 `--reasoning`. `--last` resumes the agent's most recently started session,
 wherever it is filed.
 
-Generated session ids can be resumed from the `*** Continue:` hint. Driver
+Generated session ids can be resumed from the `*** Continue:` hint, which a
+one-shot run prints on stderr. Driver
 integrations that have a stable caller key can instead derive an opaque name
 from agent + resolved working directory + caller key; repeated runs get the same
 `derived/<sha256>` session while different agents, directories, or keys remain
@@ -420,7 +421,8 @@ isolated.
 
 `--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints
 `*** Session not saved. Resume unavailable.` once on stderr after the run while
-keeping stdout answer-only. It does not warn in the interactive REPL. This is an
+keeping stdout answer-only. It does not warn in the interactive REPL, where
+`--no-save` reads a session named with `--session` and writes nothing. This is an
 expensive throwaway choice because the next run cannot resume and must re-read
 context.
 
@@ -541,8 +543,11 @@ liveness sidecars track open processes without rewriting the append-only
 conversation file.
 
 Every assistant message record carries a `stamp`: the model, provider and
-reasoning level it was written under. Resume uses the last stamp (or the last
-start record's model, whichever came later).
+reasoning level it was written under. `/model` appends a `model_switch` record
+whose `stamp` is the model it switched to and whose `previous` is the one it
+left, in the same shape. Resume uses whichever came last: an assistant stamp, a
+`model_switch` stamp, or a start record's model (the `-m` of that start, else
+the configured model).
 
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
 newest title is the session's name in `--list --json`.

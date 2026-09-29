@@ -79,6 +79,7 @@ from .session_catalog import (
     branch_session,
     catalog_sessions,
     last_stamp,
+    record_model_switch,
     record_session_start,
     session_title,
 )
@@ -124,28 +125,37 @@ _PROMPT_CHANGED_NOTICE = (
 )
 
 
-# Keyed by the mode the session continues in.
-_MODE_SWITCH_NOTICES = {
-    "repl": (
-        "<js-reminder>This conversation started as a one-shot run and now continues "
-        "in interactive chat. The human is here and can answer.</js-reminder>"
-    ),
-    "-p": (
-        "<js-reminder>This conversation started in interactive chat and now continues "
-        "as a one-shot run. The human is not here and cannot answer.</js-reminder>"
-    ),
+_MODE_PLACES = {"repl": "in interactive chat", "-p": "as a one-shot run"}
+_MODE_PRESENCE = {
+    "repl": "The human is here and can answer.",
+    "-p": "The human is not here and cannot answer.",
 }
+
+
+def _mode_switch_notice(started: str, previous: str, now: str) -> str:
+    """The reminder for a turn in mode ``now`` after a turn in ``previous``, in
+    a session whose first turn ran in ``started``."""
+    if started == now:
+        course = (f"started {_MODE_PLACES[started]}, moved {_MODE_PLACES[previous]}, "
+                  f"and now continues {_MODE_PLACES[now]} again")
+    else:
+        course = f"started {_MODE_PLACES[started]} and now continues {_MODE_PLACES[now]}"
+    return f"<js-reminder>This conversation {course}. {_MODE_PRESENCE[now]}</js-reminder>"
 
 
 def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) -> attach.UserMessageBundle:
     """Record that this turn runs in ``mode`` ("repl" or "-p"). When the last
     turn ran in the other mode, this turn's user message carries the
-    mode-switch reminder."""
+    mode-switch reminder, which names the mode of the session's first turn."""
     if cfg.session_file == Path(os.devnull):
         return bundle
-    if M.record_turn_mode(cfg.session_file, mode) is None:
+    previous = M.record_turn_mode(cfg.session_file, mode)
+    if previous is None:
         return bundle
-    return attach.with_note(bundle, _MODE_SWITCH_NOTICES[mode])
+    started = M.first_turn_mode(cfg.session_file)
+    if started not in _MODE_PLACES:
+        started = previous
+    return attach.with_note(bundle, _mode_switch_notice(started, previous, mode))
 
 
 def _parse_bool(raw: str) -> bool | None:
@@ -1265,7 +1275,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["model_source"] = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
         state["model"] = model_value
-        msgs.say(msgs.MODEL_SET, model=_provider_qualified(configured_provider_id, model_value))
+        msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(configured_provider_id, model_value))
         return
 
     route = routing.resolve_model_route(
@@ -1284,12 +1294,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["provider_base_url"] = route.base_url
     state["provider_api_key"] = route.api_key
     state["provider_headers"] = dict(route.headers)
-    msgs.say(msgs.MODEL_SET, model=_provider_qualified(route.provider_id, route.model))
-
-
-def _provider_qualified(provider_id: str | None, model: str) -> str:
-    """`provider:model` as the model lines print it; the bare model without a provider."""
-    return f"{provider_id}:{model}" if provider_id else model
+    msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(route.provider_id, route.model))
 
 
 def _pick_model_into_state(state: dict, cfg: Config) -> None:
@@ -1312,7 +1317,7 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["model_source"] = None  # the pick was persisted into the store
 
     _saved_path, save_error = _persist_default_model_id(default_model_id)
-    chosen = f"{selected['provider_id']}:{selected['model']}"
+    chosen = default_model_id
     if save_error:
         msgs.say(msgs.MODEL_NOT_SAVED_AS_DEFAULT, model=chosen, error=save_error)
     else:
@@ -1674,11 +1679,25 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _live_stamp(cfg: Config, state: dict) -> dict:
+    """The stamp a turn started now would write."""
+    active = _cfg_for_active_model(cfg, state)
+    live_settings = state.get("settings")
+    reasoning = _live_reasoning_effort_setting(live_settings if isinstance(live_settings, dict) else {},
+                                               active.reasoning_effort)
+    return M.stamp_for(active.model, active.provider_id, reasoning)
+
+
 def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
+    previous = _live_stamp(cfg, state)
     if arg:
         _set_model_via_route(state, cfg, arg)
     else:
         _pick_model_into_state(state, cfg)
+    stamp = _live_stamp(cfg, state)
+    if stamp != previous and cfg.session_file != Path(os.devnull):
+        # A resume comes back on the switched-to model before any turn ran on it.
+        record_model_switch(cfg.session_file, stamp=stamp, previous=previous)
     return None
 
 
@@ -2308,6 +2327,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         cfg,
         caller_key=caller_key,
         announce_generated=announce_generated and save,
+        model=model,
     )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
@@ -2403,18 +2423,28 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     with stdout_ctx:
                         runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
             else:
-                # Plain and --debug-file: the terminal stays clean during the turn
-                # (only the final answer is reprinted below). The log captures the
-                # streamed answer plus, for --debug-file, the concise trace lines;
-                # the full request trace lands there via telemetry.trace_sink.
+                # Plain and --debug-file: stdout carries only the final answer,
+                # reprinted below. The log captures the streamed answer plus, for
+                # --debug-file, the concise trace lines; the full request trace
+                # lands there via telemetry.trace_sink. With runtime.trace on, the
+                # concise trace also shows on stderr as the model runs.
                 capture = trace_sink if trace_sink is not None else io.StringIO()
+                trace = bool(getattr(cfg, "trace", False))
                 visible_transcript = telemetry.transcript_log
+                visible_display = telemetry.display_factory
                 telemetry.transcript_log = None
+                if trace:
+                    answer_sink = capture
+                    telemetry.display_factory = (
+                        lambda markdown: display_mod.Display.for_stream(answer_sink, markdown=markdown))
+                    capture = _StdoutTee(sys.stderr, trace_sink) if trace_sink is not None else sys.stderr
                 try:
                     with contextlib.redirect_stdout(capture):
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
+                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=trace or bool(debug_file),
+                                         tool_context=tool_context, **turn_kwargs)
                 finally:
                     telemetry.transcript_log = visible_transcript
+                    telemetry.display_factory = visible_display
         except (KeyboardInterrupt, asyncio.CancelledError):
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.TURN_INTERRUPTED)
@@ -2477,7 +2507,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         if model:
                             cont += f" --model {shlex.quote(model)}"
                         cont += f" --session {hint}"
-                        msgs.say(msgs.CONTINUE_HINT, command=cont)
+                        msgs.warn(msgs.CONTINUE_HINT, command=cont)
             return 0
 
     with _transcript_stdio(telemetry):
@@ -3230,10 +3260,9 @@ def _status_colours(state: dict) -> str:
 
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
     """The REPL status bar from live state: what is running, on what, how full."""
-    live = state.get("settings") or {}
     context = runtime.T.STOCK_CONTEXT
-    provider = _provider_from_live_settings(live)[0] or state.get("provider_id") or cfg.provider_id
-    model = _model_from_live_settings(live) or state.get("model") or cfg.model
+    provider = state.get("provider_id") or cfg.provider_id
+    model = state.get("model") or cfg.model
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
         model = model[len(provider) + 1:]
     prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
@@ -4089,7 +4118,7 @@ def _main(argv: list[str] | None = None) -> int:
     try:
         cfg = _cfg_from_env_compat(
             args.session,
-            save_session=True,
+            save_session=not args.no_save,
             extras=args.extras,
             agent_id=cli_agent,
             ignore_local_config=args.ignore_local,
@@ -4170,6 +4199,9 @@ def _main(argv: list[str] | None = None) -> int:
         # Asked for a specific session and got nothing. Silence here reads as a
         # successful resume, so an empty one has to say so.
         msgs.say(msgs.EMPTY_SESSION, path=cfg.session_file)
+    if args.no_save:
+        # -n with --session reads the named session and writes nothing back.
+        cfg = replace(cfg, session_file=Path(os.devnull))
     _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
     M.append_mark(cfg.session_file, "session_start")
     prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
