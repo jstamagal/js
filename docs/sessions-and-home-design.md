@@ -283,10 +283,15 @@ calls", a rule that exists nowhere in js. The only one-shot rule js sends is
 
 - The per-turn `run model=… provider=…` header stays.
 - `ui.net` default stays 2; `set ui.net 1` in jsrc shows failures only.
-- Bug: the last block of a streamed answer was redrawn garbled ("reseat
-  607:00scaed if width stays x4.glips smack", yoda, 2026-09-29, session
-  `20260929T101208214271Z-acc53bcfc3ea7213`). Compare the screen against the
-  session file, find the live-block redraw fault in `js/display.py`.
+- Bug (js-1g1.9, fixed): the last block of a streamed answer showed garbled
+  ("reseat607:00scaed if width stays x4.glips smack", yoda, 2026-09-29,
+  session `20260929T101208214271Z-acc53bcfc3ea7213`). The stray characters
+  came from an earlier row with a `⚠️` in it. prompt_toolkit counts U+26A0
+  U+FE0F as one column and the terminal draws it two wide, so that row sat
+  one column right of prompt_toolkit's screen model, and the next frame's
+  diff paint left some of its characters in place. `js/screen.py` now drops
+  variation selectors from scrollback text; `tests/test_screen_redraw.py`
+  replays the answer through a terminal model.
 
 ## 6. `-C DIR` keeps the agent in DIR
 
