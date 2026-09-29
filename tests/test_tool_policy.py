@@ -304,3 +304,12 @@ def test_ban_patterns_match_substrings_and_whole_string_globs():
     assert policy.argument_refusal("fetch", {"url": "https://www.pornhub.com/x"}, bans)
     assert policy.argument_refusal("fetch", {"url": "https://example.com/?q=www.pornhub.com/"}, bans) is None
     assert policy.argument_refusal("read", {"file_path": "git reset --hard"}, bans) is None
+
+
+def test_an_agent_naming_a_removed_tool_gets_one_line_naming_it(capsys):
+    registry = build_default_registry().select(["read:eager", "todo_write:eager"], agent_id="old",
+                                               config=policy.ToolsConfig())
+
+    assert set(registry.by_name) == {"read"}
+    err = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
+    assert len(err) == 1 and "todo_write" in err[0]

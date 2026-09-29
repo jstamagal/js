@@ -1,6 +1,6 @@
 """Move agent manifests from 00-tools.yaml (or 00*.md frontmatter) to agent.yaml.
 
-    python -m js.agent_migrate [--apply] [--show] [ROOT ...]
+    uv run python scripts/migrate_agents.py [--apply] [--show] [ROOT ...]
 
 With no ROOT it walks the global agents dir. Without --apply it only reports
 what it would do. Per agent dir it writes agent.yaml, then removes the old
@@ -26,7 +26,7 @@ from typing import Any
 
 import yaml
 
-from . import paths, persona
+from js import paths, persona
 
 REMOVED_TOOLS = ("todo_write", "todo_read", "todo_*")
 _KEY_RENAMES = {"reasoning_effort": "reasoning"}
@@ -218,7 +218,7 @@ def migrate_root(root: Path, *, apply: bool = False) -> list[Result]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="js.agent_migrate", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="migrate_agents", description=__doc__.splitlines()[0])
     parser.add_argument("roots", nargs="*", type=Path, help="agent roots (default: the global agents dir)")
     parser.add_argument("--apply", action="store_true", help="write the changes; default is a dry run")
     parser.add_argument("--show", action="store_true", help="print each agent.yaml that would be written")

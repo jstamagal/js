@@ -281,7 +281,7 @@ tool-bytes *args:
 # unless --apply; --show prints each agent.yaml. default root: the global
 # agents dir. just migrate-agents --apply ~/.config/js/agents .js/agents
 migrate-agents *args:
-    uv run {{ browser-extra }} python -m js.agent_migrate {{ args }}
+    uv run {{ browser-extra }} python scripts/migrate_agents.py {{ args }}
 
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 

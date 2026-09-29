@@ -1,11 +1,19 @@
 """00-tools.yaml / 00*.md frontmatter -> agent.yaml migration, on tmp copies."""
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import yaml
 
-from js import agent_migrate, persona
+from js import persona
+
+_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "migrate_agents.py"
+_spec = importlib.util.spec_from_file_location("migrate_agents", _SCRIPT)
+agent_migrate = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = agent_migrate  # dataclasses resolve their module by name
+_spec.loader.exec_module(agent_migrate)
 
 OLD_MANIFEST = """\
 # builder agent: writes code
