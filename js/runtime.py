@@ -1188,8 +1188,10 @@ async def _dispatch_batch(
 # --------------------------------------------------------------------------
 
 def _last_user_message_index(messages: list[dict]) -> int | None:
+    """Index of the message that opened the current turn. A steered message
+    joined a turn already running, so it does not open one."""
     for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx].get("role") == "user":
+        if messages[idx].get("role") == "user" and not messages[idx].get("steered"):
             return idx
     return None
 
@@ -1208,11 +1210,16 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              sampling: Sampling | None = None,
              call_stats: list[dict] | None = None,
              event_hooks: event_mod.EventHooks | None = None,
-             mcp_host: Any = None) -> None:
+             mcp_host: Any = None,
+             steer: Callable[[], dict | None] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
     `messages` in place so the caller can persist new entries.
+
+    ``steer`` is called at each tool boundary: after a batch's results are
+    recorded, when another model call follows. A user message it returns is
+    appended there, so the model reads it before choosing its next tool call.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -1631,7 +1638,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_registry.on_change = save_surface
         durable_side_effects_started = False
         overflow_recovered = 0
-        for _ in range(cfg.max_tool_iterations):
+        for iteration in range(cfg.max_tool_iterations):
             # --- One model call with retry on retriable transport errors ---
             text = ""
             pending_calls: list[_PendingToolCall] = []
@@ -2017,6 +2024,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 _emit_event("error", error=failure, retryable=False)
                 _end_turn("tool_error_limit")
                 return
+            if steer is not None and iteration + 1 < cfg.max_tool_iterations:
+                steered = steer()
+                if steered is not None:
+                    messages.append(steered)
+                    ai_convo.extend(model_client.history_to_ai_messages("", [steered], provider_id=provider_id))
+                    telemetry.event("steered", message_index=len(messages) - 1)
+                    if not suppress_output:
+                        print(f"{C.GREY}(→ steered){C.RESET}", flush=True)
 
         print(f"  {C.ORANGE}▸ tool-loop hit max iterations ({cfg.max_tool_iterations}){C.RESET}")
         _end_turn("max_iterations")
