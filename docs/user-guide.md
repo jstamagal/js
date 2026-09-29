@@ -119,6 +119,7 @@ REPL commands:
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session
 /cd [dir]                      print or change the session's working directory
+/add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
 /reset
 /wipe
 exit
@@ -160,9 +161,13 @@ other jsrc line through the command table.
 `/cd DIR` moves the session: js's working directory and the tools' move to
 `DIR`, and the next user message carries one `<js-reminder>` saying the working
 directory is now `DIR`. Under `-C`, `/cd` goes only to `DIR` or a bound path;
-anywhere else is refused. `/cd` writes a `workspace:` mark to the session, and
-resuming the session puts the working directory back. `/cd` waits for a
-running turn to end.
+anywhere else is refused with a pointer to `/add`. `/add PATH` (under `-C`
+only) shows `PATH` in the jail from the next tool call on, read-only, or
+read-write as `PATH:rw`; the file tools accept it at once. A kernel or terminal
+session already running sees it after a restart. Both tell the model once, and
+write a `workspace:` mark to the session: resuming the session puts the
+working directory back, and under the same `-C` it puts the `/add` paths back.
+`/cd` waits for a running turn to end.
 
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.

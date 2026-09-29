@@ -1,4 +1,5 @@
-"""/cd moves the session's working directory. The change reaches the model once as a reminder
+"""/cd moves the session's working directory; under `js -C`, /add changes
+what the jail shows. Each change reaches the model once as a reminder
 on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
@@ -7,8 +8,10 @@ import shutil
 
 import pytest
 
-from js import cli, runtime
-from js.toolkit import process_net
+from js import cli, jail, runtime
+from js import messages as msgs
+from js.toolkit import call_tool, process_net
+from js.toolkit.registry import build_default_registry
 
 SESSION = "workspace"
 needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
@@ -64,6 +67,11 @@ def shell_out(command):
     return probe
 
 
+def read(path):
+    def probe(context):
+        return call_tool(build_default_registry().resolve("read"), {"path": str(path)}, context)
+    return probe
+
 
 @pytest.fixture
 def places(tmp_path):
@@ -75,6 +83,18 @@ def places(tmp_path):
     return root, extra
 
 
+
+@needs_bwrap
+def test_add_is_read_only_unless_rw(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"touch": shell_out(f"touch {extra}/new")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", "one", f"/add {extra}:rw", "two"])
+
+    read_only, read_write = turns.results
+    assert "exit=0" not in read_only["touch"]
+    assert "exit=0" in read_write["touch"]
+    assert (extra / "new").exists()
 
 
 @needs_bwrap
@@ -108,7 +128,28 @@ def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
 
 
+def test_add_needs_a_jail(places):
+    _root, extra = places
+    state: dict = {}
 
+    assert cli._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
+    assert "pending_notes" not in state
+
+
+
+@needs_bwrap
+def test_a_resume_restores_the_binds_and_the_working_directory(monkeypatch, places, turns):
+    root, extra = places
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}:rw", f"/cd {extra}", "set up"])
+    turns.probes = {"pwd": shell_out("pwd"), "touch": shell_out("touch resumed")}
+
+    repl(monkeypatch, ["-C", str(root)], ["resumed"])
+
+    after = turns.results[-1]
+    assert f"\n{extra.resolve()}\n" in after["pwd"]
+    assert "exit=0" in after["touch"]
+    assert (extra / "resumed").exists()
+    assert jail.active().added == [jail.Bind(extra, True)]
 
 
 def test_a_resume_restores_the_working_directory(monkeypatch, places, turns):
@@ -122,3 +163,18 @@ def test_a_resume_restores_the_working_directory(monkeypatch, places, turns):
     repl(monkeypatch, [], ["resumed"])
 
     assert f"\n{(root / 'sub').resolve()}\n" in turns.results[-1]["pwd"]
+
+
+@needs_bwrap
+def test_add_shows_a_path(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"shell": shell_out(f"cat {extra}/data.txt"), "read": read(extra / "data.txt")}
+
+    repl(monkeypatch, ["-C", str(root)], ["before", f"/add {extra}", "after"])
+
+    hidden, shown = turns.results
+    assert "exit=0" not in hidden["shell"]
+    assert hidden["read"].startswith("ERROR:")
+    assert "exit=0" in shown["shell"] and "extra-data" in shown["shell"]
+    assert "extra-data" in shown["read"]
+    assert cli._ADD_NOTICE.format(path=extra, access="read-only") in turns.sent[1]

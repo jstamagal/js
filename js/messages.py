@@ -262,7 +262,13 @@ SESSION_PATH = Message("{path}", banner=False)
 CWD_IS = Message("{path}", banner=False)
 CD_DONE = Message("Working directory: {path}")
 CD_NOT_A_DIR = Message("/cd: not a directory: {path}")
-CD_OUTSIDE_JAIL = Message("/cd: {path} is outside the jail at {root}.")
+CD_OUTSIDE_JAIL = Message("/cd: {path} is outside the jail at {root}; /add it first.")
+NO_JAIL = Message("There is no jail; /{verb} works under js -C DIR.")
+ADD_BAD = Message("/add: {error}")
+ADD_MISSING = Message("/add: no such path: {path}")
+ADD_DONE = Message(
+    "{path} is visible in the jail, {access}, from the next tool call. A running kernel or "
+    "terminal session sees it after a restart.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
@@ -304,6 +310,7 @@ CMD_QUIT = Message("Quit. A note is kept for the next turn.")
 CMD_CD = Message(
     "Change the session's working directory; with no argument, print it. Under -C, only to DIR "
     "or a bound path.")
+CMD_ADD = Message("Under -C, show PATH in the jail: read-only, or read-write with :rw.")
 
 # --- js --help ----------------------------------------------------------------
 

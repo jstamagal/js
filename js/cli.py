@@ -1765,11 +1765,16 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-# /cd: where the session works. Each change queues one
+# /cd and /add: where the session works. Each change queues one
 # reminder for the next user message and records a `workspace:` mark, so a
 # resumed session works in the same place.
 
 _CD_NOTICE = "<js-reminder>The working directory is now {path}.</js-reminder>"
+_ADD_NOTICE = "<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>"
+
+
+def _access(bind: _jail.Bind) -> str:
+    return "read-write" if bind.rw else "read-only"
 
 
 def _queue_note(state: dict, note: str) -> None:
@@ -1801,12 +1806,21 @@ def _record_workspace(cfg: Config) -> None:
 
 
 def _restore_workspace(cfg: Config) -> None:
-    """Put a resumed session back where its last /cd left it, when the jail,
-    if there is one, shows that directory."""
+    """Put a resumed session back where its last /cd or /add left it.
+    The /add binds come back only under a jail with the same -C root; the
+    working directory only where the jail shows it."""
     mark = M.last_workspace(cfg.session_file)
     if mark is None:
         return
     jail = _jail.active()
+    if jail is not None and mark.get("root") == str(jail.root):
+        for spec in mark.get("binds") or ():
+            try:
+                bind = _jail.parse_bind(spec)
+            except ValueError:
+                continue
+            if bind.path.exists():
+                jail.add(bind)
     cwd = Path(str(mark.get("cwd") or ""))
     setting = settings.knob(getattr(cfg, "settings", None), "jail.bind")
     if cwd.is_absolute() and cwd.is_dir() and (jail is None or jail.bound(cwd, setting)):
@@ -1830,6 +1844,26 @@ def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
     _queue_note(state, _CD_NOTICE.format(path=target))
     _record_workspace(cfg)
     msgs.say(msgs.CD_DONE, path=target)
+    return None
+
+
+def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
+    jail = _jail.active()
+    if jail is None:
+        return msgs.NO_JAIL.said(verb="add")
+    spec = arg.strip()
+    if spec and not spec.startswith(("/", "~")):
+        spec = str(runtime.T.STOCK_CONTEXT.cwd / spec)
+    try:
+        bind = _jail.parse_bind(spec)
+    except ValueError as exc:
+        return msgs.ADD_BAD.said(error=exc)
+    if not bind.path.exists():
+        return msgs.ADD_MISSING.said(path=bind.path)
+    jail.add(bind)
+    _queue_note(state, _ADD_NOTICE.format(path=bind.path, access=_access(bind)))
+    _record_workspace(cfg)
+    msgs.say(msgs.ADD_DONE, path=bind.path, access=_access(bind))
     return None
 
 
@@ -1877,6 +1911,7 @@ COMMANDS: dict[str, Command] = {
                                      msgs.CMD_REFRESH_MODEL_CATALOG),
     "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
     "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
+    "add": Command(_cmd_add, "add <path>[:rw]", msgs.CMD_ADD, complete="path"),
 }
 
 

@@ -314,9 +314,15 @@ home.
   `cd DIR && js`. The operator always read `-C` as a jail.
 - `/cd DIR`, with or without `-C`, moves the session's working directory (js's
   and the tools'). Under `-C` it goes only to DIR or a bound path; elsewhere it
-  is refused. It puts one `<js-reminder>` on the next user message ("working
-  directory is now DIR") and writes a `workspace:` mark (root, cwd). A resume
-  restores the cwd.
+  is refused with a pointer to `/add`.
+- `/add PATH[:rw]`, under `-C` only, binds PATH into the live jail, read-only
+  by default. The next command sees it (each builds its own bwrap argv); the
+  file tools accept it at once. A kernel or terminal session already running
+  needs a restart.
+- Each puts one `<js-reminder>` on the next user message ("working directory
+  is now DIR", "PATH is now visible inside the jail (read-only)") and writes a
+  `workspace:` mark (root, cwd, `/add` binds). A resume restores the cwd, and
+  under the same `-C` root the binds.
 
 How it is built (`js/jail.py`):
 

@@ -283,6 +283,11 @@ class Jail:
         real = _real(path)
         return any(_under(real, _real(b.path)) for b in [Bind(self.root), *self.binds(setting)])
 
+    def add(self, bind: Bind) -> None:
+        """Show ``bind`` from the next command on (/add). A path added again
+        takes the new access."""
+        self.added = [b for b in self.added if b.path != bind.path] + [bind]
+
     # --- bwrap -------------------------------------------------------------
 
     def argv(self, argv: list[str], *, cwd: Path | str | None = None, env_path: str = "",
