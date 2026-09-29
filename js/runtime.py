@@ -766,9 +766,8 @@ def _reconcile_read_delivery(
     """Match read coverage to what the model actually received.
 
     A clipping cap (inline spill, per-result cap, or the per-turn batch cap) runs
-    after the read handler returned the full text and recorded whole-file
-    coverage. Without this, write(overwrite=true) is authorized against content
-    the model never saw."""
+    after the read handler returned the full text and recorded coverage for all
+    of it. Without this, patch is authorized to edit lines the model never saw."""
     if tool_name != "read" or not isinstance(raw, str) or not isinstance(delivered, str):
         return
     if delivered == raw:

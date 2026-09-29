@@ -15,7 +15,8 @@ Parameters:
 - `file_path`: required path.
 - `range`: optional `{start_line, end_line}` for text files, or a byte range
   `{start_byte, end_byte}`: `start_byte` is a 0-based offset and `end_byte`
-  the offset one past the last byte. Passing both kinds is an error.
+  the offset one past the last byte. Passing both kinds is an error, and so
+  is a negative or non-integer offset.
 - `show_line_numbers`: default true.
 
 A byte-range read returns raw text, no line prefixes, at most half the tighter
@@ -81,7 +82,9 @@ and names both hashes. Lines the model had seen that the change left alone stay
 seen at their new line numbers, and the lines the diff shows count as read, so
 the retry needs no second `read`. A diff larger than half the tighter of
 `limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes` is
-replaced by the changed line numbers.
+replaced by the changed line numbers. `patch` then stays gated on those lines
+until they are read; an overwrite retry goes through and discards them, and
+`undo` brings them back.
 
 Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals

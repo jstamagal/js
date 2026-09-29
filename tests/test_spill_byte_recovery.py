@@ -129,3 +129,15 @@ def test_line_and_byte_range_together_are_refused(tmp_path):
     result = fs.fs_read(file_path=str(target), range={"start_line": 1, "start_byte": 0}, context=context)
 
     assert result.startswith("ERROR")
+
+
+@pytest.mark.parametrize("bad", [{"start_byte": -5}, {"start_byte": True}, {"end_byte": "x"}, {"start_byte": 0, "end_byte": -1}])
+def test_an_invalid_byte_offset_is_refused_not_read_as_the_whole_file(tmp_path, bad):
+    target = tmp_path / "f.txt"
+    target.write_text("abc\ndef\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    result = fs.fs_read(file_path=str(target), range=bad, context=context)
+
+    assert result.startswith("ERROR")
+    assert target not in context.read_paths

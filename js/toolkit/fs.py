@@ -136,7 +136,13 @@ def _render_line_spans(spans: list[tuple[int, int]]) -> str:
 
 
 def _changed_since_read(
-    context: ToolContext, target: Path, action: str, current: bytes, current_hash: str
+    context: ToolContext,
+    target: Path,
+    action: str,
+    current: bytes,
+    current_hash: str,
+    *,
+    edits_lines: bool,
 ) -> str | None:
     """Refuse an edit of a file that changed on disk since the model read it,
     and hand the model the diff from the content it read to the content there now.
@@ -146,6 +152,8 @@ def _changed_since_read(
     diff shows (changed lines and their context) counts as seen when the diff
     is delivered whole, so the retry needs no second read.
     A diff over the result budget is replaced by the changed line numbers.
+    *edits_lines* is True for patch, which stays gated on those lines until
+    they are read; an overwrite discards them, so its retry goes through.
     Returns None when the file is unchanged since the read, or when js holds no
     UTF-8 copy of the content that was read; require_read covers those cases.
     """
@@ -201,9 +209,15 @@ def _changed_since_read(
     )
     if delivered:
         return f"{head} Diff from what you read to what is there now:\n{diff}Retry to {action} against the current text."
+    spans = _render_line_spans(changed) or "none (lines were only removed)"
+    if not edits_lines:
+        return (
+            f"{head} The diff is too large to show; the changed lines are now {spans}. "
+            f"A retry will {action} and discard them (undo restores them); read them first "
+            "if you need what changed."
+        )
     return (
-        f"{head} The diff is too large to show; the changed lines are now "
-        f"{_render_line_spans(changed) or 'none (lines were only removed)'}. "
+        f"{head} The diff is too large to show; the changed lines are now {spans}. "
         f"Read those, then retry to {action}."
     )
 
@@ -446,13 +460,16 @@ def fs_read(
         end_line = end_line if end_line is not None else range.get("end_line")
         start_byte = start_byte if start_byte is not None else range.get("start_byte")
         end_byte = end_byte if end_byte is not None else range.get("end_byte")
+    for name, value in (("start_byte", start_byte), ("end_byte", end_byte)):
+        if value is not None and int_or_default(value, -1, minimum=0) == -1:
+            return f"ERROR: {name} must be a non-negative integer, got {value!r}"
     byte_start = int_or_default(start_byte, -1, minimum=0)
     byte_end = int_or_default(end_byte, -1, minimum=0)
     byte_ranged = byte_start != -1 or byte_end != -1
     # A whole-file read (no range asked for) is the only one gated by
     # max_read_bytes. Once the caller names a range it is reading deliberately,
-    # so a 40 MB log stays addressable line-by-line — max_file_bytes is still
-    # the outer ceiling for both.
+    # so a 40 MB log stays addressable line-by-line up to max_file_bytes; a
+    # byte range seeks, so it reaches past max_file_bytes too.
     # Matches the acceptance rule the line math below uses: bools, junk and
     # out-of-range values are not a range, so they can't smuggle a whole-file
     # read past the cap.
@@ -595,7 +612,9 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = _hash_bytes(current)
-        guard = _changed_since_read(context, target, "overwrite it", current, current_hash) or context.require_read(
+        guard = _changed_since_read(
+            context, target, "overwrite it", current, current_hash, edits_lines=False
+        ) or context.require_read(
             target, "overwrite it", content_hash=current_hash
         )
         if guard:
@@ -966,7 +985,9 @@ def patch(
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
     source_hash = _hash_bytes(source_bytes)
-    guard = _changed_since_read(context, target, "edit it", source_bytes, source_hash) or context.require_read(
+    guard = _changed_since_read(
+        context, target, "edit it", source_bytes, source_hash, edits_lines=True
+    ) or context.require_read(
         target, "edit it", content_hash=source_hash
     )
     if guard:

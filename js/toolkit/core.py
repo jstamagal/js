@@ -430,8 +430,8 @@ class ToolContext:
 
         The read handler recorded coverage for the whole text it returned, but
         the runtime clips or spills that text before the model sees it. Keep only
-        the numbered lines fully present in the shared prefix, so a later edit or
-        overwrite is never authorized against bytes the model never received."""
+        the numbered lines fully present in the shared prefix, so a later edit is
+        never authorized against lines the model never received."""
         limit = 0
         upper = min(len(raw), len(delivered))
         while limit < upper and raw[limit] == delivered[limit]:
