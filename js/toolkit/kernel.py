@@ -33,6 +33,7 @@ from __future__ import annotations
 import atexit
 import base64
 import json
+import math
 import queue
 import re
 import sys
@@ -96,6 +97,11 @@ VERBOSITY_LEVELS = ("quiet", "normal", "verbose")
 # One read of the iopub queue, in seconds. Short enough that a poll that finds
 # nothing feels immediate, long enough not to spin the CPU.
 POLL_SLICE = 0.25
+# How long a drain of the shell socket waits for one more reply. A cell's
+# reply is sent before the kernel reports idle, so it is normally queued by
+# the time the cell is finished; one that arrives later is drained by the
+# next call instead of held up for.
+DRAIN_SLICE = 0.02
 # After SIGINT, how long to keep reading for the KeyboardInterrupt. A CPU-bound
 # C extension only checks signals between chunks, so the first polls after the
 # signal routinely return nothing.
@@ -501,7 +507,7 @@ def _drain_shell(session: KernelSession, deadline: float) -> None:
     """
     while time.monotonic() < deadline:
         try:
-            session.client.get_shell_msg(timeout=min(POLL_SLICE, deadline - time.monotonic()))
+            session.client.get_shell_msg(timeout=min(DRAIN_SLICE, deadline - time.monotonic()))
         except queue.Empty:
             return
 
@@ -726,7 +732,7 @@ def poll_cell(session: KernelSession, handle: CellHandle) -> CellOutput:
     return output
 
 
-def wait_cell(session: KernelSession, handle: CellHandle, timeout: int) -> CellOutput:
+def wait_cell(session: KernelSession, handle: CellHandle, timeout: float) -> CellOutput:
     """Block up to `timeout` for a submitted cell, interrupting it if the wait expires."""
     collect_until(session, handle, time.monotonic() + timeout)
     if not handle.finished and not handle.died:
@@ -783,10 +789,21 @@ def cap_for_model(text: str, context: Any) -> str:
 # --------------------------------------------------------------------------
 
 
+def _positive_seconds(raw: Any, default: float) -> float:
+    """`raw` as a positive, finite number of seconds, or `default`."""
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
 def wait_seconds(context: Any) -> float:
     """How long a submitted cell is waited for before the call returns a handle."""
-    return float(int_or_default(getattr(context, "kernel_wait_seconds", None),
-                                _settings.default_value("kernel.wait_seconds"), minimum=1))
+    return _positive_seconds(getattr(context, "kernel_wait_seconds", None),
+                             float(_settings.default_value("kernel.wait_seconds")))
 
 
 def _output_parts(output: CellOutput) -> list[str]:
@@ -870,7 +887,7 @@ def kernel(
     if context is None:
         return "ERROR: missing ToolContext"
     code = text_or_default(code)
-    limit = int_or_default(timeout, 120, minimum=1)
+    limit = _positive_seconds(timeout, 120.0)
     mode = text_or_default(action, "run").strip().lower() or "run"
     target = text_or_default(handle).strip()
     level = resolve_verbosity(context, verbosity)
@@ -929,7 +946,7 @@ def kernel(
         return _report(
             context, session, level, notes, live, output, status=status,
             timed_out_note=(
-                f"INTERRUPTED after {limit}s. The cell was stopped with a KeyboardInterrupt; "
+                f"INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; "
                 "the namespace and everything defined in it are intact."
                 if live.timed_out else ""),
         )
@@ -977,7 +994,7 @@ def kernel(
         parts: list[str] = list(notes)
         if live.timed_out:
             parts.append(
-                f"INTERRUPTED after {limit}s. The cell was stopped with a KeyboardInterrupt; "
+                f"INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; "
                 "the namespace and everything defined in it are intact."
             )
         parts.extend(_output_parts(output))
