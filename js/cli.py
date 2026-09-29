@@ -2114,6 +2114,18 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
 
 QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
 
+# Orders the async REPL's live-state writes against turn starts. A command holds
+# it for its whole run on its executor thread; a turn takes its cfg snapshot under
+# it, also off the loop thread (_live_cfg_snapshot), so a command that waits on the
+# loop (a modal picker) never deadlocks it and a slow command never stalls input.
+_LIVE_STATE_LOCK = threading.Lock()
+
+
+def _live_cfg_snapshot(cfg: Config, state: dict) -> Config:
+    """The turn cfg from live state, never from a half-applied command."""
+    with _LIVE_STATE_LOCK:
+        return _cfg_for_live_state(cfg, state)
+
 
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
@@ -2122,7 +2134,8 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return True
     if not line.startswith("/") or _is_skill_invocation(line):
         return False
-    handled, error = _run_command(line, state, cfg)
+    with _LIVE_STATE_LOCK:
+        handled, error = _run_command(line, state, cfg)
     if isinstance(error, msgs.Said):
         msgs.say_said(error)
     elif error:
@@ -3100,7 +3113,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
         prompt_text = _expand_skill_line(prompt_text)
-        turn_cfg = _cfg_for_live_state(cfg, state)
+        turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
@@ -3360,7 +3373,9 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         # Graceful quit (EOF / exit): let queued and in-flight turns finish
         # before teardown so submitted work isn't silently dropped. To abandon a
         # long turn, cancel it with ^C first, then quit.
-        if not consumer.done() and (sup.turn_active() or not queue.empty()):
+        # join() also covers a line the consumer has taken but not yet spawned
+        # (its cfg snapshot waits for a running command).
+        if not consumer.done():
             with contextlib.suppress(Exception):
                 await queue.join()
         consumer.cancel()
