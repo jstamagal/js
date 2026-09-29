@@ -38,7 +38,11 @@ persists each completed turn.
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
-| `js/runtime.py` | streaming loop, tool-call aggregation, dispatch, provider quirks |
+| `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results, dispatch, provider quirks |
+| `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply on screen and in the transcript (`StreamSink`) |
+| `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
+| `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
+| `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
 | `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
@@ -123,6 +127,18 @@ search cache.
 
 `run_turn()` mutates the caller's `messages` list. It builds a provider `convo`
 by prepending the system prompt to the current messages.
+
+`run_turn_async` in `js/runtime.py` is the loop itself: set the turn up, then
+per iteration call the model, record the reply, run the tool batch and record
+its results. The parts it drives live in their own modules, which never import
+`runtime`: `turn_stream` (events and the streamed reply), `turn_surface` (the
+tool-surface journal), `turn_budget` (the SDK conversation and the context
+budget) and `turn_call` (one model call and its recovery). Each has a unit-test
+file of the same name. `turn_budget` takes the context-window lookup as a
+callable, so `runtime._resolve_context_window` stays the one place it is
+resolved, and `turn_call` reaches the model through
+`model_client.stream_model_async` on the module.
+
 1. Builds `ai` message and tool parts via `js/model_client`.
 2. Calls `model_client.stream_model(...)`.
 3. Streams events; `model_client` aggregates text, reasoning content, and fragmented tool calls.
@@ -170,8 +186,8 @@ Provider request retry:
   date), else 1s, 2s, 4s ... up to 16s plus jitter. A wait longer than
   `runtime.retry_max_wait_seconds` (default 120, 0 means no limit) fails the
   request at once. `_open_stream` sets the OpenAI and Anthropic SDK clients'
-  `max_retries` to 0, so these retries are the only ones. The turn loop runs
-  them itself, between overflow and max-output recovery; every other model
+  `max_retries` to 0, so these retries are the only ones. The turn runs them
+  itself (`turn_call.ModelCaller`), between overflow and max-output recovery; every other model
   request (compaction summaries, the `/login` test) goes through
   `retry.call` under the same budget.
 - `runtime.stream_idle_seconds` (default 300, 0 off) is the stream idle

@@ -1,7 +1,7 @@
 """The retry budget every model request runs under.
 
 The OpenAI and Anthropic SDK clients retry nothing (model_client._open_stream
-sets their max_retries to 0). The turn loop in runtime.py retries a turn's
+sets their max_retries to 0). `ModelCaller` in turn_call.py retries a turn's
 requests under this budget, interleaved with overflow recovery and max-output
 recovery. `call` retries any other model request (compaction summaries, the
 login test) under the same budget.
