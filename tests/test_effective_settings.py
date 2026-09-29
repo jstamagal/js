@@ -8,23 +8,44 @@ reload reproduces the running configuration.
 
 from __future__ import annotations
 
+import copy
+
 from js import cli, setcmd, settings
+from js.config import Config
 from js.sampling import Sampling
 
 
 # ---------------------------------------------------------------------------
-# Display target classifier
+# /set and /show: display forms vs mutations
 # ---------------------------------------------------------------------------
 
-def test_settings_display_target_classifies_display_vs_mutation():
-    assert setcmd.settings_display_target("/set") == (True, None)
-    assert setcmd.settings_display_target("/show") == (True, None)
-    assert setcmd.settings_display_target("/set model.id") == (True, "model.id")
-    assert setcmd.settings_display_target("/show provider.id") == (True, "provider.id")
-    # mutations and non-display verbs are not display forms
-    assert setcmd.settings_display_target("/set model.id foo") == (False, None)
-    assert setcmd.settings_display_target("/set -sampling.temperature") == (False, None)
-    assert setcmd.settings_display_target("/load file") == (False, None)
+def _repl_cfg(tmp_path) -> Config:
+    d = tmp_path / "sessions"
+    return Config(
+        agent_id="a", agent_dir=d, model="offline-test-model", provider_id=None,
+        provider_base_url=None, provider_api_key=None, reasoning_effort=None,
+        max_output_tokens=None, max_tool_iterations=5, max_bash_output_bytes=65536,
+        max_tool_result_bytes=65536, fetch_timeout_s=5, debug_log=None, trace=False,
+        history_file=d / ".history", sessions_dir=d, session_file=d / "s.jsonl",
+        prompts_dir=tmp_path / "prompts",
+    )
+
+
+def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path):
+    cfg = _repl_cfg(tmp_path)
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "sampling_cli": Sampling()}
+    for line in ("/set", "/show", "/set model.id", "/show provider.id"):
+        before = copy.deepcopy(state["settings"])
+        assert cli._handle_command(line, state, cfg) is True
+        assert state["settings"] == before
+
+    cli._handle_command("/set sampling.temperature 0.3", state, cfg)
+    assert settings.get_dotted(state["settings"], ("sampling", "temperature")) == 0.3
+    assert state["sampling_cli"].temperature == 0.3
+
+    cli._handle_command("/set -sampling.temperature", state, cfg)
+    assert settings.get_dotted(state["settings"], ("sampling", "temperature")) is None
+    assert state["sampling_cli"].temperature is None
 
 
 # ---------------------------------------------------------------------------

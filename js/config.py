@@ -369,6 +369,29 @@ def _preset_config_paths(
     return paths
 
 
+def jsrc_paths(
+    project_dir: Path,
+    *,
+    ignore_local_config: bool = False,
+    ignore_global_config: bool = False,
+    presets: list[str] | None = None,
+) -> list[Path]:
+    """The jsrc files a run loads, lowest layer first."""
+    paths: list[Path] = []
+    if not ignore_global_config:
+        paths.append(_paths.global_config_file())
+    if not ignore_local_config:
+        paths.extend([project_dir / ".js" / "jsrc", project_dir / ".js" / "jsrc.local"])
+    # Presets layer on top of the base jsrc files (still below env / --extra).
+    paths.extend(_preset_config_paths(
+        presets,
+        project_dir,
+        ignore_local_config=ignore_local_config,
+        ignore_global_config=ignore_global_config,
+    ))
+    return paths
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -397,23 +420,14 @@ def from_env(
     js_root = pkg.parent
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
 
-    config_paths: list[Path] = []
     if not ignore_global_config:
-        config_file_path = _paths.global_config_file()
-        _settings.write_default_template(config_file_path)
-        config_paths.append(config_file_path)
-    if not ignore_local_config:
-        config_paths.extend([
-            project_dir / ".js" / "jsrc",
-            project_dir / ".js" / "jsrc.local",
-        ])
-    # Presets layer on top of the base jsrc files (still below env / --extra).
-    config_paths.extend(_preset_config_paths(
-        presets,
+        _settings.write_default_template(_paths.global_config_file())
+    config_paths = jsrc_paths(
         project_dir,
         ignore_local_config=ignore_local_config,
         ignore_global_config=ignore_global_config,
-    ))
+        presets=presets,
+    )
 
     jsrc_settings = _settings.collect_settings(
         config_paths=config_paths,

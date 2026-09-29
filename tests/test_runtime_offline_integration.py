@@ -11,7 +11,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import compaction, events, runtime, setcmd, settings, tools as runtime_tools
+from js import cli, compaction, events, runtime, settings, tools as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
@@ -566,12 +566,12 @@ def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_r
     assert messages[-1] == {"role": "assistant", "content": "clean"}
 
 
-def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
+def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
     hooks = RecordingHooks()
     live_settings = settings.seed_defaults()
-    hooks.set_dispatcher(
-        setcmd.EventCommandDispatcher(settings=live_settings, cwd=tmp_path, events=hooks)
-    )
+    cfg = offline_config(tmp_path)
+    state = {"messages": [], "system": "system", "settings": live_settings, "events": hooks}
+    hooks.set_dispatcher(cli._event_dispatcher(state, cfg))
     hooks.add("turn_start", "set compact.auto off")
 
     def stream_stub(**kwargs):
@@ -579,7 +579,6 @@ def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
         return model_text_result("OK")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
-    cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Say OK."}]
 
     runtime.run_turn(
@@ -594,7 +593,6 @@ def test_run_turn_dispatches_registered_setcmd_handler(monkeypatch, tmp_path):
 
     assert settings.get_dotted(live_settings, ("compact", "auto")) is False
     turn_start = next(emission for emission in hooks.emissions if emission.event == "turn_start")
-    assert turn_start.results[0].changed is True
     assert turn_start.results[0].error is None
 
 

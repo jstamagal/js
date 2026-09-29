@@ -1,21 +1,18 @@
-"""Shared command runner — the first brick of the js scripting language.
+"""Settings verbs for the command table in ``js.cli``.
 
-Lexes a line into words and dispatches the `set` and `show` verbs against a
-settings dict, using the knob registry in `js.settings`. There is NO variable
-expansion yet — that arrives with the full lexer/verb set later. Both config
-loading (slashless `set` in a jsrc script) and the REPL (`/set`, `/show`) call
-this one runner, so the harness has a single config mechanism.
+`set`, `show` and `on` operate on a settings dict and an event-hook table,
+using the registry in `js.settings`. The REPL's command table calls these;
+config loading (jsrc, before the REPL exists) calls `apply_config_line`.
 
-Callers own all I/O: `run_repl_command` and `apply_config_line` return a
-`CommandResult`; the REPL prints its `lines`, config loading collects its
-`error`s as boot warnings.
+Callers own all I/O: every function returns a `CommandResult`; the REPL prints
+its `lines`, config loading collects its `error`s as boot warnings.
 """
 
 from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import events as _events
@@ -29,14 +26,6 @@ class CommandResult:
     lines: list[str] = field(default_factory=list)  # human-readable output
     error: str | None = None       # a problem worth surfacing
     changed_keys: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class CommandContext:
-    cwd: Path = field(default_factory=Path.cwd)
-    events: _events.EventHooks | None = None
-    max_load_depth: int = 16
-    _load_stack: tuple[Path, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +63,7 @@ def render_value(spec: _s.SettingSpec, value) -> str:
 def show_lines(settings: dict, key: str | None = None) -> CommandResult:
     """`show [key]` — every knob and its current value, or just one."""
     if key is not None:
-        spec = _s.SPEC_BY_KEY.get(key)
+        spec = _s.spec_for(key)
         if spec is None:
             return CommandResult(handled=True, error=f"unknown knob: {key}")
         value = _s.get_dotted(settings, spec.path)
@@ -131,10 +120,10 @@ def show_lines_effective(
     value and a ``(live: <source>)`` tag instead of the store value."""
     overlay = overlay or {}
     if key is not None:
-        spec = _s.SPEC_BY_KEY.get(key)
+        spec = _s.spec_for(key)
         if spec is None:
             return CommandResult(handled=True, error=f"unknown knob: {key}")
-        live = overlay.get(key)
+        live = overlay.get(spec.key)
         display = live.display if live is not None else render_value(spec, _s.get_dotted(settings, spec.path))
         return CommandResult(
             handled=True,
@@ -158,31 +147,6 @@ def show_lines_effective(
     return CommandResult(handled=True, lines=lines)
 
 
-def settings_display_target(line: str) -> tuple[bool, str | None]:
-    """Classify a ``/set``/``/show`` line as a read-only display or a mutation.
-
-    Returns ``(is_display, key)``: ``is_display`` True for the value-listing forms
-    (`/set`, `/set <key>`, `/show`, `/show <key>`) so the REPL can route them
-    through the effective view; False for mutations (`/set k v`, `/set -k`) and
-    non-display verbs. ``key`` is the single knob when one was named, else None."""
-    body = _normalize(line)
-    if body is None:
-        return (False, None)
-    parts = body.split(maxsplit=2)
-    verb = parts[0].lower()
-    if verb == "show":
-        return (True, parts[1] if len(parts) > 1 else None)
-    if verb == "set":
-        if len(parts) == 1:
-            return (True, None)
-        if parts[1].startswith("-") and len(parts[1]) > 1:
-            return (False, None)  # `/set -knob` clears a knob
-        if len(parts) == 2:
-            return (True, parts[1])
-        return (False, None)  # `/set key value` mutates
-    return (False, None)
-
-
 # ---------------------------------------------------------------------------
 # set
 # ---------------------------------------------------------------------------
@@ -196,17 +160,17 @@ def _prefix_spec(key: str) -> _s.SettingSpec | None:
 
 def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
-    spec = _s.SPEC_BY_KEY.get(key)
+    spec = _s.spec_for(key)
     if spec is not None:
         value, error = _s.coerce_value(spec, raw)
         if error is not None:
-            return CommandResult(handled=True, error=f"{key}: {error}")
+            return CommandResult(handled=True, error=f"{spec.key}: {error}")
         _s.set_dotted(settings, spec.path, value)
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[f"{key} = {render_value(spec, value)}"],
-            changed_keys=[key],
+            lines=[f"{spec.key} = {render_value(spec, value)}"],
+            changed_keys=[spec.key],
         )
 
     # sub-keys of a map knob (wiki.aliases.creative) or other keys within a known
@@ -245,7 +209,7 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
 
 def apply_unset(settings: dict, key: str) -> CommandResult:
     """`set -<key>` — clear a knob back to its default/unset state."""
-    spec = _s.SPEC_BY_KEY.get(key)
+    spec = _s.spec_for(key)
     path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
     if not path:
         return CommandResult(handled=True, error=f"unknown knob: {key}")
@@ -256,6 +220,8 @@ def apply_unset(settings: dict, key: str) -> CommandResult:
     existed = _delete_dotted(settings, path)
     display = render_value(spec, None) if spec is not None else "<unset>"
     note = "" if existed else "  (already unset)"
+    if spec is not None:
+        key = spec.key
     return CommandResult(
         handled=True,
         changed=existed,
@@ -264,41 +230,56 @@ def apply_unset(settings: dict, key: str) -> CommandResult:
     )
 
 
+def set_command(settings: dict, arg: str) -> CommandResult:
+    """`set` shows every value, `set key` shows one, `set -key` clears one,
+    `set key value` sets one."""
+    parts = arg.split(maxsplit=1)
+    if not parts:
+        return show_lines(settings)
+    key = parts[0]
+    if key.startswith("-") and len(key) > 1:
+        return apply_unset(settings, key[1:])
+    if len(parts) == 1:
+        return show_lines(settings, key)
+    return apply_set(settings, key, parts[1])
+
+
 # ---------------------------------------------------------------------------
-# on / load
+# on
 # ---------------------------------------------------------------------------
 
-def _show_event_lines(context: CommandContext | None) -> CommandResult:
-    if context is None or context.events is None:
-        return CommandResult(handled=True, lines=["(no event handlers)"])
-    hooks = context.events.all()
-    if not hooks:
-        return CommandResult(handled=True, lines=["(no event handlers)"])
+def event_lines(hooks: _events.EventHooks) -> list[str]:
+    """Every registered handler as the `on` line that registers it again."""
+    registered = hooks.all()
     lines: list[str] = []
     for event in _events.CANONICAL_EVENT_NAMES:
-        for hook in hooks.get(event, ()):
+        for hook in registered.get(event, ()):
             prefix = "^" if hook.suppress else ""
-            lines.append(f"on {prefix}{hook.event} = {hook.handler}")
-    return CommandResult(handled=True, lines=lines)
+            lines.append(f"on {prefix}{hook.event} {hook.handler}")
+    return lines
 
 
-def apply_on(context: CommandContext | None, event_token: str, handler: str) -> CommandResult:
-    if context is None or context.events is None:
-        return CommandResult(handled=True, error="on needs an event context")
-    handler = handler.strip()
+def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
+    """`on` lists handlers; `on [^]event handler` registers one."""
+    parts = arg.split(maxsplit=1)
+    if not parts:
+        return CommandResult(handled=True, lines=event_lines(hooks) or ["(no event handlers)"])
+    if len(parts) < 2:
+        return CommandResult(handled=True, error="on needs an event and handler")
+    handler = parts[1].strip()
     if handler.startswith("="):
         handler = handler[1:].lstrip()
     try:
-        hook = context.events.add(event_token, handler)
+        hook = hooks.add(parts[0], handler)
     except ValueError as e:
         return CommandResult(handled=True, error=str(e))
     prefix = "^" if hook.suppress else ""
-    return CommandResult(
-        handled=True,
-        changed=True,
-        lines=[f"on {prefix}{hook.event} = {hook.handler}"],
-    )
+    return CommandResult(handled=True, changed=True, lines=[f"on {prefix}{hook.event} = {hook.handler}"])
 
+
+# ---------------------------------------------------------------------------
+# load paths
+# ---------------------------------------------------------------------------
 
 def _strip_load_comment(raw: str) -> str:
     in_single = False
@@ -340,196 +321,59 @@ def _strip_load_comment(raw: str) -> str:
     return raw
 
 
-def _split_load_arg(raw: str) -> tuple[str | None, str | None]:
+def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
+    """Resolve a `load` argument (one shell-quoted path, trailing `# comment`
+    allowed) against ``base``. Returns ``(path, error)``."""
     try:
-        parts = shlex.split(_strip_load_comment(raw))
+        parts = shlex.split(_strip_load_comment(arg))
     except ValueError as e:
         return None, str(e)
     if len(parts) != 1:
         return None, "load needs exactly one path"
-    return parts[0], None
-
-
-def _resolve_load_path(raw_path: str, context: CommandContext) -> Path:
-    path = Path(raw_path).expanduser()
+    path = Path(parts[0]).expanduser()
     if not path.is_absolute():
-        path = context.cwd / path
-    return path.resolve(strict=False)
-
-
-def run_script_file(settings: dict, raw_path: str, context: CommandContext | None) -> CommandResult:
-    """Load one ircII-style script file.
-
-    Script files use slashless commands. For this foundation pass, the accepted
-    verbs are ``set``, ``show``, ``on``, and nested ``load``.
-    """
-    if context is None:
-        context = CommandContext()
-    path = _resolve_load_path(raw_path, context)
-    if len(context._load_stack) >= context.max_load_depth:
-        return CommandResult(handled=True, error="load nesting too deep")
-    if path in context._load_stack:
-        return CommandResult(handled=True, error=f"load cycle: {path}")
-    if not path.is_file():
-        return CommandResult(handled=True, error=f"script not found: {path}")
-
-    child = replace(context, cwd=path.parent, _load_stack=(*context._load_stack, path))
-    lines: list[str] = []
-    changed_keys: list[str] = []
-    changed = False
-    try:
-        script_lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError) as e:
-        return CommandResult(
-            handled=True,
-            error=f"failed to read script: {path}: {type(e).__name__}: {e}",
-        )
-    for lineno, raw in enumerate(script_lines, 1):
-        result = apply_script_line(settings, raw, context=child)
-        if result.error:
-            return CommandResult(
-                handled=True,
-                changed=changed or result.changed,
-                lines=[*lines, *result.lines],
-                error=f"{path}:{lineno}: {result.error}",
-                changed_keys=[*changed_keys, *result.changed_keys],
-            )
-        changed = changed or result.changed
-        changed_keys.extend(result.changed_keys)
-        lines.extend(result.lines)
-    lines.append(f"loaded {path}")
-    return CommandResult(handled=True, changed=changed, lines=lines, changed_keys=changed_keys)
+        path = base / path
+    return path.resolve(strict=False), None
 
 
 # ---------------------------------------------------------------------------
-# Line dispatch
+# Line splitting and the config layer
 # ---------------------------------------------------------------------------
 
-def _normalize(line: str) -> str | None:
-    """Strip a comment/blank line (-> None) and a single leading REPL slash."""
+def split_command(line: str) -> tuple[str, str] | None:
+    """``(verb, arg)`` for a command line, or None for a blank/comment line.
+    One leading ``/`` is stripped: it is required at the input line and
+    optional everywhere else."""
     body = line.strip()
-    if not body or body.startswith("#"):
-        return None
     if body.startswith("/"):
         body = body[1:].lstrip()
     if not body or body.startswith("#"):
         return None
-    return body
+    verb, _, arg = body.partition(" ")
+    return verb.lower(), arg.strip()
 
 
-def is_repl_command(line: str, *commands: str) -> bool:
-    body = line.strip().lower()
-    return any(body == cmd.lower() or body.startswith(cmd.lower() + " ") for cmd in commands)
-
-
-def run_repl_command(settings: dict, line: str, *, context: CommandContext | None = None) -> CommandResult:
-    """Dispatch a REPL command line (`/set ...`, `/show ...`, `/on ...`,
-    `/load ...`). Returns
-    ``handled=False`` when the verb is not one this runner owns."""
-    body = _normalize(line)
-    if body is None:
-        return CommandResult(handled=False)
-    parts = body.split(maxsplit=2)
-    verb = parts[0].lower()
-
-    if verb == "set":
-        if len(parts) == 1:
-            return show_lines(settings)
-        key = parts[1]
-        if key.startswith("-") and len(key) > 1:
-            # `set -knob` clears a knob (e.g. /set -sampling.temperature).
-            return apply_unset(settings, key[1:])
-        if len(parts) == 2:
-            return show_lines(settings, parts[1])
-        return apply_set(settings, parts[1], parts[2])
-
-    if verb == "show":
-        return show_lines(settings, parts[1] if len(parts) > 1 else None)
-
-    if verb == "on":
-        if len(parts) == 1:
-            return _show_event_lines(context)
-        if len(parts) < 3:
-            return CommandResult(handled=True, error="on needs an event and handler")
-        return apply_on(context, parts[1], parts[2])
-
-    if verb == "load":
-        if len(parts) < 2:
-            return CommandResult(handled=True, error="load needs a path")
-        raw_path, error = _split_load_arg(body[len(parts[0]):].strip())
-        if error:
-            return CommandResult(handled=True, error=error)
-        return run_script_file(settings, raw_path or "", context)
-
-    return CommandResult(handled=False)
-
-
-def _handler_verb(line: str) -> str:
-    body = _normalize(line)
-    if body is None:
-        return "<blank>"
-    return body.split(maxsplit=1)[0].lower()
-
-
-@dataclass(frozen=True)
-class EventCommandDispatcher:
-    """Run event handler text through the slash/setcmd command surface."""
-
-    settings: dict
-    cwd: Path = field(default_factory=Path.cwd)
-    events: _events.EventHooks | None = None
-    max_load_depth: int = 16
-
-    def __call__(
-        self,
-        hook: _events.EventHook,
-        emission: _events.EventEmission,
-    ) -> _events.EventHandlerResult:
-        context = CommandContext(
-            cwd=self.cwd,
-            events=self.events,
-            max_load_depth=self.max_load_depth,
-        )
-        result = run_repl_command(self.settings, hook.handler, context=context)
-        if not result.handled:
-            return _events.EventHandlerResult(
-                hook=hook,
-                error=f"unsupported event handler command: {_handler_verb(hook.handler)}",
-            )
-        return _events.EventHandlerResult(
-            hook=hook,
-            lines=list(result.lines),
-            error=result.error,
-            changed=result.changed,
-            changed_keys=list(result.changed_keys),
-        )
-
-
-def apply_script_line(settings: dict, line: str, *, context: CommandContext | None = None) -> CommandResult:
-    """Apply one line from a loaded ircII-style script. Comments/blanks are
-    no-ops; commands are slashless, though a leading slash is tolerated at the
-    normalization layer."""
-    body = _normalize(line)
-    if body is None:
-        return CommandResult(handled=True)
-    parts = body.split(maxsplit=2)
-    verb = parts[0].lower()
-    if verb in {"set", "show", "on", "load"}:
-        return run_repl_command(settings, body, context=context)
-    return CommandResult(handled=True, error=f"unknown command: {verb}")
+def config_owns(verb: str) -> bool:
+    """Verbs the settings layer applies while config loads: `set`, and a
+    setting's short name (`model X` is `set model X`). Every other verb in a
+    jsrc runs through the command table when the REPL starts."""
+    return verb == "set" or verb in _s.SPEC_BY_ALIAS
 
 
 def apply_config_line(settings: dict, line: str) -> CommandResult:
-    """Apply one line from a jsrc config script. Only `set <key> <value>` is
-    valid; comments/blanks are no-ops. Anything else returns an ``error`` so the
-    loader can surface it as a boot warning without aborting."""
-    body = _normalize(line)
-    if body is None:
+    """Apply one jsrc line to ``settings`` at config load. Comments/blanks are
+    no-ops; a verb the settings layer does not own returns ``handled=False``.
+    A bad `set` returns an ``error`` so the loader can surface it without
+    aborting."""
+    parsed = split_command(line)
+    if parsed is None:
         return CommandResult(handled=True)
-    parts = body.split(maxsplit=2)
-    verb = parts[0].lower()
+    verb, arg = parsed
+    if not config_owns(verb):
+        return CommandResult(handled=False)
     if verb != "set":
-        return CommandResult(handled=True, error=f"unknown command: {verb}")
-    if len(parts) < 3:
-        return CommandResult(handled=True, error=f"set needs a key and value: {body!r}")
-    return apply_set(settings, parts[1], parts[2])
+        arg = f"{verb} {arg}"
+    parts = arg.split(maxsplit=1)
+    if len(parts) < 2:
+        return CommandResult(handled=True, error=f"set needs a key and value: {line.strip()!r}")
+    return apply_set(settings, parts[0], parts[1])

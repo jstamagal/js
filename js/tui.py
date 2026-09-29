@@ -11,7 +11,6 @@ import signal
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from rich.markdown import Markdown
@@ -21,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Input, RichLog
 
-from . import attach, events, logins, memory as M, providers, replcomplete, routing, runtime, setcmd, settings, supervisor
+from . import attach, events, logins, memory as M, providers, replcomplete, routing, runtime, settings, supervisor
 from . import transcript as transcript_mod
 from .config import Config
 from .sampling import Sampling
@@ -38,6 +37,8 @@ class TuiDeps:
     """CLI callbacks the TUI uses without importing cli.py back into this module."""
 
     handle_command: Callable[[str, dict, Config], bool]
+    event_dispatcher: Callable[[dict, Config], events.EventHandlerDispatcher]
+    command_completions: Callable[[dict], dict[str, str | None]]
     is_turn_state_command: Callable[[str], bool]
     cfg_for_live_state: Callable[[Config, dict], Config]
     append_turn: Callable[[Config, dict], None]
@@ -145,6 +146,7 @@ class JsTuiApp(App[int]):
         self._history: list[str] = []
         self._history_index: int | None = None
         self._completer = replcomplete.JsCompleter(
+            commands=lambda: deps.command_completions(state),
             setting_keys=[spec.key for spec in settings.REGISTRY],
             names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
             spell=None,
@@ -162,12 +164,7 @@ class JsTuiApp(App[int]):
         self.sup = supervisor.Supervisor(loop)
         supervisor.set_current(self.sup)
         hookset = TuiEventHooks(self)
-        dispatcher = setcmd.EventCommandDispatcher(
-            settings=self.state["settings"],
-            cwd=getattr(self.cfg, "project_dir", Path.cwd()),
-            events=hookset,
-        )
-        hookset.set_dispatcher(dispatcher)
+        hookset.set_dispatcher(self.deps.event_dispatcher(self.state, self.cfg))
         self.state["events"] = hookset
         self.consumer = asyncio.create_task(self._turn_consumer(loop))
         self.query_one(TuiInput).focus()

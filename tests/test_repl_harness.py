@@ -100,24 +100,24 @@ def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
 def test_set_commands_parse_power_user_knobs():
     live_settings = settings.seed_defaults()
 
-    trace = setcmd.run_repl_command(live_settings, "/set runtime.trace on")
+    trace = setcmd.set_command(live_settings, "runtime.trace on")
     assert trace.error is None
     assert trace.lines == ["runtime.trace = on"]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
 
-    reasoning = setcmd.run_repl_command(live_settings, "/set model.reasoning_effort max")
+    reasoning = setcmd.set_command(live_settings, "model.reasoning_effort max")
     assert reasoning.error is None
     assert reasoning.lines == ["model.reasoning_effort = max"]
     assert settings.get_dotted(live_settings, ("model", "reasoning_effort")) == "max"
 
-    maxout = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens 64000")
+    maxout = setcmd.set_command(live_settings, "model.max_output_tokens 64000")
     assert maxout.error is None
     assert maxout.lines == ["model.max_output_tokens = 64000"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
 
     # RULING A: magic strings die -- "off" is no longer a clear-token for a
     # nullable int knob; `set -key` is the only way to clear one.
-    cleared = setcmd.run_repl_command(live_settings, "/set -model.max_output_tokens")
+    cleared = setcmd.set_command(live_settings, "-model.max_output_tokens")
     assert cleared.error is None
     assert cleared.lines == ["model.max_output_tokens = <none>"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None

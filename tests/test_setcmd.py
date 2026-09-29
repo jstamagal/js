@@ -32,8 +32,8 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     live_settings = settings.seed_defaults()
     spec = settings.SPEC_BY_KEY[key]
 
-    changed = setcmd.run_repl_command(live_settings, f"/set {key} {raw}")
-    shown = setcmd.run_repl_command(live_settings, f"/show {key}")
+    changed = setcmd.set_command(live_settings, f"{key} {raw}")
+    shown = setcmd.show_lines(live_settings, f"{key}")
 
     assert changed.handled is True
     assert changed.changed is True
@@ -48,7 +48,7 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
 def test_shell_env_allow_rejects_values_that_are_not_variable_name_lists(raw):
     live_settings = settings.seed_defaults()
 
-    result = setcmd.run_repl_command(live_settings, f"/set limits.shell_env_allow {raw}")
+    result = setcmd.set_command(live_settings, f"limits.shell_env_allow {raw}")
 
     assert result.error == (
         "limits.shell_env_allow: expected a JSON list of non-empty "
@@ -61,9 +61,9 @@ def test_tools_alias_profiles_rejects_non_list_json():
     before = copy.deepcopy(live_settings)
     raw = '{"match":["openai"],"aliases":{"read":"r"}}'
 
-    result = setcmd.run_repl_command(
+    result = setcmd.set_command(
         live_settings,
-        f"/set tools.alias_profiles {raw}",
+        f"tools.alias_profiles {raw}",
     )
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
@@ -87,7 +87,7 @@ def test_tools_alias_profiles_rejects_entries_without_aliases():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"]}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -107,7 +107,7 @@ def test_tools_alias_profiles_rejects_empty_alias_maps():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{}}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -127,7 +127,7 @@ def test_tools_alias_profiles_rejects_empty_match_values():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":[],"aliases":{"read":"Read"}}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -147,7 +147,7 @@ def test_tools_alias_profiles_rejects_duplicate_alias_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read":"Tool","write":"tool"}}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -167,7 +167,7 @@ def test_tools_alias_profiles_rejects_invalid_alias_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read":"read file"}}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -187,7 +187,7 @@ def test_tools_alias_profiles_rejects_invalid_canonical_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read file":"Read"}}]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
@@ -207,7 +207,7 @@ def test_provider_extra_rejects_non_object_json():
     before = copy.deepcopy(live_settings)
     raw = '["extra_body"]'
 
-    result = setcmd.run_repl_command(live_settings, f"/set provider.extra {raw}")
+    result = setcmd.set_command(live_settings, f"provider.extra {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(config_settings, f"set provider.extra {raw}")
@@ -228,9 +228,9 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     # `set -key` (js/setcmd.py apply_unset) is the only way to clear one.
     live_settings = settings.seed_defaults()
 
-    bool_result = setcmd.run_repl_command(live_settings, "/set runtime.trace off")
-    int_result = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens 123")
-    rejected = setcmd.run_repl_command(live_settings, "/set model.max_output_tokens off")
+    bool_result = setcmd.set_command(live_settings, "runtime.trace off")
+    int_result = setcmd.set_command(live_settings, "model.max_output_tokens 123")
+    rejected = setcmd.set_command(live_settings, "model.max_output_tokens off")
 
     assert bool_result.error is None
     assert bool_result.lines == ["runtime.trace = off"]
@@ -241,7 +241,7 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     assert rejected.changed is False
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123  # unchanged
 
-    cleared = setcmd.run_repl_command(live_settings, "/set -model.max_output_tokens")
+    cleared = setcmd.set_command(live_settings, "-model.max_output_tokens")
     assert cleared.error is None
     assert cleared.lines == ["model.max_output_tokens = <none>"]
     assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
@@ -250,8 +250,8 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
 def test_subagent_max_workers_rejects_values_below_one():
     live_settings = settings.seed_defaults()
 
-    rejected = setcmd.run_repl_command(live_settings, "/set limits.subagent_max_workers 0")
-    accepted = setcmd.run_repl_command(live_settings, "/set limits.subagent_max_workers 1")
+    rejected = setcmd.set_command(live_settings, "limits.subagent_max_workers 0")
+    accepted = setcmd.set_command(live_settings, "limits.subagent_max_workers 1")
 
     assert rejected.error == "limits.subagent_max_workers: expected an integer >= 1"
     assert rejected.changed is False
@@ -265,13 +265,13 @@ def test_magic_strings_store_verbatim_for_string_knobs(token):
     # words as-is instead of silently clearing to the built-in default.
     live_settings = settings.seed_defaults()
 
-    result = setcmd.run_repl_command(live_settings, f"/set model.id {token}")
+    result = setcmd.set_command(live_settings, f"model.id {token}")
 
     assert result.error is None
     assert result.lines == [f"model.id = {token}"]
     assert settings.get_dotted(live_settings, ("model", "id")) == token
 
-    cleared = setcmd.run_repl_command(live_settings, "/set -model.id")
+    cleared = setcmd.set_command(live_settings, "-model.id")
     assert cleared.error is None
     assert settings.get_dotted(live_settings, ("model", "id")) is None
 
@@ -279,8 +279,8 @@ def test_magic_strings_store_verbatim_for_string_knobs(token):
 def test_empty_state_rendering_distinguishes_off_none_and_unset():
     live_settings = settings.seed_defaults()
 
-    off = setcmd.run_repl_command(live_settings, "/show runtime.debug")
-    none = setcmd.run_repl_command(live_settings, "/show provider.id")
+    off = setcmd.show_lines(live_settings, "runtime.debug")
+    none = setcmd.show_lines(live_settings, "provider.id")
     unset_spec = settings.SettingSpec(
         "sampling.temperature",
         "float",
@@ -292,7 +292,7 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     assert off.lines[0] == "runtime.debug = off"
     assert none.lines[0] == "provider.id = <none>"
     assert setcmd.render_value(unset_spec, None) == "<unset>"
-    sampling = setcmd.run_repl_command(live_settings, "/show sampling.temperature")
+    sampling = setcmd.show_lines(live_settings, "sampling.temperature")
     assert sampling.lines[0] == "sampling.temperature = <unset>"
     template = "\n".join(settings._template_lines())
     assert "# Per-turn sampling overrides. Default display is <unset>;" in template
@@ -306,8 +306,8 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
 def test_secret_values_are_masked_when_shown():
     live_settings = settings.seed_defaults()
 
-    changed = setcmd.run_repl_command(live_settings, "/set provider.api_key sk-test")
-    shown = setcmd.run_repl_command(live_settings, "/show provider.api_key")
+    changed = setcmd.set_command(live_settings, "provider.api_key sk-test")
+    shown = setcmd.show_lines(live_settings, "provider.api_key")
 
     assert changed.error is None
     assert changed.lines == ["provider.api_key = <set>"]
@@ -320,7 +320,7 @@ def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: 
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)
 
-    result = setcmd.run_repl_command(live_settings, f"/set {key} value")
+    result = setcmd.set_command(live_settings, f"{key} value")
 
     assert result.handled is True
     assert result.changed is False
@@ -331,8 +331,8 @@ def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: 
 def test_map_sub_key_updates_parent_map_and_shows_parent():
     live_settings = settings.seed_defaults()
 
-    changed = setcmd.run_repl_command(live_settings, "/set provider.extra.organization /p")
-    shown = setcmd.run_repl_command(live_settings, "/show provider.extra")
+    changed = setcmd.set_command(live_settings, "provider.extra.organization /p")
+    shown = setcmd.show_lines(live_settings, "provider.extra")
 
     assert changed.error is None
     assert changed.lines == ["provider.extra.organization = /p"]
@@ -341,13 +341,43 @@ def test_map_sub_key_updates_parent_map_and_shows_parent():
     assert shown.lines[0] == "provider.extra = organization=/p"
 
 
-@pytest.mark.parametrize("line", ["show model.id", "run something"])
-def test_apply_config_line_rejects_non_set_verbs(line: str):
-    result = setcmd.apply_config_line(settings.seed_defaults(), line)
+@pytest.mark.parametrize("line", ["show model.id", "on input set compact.auto off", "run something"])
+def test_apply_config_line_leaves_other_commands_to_the_command_table(line: str):
+    before = settings.seed_defaults()
+    store = settings.seed_defaults()
 
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == f"unknown command: {line.split(maxsplit=1)[0]}"
+    result = setcmd.apply_config_line(store, line)
+
+    assert result.handled is False
+    assert result.error is None
+    assert store == before
+
+
+@pytest.mark.parametrize(
+    ("line", "path", "value"),
+    [
+        ("/model local/qwen", ("model", "id"), "local/qwen"),
+        ("provider deepseek", ("provider", "id"), "deepseek"),
+        ("baseurl http://localhost:8080/v1", ("provider", "base_url"), "http://localhost:8080/v1"),
+    ],
+)
+def test_apply_config_line_applies_setting_short_names(line: str, path: tuple[str, ...], value: str):
+    store = settings.seed_defaults()
+
+    result = setcmd.apply_config_line(store, line)
+
+    assert result.error is None
+    assert result.changed_keys == [".".join(path)]
+    assert settings.get_dotted(store, path) == value
+
+
+def test_set_accepts_a_setting_short_name_for_its_key():
+    store = settings.seed_defaults()
+
+    result = setcmd.set_command(store, "model other/model")
+
+    assert result.changed_keys == ["model.id"]
+    assert settings.get_dotted(store, ("model", "id")) == "other/model"
 
 
 def test_apply_config_line_rejects_set_without_value():
@@ -408,14 +438,14 @@ def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
 def test_set_dash_key_unsets_registered_knob():
     cfg = {}
     settings.set_dotted(cfg, ("sampling", "temperature"), 1.0)
-    result = setcmd.run_repl_command(cfg, "/set -sampling.temperature")
+    result = setcmd.set_command(cfg, "-sampling.temperature")
     assert result.changed is True
     assert result.changed_keys == ["sampling.temperature"]
     assert settings.get_dotted(cfg, ("sampling", "temperature")) is None
 
 
 def test_set_dash_key_on_already_unset_is_noop():
-    result = setcmd.run_repl_command({}, "/set -sampling.temperature")
+    result = setcmd.set_command({}, "-sampling.temperature")
     assert result.changed is False
     assert result.changed_keys == []
     assert "already unset" in result.lines[0]
@@ -424,13 +454,13 @@ def test_set_dash_key_on_already_unset_is_noop():
 def test_set_dash_key_clears_map_subkey():
     cfg = {}
     settings.set_dotted(cfg, ("provider", "extra", "organization"), "/tmp/x")
-    result = setcmd.run_repl_command(cfg, "/set -provider.extra.organization")
+    result = setcmd.set_command(cfg, "-provider.extra.organization")
     assert result.changed is True
     assert settings.get_dotted(cfg, ("provider", "extra", "organization")) is None
 
 
 def test_set_dash_unknown_knob_errors():
-    result = setcmd.run_repl_command({}, "/set -nope.nope")
+    result = setcmd.set_command({}, "-nope.nope")
     assert result.error == "unknown knob: nope.nope"
 
 
@@ -462,17 +492,17 @@ def test_hand_picked_env_alias_wins_over_canonical():
 def test_provider_id_and_base_url_validate_at_set_time():
     live_settings = settings.seed_defaults()
 
-    bad_id = setcmd.run_repl_command(live_settings, "/set provider.id not-a-provider-anywhere")
+    bad_id = setcmd.set_command(live_settings, "provider.id not-a-provider-anywhere")
     assert bad_id.error is not None
     assert "unknown provider id" in bad_id.error
     assert settings.get_dotted(live_settings, ("provider", "id"), None) is None
 
-    ok_id = setcmd.run_repl_command(live_settings, "/set provider.id deepseek")
+    ok_id = setcmd.set_command(live_settings, "provider.id deepseek")
     assert ok_id.error is None
 
-    bad_url = setcmd.run_repl_command(live_settings, "/set provider.base_url http//localhost:8050/v1")
+    bad_url = setcmd.set_command(live_settings, "provider.base_url http//localhost:8050/v1")
     assert bad_url.error is not None
     assert "http://" in bad_url.error
 
-    ok_url = setcmd.run_repl_command(live_settings, "/set provider.base_url http://localhost:8050/v1")
+    ok_url = setcmd.set_command(live_settings, "provider.base_url http://localhost:8050/v1")
     assert ok_url.error is None

@@ -110,6 +110,7 @@ class SettingSpec:
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
     secret: bool = False        # mask the value in `show`
+    aliases: tuple[str, ...] = ()  # short names `set`/`show` accept for ``key``
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -125,7 +126,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- model ---
     SettingSpec("model.id", "str", DEFAULT_MODEL,
                 "Default model id; unprefixed ids route through AI Gateway.",
-                env="JS_MODEL"),
+                env="JS_MODEL", aliases=("model",)),
     SettingSpec("model.max_output_tokens", "int", None,
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
@@ -152,13 +153,13 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- provider ---
     SettingSpec("provider.id", "str", None,
                 "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
-                env="JS_PROVIDER", empty=EMPTY_NONE),
+                env="JS_PROVIDER", empty=EMPTY_NONE, aliases=("provider",)),
     SettingSpec("provider.base_url", "str", None,
                 "Explicit provider base URL; unset = provider default.",
-                env="JS_BASE_URL", empty=EMPTY_NONE),
+                env="JS_BASE_URL", empty=EMPTY_NONE, aliases=("baseurl",)),
     SettingSpec("provider.api_key", "str", None,
                 "Explicit provider API key; unset = env/login default.",
-                env="JS_API_KEY", empty=EMPTY_NONE, secret=True),
+                env="JS_API_KEY", empty=EMPTY_NONE, secret=True, aliases=("apikey",)),
     SettingSpec("provider.extra", "map", {},
                 "Free-form extra params passed through to the provider SDK.",
                 empty=EMPTY_NONE),
@@ -355,6 +356,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
+SPEC_BY_ALIAS: dict[str, SettingSpec] = {alias: spec for spec in REGISTRY for alias in spec.aliases}
+
+
+def spec_for(name: str) -> SettingSpec | None:
+    """The spec a `set`/`show` name refers to: its dotted key or a short alias."""
+    return SPEC_BY_KEY.get(name) or SPEC_BY_ALIAS.get(name)
 KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
 SECTION_ORDER: tuple[str, ...] = (
     "model",
@@ -835,14 +842,17 @@ def save_settings_to_jsrc(
     path: Path,
     settings: dict,
     *,
+    extra_lines: list[str] | None = None,
     stamp: str | None = None,
     source: str = "/save",
 ) -> tuple[int, Path | None]:
-    """Write the non-default knobs in ``settings`` to ``path`` as a jsrc script.
+    """Write the non-default settings in ``settings`` to ``path`` as a jsrc
+    script, followed by ``extra_lines`` (other commands to replay, e.g. `on`
+    and `alias` lines).
 
     An existing file is copied to ``<name>.bak`` beside itself first. Returns
-    ``(knob_count, backup_path_or_None)``."""
-    lines = settings_diff_lines(settings)
+    ``(line_count, backup_path_or_None)``."""
+    lines = [*settings_diff_lines(settings), *(extra_lines or [])]
     backup: Path | None = None
     if path.exists():
         backup = path.with_name(path.name + ".bak")
@@ -853,8 +863,8 @@ def save_settings_to_jsrc(
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = [
         f"# js config — written by {source} on {stamp}.",
-        "# Each non-comment line is a `set <key> <value>` command; only knobs that",
-        "# differ from built-in defaults are listed.",
+        "# Each non-comment line is a command; `set` lines list only settings that",
+        "# differ from built-in defaults.",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)

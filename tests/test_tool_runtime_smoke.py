@@ -993,9 +993,9 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
 
 def test_alias_profile_skips_existing_tool_name_collisions_from_config():
     live_settings = settings.seed_defaults()
-    result = setcmd.run_repl_command(
+    result = setcmd.set_command(
         live_settings,
-        '/set tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
+        'tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
     )
     registry = build_default_registry().select(["read", "write"])
 
@@ -1010,9 +1010,9 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
 
 def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config():
     live_settings = settings.seed_defaults()
-    result = setcmd.run_repl_command(
+    result = setcmd.set_command(
         live_settings,
-        '/set tools.alias_profiles ['
+        'tools.alias_profiles ['
         '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
         '{"match":["openai"],"aliases":{"read":"Read"}}'
         ']',
@@ -1027,9 +1027,9 @@ def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config()
 
 def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
     live_settings = settings.seed_defaults()
-    result = setcmd.run_repl_command(
+    result = setcmd.set_command(
         live_settings,
-        '/set tools.alias_profiles [{"match":[" openai "],"aliases":{"read":"Read"}}]',
+        'tools.alias_profiles [{"match":[" openai "],"aliases":{"read":"Read"}}]',
     )
 
     assert result.error is None

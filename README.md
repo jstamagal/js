@@ -80,11 +80,10 @@ and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
 `ai-python` when no explicit provider config is set. Tune any knob live with
 `/set <key> <value>` (and list them with `/show`); convert a legacy
-`config.toml` once with `js --migrate-config`. Runtime scripts can be loaded
-with `/load <file>`; script files use slashless commands and can already
-register typed event hooks with `on <event> <handler>`. Handlers run through the
-same script command surface (`set`, `show`, `load`, `on`) when runtime events
-fire.
+`config.toml` once with `js --migrate-config`. Files of commands run
+with `/load <file>`; any REPL command works there without the `/`, including
+typed event hooks (`on <event> <handler>`) and aliases (`alias <name>
+<command>`). `/save` writes settings, handlers and aliases back to `jsrc`.
 
 Config, logins, and the model cache live in the platform config dir; saved
 sessions live at the platform data `sessions/<agent_id>/<session>.jsonl`, and

@@ -1,21 +1,23 @@
 """REPL Tab completion — prefix match, rotating menu. No fuzzyfind.
 
 Routed by where the word under the cursor sits (a port of an ircII `bind ^I`).
-First word of the line is always command completion (a bare word gets an
-implicit leading ``/`` — ``comp`` -> ``/compact``). For every other word,
-path detection runs FIRST — a token that looks like a path (``/a/b`` or
-``@/a/b``) always wins filesystem completion regardless of which command it's
-an argument to — then:
+First word of the line is always command completion from the command table
+(a bare word gets an implicit leading ``/`` — ``comp`` -> ``/compact``). For
+every other word, path detection runs FIRST — a token that looks like a path
+(``/a/b`` or ``@/a/b``) always wins filesystem completion regardless of which
+command it's an argument to — then the command's ``complete`` source decides:
 
-1. arg of ``/set``/``/show``       -> setting keys; a second `/set` word (the
-   key already typed) completes known enum values instead, e.g.
-   ``model.reasoning_effort``.
-2. arg of ``/login``/``/provider`` -> provider ids + saved login names.
-3. arg of ``/on``                  -> event names.
-4. arg of ``/load``                -> filesystem.
-5. mid-line word whose command is any other known ``COMMANDS`` entry ->
-   no completion (a command argument never reaches the spellchecker).
-6. anything else (genuine prose)   -> spellcheck (backend injected via ``spell``).
+- ``set``    -> setting keys; the word after the key completes known enum
+  values instead, e.g. ``model.reasoning_effort``.
+- ``keys``   -> setting keys.
+- ``names``  -> provider ids + saved login names.
+- ``events`` -> event names.
+- ``path``   -> filesystem.
+- none       -> no completion (a command argument never reaches the
+  spellchecker).
+
+A first word that is not a command is prose -> spellcheck (backend injected
+via ``spell``).
 
 Always PREFIX match (``startswith``), never fuzzy subsequence. Tab-triggered,
 rotating menu is configured on the PromptSession, not here.
@@ -27,48 +29,14 @@ import glob
 import os
 import re
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
 from . import events
 from . import settings as _settings
 
-# Real REPL commands only — what _handle_command / _handle_provider_command actually dispatch.
-COMMANDS: tuple[str, ...] = (
-    "/help",
-    "/set",
-    "/show",
-    "/save",
-    "/load",
-    "/on",
-    "/model",
-    "/pick-model",
-    "/provider",
-    "/baseurl",
-    "/apikey",
-    "/login",
-    "/logout",
-    "/models",
-    "/reset",
-    "/wipe",
-    "/persona",
-    "/turns",
-    "/session",
-    "/jobs",
-    "/cancel",
-    "/compact",
-    "/compact-auto",
-    "/refresh-model-catalog",
-    "exit",
-    "quit",
-    ":q",
-)
-
-_SET_CMDS = ("/set", "/show")
-_NAME_CMDS = ("/login", "/provider")
-_ON_CMDS = ("/on",)
-_PATH_ARG_CMDS = ("/load",)
+CMDCHAR = "/"
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 # `/set <key> <value>` — keys whose value is a known small enum get their
@@ -90,16 +58,11 @@ def value_candidates(key: str, token: str) -> list[str]:
     return _prefix(values, token.lower())
 
 
-def command_candidates(token: str) -> list[str]:
-    """First-word completion. Prefix match; a slashless word gets an implicit
-    ``/`` so ``comp`` completes to ``/compact``. Returns sorted full commands."""
-    out: set[str] = set()
-    for cmd in COMMANDS:
-        if cmd.startswith(token):
-            out.add(cmd)
-        elif token and not token.startswith("/") and cmd.startswith("/" + token):
-            out.add(cmd)
-    return sorted(out)
+def command_candidates(token: str, verbs: Iterable[str]) -> list[str]:
+    """First-word completion over the table's verbs. Prefix match; a slashless
+    word gets an implicit ``/`` so ``comp`` completes to ``/compact``."""
+    word = token[len(CMDCHAR):] if token.startswith(CMDCHAR) else token
+    return sorted(CMDCHAR + verb for verb in verbs if verb.startswith(word))
 
 
 def looks_like_path(token: str) -> bool:
@@ -154,18 +117,21 @@ def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
 class JsCompleter(Completer):
     """Routes the cursor word to command / arg / path / spell candidates.
 
-    ``setting_keys`` is the static knob list; ``names`` is a callable returning
-    provider ids + saved login names (dynamic — a login may be added mid-session);
-    ``spell`` is an injected ``str -> list[str]`` suggester (None until a backend
-    is wired). Keeps this module dependency-free and unit-testable.
+    ``commands`` returns the command table as verb -> argument completion
+    source (read per keystroke, so aliases defined mid-session complete);
+    ``setting_keys`` is the static setting list; ``names`` returns provider ids
+    + saved login names; ``spell`` is an injected ``str -> list[str]``
+    suggester. Keeps this module dependency-free and unit-testable.
     """
 
     def __init__(
         self,
+        commands: Callable[[], Mapping[str, str | None]],
         setting_keys: Iterable[str] = (),
         names: Callable[[], Iterable[str]] | None = None,
         spell: Callable[[str], list[str]] | None = None,
     ) -> None:
+        self._commands = commands
         self._setting_keys = tuple(setting_keys)
         self._names = names
         self._spell = spell
@@ -174,31 +140,26 @@ class JsCompleter(Completer):
         """Pure-ish: (candidate list, token length) for the text left of cursor."""
         token = _TRAILING_TOKEN.search(text_before_cursor).group(0)
         before = text_before_cursor[: len(text_before_cursor) - len(token)]
+        table = self._commands()
         if before.strip() == "":  # nothing but whitespace before -> first word
-            return command_candidates(token), len(token)
-        head = before.split()[0]
-        norm = head if head.startswith("/") else "/" + head
+            return command_candidates(token, table), len(token)
+        words = before.split()
+        head = words[0].removeprefix(CMDCHAR).lower()
         if looks_like_path(token):
             return path_candidates(token), len(token)
-        if norm in _SET_CMDS:
-            words = before.split()
-            if norm == "/set" and len(words) >= 2:
-                return value_candidates(words[1], token), len(token)
+        if head not in table:
+            return (self._spell(token) if self._spell is not None else []), len(token)
+        source = table[head]
+        if source == "set" and len(words) >= 2:
+            return value_candidates(words[1], token), len(token)
+        if source in ("set", "keys"):
             return _prefix(self._setting_keys, token), len(token)
-        if norm in _NAME_CMDS:
-            names = list(self._names()) if self._names else []
-            return _prefix(names, token), len(token)
-        if norm in _ON_CMDS:
+        if source == "names":
+            return _prefix(list(self._names()) if self._names else [], token), len(token)
+        if source == "events":
             return event_candidates(token), len(token)
-        if norm in _PATH_ARG_CMDS:
+        if source == "path":
             return path_candidates(token), len(token)
-        if norm in COMMANDS:
-            # A known command's argument with no specific completion source
-            # above (e.g. /model, /baseurl, /apikey, /models, /compact) —
-            # never let it fall through to the prose spellchecker.
-            return [], len(token)
-        if self._spell is not None:
-            return self._spell(token), len(token)
         return [], len(token)
 
     def get_completions(self, document, complete_event):
