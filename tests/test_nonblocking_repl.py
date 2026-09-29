@@ -75,6 +75,29 @@ def test_nonblocking_repl_empty_line_then_eof_is_clean(monkeypatch, tmp_path):
     assert load_messages(_session_file(tmp_path)) == []
 
 
+def test_nonblocking_repl_skill_line_sends_user_only_skill(monkeypatch, tmp_path):
+    skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")
+    turns: list[str] = []
+
+    async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
+        turns.append(str(messages[-1]["content"]))
+        messages.append({"role": "assistant", "content": "ok"})
+
+    lines = ["/skill nosuch", "/skill secret check the plan"]
+    rc = _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub)
+    assert rc == 0
+
+    # The unknown name starts no turn; the user-only skill reaches the model.
+    assert len(turns) == 1
+    assert "user-only body" in turns[0]
+    assert "check the plan" in turns[0]
+    reloaded = load_messages(_session_file(tmp_path))
+    assert [m["role"] for m in reloaded] == ["user", "assistant"]
+    assert "user-only body" in str(reloaded[0]["content"])
+
+
 def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:

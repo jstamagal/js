@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -38,7 +39,8 @@ def test_model_picker_opens_without_logins(tmp_path: Path):
         _reset_logins()
 
 
-def test_model_picker_shows_saved_login_models(tmp_path: Path):
+@pytest.mark.parametrize("cancel_key", ["q", "\x1b", "\x03"])
+def test_model_picker_shows_saved_login_models(tmp_path: Path, cancel_key: str):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     logins.cache_models("deepseek", ["deepseek-v4-flash"])
@@ -48,7 +50,8 @@ def test_model_picker_shows_saved_login_models(tmp_path: Path):
         assert state.provider_index == 0
         assert state.model_index == 0
         assert state.model_rows[0].id == "deepseek-v4-flash"
-        assert await _drive(state, "q") is None
+        # With a model selectable, each cancel key closes the picker with no choice.
+        assert await _drive(state, cancel_key) is None
 
     try:
         asyncio.run(smoke())

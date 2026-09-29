@@ -209,9 +209,10 @@ def test_failed_refresh_is_tried_once_per_process(monkeypatch, tmp_path: Path, c
 
     assert attempts == ["try"]
     assert all(status is not None and status.db_path == custom for status in statuses)
-    warnings = [line for line in capsys.readouterr().err.splitlines() if "refresh failed" in line]
-    assert len(warnings) == 1
-    assert "name resolution" in warnings[0]
+    # The failure reaches stderr once, with its two-line error on one line.
+    reports = [line for line in capsys.readouterr().err.splitlines() if "Temporary failure" in line]
+    assert len(reports) == 1
+    assert "in name resolution" in reports[0]
 
     # An explicit refresh still tries.
     model_metadata.ensure_fresh_catalog(force=True)

@@ -135,11 +135,9 @@ class SkillCatalog:
         loaded = load_skill(self, name, user=user)
         return loaded.instructions if loaded is not None else None
 
-    def load_exact(
-        self, name: str, tool_registry: Any = None, *, user: bool = False
-    ) -> LoadedSkill | None:
+    def load_exact(self, name: str, tool_registry: Any = None) -> LoadedSkill | None:
         """Load an exact catalog match and request its declared tool surface."""
-        return load_skill(self, name, tool_registry=tool_registry, user=user)
+        return load_skill(self, name, tool_registry=tool_registry)
 
 
 def load_skill(
@@ -161,7 +159,7 @@ def load_skill(
     if not metadata.model_invocable and not user:
         return None
     text = metadata.path.read_text(encoding="utf-8", errors="replace")
-    _, body, _ = _split_frontmatter(metadata.path, text)
+    _, body, _ = _split_frontmatter(text)
     activation = ToolActivationResult()
     activate = getattr(tool_registry, "activate_tools", None)
     if metadata.tools and callable(activate):
@@ -281,16 +279,16 @@ def _skill_paths(root: Path) -> tuple[Path, ...]:
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:
     text = path.read_text(encoding="utf-8", errors="replace")
-    manifest, body, _ = _split_frontmatter(path, text)
+    manifest, body, _ = _split_frontmatter(text)
     derived_name = path.parent.name
-    name = _string_field(path, manifest, "name") or derived_name
-    _validate_name(path, name)
-    description = _string_field(path, manifest, "description")
+    name = _string_field(manifest, "name") or derived_name
+    _validate_name(name)
+    description = _string_field(manifest, "description")
     if not description:
         description = _derive_description(body, name)
     description = " ".join(description.split())[:_MAX_DESCRIPTION]
-    tools = _tools_field(path, manifest)
-    user_only = _bool_field(path, manifest, "disable-model-invocation")
+    tools = _tools_field(manifest)
+    user_only = _bool_field(manifest, "disable-model-invocation")
     metadata = SkillMetadata(
         name=name,
         description=description,
@@ -302,7 +300,7 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
     return _SkillRecord(metadata=metadata)
 
 
-def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any], str, int]:
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
     if not text.startswith("---") or text[:4] not in {"---\n", "---\r"}:
         return {}, text, 0
     match = re.search(r"\r?\n---[ \t]*(?:\r?\n|$)", text[3:])
@@ -339,7 +337,7 @@ def _warn_once(message: str) -> None:
     print(line, file=sys.stderr)
 
 
-def _string_field(path: Path, manifest: dict[str, Any], field: str) -> str:
+def _string_field(manifest: dict[str, Any], field: str) -> str:
     value = manifest.get(field)
     if value is None:
         return ""
@@ -348,7 +346,7 @@ def _string_field(path: Path, manifest: dict[str, Any], field: str) -> str:
     return value.strip()
 
 
-def _bool_field(path: Path, manifest: dict[str, Any], field: str) -> bool:
+def _bool_field(manifest: dict[str, Any], field: str) -> bool:
     value = manifest.get(field)
     if value is None:
         return False
@@ -359,7 +357,7 @@ def _bool_field(path: Path, manifest: dict[str, Any], field: str) -> bool:
     raise ValueError(f"{field} frontmatter must be true or false")
 
 
-def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
+def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     value = manifest.get("tools")
     if value is None:
         return ()
@@ -378,7 +376,7 @@ def _tools_field(path: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
     return tuple(tools)
 
 
-def _validate_name(path: Path, name: str) -> None:
+def _validate_name(name: str) -> None:
     if not _NAME_RE.fullmatch(name) or ".." in name:
         raise ValueError(f"unsafe skill name {name!r}")
 
