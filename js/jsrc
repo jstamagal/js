@@ -40,6 +40,14 @@ set history.max_entries 10000
 # --- keys ---
 set -keys.file
 
+# --- tags ---
+set -tags.file
+set tags.threshold 0.6
+set tags.max 3
+set tags.messages 10
+set tags.message_chars 2000
+set tags.model jev-latest
+
 # --- provider ---
 set -provider.id
 set -provider.base_url

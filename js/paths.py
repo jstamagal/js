@@ -73,6 +73,11 @@ def tools_config_file() -> Path:
     return home() / "tools.yaml"
 
 
+def tags_file() -> Path:
+    """The operator's session tag list (`js.session_tags`)."""
+    return home() / "tags.yaml"
+
+
 def global_env_file() -> Path:
     return home() / ".env"
 

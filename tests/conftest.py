@@ -38,7 +38,7 @@ def isolated_user_profile(monkeypatch, tmp_path):
     runtime.mkdir(mode=0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     for name in tuple(os.environ):
-        if name.startswith("JS_"):
+        if name.startswith(("JS_", "TYPESAFE_")):
             monkeypatch.delenv(name, raising=False)
     # `js -C` puts the whole process in a jail; one test's jail must not
     # confine the next test's tools.
