@@ -548,3 +548,17 @@ def test_text_between_signed_thinking_blocks_replays_in_the_order_it_came(monkey
     ))
 
     assert [b["type"] for b in _assistant_blocks(wire.bodies[0])[0]] == ["thinking", "text", "thinking", "tool_use"]
+
+
+def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
+    session = tmp_path / "session.jsonl"
+    answer = {**_signed_call(1), "content": "done"}
+    del answer["tool_calls"]
+    messages = [{"role": "user", "content": "go"}, answer, {"role": "user", "content": "more"},
+                _signed_call(2), _result(2)]
+    memory.persist_messages(session, messages)
+
+    assert memory.drop_signed_reasoning(messages) == 2
+    memory.persist_messages(session, messages)
+
+    assert memory.load_replay_messages(session) == messages
