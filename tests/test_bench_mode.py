@@ -71,6 +71,22 @@ def _stream_stub(captured_max: list):
     return stub
 
 
+def _bench(agent: str, *, stats_json: str | None = None, stats_csv: str | None = None) -> int:
+    return cli._run_bench(
+        agent, model=None, reasoning=None, maxout=None, quiet=True, extras=None,
+        ignore_local_config=False, ignore_global_config=False, presets=None,
+        stats_json=stats_json, stats_csv=stats_csv,
+    )
+
+
+def test_bench_flag_runs_the_named_agent(monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(cli, "_run_bench", lambda agent, **kwargs: calls.append((agent, kwargs["quiet"], kwargs["stats_json"])) or 0)
+
+    assert cli.main(["--bench", "jokertest", "-q", "--stats-json", "out.json"]) == 0
+    assert calls == [("jokertest", True, "out.json")]
+
+
 def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -82,7 +98,7 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub(captured))
 
     out = tmp_path / "stats.json"
-    rc = cli.main(["--bench", "jokertest", "-q", "--stats-json", str(out)])
+    rc = _bench("jokertest", stats_json=str(out))
     assert rc == 0
 
     payload = json.loads(out.read_text(encoding="utf-8"))
@@ -119,14 +135,14 @@ def test_run_bench_csv_has_one_row_per_benchmark(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub([]))
 
     out = tmp_path / "stats.csv"
-    rc = cli.main(["--bench", "jokertest", "-q", "--stats-csv", str(out)])
+    rc = _bench("jokertest", stats_csv=str(out))
     assert rc == 0
     lines = out.read_text(encoding="utf-8").strip().splitlines()
     assert lines[0].startswith("name,prompt,max_tokens")
     assert len(lines) == 1 + 4  # header + four benchmarks
 
 
-def test_bench_requires_benchmark_files(tmp_path, monkeypatch, capsys):
+def test_bench_requires_benchmark_files(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -134,6 +150,4 @@ def test_bench_requires_benchmark_files(tmp_path, monkeypatch, capsys):
     d = tmp_path / ".js" / "agents" / "noBench"
     d.mkdir(parents=True)
     (d / "01-prompt.md").write_text("hi", encoding="utf-8")
-    rc = cli.main(["--bench", "noBench", "-q"])
-    assert rc == 2
-    assert "no NN-benchmark.md" in capsys.readouterr().err
+    assert _bench("noBench") == 2

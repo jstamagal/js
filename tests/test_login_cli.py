@@ -556,7 +556,7 @@ def test_codex_login_typed_extras_survive_cache_and_list_models(
         ]
 
         capsys.readouterr()
-        assert cli.main(["--list-models", "openai-codex"]) == 0
+        assert cli._print_model_list("openai-codex", None) == 0
         out = capsys.readouterr().out
         assert out == (
             "openai-codex/gpt-5.5\n"

@@ -42,21 +42,30 @@ def _telemetry(cfg, state):
 
 
 def run_blocking(cfg, lines, **state_kwargs) -> dict:
+    """Run the blocking loop over `lines`, or over a session object that has
+    its own prompt()."""
+    session = lines if hasattr(lines, "prompt") else LineSession(lines)
     state, prompt_spec = repl_state(cfg, **state_kwargs)
-    cli._blocking_repl(cfg, state, _telemetry(cfg, state), LineSession(lines), prompt_spec)
+    cli._blocking_repl(cfg, state, _telemetry(cfg, state), session, prompt_spec)
     return state
 
 
 def run_async(monkeypatch, cfg, lines, **state_kwargs) -> dict:
-    """Each line reaches the async REPL's Enter handler in order, then EOF."""
+    """Each line reaches the async REPL's Enter handler in order, then EOF.
+
+    `lines` may instead be an async function; it is called with the Enter
+    handler and EOF follows when it returns."""
 
     class AppStub:
         def __init__(self, on_line, on_eof):
             self._on_line, self._on_eof = on_line, on_eof
 
         async def run_async(self):
-            for line in lines:
-                await self._on_line(line.strip())
+            if callable(lines):
+                await lines(self._on_line)
+            else:
+                for line in lines:
+                    await self._on_line(line.strip())
             self._on_eof()
 
         def exit(self):

@@ -2,12 +2,11 @@
 
 Covers the three machine-readable flags external pickers consume:
 
-  --providers-json  -> cli._providers_json  (js/cli.py:1070)
-  --logins-json     -> cli._logins_json     (js/cli.py:1083)
-  --models-json     -> cli._models_json     (js/cli.py:1097), dispatched at
-                       js/cli.py:1179 with the {"error": ...}/rc=1 wrap at 1193.
+  --providers-json  -> cli._providers_json
+  --logins-json     -> cli._logins_json
+  --models-json     -> cli._models_json, which main wraps in {"error": ...}/rc=1
 
-The security contract under test lives in _logins_json (js/cli.py:1083-1094):
+The security contract under test lives in _logins_json:
 codex_refresh_token is ALWAYS nulled, has_api_key / has_codex_refresh_token
 expose only booleans, and provider_api_key is nulled for codex providers. Note
 the actual behavior (asserted below, not assumed): provider_api_key is NOT
@@ -41,7 +40,7 @@ def tmp_logins_dir(tmp_path: Path):
 
 def _stdout_json(capsys) -> object:
     out = capsys.readouterr().out
-    # _print_json writes exactly one json.dumps line (js/cli.py:1108).
+    # _print_json writes exactly one json.dumps line.
     assert out.endswith("\n")
     return json.loads(out)
 
@@ -50,18 +49,16 @@ def _stdout_json(capsys) -> object:
 # --providers-json
 # --------------------------------------------------------------------------
 
-def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir, capsys):
+def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir):
     # Make deepseek look env-configured; save a login for a different provider.
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-deepseek")
     monkeypatch.delenv("MIMO_API_KEY", raising=False)
     logins.save_login(logins.Login(provider_id="mimo", provider_api_key="sk-mimo"))
 
-    rc = cli.main(["--providers-json"])
-    rows = _stdout_json(capsys)
+    rows = cli._providers_json()
 
-    assert rc == 0
     assert isinstance(rows, list)
-    # Every row is exactly {id, name, source} (js/cli.py:1077).
+    # Every row is exactly {id, name, source}.
     for row in rows:
         assert set(row) == {"id", "name", "source"}
         assert isinstance(row["id"], str)
@@ -72,14 +69,14 @@ def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir, capsys):
     # Builtin login providers are present.
     assert "deepseek" in by_id
     assert "mimo" in by_id
-    # source precedence: login wins over env wins over registry (js/cli.py:1076).
+    # source precedence: login wins over env wins over registry.
     assert by_id["mimo"]["source"] == "login"
     assert by_id["deepseek"]["source"] == "env"
 
 
-def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_logins_dir, capsys):
+def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_logins_dir):
     # A saved login whose id is not in the known registry shows up as "custom"
-    # (js/cli.py:1078-1079).
+    #.
     known = {p.id for p in providers.login_providers()}
     custom_id = "my-private-proxy-xyz"
     assert custom_id not in known
@@ -87,10 +84,8 @@ def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_log
         logins.Login(provider_id=custom_id, provider_base_url="http://proxy.test/v1", provider_api_key="sk-x")
     )
 
-    rc = cli.main(["--providers-json"])
-    rows = _stdout_json(capsys)
+    rows = cli._providers_json()
 
-    assert rc == 0
     by_id = {row["id"]: row for row in rows}
     assert by_id[custom_id] == {"id": custom_id, "name": custom_id, "source": "custom"}
 
@@ -99,14 +94,11 @@ def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_log
 # --logins-json  (secret masking is the point of this flag)
 # --------------------------------------------------------------------------
 
-def test_logins_json_empty_store(tmp_logins_dir, capsys):
-    rc = cli.main(["--logins-json"])
-    rows = _stdout_json(capsys)
-    assert rc == 0
-    assert rows == []
+def test_logins_json_empty_store(tmp_logins_dir):
+    assert cli._logins_json() == []
 
 
-def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir, capsys):
+def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir):
     # A normal provider login keeps its api key (the picker needs it); a codex
     # login has its access JWT nulled. Both have refresh tokens nulled.
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-normal-secret"))
@@ -120,17 +112,15 @@ def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir
         )
     )
 
-    rc = cli.main(["--logins-json"])
-    rows = _stdout_json(capsys)
+    rows = cli._logins_json()
 
-    assert rc == 0
     by_id = {row["provider_id"]: row for row in rows}
     assert set(by_id) == {"deepseek", "openai-codex"}
 
     normal = by_id["deepseek"]
     codex = by_id["openai-codex"]
 
-    # Each row carries the derived booleans and provider_id (js/cli.py:1087-1089).
+    # Each row carries the derived booleans and provider_id.
     for row in (normal, codex):
         assert "provider_id" in row
         assert isinstance(row["has_api_key"], bool)
@@ -146,12 +136,12 @@ def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir
     assert normal["provider_api_key"] == "sk-normal-secret"
     assert codex["provider_api_key"] is None
 
-    # Refresh token is ALWAYS nulled (js/cli.py:1092).
+    # Refresh token is ALWAYS nulled.
     assert normal["codex_refresh_token"] is None
     assert codex["codex_refresh_token"] is None
 
 
-def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir, capsys):
+def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir):
     # Defense-in-depth: scan the raw JSON text for the secret values.
     refresh_secret = "REFRESH-TOKEN-MUST-NOT-LEAK"
     access_secret = "CODEX-ACCESS-JWT-MUST-NOT-LEAK"
@@ -163,10 +153,8 @@ def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir, ca
         )
     )
 
-    rc = cli.main(["--logins-json"])
-    raw = capsys.readouterr().out
+    raw = json.dumps(cli._logins_json())
 
-    assert rc == 0
     assert refresh_secret not in raw
     assert access_secret not in raw
     # Sanity: it is still valid JSON describing the codex login.
@@ -176,27 +164,33 @@ def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir, ca
     assert rows[0]["has_api_key"] is True
 
 
+def test_json_flags_print_their_payload_as_one_json_line(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_providers_json", lambda: [{"id": "p"}])
+    monkeypatch.setattr(cli, "_logins_json", lambda: [{"provider_id": "l"}])
+
+    assert cli.main(["--providers-json"]) == 0
+    assert _stdout_json(capsys) == [{"id": "p"}]
+    assert cli.main(["--logins-json"]) == 0
+    assert _stdout_json(capsys) == [{"provider_id": "l"}]
+
+
 # --------------------------------------------------------------------------
 # --models-json
 # --------------------------------------------------------------------------
 
-def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir, capsys):
+def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
     # Stub the network boundary (logins.test_login) the way prompt-mode tests
     # stub stream_model, then assert the {"models": [...]} envelope.
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["m-alpha", "m-beta"])
 
-    rc = cli.main(["--models-json", "deepseek"])
-    payload = _stdout_json(capsys)
-
-    assert rc == 0
-    assert payload == {"models": ["m-alpha", "m-beta"]}
+    assert cli._models_json("deepseek") == {"models": ["m-alpha", "m-beta"]}
 
 
 def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, monkeypatch):
     # Offline, with no saved login and no creds, the SDK raises on missing
     # credentials before any request; cli wraps it as {"error": ...}, rc=1
-    # (js/cli.py:1193-1195).
+    #.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_ADMIN_KEY", raising=False)
 
@@ -213,7 +207,7 @@ def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, 
 def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, capsys):
     # `--models-json` with no value (const="") sends provider_arg=None, which
     # builds a Config and feeds cfg.provider_id to _models_for_provider
-    # (js/cli.py:1182-1192). Stub the network boundary and capture the cfg.
+    #. Stub the network boundary and capture the cfg.
     seen: list[str | None] = []
 
     def fake_test_login(login):
@@ -243,7 +237,7 @@ def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_login
     logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="jwt"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
 
-    rc = cli.main(["--list-models", "openai-codex"])
+    rc = cli._print_model_list("openai-codex", None)
     out = capsys.readouterr().out
 
     assert rc == 0
@@ -263,13 +257,18 @@ def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir
         raise AssertionError("cache hit should avoid a live fetch")
 
     monkeypatch.setattr(cli.logins, "test_login", _no_live)
-    # Keep it hermetic: the no-arg path builds a Config only to read provider_id.
-    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *a, **k: SimpleNamespace(provider_id=None))
-
-    rc = cli.main(["--list-models"])
+    rc = cli._print_model_list(None, SimpleNamespace(provider_id=None))
     out = capsys.readouterr().out
 
     assert rc == 0
     assert "opencode-go/glm-5.1" in out
     assert "opencode-go/glm-5.2" in out
     assert "deepseek/deepseek-v4-flash" in out
+
+
+def test_list_models_flag_prints_the_model_list(monkeypatch):
+    calls: list[str | None] = []
+    monkeypatch.setattr(cli, "_print_model_list", lambda provider_arg, cfg: calls.append(provider_arg) or 0)
+
+    assert cli.main(["--list-models", "openai-codex"]) == 0
+    assert calls == ["openai-codex"]

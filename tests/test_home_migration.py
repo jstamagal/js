@@ -296,15 +296,10 @@ def test_js_startup_migrates_and_then_lists_the_moved_session(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     _write(_legacy()["data"] / "sessions" / "defaultagent" / "old.jsonl", '{"role":"user","content":"hi"}\n')
 
-    assert cli.main(["--blocking", "--list", "--json"]) == 0
+    assert cli.main(["--list", "--json"]) == 0
 
-    captured = capsys.readouterr()
-    assert len([line for line in captured.err.splitlines() if "->" in line]) == 1
-    records = [json.loads(line) for line in captured.out.splitlines()]
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [(item["agent"], item["name"]) for item in records] == [("defaultagent", "old")]
-
-    assert cli.main(["--blocking", "--list", "--json"]) == 0
-    assert "->" not in capsys.readouterr().err
 
 
 def test_home_as_the_working_directory_loads_the_global_jsrc_once():

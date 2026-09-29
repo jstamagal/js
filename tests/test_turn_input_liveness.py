@@ -8,7 +8,6 @@ dies with the turn when ^C cancels it.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import sys
 import threading
@@ -20,12 +19,13 @@ import ai.types.usage
 import pytest
 
 from js import cli, runtime
-from js.config import Config
+from js.config import Config, from_env
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit import process_net
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
+from repl_driver import run_async
 
 
 def _cfg(tmp_path):
@@ -79,15 +79,17 @@ def _call(name: str, args: str, call_id: str) -> ModelStreamResult:
     )
 
 
-def test_second_line_is_processed_while_a_tool_sleeps(monkeypatch, tmp_path):
-    """Drive one line through the Enter handler into a turn whose tool sleeps 2s;
-    a second line entered meanwhile is handled before that turn finishes."""
+def test_second_line_is_processed_while_a_tool_runs(monkeypatch, tmp_path):
+    """Drive one line through the Enter handler into a turn whose tool blocks
+    until the test releases it; a second line entered meanwhile is handled
+    before that turn finishes."""
     started = threading.Event()
+    release = threading.Event()
     finished = threading.Event()
 
     def nap() -> str:
         started.set()
-        time.sleep(2)
+        release.wait(30)
         finished.set()
         return "rested"
 
@@ -108,36 +110,21 @@ def test_second_line_is_processed_while_a_tool_sleeps(monkeypatch, tmp_path):
 
     seen: dict[str, bool] = {}
 
-    class AppStub:
-        def __init__(self, on_line, on_eof):
-            self._on_line, self._on_eof = on_line, on_eof
-
-        async def run_async(self):
-            await self._on_line("first")
-            while not started.is_set():
-                await asyncio.sleep(0.01)
-            await asyncio.wait_for(self._on_line("second"), timeout=1.5)
-            seen["tool_finished_before_second_line"] = finished.is_set()
-            self._on_eof()
-
-        def exit(self):
-            pass
-
-        def invalidate(self):
-            pass
+    async def script(on_line):
+        await on_line("first")
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(on_line("second"), timeout=10)
+        seen["tool_finished_before_second_line"] = finished.is_set()
+        release.set()
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.screen, "build_app",
-                        lambda *, on_line, on_eof, **_: (AppStub(on_line, on_eof), cli.screen.Scrollback()))
-    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_with_nap)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
 
-    assert cli.main([]) == 0
+    run_async(monkeypatch, from_env(), script)
+
     assert seen == {"tool_finished_before_second_line": False}
     assert finished.is_set()
 

@@ -2609,6 +2609,25 @@ def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> l
 
 
 
+def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
+    """Print one `provider/model` line per model of `provider_arg`, or of
+    every saved login when it is None. A provider whose models cannot be
+    listed gets a `#` line on stderr and the rest still print."""
+    provider_ids = _list_models_provider_ids(provider_arg, cfg)
+    if not provider_ids:
+        print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
+        return 0
+    for pid in provider_ids:
+        try:
+            model_ids = _models_cached_or_live(pid, cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        for model_id in model_ids:
+            print(f"{pid}/{model_id}" if pid else model_id)
+    return 0
+
+
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
     payload = _list_models_payload(provider_id, cfg)
     return {"models": payload["models"]}
@@ -3330,14 +3349,16 @@ def _raw_configured_spec(cfg):
     return P.load_prompt_spec(cfg.prompts_dir)
 
 
-def _printonly_run(args, cli_agent, presets) -> int:
-    letters, count, path = _printonly_slots(args.printonly)
+def _printonly_run(spec: str, *, agent: str | None = None, session: str | None = None,
+                   extras: list[str] | None = None, ignore_local_config: bool = False,
+                   ignore_global_config: bool = False, presets: list[str] | None = None) -> int:
+    letters, count, path = _printonly_slots(spec)
     sections = _printonly_letters(letters)
 
     try:
         cfg = _cfg_from_env_compat(
-            args.session, save_session=False, extras=args.extras, agent_id=cli_agent,
-            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            session, save_session=False, extras=extras, agent_id=agent,
+            ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
             presets=presets,
         )
     except Exception as e:  # noqa: BLE001 — printonly never errors
@@ -3619,19 +3640,7 @@ def main(argv: list[str] | None = None) -> int:
                     ignore_local_config=args.ignore_local,
                     ignore_global_config=args.ignore_global,
                 )
-            provider_ids = _list_models_provider_ids(provider_arg, cfg)
-            if not provider_ids:
-                print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
-                return 0
-            for pid in provider_ids:
-                try:
-                    model_ids = _models_cached_or_live(pid, cfg)
-                except Exception as e:  # noqa: BLE001
-                    print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
-                    continue
-                for model_id in model_ids:
-                    print(f"{pid}/{model_id}" if pid else model_id)
-            return 0
+            return _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
             print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
             return 1
@@ -3666,7 +3675,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.printonly is not None:
-        return _printonly_run(args, cli_agent, presets)
+        return _printonly_run(
+            args.printonly, agent=cli_agent, session=args.session, extras=args.extras,
+            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            presets=presets,
+        )
 
     selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:

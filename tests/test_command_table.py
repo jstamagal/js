@@ -3,71 +3,42 @@ it, and a jsrc may hold any command line."""
 
 from __future__ import annotations
 
-import contextlib
+import os
+from pathlib import Path
 
 from js import cli, paths, settings
+from js.config import from_env, jsrc_paths
+from repl_driver import repl_state
 
 
-def _drive_repl(monkeypatch, tmp_path, lines, run_turn_async_stub=None):
-    """Run `js` (async REPL) headless: each line hits the Enter handler, then EOF."""
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class AppStub:
-        def __init__(self, on_line, on_eof):
-            self._on_line, self._on_eof = on_line, on_eof
-
-        async def run_async(self):
-            for line in lines:
-                await self._on_line(line.strip())
-            self._on_eof()
-
-        def exit(self):
-            pass
-
-        def invalidate(self):
-            pass
-
-    def build_app_stub(*, on_line, on_eof, **_kwargs):
-        return AppStub(on_line, on_eof), cli.screen.Scrollback()
-
-    async def no_turn(*args, **kwargs):
-        raise AssertionError("no turn expected")
-
-    monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
-    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
-    monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub or no_turn)
-    return cli.main([])
+def _launch(cwd):
+    """A REPL launch in `cwd`: the config, the state after replaying the jsrc
+    files, and the replay's errors."""
+    os.chdir(cwd)
+    cfg = from_env()
+    state, _spec = repl_state(cfg)
+    errors = cli._run_rc_commands(state, cfg, jsrc_paths(Path(cfg.project_dir or cwd)))
+    return cfg, state, errors
 
 
-def _capture_startup_state(monkeypatch) -> dict:
-    captured: dict = {}
-    real = cli._run_rc_commands
-
-    def spy(state, cfg, rc_paths):
-        errors = real(state, cfg, rc_paths)
-        captured["state"], captured["errors"] = state, errors
-        return errors
-
-    monkeypatch.setattr(cli, "_run_rc_commands", spy)
-    return captured
+def _run(lines, state, cfg):
+    for line in lines:
+        assert cli._handle_command(line, state, cfg) is True
 
 
 def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_path):
-    assert _drive_repl(monkeypatch, tmp_path, [
+    monkeypatch.chdir(tmp_path)
+    cfg, state, _errors = _launch(tmp_path)
+    _run([
         "/on turn_start set compact.auto off",
         "/on ^tool_call set runtime.trace on",
         "/alias ca compact-auto $*",
         "/save",
-    ]) == 0
+    ], state, cfg)
 
-    captured = _capture_startup_state(monkeypatch)
-    assert _drive_repl(monkeypatch, tmp_path, []) == 0
+    _cfg, state, errors = _launch(tmp_path)
 
-    state = captured["state"]
-    assert captured["errors"] == []
+    assert errors == []
     assert [h.handler for h in state["events"].handlers_for("turn_start")] == ["set compact.auto off"]
     assert [(h.handler, h.suppress) for h in state["events"].handlers_for("tool_call")] == [
         ("set runtime.trace on", True)
@@ -76,7 +47,9 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
 
 
 def test_save_writes_only_non_default_settings(monkeypatch, tmp_path):
-    _drive_repl(monkeypatch, tmp_path, ["/set compact.auto off", "/save"])
+    monkeypatch.chdir(tmp_path)
+    cfg, state, _errors = _launch(tmp_path)
+    _run(["/set compact.auto off", "/save"], state, cfg)
 
     saved = paths.global_config_file().read_text(encoding="utf-8")
     reloaded = settings.collect_settings(config_paths=[paths.global_config_file()], env={})
@@ -86,49 +59,46 @@ def test_save_writes_only_non_default_settings(monkeypatch, tmp_path):
 
 
 def test_jsrc_model_and_provider_lines_take_effect(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
     jsrc.write_text("/provider deepseek\n/model deepseek-chat\n", encoding="utf-8")
-    seen = {}
 
-    async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
-        seen["model"], seen["provider"] = cfg.model, cfg.provider_id
-        messages.append({"role": "assistant", "content": "ok"})
+    cfg, state, _errors = _launch(tmp_path)
+    turn_cfg = cli._cfg_for_live_state(cfg, state)
 
-    assert _drive_repl(monkeypatch, tmp_path, ["hello"], run_turn_async_stub) == 0
-
-    assert seen == {"model": "deepseek-chat", "provider": "deepseek"}
+    assert (turn_cfg.model, turn_cfg.provider_id) == ("deepseek-chat", "deepseek")
 
 
 def test_rc_replay_leaves_set_lines_to_the_settings_layer(monkeypatch, tmp_path):
     """Env beats jsrc for settings; replaying the rc at startup must not undo that."""
+    monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
     jsrc.write_text("set compact.auto off\nalias t turns\n", encoding="utf-8")
     monkeypatch.setenv("JS_COMPACT_AUTO", "on")
-    captured = _capture_startup_state(monkeypatch)
 
-    _drive_repl(monkeypatch, tmp_path, [])
+    _cfg, state, _errors = _launch(tmp_path)
 
-    assert settings.get_dotted(captured["state"]["settings"], ("compact", "auto")) is True
-    assert captured["state"]["aliases"] == {"t": "turns"}
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert state["aliases"] == {"t": "turns"}
 
 
 def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
     jsrc.write_text("load extra.irc\n", encoding="utf-8")
     (jsrc.parent / "extra.irc").write_text("set compact.auto off\nalias t turns\n", encoding="utf-8")
     monkeypatch.setenv("JS_COMPACT_AUTO", "on")
-    captured = _capture_startup_state(monkeypatch)
     project = tmp_path / "project"
     project.mkdir()
 
-    _drive_repl(monkeypatch, project, [])
+    _cfg, state, errors = _launch(project)
 
-    assert captured["errors"] == []
-    assert captured["state"]["aliases"] == {"t": "turns"}
-    assert settings.get_dotted(captured["state"]["settings"], ("compact", "auto")) is True
+    assert errors == []
+    assert state["aliases"] == {"t": "turns"}
+    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
 
 
 def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
@@ -144,16 +114,16 @@ def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
 
 
 def test_rc_errors_name_the_line_and_do_not_stop_startup(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
     jsrc.write_text("bogus verb\nalias t turns\n", encoding="utf-8")
-    captured = _capture_startup_state(monkeypatch)
 
-    assert _drive_repl(monkeypatch, tmp_path, []) == 0
+    _cfg, state, errors = _launch(tmp_path)
 
-    assert len(captured["errors"]) == 1
-    assert f"{jsrc}:1" in captured["errors"][0]
-    assert captured["state"]["aliases"] == {"t": "turns"}
+    assert len(errors) == 1
+    assert f"{jsrc}:1" in errors[0]
+    assert state["aliases"] == {"t": "turns"}
 
 
 def _state() -> dict:

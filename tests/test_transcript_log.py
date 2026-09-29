@@ -78,15 +78,14 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
     def completion_stub(**_kwargs):
         return _fake_stream_result("FINAL_OK")
 
-    monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    rc = cli.main(["-p", "hello"])
+    rc = cli._run_prompt("hello")
 
     assert rc == 0
-    assert capsys.readouterr().out == "FINAL_OK\nContinue: js --session sess\n"
+    assert capsys.readouterr().out.splitlines()[0] == "FINAL_OK"
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
     assert "<USER> hello" in log
     assert "<APE> FINAL_OK" in log

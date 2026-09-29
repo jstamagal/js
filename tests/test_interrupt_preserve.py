@@ -4,7 +4,9 @@ wipe it — except when the turn produced nothing, where the bare prompt is drop
 from __future__ import annotations
 
 from js import cli
+from js.config import from_env
 from js.memory import append_message, load_messages
+from repl_driver import run_blocking
 
 
 def _session_file(tmp_path):
@@ -15,27 +17,9 @@ def _session_file(tmp_path):
 
 def _drive_repl(monkeypatch, tmp_path, run_turn_stub):
     """Run the interactive loop for exactly one user line, then EOF to exit."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(["please do the thing"])
-
-        def prompt(self, *_args, **_kwargs):
-            return next(self.lines)  # StopIteration after one line breaks the loop
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    # StopIteration from the stubbed prompt() bubbles as RuntimeError out of the
-    # generator; catch the clean exit paths and ignore the loop-terminator.
-    try:
-        return cli.main(["--blocking"])
-    except (RuntimeError, StopIteration):
-        return 0
+    run_blocking(from_env(), ["please do the thing"])
 
 
 def test_interrupt_keeps_partial_work_across_reload(monkeypatch, tmp_path):

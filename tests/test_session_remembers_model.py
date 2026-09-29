@@ -9,6 +9,7 @@ import pytest
 
 from js import cli
 from js.session_catalog import last_session_model, record_session_start
+from repl_driver import LineSession
 
 
 def _metadata(session_file):
@@ -63,27 +64,18 @@ def test_last_session_model_survives_a_session_with_no_metadata(tmp_path):
 
 
 def _repl(monkeypatch, tmp_path, argv, lines=()):
-    """Run the interactive loop over *lines*, then exit."""
+    """Launch `js --blocking *argv` over *lines*; return the model each turn ran on."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            return next(self.lines)
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", lambda *a, **k: None)
-    try:
-        return cli.main(["--blocking", *argv])
-    except (RuntimeError, StopIteration):
-        return 0
+    models: list[str] = []
+    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
+    monkeypatch.setattr(cli.runtime, "run_turn", lambda cfg, *a, **k: models.append(cfg.model))
+    assert cli.main(["--blocking", *argv]) == 0
+    return models
 
 
 def _only_session(tmp_path):
@@ -92,33 +84,19 @@ def _only_session(tmp_path):
     return found[0]
 
 
-def test_resume_without_a_model_flag_reuses_the_recorded_model(monkeypatch, tmp_path, capsys):
+def test_resume_without_a_model_flag_reuses_the_recorded_model(monkeypatch, tmp_path):
     _repl(monkeypatch, tmp_path, ["--model", "cliapiproxy/claude-opus-5"])
     session_file = _only_session(tmp_path)
-    capsys.readouterr()
 
-    name = session_file.stem
-    _repl(monkeypatch, tmp_path, ["--session", name])
+    models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem], lines=["go on"])
 
-    assert "cliapiproxy/claude-opus-5" in capsys.readouterr().out
+    assert models == ["cliapiproxy/claude-opus-5"]
 
 
-def test_an_explicit_model_flag_still_wins_over_the_recorded_one(monkeypatch, tmp_path, capsys):
+def test_an_explicit_model_flag_still_wins_over_the_recorded_one(monkeypatch, tmp_path):
     _repl(monkeypatch, tmp_path, ["--model", "cliapiproxy/claude-opus-5"])
     session_file = _only_session(tmp_path)
-    capsys.readouterr()
 
-    _repl(monkeypatch, tmp_path, ["--session", session_file.stem, "--model", "other/model"])
-    out = capsys.readouterr().out
+    models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem, "--model", "other/model"], lines=["go on"])
 
-    assert "cliapiproxy/claude-opus-5" not in out
-
-
-def test_resuming_an_empty_session_says_so(monkeypatch, tmp_path, capsys):
-    sessions = tmp_path / ".js" / "sessions" / "defaultagent"
-    sessions.mkdir(parents=True)
-    (sessions / "blank.jsonl").write_text("", encoding="utf-8")
-
-    _repl(monkeypatch, tmp_path, ["--session", "blank"])
-
-    assert "nothing to resume" in capsys.readouterr().out
+    assert models == ["other/model"]

@@ -321,7 +321,7 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     ])
     monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: cfg)
     scripted(monkeypatch, cancel=cancel)
-    assert cli.main(["-p", "first"]) == (130 if cancel else 0)
+    assert cli._run_prompt("first") == (130 if cancel else 0)
     displayed = capsys.readouterr()
     assert (THOUGHT in transcript.strip_ansi(displayed.err)) is (level > 0)
     assert THOUGHT not in displayed.out
