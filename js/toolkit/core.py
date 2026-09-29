@@ -38,6 +38,8 @@ _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
 # Upper bound on ToolContext.known_content; the oldest entries go first.
 _KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
+# A tool result that carries an image: prefix, host path, mime, text stub.
+_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
 # The id of the tool call running in this thread or task. Read coverage is
@@ -906,14 +908,28 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     notices = context.consume_snapshot_notices()
     if notices and isinstance(result, str):
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
-        return f"{result}\n{rendered}"
-    return result
+        result = f"{result}\n{rendered}"
+    return _as_jail_shows(result)
+
+
+def _as_jail_shows(result: Any) -> Any:
+    """``result`` with host paths into the jail's /tmp and ~/.js/tmp named as
+    the jail shows them. The path field of an image marker stays the host
+    path: the model client reads the image from it."""
+    if _jail.active() is None or not isinstance(result, str) or isinstance(result, _jail.Refusal):
+        return result
+    if result.startswith(_IMAGE_RESULT_PREFIX):
+        prefix, host, rest = (result.split("\t", 2) + ["", ""])[:3]
+        shown = f"{prefix}\t{host}\t{_jail.shown(rest)}"
+    else:
+        shown = _jail.shown(result)
+    return result if shown == result else shown
 
 
 async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Invoke either a native sync handler or a cancelable async handler."""
     result = call_tool(tool, args, context)
-    return await result if inspect.isawaitable(result) else result
+    return _as_jail_shows(await result) if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:
