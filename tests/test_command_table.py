@@ -173,3 +173,12 @@ def test_turn_state_commands_come_from_the_table(monkeypatch):
 
     assert cli._is_turn_state_command("/scrub now")
     assert not cli._is_turn_state_command("/turns")
+
+
+def test_registering_the_same_handler_twice_keeps_one(tmp_path):
+    """A handler loaded from one jsrc and saved into another registers once."""
+    state = {**_state(), "events": cli.events.EventHooks()}
+    cli._handle_command("/on turn_start set compact.auto off", state, None)
+    cli._handle_command("/on turn_start set compact.auto off", state, None)
+
+    assert len(state["events"].handlers_for("turn_start")) == 1

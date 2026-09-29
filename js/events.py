@@ -95,7 +95,8 @@ class EventHooks:
         if not text:
             raise ValueError("on needs a handler")
         hook = EventHook(event=event, handler=text, suppress=suppress)
-        self._hooks[event].append(hook)
+        if hook not in self._hooks[event]:  # the same handler twice would run twice
+            self._hooks[event].append(hook)
         return hook
 
     def handlers_for(self, event: str) -> list[EventHook]:
