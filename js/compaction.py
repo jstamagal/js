@@ -335,19 +335,17 @@ def prefix_worth_summarizing(messages: list[dict], preserve_from: int) -> bool:
 # After a summary compaction the model knows it edited a file but not what is
 # in it, so its next move is to re-read everything it was just working on —
 # one turn wasted, and the summary rarely carries enough detail to edit from.
-# Re-attach the files it touched most recently, newest first, under a budget.
-POST_COMPACT_MAX_FILES = 5
-POST_COMPACT_TOKEN_BUDGET = 50_000
-POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+# Re-attach the files it touched most recently, newest first, under a budget
+# (compact.rehydrate_*).
 
 
 def _post_compact_rehydration(
     context: Any,
     *,
     chars_per_token: float = 4.0,
-    max_files: int = POST_COMPACT_MAX_FILES,
-    token_budget: int = POST_COMPACT_TOKEN_BUDGET,
-    per_file_tokens: int = POST_COMPACT_MAX_TOKENS_PER_FILE,
+    max_files: int | None = None,
+    token_budget: int | None = None,
+    per_file_tokens: int | None = None,
 ) -> dict | None:
     """Build one user message re-attaching recently read files, or None.
 
@@ -355,7 +353,14 @@ def _post_compact_rehydration(
     content is current — the model may have edited the file since. Files that
     vanished or grew past the per-file budget are named but not inlined, which
     is still useful: it tells the model the file exists and must be re-read.
+    A budget left None is its compact.rehydrate_* value in js/jsrc.
     """
+    if max_files is None:
+        max_files = _settings.default_value("compact.rehydrate_max_files")
+    if token_budget is None:
+        token_budget = _settings.default_value("compact.rehydrate_token_budget")
+    if per_file_tokens is None:
+        per_file_tokens = _settings.default_value("compact.rehydrate_max_tokens_per_file")
     paths = list(getattr(context, "read_paths", []) or [])
     if not paths:
         return None
@@ -717,7 +722,13 @@ async def compact_now(
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
                             "flight_path": str(flight.path)}
-        rehydrated = _post_compact_rehydration(context or T.STOCK_CONTEXT, chars_per_token=chars_per_token)
+        rehydrated = _post_compact_rehydration(
+            context or T.STOCK_CONTEXT,
+            chars_per_token=chars_per_token,
+            max_files=get_nonnegative_int(cfg, "rehydrate_max_files"),
+            token_budget=get_nonnegative_int(cfg, "rehydrate_token_budget"),
+            per_file_tokens=get_nonnegative_int(cfg, "rehydrate_max_tokens_per_file"),
+        )
         after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *messages[keep_from:]]
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:

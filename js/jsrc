@@ -44,6 +44,7 @@ set limits.max_download_bytes 0
 set limits.inline_code_timeout_s 300
 set limits.max_read_lines 2000
 set limits.max_file_bytes 2000000
+set limits.max_text_attachment_bytes 65536
 set limits.max_read_bytes 262144
 set limits.max_tool_results_per_turn_bytes 200000
 set limits.task_max_depth 2
@@ -81,6 +82,9 @@ set compact.summary_reserve_tokens 20000
 set compact.tail_tokens 16384
 set compact.min_savings_tokens 400
 set compact.clear_keep_recent 20
+set compact.rehydrate_max_files 5
+set compact.rehydrate_token_budget 50000
+set compact.rehydrate_max_tokens_per_file 5000
 set compact.chars_per_token 4.0
 set compact.model same
 set compact.summary_max_tokens 8192

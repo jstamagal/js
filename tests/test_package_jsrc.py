@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -309,3 +310,54 @@ def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
     process_net.fetch("https://example.test/", context=context)
 
     assert seen["agent"] == "knob-agent/2"
+
+
+def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
+    from js import attach
+
+    project = _isolated_home(monkeypatch, tmp_path)
+    user = tmp_path / "config" / "js" / "jsrc"
+    user.parent.mkdir(parents=True)
+    user.write_text("set limits.max_text_attachment_bytes 10\n", encoding="utf-8")
+    cfg = from_env(save_session=False, cwd=project)
+    (project / "a.txt").write_text("q" * 100, encoding="utf-8")
+
+    bundle = attach.build_user_message("look", ["a.txt"], cfg, cwd=project)
+
+    assert "q" * 10 in bundle.history_message["content"]
+    assert "q" * 11 not in bundle.history_message["content"]
+
+
+@pytest.mark.parametrize(("max_files", "reattached"), [("0", False), ("5", True)])
+def test_rehydrate_max_files_knob_decides_whether_files_come_back(
+    monkeypatch, tmp_path, max_files, reattached,
+):
+    from types import SimpleNamespace
+
+    from js import compaction
+
+    project = _isolated_home(monkeypatch, tmp_path)
+    user = tmp_path / "config" / "js" / "jsrc"
+    user.parent.mkdir(parents=True)
+    user.write_text(
+        f"set model.id offline-test-model\nset compact.rehydrate_max_files {max_files}\n", encoding="utf-8",
+    )
+    cfg = replace(from_env(save_session=False, cwd=project), session_file=tmp_path / "s.jsonl")
+    source = project / "kept.py"
+    source.write_text("print('rehydrated-marker')\n", encoding="utf-8")
+    context = ToolContext(cwd=project)
+    context.read_paths = {source}
+
+    async def stream_stub(**_kwargs):
+        return SimpleNamespace(text="Summary")
+
+    monkeypatch.setattr(compaction.model_client, "stream_model_async", stream_stub)
+    messages = [
+        {"role": "user", "content": "old " * 20000},
+        {"role": "assistant", "content": "done"},
+    ]
+
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, context=context)
+
+    assert result.startswith("compacted:")
+    assert any("rehydrated-marker" in str(m.get("content")) for m in messages) is reattached

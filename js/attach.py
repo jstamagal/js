@@ -12,10 +12,10 @@ from collections.abc import Iterable
 
 import ai
 
+from . import settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
 
-TEXT_ATTACHMENT_MAX_BYTES = 64 * 1024
 STDIN_ATTACHMENT_NAME = "<stdin>"
 
 
@@ -250,8 +250,9 @@ def _resolve_path(raw_path: str, cwd: Path) -> Path:
 
 
 def _text_cap(cfg: Config) -> int:
-    configured = int(getattr(cfg, "max_tool_result_bytes", TEXT_ATTACHMENT_MAX_BYTES) or TEXT_ATTACHMENT_MAX_BYTES)
-    return max(1, min(TEXT_ATTACHMENT_MAX_BYTES, configured))
+    attachment_cap = int(_settings.knob(getattr(cfg, "settings", None), "limits.max_text_attachment_bytes"))
+    configured = int(getattr(cfg, "max_tool_result_bytes", attachment_cap) or attachment_cap)
+    return max(1, min(attachment_cap, configured))
 
 
 def _strip_incomplete_utf8_tail(data: bytes) -> bytes:

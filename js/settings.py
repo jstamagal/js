@@ -199,6 +199,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum lines returned by read()."),
     SettingSpec("limits.max_file_bytes", "int",
                 "Maximum file bytes read by fs tools."),
+    SettingSpec("limits.max_text_attachment_bytes", "int",
+                "Most bytes of a text file attached to a prompt; a larger file is "
+                "truncated. limits.max_tool_result_bytes also caps it."),
     SettingSpec("limits.max_read_bytes", "int",
                 "Maximum file bytes for a whole-file read(); ignored when the call "
                 "passes a line or byte range, so ranged reads work on any size file."),
@@ -301,6 +304,14 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("compact.clear_keep_recent", "int",
                 "Tool results left intact when an over-budget request clears old "
                 "tool-result bodies before falling back to a summary."),
+    SettingSpec("compact.rehydrate_max_files", "int",
+                "Recently read files re-attached after a summary compaction, "
+                "newest first. 0 = none."),
+    SettingSpec("compact.rehydrate_token_budget", "int",
+                "Estimated tokens all re-attached files may use together."),
+    SettingSpec("compact.rehydrate_max_tokens_per_file", "int",
+                "A recently read file larger than this many estimated tokens is "
+                "named after a compaction but not re-attached."),
     SettingSpec("compact.chars_per_token", "float",
                 "Fallback/self-calibrating character-to-token estimate."),
     SettingSpec("compact.model", "str",
