@@ -190,7 +190,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert compaction.compacted(result)
-    assert captured == [4096]
+    assert captured == [settings.default_value("compact.summary_max_tokens")]
 
 
 def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_path):

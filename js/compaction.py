@@ -410,7 +410,11 @@ def thresholds(cfg: Config) -> tuple[float, float, float]:
     trigger_at = get_float(cfg, "trigger_threshold", max_value=1.0)
     force_at = get_float(cfg, "force_threshold", max_value=1.0)
     if not (notify_at <= trigger_at <= force_at):
-        return 0.50, 0.80, 0.90
+        return (
+            _settings.default_value("compact.notify_threshold"),
+            _settings.default_value("compact.trigger_threshold"),
+            _settings.default_value("compact.force_threshold"),
+        )
     return notify_at, trigger_at, force_at
 
 
@@ -593,7 +597,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(_summary_prompt(head, focus, guidance))],
                 tools=None,
-                max_output_tokens=get_int(cfg, "summary_max_tokens", 4096, max_value=8192),
+                max_output_tokens=get_int(cfg, "summary_max_tokens", max_value=8192),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=route.headers,
