@@ -53,20 +53,15 @@ uv run pytest --version
 ## Main Offline Suite
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e"
+python -m pytest -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 ```
 
-Verified in this environment:
-
-```bash
-python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider -n auto
-```
-
-`just test` runs exactly that. `-n auto` spreads the suite over every core
-(pytest-xdist, in the `test` extra): 1681 tests in ~130s on a six-core box
-against ~590s serial. The slowest tests drive the real obscura binary and real
-Jupyter kernels, so most of that wall time is spent waiting on a subprocess.
-Drop `-n auto` when a failure needs readable interleaved output.
+`just test` runs exactly that. `-n logical` starts one pytest-xdist worker per
+hardware thread (pytest-xdist is in the `test` extra). `--dist worksteal` lets
+an idle worker take queued tests from a busy one; without it, xdist hands each
+worker a run of neighbouring tests up front, and one worker ends up alone with
+all of `test_kernel_toolbox.py`'s real Jupyter kernels long after the others
+are done. Drop `-n` when a failure needs readable interleaved output.
 
 ## Focused Suites
 

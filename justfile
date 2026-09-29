@@ -175,7 +175,7 @@ uninstall:
 # offline suite — skips the live markers. Cached per tree state: an unchanged
 # tree replays the last run. `just test --force` reruns.
 test *args:
-    scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n auto
+    scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 test-file file:
