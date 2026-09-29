@@ -11,6 +11,7 @@ from typing import Any
 from .. import paths
 from .. import session_store
 from .. import settings as _settings
+from .. import turn_settings as _turn_settings
 from ..events import RefusableOnly
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
@@ -18,41 +19,6 @@ from .core import Tool, ToolContext
 from . import task_jobs
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
-
-
-# The ToolContext settings a subagent takes from its parent. A subagent gets its
-# own kernel (kernel_session stays None) but inherits how loudly it renders —
-# the operator watching one terminal wants one verbosity, not one per agent.
-_INHERITED_FIELDS = (
-    "max_read_lines",
-    "max_file_bytes",
-    "max_read_bytes",
-    "max_tool_result_bytes",
-    "max_tool_result_inline_bytes",
-    "max_bash_output_ceiling",
-    "max_bash_output_bytes",
-    "fetch_timeout_s",
-    "browse_timeout_s",
-    "download_timeout_s",
-    "max_download_bytes",
-    "task_max_depth",
-    "subagent_max_workers",
-    "shell_env_allow",
-    "user_agent",
-    "terminal_cols",
-    "terminal_rows",
-    "kernel_verbosity",
-    "kernel_render_max_lines",
-    "kernel_wait_seconds",
-    "shell_wait_seconds",
-    "max_parallel_tools",
-    "shell_program",
-    "jail_bind",
-    "lsp_servers",
-    "lsp_timeout_s",
-    "notebook_output_lines",
-    "model",
-)
 
 
 def _filename_limit(directory: Path) -> int:
@@ -110,8 +76,9 @@ def _task_text(item: Any) -> str:
 
 
 def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContext:
-    inherited = {name: getattr(parent, name) for name in _INHERITED_FIELDS if hasattr(parent, name)}
-    child = ToolContext(cwd=parent.cwd, **inherited)
+    # A subagent gets its own kernel (kernel_session stays None) but the
+    # parent's per-turn settings, kernel verbosity among them.
+    child = ToolContext(cwd=parent.cwd, model=getattr(parent, "model", ""), **_turn_settings.inherit(parent))
     child.tool_registry = registry
     child.agent_id = agent
     child.task_depth = getattr(parent, "task_depth", 0) + 1

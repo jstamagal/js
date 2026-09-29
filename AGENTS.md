@@ -81,6 +81,9 @@ Anything settable is a registered setting (`js/settings.py`). `/set` with no
 argument dumps every settable setting, `/set <key> <value>` sets one, and
 `/save` rewrites jsrc from the full live state, no confirmation. A setting
 reachable only through an env var or a hardcoded default is not finished.
+A setting a turn reads is also one `TurnSetting` row in `js/turn_settings.py`;
+the row makes it a `Config` field and, with `on_context`, a `ToolContext` field
+that subagents inherit.
 
 ## Docs
 
