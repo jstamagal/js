@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field, replace
 from functools import cache
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -163,6 +164,8 @@ class TurnToolSurface:
         self._loaded: set[str] = set()
         self._mcp_loaded: set[str] = set()
         self._loaded_ids: set[str] = set()
+        # `skill` is read-only, so two of its calls can activate tools at once.
+        self._activation_lock = threading.Lock()
         self._discovery = discovery.discovery_tool(self)
 
     @property
@@ -267,6 +270,10 @@ class TurnToolSurface:
 
     def activate_tools(self, names: Iterable[str]) -> ToolActivationResult:
         """Activate declared native tools without widening selected policy."""
+        with self._activation_lock:
+            return self._activate_tools(names)
+
+    def _activate_tools(self, names: Iterable[str]) -> ToolActivationResult:
         activated: list[str] = []
         denied: list[str] = []
         missing: list[str] = []

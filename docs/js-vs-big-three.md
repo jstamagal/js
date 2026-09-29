@@ -23,7 +23,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 
 | capability | js | Claude Code | Codex | pi |
 |---|---|---|---|---|
-| Read-only tool calls run in parallel | no, only `task` ✔ | yes, up to 10 | yes, RwLock | yes |
+| Read-only tool calls run in parallel | yes, readers-writer, up to 8 ✔ | yes, up to 10 | yes, RwLock | yes |
 | Retry honours `Retry-After` | no, 2 attempts ✔ | yes, 10 | yes | yes |
 | Shell output past the cap | **head kept, tail lost** ✔ | whole stream to file | head + tail | tail + spill file |
 | Stale-edit guard | per line range, returns recovery diff | per-file mtime | none | none |
@@ -80,8 +80,6 @@ pi retries once. Codex does not recover inside a normal turn.
 
 ## Where bucking the norm looks wrong
 
-**Tool calls run one at a time.** ✔ `_dispatch_tool_calls` gives parallelism only to `task`, and runs on a single worker (`runtime.py:883,1112`). Six `read` calls in one turn run in sequence. All three others run read-only calls in parallel. `Tool.read_only` already exists (`core.py:230`) and nothing uses it for scheduling. This is the biggest everyday latency gap.
-
 **Shell output keeps the head and throws away the tail.** ✔ `_StreamCapture.feed` stops keeping bytes at the cap (`capped_process.py:64`). The cap is 150 kB, and the spill afterwards works from the already-clipped text. The compiler error at the end of a long build log is gone for good. The other three keep the tail or the whole stream.
 
 **Retry gives up after two attempts and ignores `Retry-After`.** ✔ The check is `transport_retries == 2` (`runtime.py:1816`), and "retry-after" appears nowhere in js. A 429 with a 30-second `Retry-After` kills a turn in about 3 seconds. Claude Code retries 10 times, and all three honour the header.
@@ -135,7 +133,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 | mechanism | from | js change |
 |---|---|---|
-| Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | `_dispatch_batch` plus the existing `read_only` flag |
+| Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
 | Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | `runtime.py:1813`, `_backoff` |
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | `capped_process._StreamCapture` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | `runtime.py:1948` |
@@ -189,7 +187,7 @@ Hot spots over 441 commits in two months:
 ## Priorities
 
 1. **Shell head+tail with a raw spill.** It's cheap, and today js silently loses the one line that matters.
-2. **Parallel read-only tool calls.**
+2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget.**
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures.
 5. **Record ids plus the model stamp** (in progress in js-1g1.2), then the picker.

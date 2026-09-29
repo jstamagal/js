@@ -90,7 +90,11 @@ ban:                  # argument patterns, refused before dispatch
 
 `tag:read_only` is intrinsic: it matches every tool whose `read_only` property
 is true (tools that write nothing). It takes an optional modifier,
-`tag:read_only:lazy`; without one it means eager.
+`tag:read_only:lazy`; without one it means eager. A tool that writes only under
+some arguments (`ast_search` with `apply`, `fetch` with `save` or a POST,
+`browse` with `screenshot`) declares `read_only_when` instead; the tag does not
+match it, but dispatch runs its read-only calls in parallel (see Dispatch
+Semantics).
 
 Resolution: the first entry that names a tool (its exact name or an intrinsic
 tag it carries) decides it. Only when nothing names the tool does the first
@@ -194,11 +198,35 @@ tool call id.
 Dispatch rules:
 
 - task calls from one assistant turn run concurrently
-- non-task calls run sequentially
+- the other calls run in model order under a readers-writer rule, the one
+  Codex uses (`codex-rs/core/src/tools/parallel.rs`):
+  - a read-only call runs beside the read-only calls next to it, up to
+    `runtime.max_parallel_tools` at once (default 8)
+  - a call that is not read-only runs alone: it starts after every earlier
+    call has finished, and later calls wait for it
+  - so read, read, patch, read runs as [read ∥ read] → patch → read
+  - `runtime.max_parallel_tools 1` runs every call in turn
 - results are appended in original tool-call order
-- tool result content is capped
+- tool result content is capped, per result and then per batch
+  (`limits.max_tool_results_per_turn_bytes` covers the whole batch)
+- ^C starts no queued call; calls already running finish and their results
+  are kept
 - repeated tool errors get retry metadata
 - a repeated-error limit appends a final assistant error
+
+A call is read-only when its tool sets `read_only` (`read`, `fs_search`,
+`skill`, `docs_search`, `exa_search`, `serper_search`, `tavily_search`), or
+when its tool's `read_only_when` accepts its arguments: `ast_search` without
+`apply`, `fetch` as a GET or HEAD without `save`, `browse` without
+`screenshot`. A call that cannot be resolved or parsed is not read-only.
+
+Parallel read-only calls share one `ToolContext`. Read coverage, file hashes
+and known content sit behind `ToolContext._coverage_lock`, and coverage is
+recorded per call id: when the runtime clips a read's result, only that call's
+share is narrowed, and lines another read of the same file delivered stay
+read. The runtime forgets the per-call shares (`settle_reads`) once the batch
+cap has run. Trace and telemetry writes hold one lock, so an exchange prints
+whole; spill files are written to a temporary name and renamed.
 
 Inside the `task` tool, multiple task strings also run concurrently.
 

@@ -166,11 +166,17 @@ Tool errors are tracked per tool. A repeated `ERROR` gets retry metadata:
 After the retry limit is reached, the runtime appends a final assistant error
 instead of surfacing "no assistant response".
 
-## Task Parallelism
+## Task and Read-Only Parallelism
 
-`task` calls from the same assistant turn are dispatched concurrently. Non-task
-tools from that turn are dispatched sequentially. Result messages are restored
-to original tool-call order before being appended.
+`task` calls from the same assistant turn are dispatched concurrently. The
+other calls from that turn run in model order under a readers-writer rule:
+read-only calls next to each other run together, up to
+`runtime.max_parallel_tools` at once (default 8; 1 runs every call in turn),
+and a call that writes runs alone, after every call before it. Read, read,
+patch, read runs as [read ∥ read] → patch → read. Result messages are restored
+to original tool-call order before being appended. See
+[Dispatch Semantics](tool-system.md#dispatch-semantics) for which calls count
+as read-only and how shared state is kept consistent.
 
 Inside the `task` tool, multiple task strings also run concurrently using a
 thread pool.

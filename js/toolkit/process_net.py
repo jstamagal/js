@@ -911,6 +911,12 @@ def fetch(
         return f"ERROR: {type(exc).__name__}: {exc}"
 
 
+def _fetch_is_read_only(args: dict[str, Any]) -> bool:
+    """A GET or HEAD that saves nothing."""
+    method = (text_or_default(args.get("method"), "GET") or "GET").upper()
+    return method in {"GET", "HEAD"} and not args.get("save")
+
+
 def tools() -> tuple[Tool, ...]:
     return (
         Tool(
@@ -955,5 +961,6 @@ def tools() -> tuple[Tool, ...]:
                 "save": {"type": "string"},
             },
             required=("url",),
+            read_only_when=_fetch_is_read_only,
         ),
     )
