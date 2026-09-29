@@ -325,6 +325,23 @@ def record_prompt_seen(memory_file: Path, prompt: str) -> bool:
     return previous is not None and previous != current
 
 
+_TURN_MODE_MARK = "turn_mode:"
+
+
+def record_turn_mode(memory_file: Path, mode: str) -> str | None:
+    """Note that a turn runs in ``mode`` and return the mode the previous turn
+    ran in when it was a different one, else None.
+
+    A `turn_mode:` mark is appended only when the mode changes, so the newest
+    one is always the mode of the last turn. A session with no mark yet reports
+    no change."""
+    previous = _last_mark_payload(memory_file, _TURN_MODE_MARK) or None
+    if previous == mode:
+        return None
+    append_mark(memory_file, _TURN_MODE_MARK + mode)
+    return previous
+
+
 def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
                            trigger: dict | None = None, rehydrated: dict | None = None) -> None:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}

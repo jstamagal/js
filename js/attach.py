@@ -32,6 +32,26 @@ class UserMessageBundle:
     history_message: dict
 
 
+def with_note(bundle: UserMessageBundle, note: str) -> UserMessageBundle:
+    """``bundle`` with ``note`` appended to its text, in both versions."""
+    history_text = bundle.history_message.get("content") or ""
+    text = f"{history_text}\n\n{note}" if history_text else note
+    runtime_content = bundle.runtime_message.get("content")
+    if isinstance(runtime_content, list):
+        parts = list(runtime_content)
+        if parts and isinstance(parts[0], ai.types.messages.TextPart):
+            parts[0] = ai.types.messages.TextPart(text=text)
+        else:
+            parts.insert(0, ai.types.messages.TextPart(text=text))
+        runtime_content = parts
+    else:
+        runtime_content = text
+    return UserMessageBundle(
+        runtime_message={**bundle.runtime_message, "content": runtime_content},
+        history_message={**bundle.history_message, "content": text},
+    )
+
+
 def _scan_tokens(line: str) -> list[tuple[str, int, int]]:
     """Split `line` into shell-word tokens, each returned as (unquoted_text, start,
     end) spanning the token's raw location in `line`. Mirrors shlex.split's posix

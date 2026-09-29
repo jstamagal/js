@@ -211,7 +211,15 @@ already came back as a handle keep running.
 The command's stdin is `/dev/null` and it has no controlling terminal, so it
 never reads the keystrokes meant for js's input line.
 
-Unix uses `$SHELL -c`, fallback `/bin/sh -c`. Windows uses `COMSPEC /C`.
+Unix runs `shell.program` (default `bash`) with `-c`. bash and zsh also get
+`-o pipefail`, so a pipeline reports the failure of any stage. Windows uses
+`COMSPEC /C`.
+
+The command's environment holds only the names in `limits.shell_env_allow` and
+the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
+variable that js has but the command's environment does not, the result
+carries an `environment=filtered unset=NAME allowed=… present=…` line after the
+exit line.
 
 Use `cwd` instead of writing `cd ... && ...` in the command.
 

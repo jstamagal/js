@@ -112,6 +112,30 @@ _PROMPT_CHANGED_NOTICE = (
 )
 
 
+# Keyed by the mode the session continues in.
+_MODE_SWITCH_NOTICES = {
+    "repl": (
+        "<js-reminder>This conversation started as a one-shot run and now continues "
+        "in interactive chat. The human is here and can answer.</js-reminder>"
+    ),
+    "-p": (
+        "<js-reminder>This conversation started in interactive chat and now continues "
+        "as a one-shot run. The human is not here and cannot answer.</js-reminder>"
+    ),
+}
+
+
+def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) -> attach.UserMessageBundle:
+    """Record that this turn runs in ``mode`` ("repl" or "-p"). When the last
+    turn ran in the other mode, this turn's user message carries the
+    mode-switch reminder."""
+    if cfg.session_file == Path(os.devnull):
+        return bundle
+    if M.record_turn_mode(cfg.session_file, mode) is None:
+        return bundle
+    return attach.with_note(bundle, _MODE_SWITCH_NOTICES[mode])
+
+
 def _parse_bool(raw: str) -> bool | None:
     r = raw.lower().strip()
     if r in _BOOL_WORDS_ON:
@@ -2042,6 +2066,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    if save:
+        user_bundle = _note_mode_switch(cfg, user_bundle, "-p")
     messages.append(user_bundle.runtime_message)
     if save:
         _append_turn(cfg, user_bundle.history_message)
@@ -2802,6 +2828,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         # line, keep the REPL.
         msgs.say(msgs.FAILED, error=e)
         return
+    user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
@@ -3159,6 +3186,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             msgs.say(msgs.FAILED, error=e)
             continue
 
+        user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)

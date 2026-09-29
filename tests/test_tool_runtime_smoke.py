@@ -898,8 +898,7 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
             return process_net.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(process_net, "start_capped", lambda argv, **kw: FakeProcess())
-    monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
-    context = ToolContext(cwd=tmp_path, shell_wait_seconds=42)
+    context = ToolContext(cwd=tmp_path, shell_wait_seconds=42, shell_program="/bin/sh")
 
     assert process_net.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
     process_net.shell("echo ok", timeout=-1, context=context)
@@ -908,7 +907,7 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
     assert waits == [42, 42]
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
-def test_shell_uses_env_shell_with_dash_c_and_reports_shell(tmp_path, monkeypatch):
+def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkeypatch):
     fake_shell = tmp_path / "fake-shell"
     fake_shell.write_text(
         "#!/bin/sh\n"
@@ -918,8 +917,7 @@ def test_shell_uses_env_shell_with_dash_c_and_reports_shell(tmp_path, monkeypatc
         encoding="utf-8",
     )
     fake_shell.chmod(0o700)
-    monkeypatch.setenv("SHELL", str(fake_shell))
-    context = ToolContext(cwd=tmp_path)
+    context = ToolContext(cwd=tmp_path, shell_program=str(fake_shell))
 
     actual = process_net.shell("printf should-not-need-real-shell", context=context)
 
@@ -934,15 +932,6 @@ def test_shell_uses_env_shell_with_dash_c_and_reports_shell(tmp_path, monkeypatc
     assert actual == expected
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell behavior")
-def test_shell_falls_back_to_bin_sh_when_shell_unset(tmp_path, monkeypatch):
-    monkeypatch.delenv("SHELL", raising=False)
-    context = ToolContext(cwd=tmp_path)
-
-    actual = process_net.shell("printf fallback-ok", context=context)
-
-    expected = "shell=/bin/sh\nexit=0\n--- stdout ---\nfallback-ok"
-    assert actual == expected
 
 
 

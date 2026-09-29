@@ -336,18 +336,19 @@ def test_shell_uses_configured_environment_allowlist_and_explains_failure(
         return FakeProcess()
 
     monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
+    monkeypatch.setenv("OTHER_SECRET", "kept-out")
     monkeypatch.setattr(process_net, "start_capped", start_stub)
-    monkeypatch.setattr(process_net, "_default_shell", lambda: "/bin/sh")
-    context = ToolContext(cwd=tmp_path)
+    context = ToolContext(cwd=tmp_path, shell_program="/bin/sh")
     context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")
 
-    result = process_net.shell("use-token", context=context)
+    result = process_net.shell('use-token "$FORGECODE_TOKEN" "$OTHER_SECRET"', context=context)
 
     assert seen["env"]["FORGECODE_TOKEN"] == "operator-secret"
     assert "exit=7" in result
     assert "environment=filtered" in result
     assert "allowed=" in result
     assert "FORGECODE_TOKEN" in result
+    assert "OTHER_SECRET" in result
     assert "limits.shell_env_allow" in result
 
 

@@ -427,8 +427,17 @@ launch's mark, the REPL appends one `<js-reminder>` user message saying the
 prompt files changed on disk and the session keeps its original prompt. A
 session with no earlier `prompt_seen:` mark gets no notice.
 
-The message loader ignores `system:`, `prompt_seen:` and every other mark; they
-remain in JSONL as audit notes.
+`turn_mode:<mode>` records the mode a turn ran in: `repl`, or `-p` for a
+one-shot or piped run. It is appended when a turn's mode differs from the newest
+mark's, so the newest mark is always the last turn's mode. When a turn changes
+the mode, its user message carries one `<js-reminder>`: after `-p`, that the
+conversation now continues in interactive chat and the human can answer; after
+the REPL, that it now continues as a one-shot run and the human cannot answer.
+A launch with no turn changes nothing. A session with no earlier `turn_mode:`
+mark gets no reminder.
+
+The message loader ignores `system:`, `prompt_seen:`, `turn_mode:` and every
+other mark; they remain in JSONL as audit notes.
 
 ## Wipe And Backups
 

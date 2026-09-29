@@ -1,4 +1,6 @@
-Run one command with `$SHELL -c` and return exit code, stdout, and stderr.
+Run one command with bash (or the shell set in `shell.program`) and return
+exit code, stdout, and stderr. Under bash and zsh a pipeline fails when any
+stage fails (`pipefail`), so `false | cat` reports exit 1.
 Output is capped and marked where it was cut, so do not pipe through `head` or
 `tail` just to shrink it. Stdin is `/dev/null` and there is no terminal: a
 command that reads input gets end-of-file, and a password or confirmation

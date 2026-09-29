@@ -30,7 +30,7 @@ compatibility. The harness optimizes for:
 
 - Low-friction terminal workflows.
 - Explicit settings instead of hidden policy.
-- Zsh-friendly shell execution through `$SHELL`.
+- Shell execution through a settable program (`shell.program`, default bash).
 - Rich model-facing tool descriptions.
 - Prompt-directory agents.
 - Parallel subagent delegation.

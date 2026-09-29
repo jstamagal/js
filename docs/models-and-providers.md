@@ -408,14 +408,10 @@ never heard of the id, the harness falls back to the name-based check.
 - runtime sends image bytes once for that turn
 - session history persists only a text stub
 
-## Zsh And Terminal Tools
+## Shell And Terminal Tools
 
-The `shell` tool runs through `$SHELL -c` on Unix. If the process environment is
-zsh-first, the tool is zsh-first:
-
-```bash
-export SHELL=/usr/bin/zsh
-```
+The `shell` tool runs commands with the `shell.program` setting (default
+`bash`). `set shell.program zsh` in jsrc makes it zsh.
 
 Current behavior:
 
@@ -426,6 +422,3 @@ Current behavior:
   `aria2c` through the same managed-path-then-PATH resolver. Ordinary API calls
   and rendered browsing do not spawn it.
 - `shell` can run `rg`, `fzf`, `bat`, or anything else on PATH when installed.
-
-Any shell-level affordance added later preserves `$SHELL` first and does not
-change canonical tool names.
