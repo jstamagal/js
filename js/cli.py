@@ -7,7 +7,6 @@ import asyncio
 import contextlib
 import copy
 import functools
-import inspect
 import io
 import json
 import os
@@ -166,6 +165,38 @@ def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) 
     return attach.with_note(bundle, _mode_switch_notice(started, previous, mode))
 
 
+_MODEL_SWITCH_NOTICE = (
+    "<js-reminder>The model changed from {previous} to {current}. "
+    "Earlier replies in this conversation came from {previous}.</js-reminder>"
+)
+_CUT_OFF_NOTICE = (
+    "<js-reminder>The last turn in this conversation was cut off before it finished."
+    "</js-reminder>"
+)
+
+
+def _stamp_label(model: str | None, provider: str | None) -> str:
+    return f"{provider}/{model}" if provider else str(model)
+
+
+def _note_model_switch(cfg: Config, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
+    """When the session's newest reply came from a model other than the one
+    ``cfg`` runs this turn on, this turn's user message carries the
+    model-switch reminder. A stamp without a provider compares on the model id."""
+    if cfg.session_file == Path(os.devnull):
+        return bundle
+    stamp = M.last_reply_stamp(cfg.session_file)
+    if stamp is None:
+        return bundle
+    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
+    if stamp["model"] == cfg.model and (provider is None or provider == cfg.provider_id):
+        return bundle
+    return attach.with_note(bundle, _MODEL_SWITCH_NOTICE.format(
+        previous=_stamp_label(stamp["model"], provider),
+        current=_stamp_label(cfg.model, cfg.provider_id),
+    ))
+
+
 def _parse_bool(raw: str) -> bool | None:
     r = raw.lower().strip()
     if r in _BOOL_WORDS_ON:
@@ -195,32 +226,6 @@ def _from_env(
         presets=presets,
     )
 
-
-def _cfg_from_env_compat(
-    session: str | None,
-    *,
-    save_session: bool,
-    extras: list[str] | None,
-    agent_id: str | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
-) -> Config:
-    try:
-        return _from_env(
-            session,
-            save_session=save_session,
-            extras=extras,
-            agent_id=agent_id,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
-    except TypeError:
-        # Tests and external callers may monkeypatch the old helper signature.
-        if agent_id is None:
-            return _from_env(session, save_session=save_session, extras=extras)
-        return _from_env(session, save_session=save_session, extras=extras, agent_id=agent_id)
 
 def _append_turn(cfg: Config, message: dict) -> None:
     M.append_message(cfg.session_file, message)
@@ -354,20 +359,36 @@ def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
     """The --model value that puts a resumed session back on its stamped model,
     or None when the configuration already resolves to it.
 
-    The stamped provider rides as a prefix only where routing takes the prefix
-    as the provider: it parses as a known provider, and it is the configured
-    one or has a saved login. Otherwise the model id goes alone."""
+    A stamp whose provider is neither the configured one nor logged in gives
+    None: the session continues on the configured model. The stamped provider
+    rides as a prefix when it parses as a known provider and is the configured
+    one or has a saved login. A stamp without a provider, or one whose prefix
+    does not parse, gives the model id alone."""
     model = stamp.get("model")
     if not isinstance(model, str) or not model:
         return None
     provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
     if model == cfg.model and (not provider or provider == cfg.provider_id):
         return None
+    if _stamp_without_login(stamp, cfg) is not None:
+        return None
     prefixed = f"{provider}/{model}"
     if (provider and providers.parse_model_prefix(prefixed) == (provider, model)
             and (provider == cfg.provider_id or routing._saved_login(provider) is not None)):
         return prefixed
     return None if model == cfg.model else model
+
+
+def _stamp_without_login(stamp: dict, cfg: Config) -> str | None:
+    """``provider/model`` of a stamp whose provider is neither the configured
+    one nor logged in, else None. Such a session resumes on the configured model."""
+    model = stamp.get("model")
+    provider = stamp.get("provider")
+    if not isinstance(model, str) or not model or not isinstance(provider, str) or not provider:
+        return None
+    if provider == cfg.provider_id or routing._saved_login(provider) is not None:
+        return None
+    return f"{provider}/{model}"
 
 
 def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
@@ -2059,11 +2080,21 @@ def _queue_note(state: dict, note: str) -> None:
     state.setdefault("pending_notes", []).append(note)
 
 
-def _with_pending_notes(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
-    """``bundle`` carrying the reminders queued since the last user message."""
-    for note in state.pop("pending_notes", None) or ():
+def _take_pending_notes(state: dict) -> list[str]:
+    """The reminders queued since the last user message, removed from the queue."""
+    return list(state.pop("pending_notes", None) or ())
+
+
+def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:
+    for note in notes:
         bundle = attach.with_note(bundle, note)
     return bundle
+
+
+def _requeue_notes(state: dict, notes) -> None:
+    """Put ``notes`` back in front of the queue: the turn that carried them was discarded."""
+    if notes:
+        state["pending_notes"] = [*notes, *(state.get("pending_notes") or ())]
 
 
 def _set_working_dir(path: Path) -> None:
@@ -2420,7 +2451,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             session,
             save_session=save,
             extras=extras,
@@ -2437,8 +2468,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     # A resumed session continues on the model, provider and reasoning of its
     # last stamp unless this run names them. Read before this start records its own.
     resumed = last_stamp(cfg.session_file) if cfg.session_file != Path(os.devnull) else None
+    unreachable_stamp = None
     if resumed is not None:
         if model is None:
+            unreachable_stamp = _stamp_without_login(resumed, cfg)
             model = _resume_model_spec(resumed, cfg)
         if reasoning is None:
             reasoning_override = _resume_reasoning(resumed, cfg)
@@ -2478,6 +2511,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    if unreachable_stamp is not None:
+        with _transcript_stdio(telemetry):
+            msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+                      model=_stamp_label(cfg.model, cfg.provider_id))
 
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
@@ -2485,6 +2522,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         else cfg
     )
     messages = M.load_replay_messages(cfg.session_file)
+    cut_off = M.turn_cut_off(messages)
     _restore_workspace(cfg)
     before_len = len(messages)
     if events is not None:
@@ -2509,6 +2547,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
     if save:
         user_bundle = _note_mode_switch(cfg, user_bundle, "-p")
+    user_bundle = _note_model_switch(cfg, user_bundle)
+    if cut_off:
+        user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
     messages.append(user_bundle.runtime_message)
     if save:
         _append_turn(cfg, user_bundle.history_message)
@@ -2646,7 +2687,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     return 1
 
 
-
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -2704,34 +2744,6 @@ def _run_prompt_json(prompt: str, **kwargs) -> int:
     return code
 
 
-def _accepts_kwarg(func, name: str) -> bool:
-    """Whether ``func`` can take keyword ``name`` — a named parameter or ``**kwargs``.
-    Falls back to True when the signature can't be read, so the real call decides."""
-    try:
-        params = inspect.signature(func).parameters.values()
-    except (TypeError, ValueError):
-        return True
-    for param in params:
-        if param.kind is inspect.Parameter.VAR_KEYWORD:
-            return True
-        if param.name == name and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return True
-    return False
-
-
-def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
-    # Decide whether the (possibly monkeypatched) _run_prompt takes tool_context
-    # by INSPECTING its signature, not by catching TypeError around the whole
-    # turn — a stray TypeError raised deep inside a commit/wiki run must surface
-    # as an error, never trigger a silent second full execution of the turn.
-    if tool_context is not None and _accepts_kwarg(_run_prompt, "tool_context"):
-        return _run_prompt(*args, tool_context=tool_context, **kwargs)
-    return _run_prompt(*args, **kwargs)
-
-
 def _bench_row_line(row: dict) -> msgs.Said:
     if not row.get("ok"):
         return msgs.BENCH_FAILED.said(name=row["name"], error=row.get("error") or "failed")
@@ -2762,7 +2774,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             None, save_session=False, extras=extras, agent_id=agent_id,
             ignore_local_config=ignore_local_config,
             ignore_global_config=ignore_global_config, presets=presets,
@@ -2986,7 +2998,7 @@ def _run_commit(target: str | None,
     if extra_context and extra_context.strip():
         prompt += f"\n\nOperator context:\n{extra_context.strip()}"
 
-    return _run_prompt_compat(
+    return _run_prompt(
         prompt,
         model=model,
         debug=debug,
@@ -3007,7 +3019,7 @@ def _run_commit(target: str | None,
 
 def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "", extras: list[str] | None = None, model: str | None = None) -> int:
     try:
-        cfg = _cfg_from_env_compat(session, save_session=True, extras=extras, agent_id=agent)
+        cfg = _from_env(session, save_session=True, extras=extras, agent_id=agent)
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
@@ -3200,7 +3212,7 @@ def _restore_history_forms(messages: list[dict], user_bundle, steered: list, bef
 
 
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                   steer=None, steered=()) -> None:
+                   steer=None, steered=(), notes=()) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
@@ -3210,6 +3222,8 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
 
     ``steer`` hands the runtime lines typed during the turn; ``steered`` holds
     the bundles it has handed over, so their history forms are persisted.
+    ``notes`` are the queued reminders ``user_bundle`` carries; a discarded
+    turn puts them back in the queue.
     """
     try:
         before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
@@ -3265,6 +3279,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             print()
             msgs.say(msgs.TURN_ABORTED)
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except Exception as e:  # noqa: BLE001
@@ -3274,6 +3289,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             _persist_turn_messages(turn_cfg, state["messages"])
         else:
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _requeue_notes(state, notes)
         M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
 
 
@@ -3340,7 +3356,9 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         msgs.say(msgs.FAILED, error=e)
         return
     user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
-    user_bundle = _with_pending_notes(state, user_bundle)
+    user_bundle = _note_model_switch(turn_cfg, user_bundle)
+    notes = _take_pending_notes(state)
+    user_bundle = _with_notes(user_bundle, notes)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
@@ -3379,7 +3397,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
 
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                 steer=take_steer, steered=steered),
+                 steer=take_steer, steered=steered, notes=notes),
         kind="turn",
         label=prompt_text[:40],
     )
@@ -3765,7 +3783,9 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             continue
 
         user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
-        user_bundle = _with_pending_notes(state, user_bundle)
+        user_bundle = _note_model_switch(turn_cfg, user_bundle)
+        notes = _take_pending_notes(state)
+        user_bundle = _with_notes(user_bundle, notes)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         before_len = len(state["messages"])
         state["messages"].append(user_bundle.runtime_message)
@@ -3845,6 +3865,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 print()
                 msgs.say(msgs.TURN_ABORTED)
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _requeue_notes(state, notes)
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             msgs.say(msgs.FAILED, error=_error_text(e))
@@ -3854,6 +3875,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 _persist_turn_messages(turn_cfg, state["messages"])
             else:
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
     _emit_session_event(state, telemetry, cfg, "session_end")
     mcp_loop.run(_close_session_mcp_host(state))
@@ -3928,7 +3950,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     sections = _printonly_letters(letters)
 
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             session, save_session=False, extras=extras, agent_id=agent,
             ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
             presets=presets,
@@ -4223,7 +4245,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             cfg = None
             provider_arg = args.models_json or None
             if provider_arg is None:
-                cfg = _cfg_from_env_compat(
+                cfg = _from_env(
                     args.session,
                     save_session=False,
                     extras=args.extras,
@@ -4240,7 +4262,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             cfg = None
             provider_arg = args.list_models or None
             if provider_arg is None:
-                cfg = _cfg_from_env_compat(
+                cfg = _from_env(
                     args.session,
                     save_session=False,
                     extras=args.extras,
@@ -4382,7 +4404,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     os.environ["JS_MODE"] = "repl"
     _session_leases.start["mode"] = "repl"
     try:
-        cfg = _cfg_from_env_compat(
+        cfg = _from_env(
             args.session,
             save_session=not args.no_save,
             extras=args.extras,
@@ -4405,6 +4427,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     # put an otherwise fine launch through the login gate for a model it was
     # going to use anyway.
     resumed = last_stamp(cfg.session_file)
+    unreachable_stamp = (_stamp_without_login(resumed, cfg)
+                         if args.model is None and resumed is not None else None)
     if args.model is None and resumed is not None:
         remembered_model = _resume_model_spec(resumed, cfg)
         if remembered_model:
@@ -4435,6 +4459,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    if unreachable_stamp is not None:
+        msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+                 model=_stamp_label(cfg.model, cfg.provider_id))
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
@@ -4461,6 +4488,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     )
 
     messages = M.load_replay_messages(cfg.session_file)
+    cut_off = M.turn_cut_off(messages)
     _restore_workspace(cfg)
     if messages:
         notices.append(msgs.line_for(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message")))
@@ -4510,6 +4538,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         tool_registry=active_registry,
     )
     state["keymap"] = keymap
+    if cut_off:
+        _queue_note(state, _CUT_OFF_NOTICE)
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.ignore_local,

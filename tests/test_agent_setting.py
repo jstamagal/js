@@ -115,7 +115,8 @@ def test_unsafe_agent_in_jsrc_is_rejected(monkeypatch, tmp_path):
 def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, js_agent, argv, expected):
     _home(monkeypatch, tmp_path, js_agent)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.runtime, "run_turn", lambda *a, **k: None)
+    monkeypatch.setattr(cli.runtime, "run_turn",
+                        lambda cfg, system, messages, *a, **k: messages.append({"role": "assistant", "content": "ok"}))
     monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["first run"]))
     assert cli.main(["--blocking", *argv]) == 0
     [first] = _sessions(tmp_path)
@@ -131,7 +132,7 @@ def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, j
     assert cli.main(["--blocking", "--last", *argv]) == 0
 
     assert _sessions(tmp_path) == [first]
-    assert resumed == [(expected, ["first run", "second run"])]
+    assert resumed == [(expected, ["first run", "ok", "second run"])]
 
 
 @pytest.mark.parametrize(("js_agent", "argv", "expected"), LAYERS)

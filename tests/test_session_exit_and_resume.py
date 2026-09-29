@@ -12,7 +12,11 @@ from js.memory import load_messages
 from repl_driver import LineSession, run_blocking
 
 
-def _repl(monkeypatch, tmp_path, argv, lines=()):
+def _reply(cfg, system, messages, *a, **k):
+    messages.append({"role": "assistant", "content": "ok"})
+
+
+def _repl(monkeypatch, tmp_path, argv, lines=(), run_turn=lambda *a, **k: None):
     """Launch `js --blocking *argv` over *lines*; it exits on EOF."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_AGENT", raising=False)
@@ -21,7 +25,7 @@ def _repl(monkeypatch, tmp_path, argv, lines=()):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
-    monkeypatch.setattr(cli.runtime, "run_turn", lambda *a, **k: None)
+    monkeypatch.setattr(cli.runtime, "run_turn", run_turn)
     return cli.main(["--blocking", *argv])
 
 
@@ -99,7 +103,7 @@ def test_an_interrupt_does_not_end_a_session_that_keeps_going(monkeypatch, tmp_p
 
 
 def test_last_resumes_the_previous_session(monkeypatch, tmp_path):
-    _repl(monkeypatch, tmp_path, [], lines=["first run"])
+    _repl(monkeypatch, tmp_path, [], lines=["first run"], run_turn=_reply)
     session_file = _only_session(tmp_path)
     resumed: list = []
 
@@ -111,7 +115,7 @@ def test_last_resumes_the_previous_session(monkeypatch, tmp_path):
     assert cli.main(["--blocking", "--last"]) == 0
 
     assert _only_session(tmp_path) == session_file
-    assert resumed == [["first run", "second run"]]
+    assert resumed == [["first run", "ok", "second run"]]
 
 
 def test_last_reports_when_there_is_nothing_to_resume(monkeypatch, tmp_path):

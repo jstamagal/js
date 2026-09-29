@@ -296,7 +296,7 @@ def test_a_refused_home_move_shows_in_its_entry_severity(tmp_path):
 
 
 def test_offline_compaction_reports_through_the_slot(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_cfg_from_env_compat", lambda *a, **kw: SimpleNamespace(session_file="s.jsonl"))
+    monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: SimpleNamespace(session_file="s.jsonl"))
     monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system="S"))
     monkeypatch.setattr(cli.M, "load_replay_messages", lambda path: [])
     monkeypatch.setattr(cli.compaction, "compact_now_sync",

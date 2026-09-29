@@ -150,6 +150,33 @@ def _compaction_summary_message(summary: str) -> dict:
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
 
+# User messages js writes on its own: reminders and compaction summaries.
+_HARNESS_USER_PREFIXES = ("<js-reminder>", "<compaction-summary>")
+
+
+def turn_cut_off(messages: list[dict]) -> bool:
+    """Whether the last turn in `messages` ended without a finished reply.
+
+    Trailing user messages js wrote on its own are passed over. The turn was
+    cut off when what is left ends on a user or tool message, or on an
+    assistant message that carries tool calls or an `incomplete_reason`."""
+    index = len(messages) - 1
+    while index >= 0:
+        message = messages[index]
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, str) and content.startswith(_HARNESS_USER_PREFIXES):
+            index -= 1
+            continue
+        break
+    if index < 0:
+        return False
+    last = messages[index]
+    role = last.get("role")
+    if role == "assistant":
+        return bool(last.get("tool_calls") or last.get("incomplete_reason"))
+    return role in ("user", "tool")
+
+
 def _parse_compaction_marker(marker: str) -> dict | None:
     if not marker.startswith("compaction:"):
         return None
@@ -168,8 +195,18 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     reasoning, and `model_client.history_to_ai_messages` applies the transport's
     replay policy.
     """
+    messages, skipped_versions = _replay(memory_file)
+    if skipped_versions:
+        msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
+                  records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
+    return messages
+
+
+def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None) -> tuple[list[dict], int]:
+    """The replayed history and the number of records skipped for their version.
+    ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read."""
     if not memory_file.exists():
-        return []
+        return [], 0
     messages: list[dict] = []
     skipped_versions = 0
     with _open_locked(memory_file, "r") as f:
@@ -221,10 +258,10 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
                 continue
             if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
                 messages.append(rec.message)
-    if skipped_versions:
-        msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
-                  records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
-    return _heal_orphaned_tool_calls(messages)
+                stamp = _reply_stamp(rec.message, rec.stamp)
+                if stamps is not None and stamp is not None:
+                    stamps[id(rec.message)] = (rec.message, stamp)
+    return _heal_orphaned_tool_calls(messages), skipped_versions
 
 
 def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
@@ -329,6 +366,71 @@ def _last_mark_payload(memory_file: Path, prefix: str) -> str | None:
         marker = record.get("marker") if isinstance(record, dict) else None
         if isinstance(marker, str) and marker.startswith(prefix):
             return marker[len(prefix):]
+    return None
+
+
+def _reply_stamp(message: object, stamp: object) -> dict | None:
+    """``stamp`` when it is a usable stamp on an assistant message, else None."""
+    if (isinstance(stamp, dict) and isinstance(message, dict) and message.get("role") == "assistant"
+            and isinstance(stamp.get("model"), str) and stamp["model"]):
+        return stamp
+    return None
+
+
+def _rewrites_history(marker: object) -> bool:
+    """Whether a mark can drop messages written before it from the replayed history."""
+    return isinstance(marker, str) and (
+        marker == "session_reset" or marker.startswith("rollback_to:") or marker.startswith("compaction:"))
+
+
+def _lines_newest_first(stream, block: int = 1 << 16):
+    """The lines of a binary ``stream``, last line first, read back from the end in blocks."""
+    stream.seek(0, 2)
+    position = stream.tell()
+    rest = b""
+    while position > 0:
+        step = min(block, position)
+        position -= step
+        stream.seek(position)
+        lines = (stream.read(step) + rest).split(b"\n")
+        rest = lines.pop(0)
+        yield from reversed(lines)
+    if rest:
+        yield rest
+
+
+def last_reply_stamp(memory_file: Path) -> dict | None:
+    """The stamp of the newest assistant message in the replayed history that has one, or None.
+
+    The file is read back from its end. Reaching a mark that rewrites history
+    before a stamped reply sends the lookup through a full replay, so a reply
+    that a rollback, reset or compaction dropped does not count."""
+    try:
+        with _open_locked(memory_file, "rb") as stream:
+            for line in _lines_newest_first(stream):
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(record, dict) or _migrate_record(record) is None:
+                    continue
+                if record["kind"] == "mark":
+                    if _rewrites_history(record.get("marker")):
+                        break
+                    continue
+                stamp = _reply_stamp(record.get("message"), record.get("stamp"))
+                if stamp is not None:
+                    return stamp
+            else:
+                return None
+    except OSError:
+        return None
+    stamps: dict[int, tuple[dict, dict]] = {}
+    messages, _skipped = _replay(memory_file, stamps)
+    for message in reversed(messages):
+        entry = stamps.get(id(message))
+        if entry is not None and entry[0] is message:
+            return entry[1]
     return None
 
 
