@@ -242,7 +242,7 @@ def test_event_hooks_skip_recursive_dispatch():
         nested = hooks.emit("turn_start", nested=True)
         assert nested.dispatch_skipped is True
         assert nested.results == []
-        return events.EventHandlerResult(hook=hook, lines=["ok"])
+        return events.EventHandlerResult(hook=hook, error="ok")
 
     hooks.set_dispatcher(recursive_dispatch)
     hooks.add("turn_start", "set compact.auto off")
@@ -251,7 +251,7 @@ def test_event_hooks_skip_recursive_dispatch():
 
     assert calls == ["turn_start:set compact.auto off"]
     assert emission.dispatch_skipped is False
-    assert emission.results[0].lines == ["ok"]
+    assert emission.results[0].error == "ok"
 
 
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):

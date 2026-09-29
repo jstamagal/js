@@ -45,14 +45,6 @@ class TuiDeps:
     maybe_auto_compact: Callable[[Config, dict], None]
     sync_telemetry_from_live_settings: Callable[[Config, dict, runtime.Telemetry], None]
     sync_sampling_from_live_settings: Callable[[dict], Sampling]
-    sync_model_from_live_settings: Callable[[dict], None]
-    sync_provider_from_live_settings: Callable[[dict, list[str]], None]
-    sync_tool_registry_from_live_settings: Callable[[Config, dict], None]
-    event_results_changed_sampling: Callable[[list[events.EventHandlerResult]], bool]
-    event_results_changed_model: Callable[[list[events.EventHandlerResult]], bool]
-    event_result_changed_keys: Callable[[list[events.EventHandlerResult]], list[str]]
-    changed_provider_key: Callable[[list[str]], bool]
-    changed_lock_subagent_model_key: Callable[[list[str]], bool]
 
 
 class TuiEventHooks(events.EventHooks):
@@ -164,6 +156,10 @@ class JsTuiApp(App[int]):
         self.sup = supervisor.Supervisor(loop)
         supervisor.set_current(self.sup)
         hookset = TuiEventHooks(self)
+        rc_hooks = self.state.get("events")
+        if isinstance(rc_hooks, events.EventHooks):
+            for hook in (h for hooks in rc_hooks.all().values() for h in hooks):
+                hookset.add(("^" if hook.suppress else "") + hook.event, hook.handler)
         hookset.set_dispatcher(self.deps.event_dispatcher(self.state, self.cfg))
         self.state["events"] = hookset
         self.consumer = asyncio.create_task(self._turn_consumer(loop))
@@ -241,8 +237,7 @@ class JsTuiApp(App[int]):
     async def _start_turn(self, line: str, loop: asyncio.AbstractEventLoop) -> None:
         assert self.sup is not None
         prompt_text, line_attachments = attach.split_repl_attachments(line)
-        input_event = self._emit_repl_event("input", text=prompt_text, attachments=line_attachments)
-        self._sync_from_event(input_event)
+        self._emit_repl_event("input", text=prompt_text, attachments=line_attachments)
         self.deps.sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
         try:
             turn_cfg = self.deps.cfg_for_live_state(self.cfg, self.state)
@@ -292,8 +287,7 @@ class JsTuiApp(App[int]):
                 self._render_latest_assistant(before_len)
             self._turn_count += 1
         except asyncio.CancelledError:
-            cancel_event = self._emit_repl_event("cancel", reason="cancelled")
-            self._sync_from_event(cancel_event)
+            self._emit_repl_event("cancel", reason="cancelled")
             self.deps.sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
             if len(self.state["messages"]) > before_len + 1:
                 self._write_transcript("[orange1](turn interrupted — partial work kept)[/]")
@@ -319,17 +313,6 @@ class JsTuiApp(App[int]):
         from .cli import _sampling_for_turn
 
         return _sampling_for_turn(turn_cfg, self.prompt_spec, sampling_cli)
-
-    def _sync_from_event(self, emission: events.EventEmission) -> None:
-        if self.deps.event_results_changed_sampling(emission.results):
-            self.state["sampling_cli"] = self.deps.sync_sampling_from_live_settings(self.state["settings"])
-        if self.deps.event_results_changed_model(emission.results):
-            self.deps.sync_model_from_live_settings(self.state)
-        changed = self.deps.event_result_changed_keys(emission.results)
-        if self.deps.changed_provider_key(changed):
-            self.deps.sync_provider_from_live_settings(self.state, changed)
-        if self.deps.changed_lock_subagent_model_key(changed):
-            self.deps.sync_tool_registry_from_live_settings(self.cfg, self.state)
 
     def _emit_repl_event(self, event: str, **payload: Any) -> events.EventEmission:
         hookset = self.state.get("events")

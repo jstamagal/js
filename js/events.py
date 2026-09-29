@@ -39,10 +39,7 @@ class EventHook:
 @dataclass(frozen=True)
 class EventHandlerResult:
     hook: EventHook
-    lines: list[str] = field(default_factory=list)
     error: str | None = None
-    changed: bool = False
-    changed_keys: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

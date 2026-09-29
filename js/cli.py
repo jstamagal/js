@@ -1030,18 +1030,6 @@ def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
     return "subagents.lock_model" in keys
 
 
-def _event_result_changed_keys(results: list[events.EventHandlerResult]) -> list[str]:
-    return [key for result in results for key in result.changed_keys]
-
-
-def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_sampling_key(result.changed_keys) for result in results)
-
-
-def _event_results_changed_model(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_model_key(result.changed_keys) for result in results)
-
-
 def _emit_repl_event(
     state: dict,
     telemetry: runtime.Telemetry,
@@ -1803,9 +1791,12 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
     return error
 
 
+QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
+
+
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
-    if line in {"exit", "quit", ":q"}:
+    if line in QUIT_WORDS:
         state["running"] = False
         return True
     if not line.startswith("/"):
@@ -2657,16 +2648,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         _persist_turn_messages(cfg, state["messages"])
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
-        cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
-        if _event_results_changed_sampling(cancel_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(cancel_event.results):
-            _sync_model_from_live_settings(state)
-        cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-        if _changed_provider_key(cancel_changed_keys):
-            _sync_provider_from_live_settings(state, cancel_changed_keys)
-        if _changed_lock_subagent_model_key(cancel_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
+        _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
@@ -2703,18 +2685,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -
         line = await queue.get()
         try:
             prompt_text, line_attachments = attach.split_repl_attachments(line)
-            input_event = _emit_repl_event(
+            _emit_repl_event(
                 state, telemetry, "input", text=prompt_text, attachments=line_attachments
             )
-            if _event_results_changed_sampling(input_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(input_event.results):
-                _sync_model_from_live_settings(state)
-            input_changed_keys = _event_result_changed_keys(input_event.results)
-            if _changed_provider_key(input_changed_keys):
-                _sync_provider_from_live_settings(state, input_changed_keys)
-            if _changed_lock_subagent_model_key(input_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             try:
                 turn_cfg = _cfg_for_live_state(cfg, state)
@@ -3401,6 +3374,7 @@ def main(argv: list[str] | None = None) -> int:
         setting_keys=[spec.key for spec in settings.REGISTRY],
         names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
         spell=replcomplete.hunspell_suggest,
+        bare_words=QUIT_WORDS,
     )
     session = PromptSession(
         history=FileHistory(str(cfg.history_file)),
@@ -3506,14 +3480,6 @@ def main(argv: list[str] | None = None) -> int:
             maybe_auto_compact=_maybe_auto_compact,
             sync_telemetry_from_live_settings=_sync_telemetry_from_live_settings,
             sync_sampling_from_live_settings=_sampling_override_from_live_settings,
-            sync_model_from_live_settings=_sync_model_from_live_settings,
-            sync_provider_from_live_settings=_sync_provider_from_live_settings,
-            sync_tool_registry_from_live_settings=_sync_tool_registry_from_live_settings,
-            event_results_changed_sampling=_event_results_changed_sampling,
-            event_results_changed_model=_event_results_changed_model,
-            event_result_changed_keys=_event_result_changed_keys,
-            changed_provider_key=_changed_provider_key,
-            changed_lock_subagent_model_key=_changed_lock_subagent_model_key,
         )
         return tui.run_tui_repl(cfg, state, telemetry, prompt_spec, deps)
 
@@ -3556,22 +3522,13 @@ def main(argv: list[str] | None = None) -> int:
             sink.write_user(line)
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
-        input_event = _emit_repl_event(
+        _emit_repl_event(
             state,
             telemetry,
             "input",
             text=prompt_text,
             attachments=line_attachments,
         )
-        if _event_results_changed_sampling(input_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(input_event.results):
-            _sync_model_from_live_settings(state)
-        input_changed_keys = _event_result_changed_keys(input_event.results)
-        if _changed_provider_key(input_changed_keys):
-            _sync_provider_from_live_settings(state, input_changed_keys)
-        if _changed_lock_subagent_model_key(input_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
             turn_cfg = _cfg_for_live_state(cfg, state)
@@ -3636,16 +3593,7 @@ def main(argv: list[str] | None = None) -> int:
             _persist_turn_messages(cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
-            cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
-            if _event_results_changed_sampling(cancel_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(cancel_event.results):
-                _sync_model_from_live_settings(state)
-            cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-            if _changed_provider_key(cancel_changed_keys):
-                _sync_provider_from_live_settings(state, cancel_changed_keys)
-            if _changed_lock_subagent_model_key(cancel_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
+            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             if _turn_has_progress(state["messages"], user_bundle.runtime_message):
                 # Turn did real work (assistant/tool messages beyond the user

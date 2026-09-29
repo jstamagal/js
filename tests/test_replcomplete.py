@@ -24,6 +24,15 @@ def test_every_table_command_completes():
     assert command_candidates("/", _table()) == sorted("/" + verb for verb in cli.COMMANDS)
 
 
+def test_bare_quit_words_complete():
+    completer = JsCompleter(commands=_table, bare_words=cli.QUIT_WORDS)
+
+    assert completer.candidates("ex")[0] == ["exit"]
+    assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
+    for word in cli.QUIT_WORDS:
+        assert word in completer.candidates(word)[0]
+
+
 def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
     command = cli.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
     monkeypatch.setitem(cli.COMMANDS, "frobnicate", command)
