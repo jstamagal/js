@@ -149,10 +149,10 @@ pi retries once. Codex does not recover inside a normal turn.
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | resume path |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | `skills.py` frontmatter |
-| Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | beside `alias` |
-| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | `screen.py` |
+| Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | done in js-1g1.23: `prompt_commands.py`, `~/.js/commands/NAME.md` |
+| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
 | Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |
-| Hooks that return context or block | Claude Code `utils/hooks.ts:418` | `events.py` |
+| Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
 | Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | `kernel.py` |
 
 ## Entirely lacking
