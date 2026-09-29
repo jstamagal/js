@@ -185,6 +185,20 @@ def test_path_directories_under_host_tmp_run(jailed, monkeypatch):
 
 
 @needs_bwrap
+def test_tmp_on_path_keeps_the_private_tmp(jailed, monkeypatch):
+    marker = Path(tempfile.mkstemp(dir="/tmp")[1])
+    try:
+        monkeypatch.setenv("PATH", f"/tmp{os.pathsep}{os.environ['PATH']}")
+
+        _, result = run_shell(f"cat {marker}; echo x > /tmp/private && echo WROTE", jailed)
+    finally:
+        marker.unlink()
+
+    assert "No such file" in result
+    assert "WROTE" in result
+
+
+@needs_bwrap
 def test_network_stays_on(jailed, tmp_path):
     client = shutil.which("curl")
     python = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else None
