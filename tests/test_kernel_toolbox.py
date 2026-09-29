@@ -609,6 +609,31 @@ def test_a_cell_abandoned_by_a_cancelled_turn_leaves_the_kernel_idle(ctx):
 
 
 @needs_kernel
+def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx):
+    """The cancel path can signal a cell that is sent but not yet executing.
+
+    The first cell ignores SIGINT while it runs, so the signal lands before the
+    kernel starts the second cell, the one the interrupt was meant for.
+    """
+    kmod.kernel(code="x = 1", context=ctx)
+    session = ctx.kernel_session
+    session.submit("import signal, time\n"
+                   "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+                   "time.sleep(1)")
+    target = session.submit("import time\ntime.sleep(30)")
+
+    assert kmod.interrupt_inflight(ctx) is True
+
+    started = time.monotonic()
+    kmod.collect_until(session, target, started + 20)
+    assert target.finished
+    assert time.monotonic() - started < 15
+    assert any(m["header"]["msg_type"] == "error"
+               and m["content"].get("ename") == "KeyboardInterrupt"
+               for m in target.messages)
+
+
+@needs_kernel
 def test_a_kernel_that_dies_mid_cell_is_reported_not_waited_on(ctx):
     kmod.kernel(code="x = 1", context=ctx)
 
