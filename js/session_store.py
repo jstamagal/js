@@ -163,6 +163,23 @@ def find(session: str, relative: Path, current: Path) -> Path | None:
     return _one(session, [path for folder in others for path in _tails(folder, tail)])
 
 
+def branch_parent(metadata: Any) -> tuple[str, Any] | None:
+    """The parent session file and branch point a start record names, or None
+    when the record is not a branch's start.
+
+    The point is the `message` of the record's `branched_from`: the id of the
+    message record `js.session_catalog.branch_session` split at."""
+    branch = metadata.get("branched_from") if isinstance(metadata, dict) else None
+    if not isinstance(branch, dict) or not isinstance(branch.get("session"), str):
+        return None
+    return branch["session"], branch.get("message")
+
+
+def point_label(number: int) -> str:
+    """A message number as the transcript and the picker show it: `#0031`."""
+    return f"#{number:04d}"
+
+
 def display_name(session_file: Path, root: Path | None = None) -> str:
     """The name `--session` takes for this file: its path under its folder, no suffix."""
     try:
