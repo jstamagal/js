@@ -288,9 +288,34 @@ calls", a rule that exists nowhere in js. The only one-shot rule js sends is
   `20260929T101208214271Z-acc53bcfc3ea7213`). Compare the screen against the
   session file, find the live-block redraw fault in `js/display.py`.
 
+## 6. `-C DIR` keeps the agent in DIR
+
+Today `-C` only `chdir`s. On 2026-09-10 an audit turn "confined" with `-C
+/tmp` read `~/.zshrc` and sent four live API keys to a remote endpoint
+(commit `59bc8cb`); the fix only jailed the bench scripts. The goal here is
+not hostile-model security (that is `~/src/llmbench`'s job) but keeping the
+agent's context clean: no `find /` or `rg ~` sweeps through the operator's
+home.
+
+- Every command tool (shell, kernel, terminal, toolbox) runs under
+  bubblewrap. DIR is bound read-write at its real path and is the working
+  directory.
+- The operator's home is a tmpfs. Bound back read-only: every `$PATH`
+  directory under home, so toolchains work. The setting `jail.bind` adds
+  paths (`~/.cache/uv:rw`, …).
+- `/usr`, `/etc` and the rest of the system: read-only. `/tmp` and
+  `~/.js/tmp`: private to the jail.
+- The network stays on. Provider keys are not in the tool environment.
+- read / write / patch / remove / fs_search resolve paths and refuse anything
+  outside DIR (and the bound paths) with one line.
+- Subagents inherit the jail. No bwrap on the box: js refuses `-C` with one
+  line; there is no unjailed fallback.
+
 ## Open
 
 - Probes that failed with no reply (a 402, a DNS error): shown with the
   error and model (`✗ 402 deepseek-v4-flash`), or hidden with the empty
   sessions?
+- `-C` as the jail with `cd DIR && js` for the plain case, or `-C` kept as
+  `chdir` and a new `--jail DIR`?
 - Tags as a fourth `v` view (`[nfs / mounts]`, …) or only a column and filter?
