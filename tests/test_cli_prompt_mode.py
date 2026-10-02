@@ -98,7 +98,7 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert actual.sessions_dir == expected_sessions_dir
     latest = json.loads((expected_state_dir / "latest.json").read_text(encoding="utf-8"))
     assert latest["session_file"] == str(actual.session_file)
-    # No jsrc means no file: only /save writes one.
+    # Reading config writes nothing; the CLI entry point writes the first jsrc.
     assert not (tmp_path / ".js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -157,8 +157,9 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     actual = cli.main(["--agent", "../../etc", "-p", "ignored"])
 
     assert actual == 2
-    # Every start lays out ~/.js; a refused id adds nothing to it or beside it.
-    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(_paths.layout_dirs())
+    # Every start lays out ~/.js and its jsrc; a refused id adds nothing to it or beside it.
+    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(
+        [*_paths.layout_dirs(), _paths.global_config_file()])
     assert not (tmp_path / "etc").exists()
 
 

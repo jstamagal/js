@@ -1008,16 +1008,17 @@ def _config_line_value(spec: SettingSpec, value: Any) -> str:
     return str(value)
 
 
-def settings_diff_lines(settings: dict) -> list[str]:
-    """`set <key> <value>` lines for every knob whose current value differs
-    from its `js/jsrc` value, in REGISTRY order. A knob the store does not hold
-    runs on its js/jsrc value and gets no line. Secrets are written verbatim."""
+def settings_lines(settings: dict) -> list[str]:
+    """One line per registered setting, in REGISTRY order: `set <key> <value>`
+    for its value in ``settings``, `set -<key>` when it holds none. Secrets are
+    written verbatim."""
     lines: list[str] = []
     for spec in REGISTRY:
         value = get_dotted(settings, spec.path)
-        if value is None or value == "" or value == spec.default:
-            continue
-        lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
+        if value is None or value == "":
+            lines.append(f"set -{spec.key}")
+        else:
+            lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
     return lines
 
 
@@ -1029,13 +1030,13 @@ def save_settings_to_jsrc(
     stamp: str | None = None,
     source: str = "/save",
 ) -> tuple[int, Path | None]:
-    """Write the non-default settings in ``settings`` to ``path`` as a jsrc
-    script, followed by ``extra_lines`` (other commands to replay, e.g. `on`
-    and `alias` lines).
+    """Replace ``path`` with a jsrc script holding every registered setting's
+    value in ``settings``, followed by ``extra_lines`` (other commands to
+    replay, e.g. `on` and `alias` lines).
 
     An existing file is copied to ``<name>.bak`` beside itself first. Returns
     ``(line_count, backup_path_or_None)``."""
-    lines = [*settings_diff_lines(settings), *(extra_lines or [])]
+    lines = [*settings_lines(settings), *(extra_lines or [])]
     backup: Path | None = None
     if path.exists():
         backup = path.with_name(path.name + ".bak")
@@ -1046,10 +1047,19 @@ def save_settings_to_jsrc(
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = [
         f"# js config — written by {source} on {stamp}.",
-        "# Each non-comment line is a command; `set` lines list only settings that",
-        "# differ from js/jsrc, the built-in defaults.",
+        "# Each non-comment line is a command: one `set` line per setting, then",
+        "# handlers and aliases. `set -<key>` leaves a setting unset.",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join([*header, *lines]) + "\n", encoding="utf-8")
     return len(lines), backup
+
+
+def ensure_user_jsrc(path: Path) -> bool:
+    """Write ``path`` with every setting at its `js/jsrc` value when there is no
+    file there. Returns whether it wrote one."""
+    if path.exists():
+        return False
+    save_settings_to_jsrc(path, seed_defaults(), source="js on first run")
+    return True

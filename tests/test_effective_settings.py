@@ -209,7 +209,7 @@ def test_save_round_trip_reproduces_effective_values(tmp_path):
     count, backup = settings.save_settings_to_jsrc(path, store, stamp="2026-07-07 12:00")
 
     assert backup is None  # no prior file to back up
-    assert count == 5
+    assert count == len(settings.REGISTRY)
 
     reloaded = settings.collect_settings(config_paths=[path], env={})
     for key in (
@@ -234,13 +234,13 @@ def test_save_backs_up_existing_file(tmp_path):
     assert backup.read_text(encoding="utf-8") == "# prior config\nset model.id old\n"
 
 
-def test_save_omits_defaults_but_writes_secret(tmp_path):
+def test_save_writes_every_setting_and_the_secret(tmp_path):
     path = tmp_path / "jsrc"
     settings.save_settings_to_jsrc(path, _effective_store(), stamp="x")
     text = path.read_text(encoding="utf-8")
 
-    # a knob left at its built-in default is never written
-    assert "runtime.trace" not in text
-    assert "limits.max_tool_iterations" not in text
+    # a setting on its built-in value is written too
+    assert "set runtime.trace on" in text
+    assert f"set limits.max_tool_iterations {settings.default_value('limits.max_tool_iterations')}" in text
     # provider.api_key IS persisted verbatim (his box; the jsrc key line is plain)
     assert "set provider.api_key sk-secret" in text

@@ -143,7 +143,7 @@ def test_from_env_uses_the_js_home_and_writes_no_global_jsrc(monkeypatch, tmp_pa
     assert cfg.provider_id == "deepseek"
     assert cfg.provider_api_key == "sk-test"
     assert cfg.sessions_dir == data_home / "sessions" / session_store.slug(Path.cwd())
-    # No jsrc means no file: only /save writes one.
+    # Reading config writes nothing; the CLI entry point writes the first jsrc.
     assert not (config_home / "jsrc").exists()
     assert not (tmp_path / "config").exists()
     assert not (tmp_path / "data").exists()

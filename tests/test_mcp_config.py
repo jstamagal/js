@@ -127,7 +127,7 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     saved = path.read_text(encoding="utf-8")
     reloaded = settings.collect_settings(config_paths=[path], env={})
 
-    assert count == 1
+    assert count == len(settings.REGISTRY)
     assert backup is None
     assert ENV_SECRET in saved and HEADER_SECRET in saved
     assert reloaded["mcp"]["servers"] == _servers()

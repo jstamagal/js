@@ -138,6 +138,21 @@ def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path)
     assert f"{path}:2" in str(raised.value)
 
 
+def test_first_run_writes_a_user_jsrc_with_every_setting_and_leaves_an_existing_one(monkeypatch, tmp_path):
+    project = _isolated_home(monkeypatch, tmp_path)
+    monkeypatch.chdir(project)
+    user = tmp_path / "home" / ".js" / "jsrc"
+
+    assert cli.main(["--list"]) == 0
+    written = user.read_text(encoding="utf-8")
+    assert sorted(key.lstrip("-") for key in _set_lines(written)) == sorted(spec.key for spec in settings.REGISTRY)
+    assert settings.collect_settings(config_paths=[user], env={}) == settings.seed_defaults()
+
+    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    assert cli.main(["--list"]) == 0
+    assert user.read_text(encoding="utf-8") == "set limits.max_read_lines 33\n"
+
+
 def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
     lines = [
         line for line in settings.PACKAGE_JSRC.read_text(encoding="utf-8").splitlines()
@@ -207,18 +222,21 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     assert reloaded.max_read_lines == 33
 
 
-def test_save_writes_no_line_for_a_knob_on_its_package_value(tmp_path):
+def test_save_writes_one_line_per_setting_and_reloads_to_the_same_values(tmp_path):
     live = settings.seed_defaults()
     setcmd.set_command(live, "-limits.max_read_lines")
     setcmd.set_command(live, "limits.fetch_timeout_s 77")
     target = tmp_path / "jsrc"
 
-    settings.save_settings_to_jsrc(target, live, stamp="t")
+    count, _backup = settings.save_settings_to_jsrc(target, live, stamp="t")
     reloaded = settings.collect_settings(config_paths=[target], env={})
+    expected = settings.seed_defaults()
+    expected["limits"]["fetch_timeout_s"] = 77
 
-    assert reloaded["limits"]["max_read_lines"] == settings.default_value("limits.max_read_lines")
-    assert reloaded["limits"]["fetch_timeout_s"] == 77
-    assert settings.settings_diff_lines(settings.seed_defaults()) == []
+    assert count == len(settings.REGISTRY)
+    assert sorted(key.lstrip("-") for key in _set_lines(target.read_text(encoding="utf-8"))) == sorted(
+        spec.key for spec in settings.REGISTRY)
+    assert reloaded == expected
 
 
 def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):

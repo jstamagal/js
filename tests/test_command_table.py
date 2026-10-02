@@ -46,16 +46,21 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     assert state["aliases"] == {"ca": "compact-auto $*"}
 
 
-def test_save_writes_only_non_default_settings(monkeypatch, tmp_path):
+def test_save_replaces_the_jsrc_with_every_current_setting(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    jsrc = paths.global_config_file()
+    jsrc.parent.mkdir(parents=True, exist_ok=True)
+    jsrc.write_text("# old\nset limits.max_read_lines 33\n", encoding="utf-8")
     cfg, state, _errors = _launch(tmp_path)
     _run(["/set compact.auto off", "/save"], state, cfg)
 
-    saved = paths.global_config_file().read_text(encoding="utf-8")
-    reloaded = settings.collect_settings(config_paths=[paths.global_config_file()], env={})
+    saved = jsrc.read_text(encoding="utf-8")
+    reloaded = settings.collect_settings(config_paths=[jsrc], env={})
 
+    assert "# old" not in saved
     assert settings.get_dotted(reloaded, ("compact", "auto")) is False
-    assert "limits.max_tool_iterations" not in saved
+    assert settings.get_dotted(reloaded, ("limits", "max_read_lines")) == 33
+    assert f"set limits.max_tool_iterations {settings.default_value('limits.max_tool_iterations')}" in saved
 
 
 def test_jsrc_model_and_provider_lines_take_effect(monkeypatch, tmp_path):

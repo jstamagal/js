@@ -3978,10 +3978,11 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
     # Before anything reads or writes ~/.js: move the old locations in, once,
-    # then make sure every directory of the layout is there.
+    # then make sure every directory of the layout and the user jsrc are there.
     _home.migrate_once()
     with contextlib.suppress(OSError):
         _paths.ensure_home()
+        settings.ensure_user_jsrc(_paths.global_config_file())
     _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
