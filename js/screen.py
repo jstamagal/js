@@ -23,9 +23,10 @@ from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mod
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
-from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.menus import MultiColumnCompletionsMenu
 from prompt_toolkit.layout.processors import HighlightIncrementalSearchProcessor
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import ColorDepth
@@ -591,11 +592,13 @@ def build_app(
             event.app.invalidate()
 
     def _tab(event) -> None:
+        # The first Tab fills in what every match shares and lists them all;
+        # each Tab after that selects the next one.
         b = input_buffer
         if b.complete_state:
             b.complete_next()
         else:
-            b.start_completion(select_first=False)
+            b.start_completion(insert_common_part=True)
 
     def _page() -> int:
         return max(1, get_app().output.get_size().rows - 3)
@@ -633,23 +636,27 @@ def build_app(
         return _status_style_sheet(colours)
 
     layout = Layout(
-        HSplit([
-            Window(BufferControl(buffer=scrollback.buffer, lexer=_AnsiLexer(), focusable=False),
-                   wrap_lines=True),
-            Window(FormattedTextControl(_status_text), height=1, style="class:status"),
-            Window(BufferControl(buffer=input_buffer,
-                                 input_processors=[HighlightIncrementalSearchProcessor()],
-                                 search_buffer_control=search_toolbar.control,
-                                 lexer=None),
-                   height=Dimension(min=1, max=10), dont_extend_height=True,
-                   get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(prompt if lineno == 0 and not wrap
-                                                                               else " " * len(_plain(prompt))))),
-            ConditionalContainer(
-                Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
-                filter=has_focus(ex_buffer),
-            ),
-            search_toolbar,
-        ]),
+        FloatContainer(
+            HSplit([
+                Window(BufferControl(buffer=scrollback.buffer, lexer=_AnsiLexer(), focusable=False),
+                       wrap_lines=True),
+                Window(FormattedTextControl(_status_text), height=1, style="class:status"),
+                Window(BufferControl(buffer=input_buffer,
+                                     input_processors=[HighlightIncrementalSearchProcessor()],
+                                     search_buffer_control=search_toolbar.control,
+                                     lexer=None),
+                       height=Dimension(min=1, max=10), dont_extend_height=True,
+                       get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(prompt if lineno == 0 and not wrap
+                                                                                   else " " * len(_plain(prompt))))),
+                ConditionalContainer(
+                    Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
+                    filter=has_focus(ex_buffer),
+                ),
+                search_toolbar,
+            ]),
+            floats=[Float(xcursor=True, ycursor=True, transparent=True,
+                          content=MultiColumnCompletionsMenu())],
+        ),
         focused_element=input_buffer,
     )
     def _editing_mode() -> EditingMode:
