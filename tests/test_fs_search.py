@@ -224,6 +224,45 @@ def test_fs_search_regex_error_keeps_the_diagnostic_detail(tmp_path):
     assert "unclosed character class" in actual
 
 
+@pytest.fixture
+def unreadable_dir(tmp_path):
+    """A tree with a tagged file and a subdirectory nobody can open."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads any directory")
+    (tmp_path / "open").mkdir()
+    (tmp_path / "open" / "tag.txt").write_text("tag here\n", encoding="utf-8")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "tag.txt").write_text("tag here\n", encoding="utf-8")
+    locked.chmod(0)
+    yield locked
+    locked.chmod(0o755)
+
+
+@requires_rg
+@pytest.mark.parametrize("mode", ["files", "files_with_matches", "content", "count"])
+def test_fs_search_keeps_its_hits_and_names_an_unreadable_directory(tmp_path, unreadable_dir, mode):
+    context = ToolContext(cwd=tmp_path)
+    pattern = "*tag*" if mode == "files" else "tag"
+
+    actual = fs_search(pattern, path=".", output_mode=mode, context=context)
+
+    assert not actual.startswith("ERROR:")
+    assert str(tmp_path / "open" / "tag.txt") in actual
+    assert str(unreadable_dir) in actual
+
+
+@requires_rg
+def test_fs_search_with_only_an_unreadable_directory_is_no_matches_not_an_error(tmp_path, unreadable_dir):
+    context = ToolContext(cwd=tmp_path)
+
+    actual = fs_search("zzz_absent_zzz", path=".", context=context)
+
+    assert not actual.startswith("ERROR:")
+    assert "(no matches)" in actual
+    assert str(unreadable_dir) in actual
+
+
 @requires_rg
 def test_fs_search_head_limit_and_offset_slice_results(tmp_path):
     context = ToolContext(cwd=tmp_path)

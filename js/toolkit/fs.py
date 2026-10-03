@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -1232,6 +1233,11 @@ def _iter_files(root: Path) -> Iterable[Path]:
 
 _RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it."
 _RG_TIMEOUT_S = 120
+# ripgrep's line for a path its walk could not open or read, e.g.
+# "rg: /a/b: IO error for operation on /a/b: Permission denied (os error 13)".
+# rg exits 2 after one of these but still prints every match it reached.
+_RG_WALK_ERROR = re.compile(r"^rg: (?P<path>.+?): (?:.*: )?(?P<reason>[^:]+?) \(os error \d+\)$")
+_RG_WALK_ERRORS_SHOWN = 5
 _AST_GREP_MISSING = (
     "ERROR: ast-grep not found in tools/bin or PATH; run `just install` to provision it."
 )
@@ -1378,6 +1384,16 @@ def _rg_stream(
     return lines, rc, stderr, timed_out
 
 
+def _rg_walk_errors(stderr: str) -> list[str] | None:
+    """The paths rg's walk could not read, each as "path: reason", or None
+    when stderr is empty or says anything else (a bad regex or glob)."""
+    lines = [line for line in stderr.splitlines() if line.strip()]
+    found = [_RG_WALK_ERROR.match(line) for line in lines]
+    if not found or not all(found):
+        return None
+    return [f"{match['path']}: {match['reason']}" for match in found]
+
+
 # Excludes every dot-prefixed basename, and prunes dot-prefixed directories with
 # it, restoring ripgrep's default hidden behaviour after a whitelist glob has
 # overridden it.
@@ -1492,7 +1508,7 @@ def fs_search(
     # some entries are never returned.
     # `--one-file-system` keeps the walk on the filesystem the root is on: a
     # mount point under the root (an NFS share, an automount) is not entered.
-    argv = [rg, "--color=never", "--no-messages", "--sort", "path", "--one-file-system"]
+    argv = [rg, "--color=never", "--sort", "path", "--one-file-system"]
     if mode == "files":
         argv.append("--files")
     elif mode == "files_with_matches":
@@ -1559,8 +1575,10 @@ def fs_search(
     if timed_out:
         return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
     # rc None = rg stopped early with a full page of matches; 0 = matches; 1 = no
-    # matches (clean empty result); anything else = real rg error (bad regex/glob).
-    if rc is not None and rc not in (0, 1):
+    # matches (clean empty result); 2 with only walk errors on stderr = the
+    # matches rg could reach; anything else = real rg error (bad regex/glob).
+    unread = _rg_walk_errors(stderr or "")
+    if rc is not None and rc not in (0, 1) and unread is None:
         detail = (stderr or "").strip()
         if len(detail) > 2000:
             detail = detail[:2000] + " …[diagnostic truncated]"
@@ -1571,6 +1589,10 @@ def fs_search(
     out = "\n".join(sliced) if sliced else "(no matches)"
     if truncated:
         out += f"\n[more matches than head_limit={limit}; continue with offset={skip + limit}]"
+    if unread:
+        more = len(unread) - _RG_WALK_ERRORS_SHOWN
+        named = "; ".join(unread[:_RG_WALK_ERRORS_SHOWN]) + (f"; and {more} more" if more > 0 else "")
+        out += f"\n[not searched, rg could not read {len(unread)} path(s): {named}]"
     if memoized:
         context.search_cache[cache_key] = out
     return out
