@@ -1842,8 +1842,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         # already emitted turn_end; only cancellation (CancelledError /
         # KeyboardInterrupt — BaseException, not Exception) reaches here
         # unbalanced, so pair turn_start with a turn_end before propagating.
+        # Either way the answer streamed so far is finished where it stands:
+        # left open, the next reply would take over its place on the screen.
+        sink.close()
         if not isinstance(_turn_exc, Exception):
-            sink.close()
             sink.commit_partial(messages)
             events.end("cancelled")
         else:

@@ -146,6 +146,21 @@ def _answer(text: str, *, keepalive: int = 0, interval: float = 0.0):
     return step
 
 
+def _dropped(text: str):
+    """Streams one chunk carrying `text`, then closes the connection inside
+    the next chunk."""
+    async def step(reader, writer):
+        first = {"id": "r", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
+                              "finish_reason": None}]}
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+        writer.write(_chunk(b"data: " + json.dumps(first).encode() + b"\n\n"))
+        writer.write(b"400\r\ndata: {")
+        await writer.drain()
+        return False
+    return step
+
+
 def _silent(*, after_headers: bool):
     async def step(reader, writer):
         if after_headers:
@@ -273,6 +288,72 @@ def test_building_the_sdk_client_does_not_count_as_silence(tmp_path, monkeypatch
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "first try"}
     assert len(server.arrivals) == 1
+
+
+def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
+    server, messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("recovered")])
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
+
+
+def test_a_connection_that_keeps_dropping_gives_up_after_the_budget(tmp_path):
+    server, _messages, error = _served_turn(tmp_path, [_dropped("Green")], {"retry_attempts": 2})
+
+    assert isinstance(error, ai.ProviderConnectionError)
+    assert error.is_retryable
+    assert len(server.arrivals) == 3
+
+
+class _ScrollbackLive:
+    """display.LiveSurface straight onto a Scrollback, without an app."""
+
+    def __init__(self, scrollback):
+        self.scrollback = scrollback
+
+    def width(self):
+        return 80
+
+    def update(self, rendered):
+        self.scrollback.answer_update(rendered)
+
+    def commit(self, rendered):
+        self.scrollback.answer_commit(rendered)
+
+
+def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeypatch):
+    from js import display, screen
+
+    def stream(**kwargs):
+        if not replies:
+            kwargs["on_text"]("Green")
+            replies.append("failed")
+            raise RuntimeError("the stream broke")
+        kwargs["on_text"]("Next")
+        return _done("Next")
+
+    replies: list[str] = []
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    scrollback = screen.Scrollback()
+    telemetry = runtime.Telemetry(None)
+    telemetry.display_factory = lambda _markdown: display.Display(
+        scrollback.append, live=_ScrollbackLive(scrollback), flush=scrollback.flush)
+    cfg = _config(tmp_path)
+
+    def turn(messages):
+        return asyncio.run(runtime.run_turn_async(
+            cfg, "system", messages, telemetry, tool_registry=build_default_registry().select([]),
+            tool_context=ToolContext(cwd=tmp_path), suppress_output=False))
+
+    with pytest.raises(RuntimeError):
+        turn([{"role": "user", "content": "first"}])
+    turn([{"role": "user", "content": "second"}])
+    scrollback.flush()
+
+    text = scrollback.buffer.text
+    assert "Green" in text and "Next" in text
+    assert text.index("Green") < text.index("Next")
 
 
 def test_a_stream_that_stays_silent_gives_up_after_the_budget(tmp_path):
@@ -648,6 +729,13 @@ def _served_summary(tmp_path, script, runtime_settings=None):
 
 def test_a_compaction_summary_survives_a_429(tmp_path):
     server, summary = _served_summary(tmp_path, [_status(429, {"retry-after": "0"}), _answer("the summary")])
+
+    assert summary == "the summary"
+    assert len(server.arrivals) == 2
+
+
+def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
+    server, summary = _served_summary(tmp_path, [_dropped("the sum"), _answer("the summary")])
 
     assert summary == "the summary"
     assert len(server.arrivals) == 2

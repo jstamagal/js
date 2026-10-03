@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 
 import ai
+import httpx2
 
 from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, retry, routing, stream_transport, tool_args
 from .sampling import Sampling
@@ -131,6 +132,17 @@ def _friendly_provider_error(
     # SDK type, retryability and structured overflow fields. The SDK diagnostic
     # is also more useful here than suggesting login for an oversized request.
     return None
+
+
+def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.ProviderConnectionError | None:
+    """The retryable SDK error for a connection lost or timed out while the
+    stream was being read, else None. The provider SDKs wrap transport errors
+    raised while sending the request; one raised mid-stream (a peer closing
+    inside a chunk) reaches js as the raw httpx2 error."""
+    if not isinstance(exc, httpx2.TransportError):
+        return None
+    kind = ai.ProviderTimeoutError if isinstance(exc, httpx2.TimeoutException) else ai.ProviderConnectionError
+    return kind(f"{type(exc).__name__}: {exc}", provider=_provider_label(provider_id, exc), is_retryable=True)
 
 
 # Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
@@ -1285,6 +1297,9 @@ async def stream_model_async(
         friendly = _friendly_provider_error(exc, provider_id=provider_id)
         if friendly is not None:
             raise friendly from exc
+        dropped = _transport_error(exc, provider_id=provider_id)
+        if dropped is not None:
+            raise dropped from exc
         raise
     finally:
         _idle_seconds.reset(idle_token)
@@ -1358,10 +1373,6 @@ def run_owning_loop(coro: Any) -> Any:
     upstream, so this narrows what the loop reports rather than pretending to
     fix it — only during OUR shutdown of OUR loop, and only for errors the close
     protocol itself raised.
-
-    This matters beyond the cosmetics: `openai==2.44.0` is pinned in
-    pyproject.toml specifically because openai 3 brings httpx2/httpcore2 and
-    that traceback with it.
     """
     runner = asyncio.Runner()
     try:
