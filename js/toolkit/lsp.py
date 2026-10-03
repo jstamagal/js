@@ -42,6 +42,8 @@ _DIAGNOSTIC_SETTLE_S = 0.3
 # Most locations a definition or references result lists.
 _MAX_LOCATIONS = 200
 _STDERR_LINES = 20
+# How long a fresh server gets to send its first `experimental/serverStatus`.
+_STATUS_PROBE_S = 1.0
 _SEVERITY = {1: "error", 2: "warning", 3: "info", 4: "hint"}
 _LANGUAGE_IDS = {
     ".py": "python", ".pyi": "python",
@@ -199,6 +201,10 @@ class LanguageServer:
     _responses: dict[int, dict] = field(default_factory=dict)
     _diagnostics: dict[str, _Diagnostics] = field(default_factory=dict)
     _publishes: int = 0
+    # `experimental/serverStatus` (rust-analyzer): None until the server sends
+    # one, then whether it has finished loading the workspace.
+    _quiescent: bool | None = None
+    _status_probed: bool = False
     _cond: threading.Condition = field(default_factory=threading.Condition)
     _write_lock: threading.Lock = field(default_factory=threading.Lock)
     # Held while documents are compared with disk and synced, so two parallel
@@ -289,6 +295,11 @@ class LanguageServer:
         if "id" in message:
             self._answer(message["id"], method, message.get("params"))
             return
+        if method == "experimental/serverStatus":
+            with self._cond:
+                self._quiescent = bool((message.get("params") or {}).get("quiescent"))
+                self._cond.notify_all()
+            return
         if method == "textDocument/publishDiagnostics":
             params = message.get("params") or {}
             uri = params.get("uri")
@@ -375,6 +386,7 @@ class LanguageServer:
                 "references": {},
             },
             "window": {"workDoneProgress": False},
+            "experimental": {"serverStatusNotification": True},
         }
         result = self.request("initialize", {
             "processId": os.getpid(),
@@ -477,6 +489,23 @@ class LanguageServer:
             if entry is None or (entry.version is not None and entry.version != version):
                 return None
             return list(entry.items)
+
+    def wait_quiescent(self, timeout: float) -> None:
+        """Return once a server that reports `experimental/serverStatus` has
+        loaded its workspace; before that it answers position queries with
+        nothing. The first call gives the server a moment to send its first
+        status; a server that sends none is never waited on again."""
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            if self._quiescent is None and not self._status_probed:
+                self._status_probed = True
+                self._cond.wait_for(lambda: self._quiescent is not None or self.exited,
+                                    min(_STATUS_PROBE_S, timeout))
+            while self._quiescent is False and not self.exited:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                self._cond.wait(left)
 
     def wait_diagnostics(self, uri: str, version: int, after: int, timeout: float) -> list[dict] | None:
         """The diagnostics published for ``uri`` after publish number
@@ -750,6 +779,7 @@ def lsp(
             return position
         where, label = position
         document = {"textDocument": {"uri": uri}, "position": where}
+        server.wait_quiescent(timeout)
         if op == "hover":
             result = server.request("textDocument/hover", document, timeout)
             body = _hover_text((result or {}).get("contents")) if isinstance(result, dict) else ""

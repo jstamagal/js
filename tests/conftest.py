@@ -24,6 +24,11 @@ def isolated_user_profile(monkeypatch, tmp_path):
         real_cache = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright")
         if os.path.isdir(real_cache):
             monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", real_cache)
+    # rustup's proxies (cargo, rust-analyzer) find their toolchains from HOME
+    # the same way; keep them on the real install.
+    real_rustup = os.path.join(os.path.expanduser("~"), ".rustup")
+    if "RUSTUP_HOME" not in os.environ and os.path.isdir(real_rustup):
+        monkeypatch.setenv("RUSTUP_HOME", real_rustup)
     monkeypatch.setenv("HOME", str(tmp_path))
     for name in (
         "XDG_CONFIG_HOME",

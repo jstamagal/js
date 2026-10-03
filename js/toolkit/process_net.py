@@ -45,6 +45,9 @@ from .search import _absolutize
 
 # The js/jsrc limits.shell_env_allow, for a context whose own value is not a list.
 _ENV_ALLOW = tuple(_settings.default_value("limits.shell_env_allow"))
+# Where rustup's cargo and rustc on PATH find their toolchains; a command
+# inherits them with PATH, since without them those binaries do not run.
+_TOOLCHAIN_ENV = ("RUSTUP_HOME", "CARGO_HOME")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
@@ -342,7 +345,7 @@ def shell(
     if not isinstance(configured_allow, (list, tuple, set, frozenset)):
         configured_allow = _ENV_ALLOW
     allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
-    safe_env = {key: os.environ[key] for key in allowed if key in os.environ}
+    safe_env = {key: os.environ[key] for key in (*allowed, *_TOOLCHAIN_ENV) if key in os.environ}
     # The managed binaries are downloaded for a command to call by name, so the
     # directory holding them leads PATH. Without this fd, bat and fzf are
     # installed and unreachable.

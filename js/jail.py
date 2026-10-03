@@ -8,8 +8,8 @@ hostile model. Under `-C`:
   are empty tmpfs mounts, and so are `/run/user` and every network
   filesystem mount. The jail's `/tmp` and `~/.js/tmp` are directories private
   to this js process. DIR is bound read-write at its real path. The PATH
-  directories and the kernel's interpreter under a hidden tree or the host's
-  `/tmp`, the `jail.bind` entries and the `/add` binds are bound back. The
+  directories, rustup's toolchains and the kernel's interpreter under a hidden
+  tree or the host's `/tmp`, the `jail.bind` entries and the `/add` binds are bound back. The
   network is shared.
 - the file tools resolve every path and refuse one outside DIR and the bound
   paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
@@ -175,6 +175,13 @@ def _other_views(tree: Path, mounts: list[_Mount]) -> list[Path]:
             continue
         views.append(mount.point / target.relative_to(mount.root))
     return views
+
+
+def _toolchain_homes(home: Path) -> list[Path]:
+    """Trees a PATH shim reads its toolchains from: rustup's ``cargo`` and
+    ``rustc`` in /usr/bin find theirs under RUSTUP_HOME, ~/.rustup by default."""
+    rustup = Path(os.environ.get("RUSTUP_HOME") or home / ".rustup")
+    return [_real(rustup)] if rustup.is_dir() else []
 
 
 def hidden_roots() -> list[Path]:
@@ -353,6 +360,7 @@ class Jail:
 
         implicit = [Bind(p, False) for p in self._path_binds(env_path)]
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
+        implicit += [Bind(p, False) for p in _toolchain_homes(home)]
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
         # The host /tmp is replaced by the private one, so a path under it is
         # as unreachable as one in a hidden tree and is bound back. A replaced
