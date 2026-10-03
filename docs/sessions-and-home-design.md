@@ -54,7 +54,9 @@ Separately, `paths.ensure_home()` creates every directory of the layout on
 each start, so `ls ~/.js` always shows the whole structure:
 
     ~/.js/
-      jsrc  JS.md  tools.yaml  tags.yaml     files; not created, only read
+      jsrc           written with every setting on the first run
+      JS.md  tools.yaml  tags.yaml   files; not created, only read
+                     (tags.yaml replaces the stock js/tags.yaml)
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, flat
@@ -261,8 +263,9 @@ Terms combine with AND. The index is an SQLite FTS5 table under
 
 ### Tags (Jev)
 
-Each non-quick session gets up to three tags from an operator-owned list in
-`~/.js/tags.yaml` (one line per tag: name and a short description).
+Each non-quick session gets up to three tags from a list of one line per tag
+(name and a short description): the stock `js/tags.yaml`, or `~/.js/tags.yaml`
+in its place when the operator writes one.
 
 - One TypeSafe request per session: `state` = the last 10 operator and model
   messages (tool output excluded); one `noul` question per tag ("does the

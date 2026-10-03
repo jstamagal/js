@@ -1,0 +1,27 @@
+# The stock session tag list: one `name: description` line per tag. Jev asks of
+# every shown session whether each tag is one of its main subjects. Tags name
+# subjects; an activity such as "coding" or "something broke" fits nearly every
+# session and tags nothing. ~/.js/tags.yaml, when there is one, is read instead
+# of this file, and `tags.file` names another file instead of both.
+js: the js harness itself, its code, config, tools, agents and sessions
+llama.cpp: building, running and tuning llama.cpp, llama-server and its forks
+rocm / hip: ROCm and HIP toolchains, nightly builds, libraries and linking against them
+amd gpus: AMD Radeon and RDNA2 cards such as the V620, multi-GPU setups, VRAM, power and temperatures
+model serving: vLLM, TabbyAPI, ollama and other inference servers, their configs and benchmarks
+models / quantization: downloading models, GGUF and EXL quants, context length, RoPE and YaRN
+hardware: CPUs, motherboards, PCIe lanes, switches and bifurcation, core and CCD pinning
+linux system: the kernel, packages (paru, pacman, xbps), services, users and permissions
+nfs / storage: NFS exports and mounts, fstab, disks and filesystems
+containers: incus, docker and distrobox containers, GPU passthrough into them, their networking
+networking: interfaces, macvlan, NetworkManager, DNS and reaching the other boxes
+desktop / terminal: Wayland and X11, niri, alacritty, xterm, fonts, colours and the shell prompt
+neovim: neovim and LazyVim configuration, colorschemes, plugins and keys
+irc / bitchtea: IRC clients and bitchtea, rfc1459 and IRCv3, ncurses terminal interfaces
+agent prompts: system prompts, agent instructions, skills and prompt rewriting
+characters: character profiles and persona play, such as the ape characters
+c programs: C code, compilers, make and CMake builds, crashes and linking
+python: Python scripts, packages, uv and virtual environments
+shell / unix tools: bash and zsh scripts, one-liners, coreutils and text munging
+git / github: git history, commits, branches, gh and pull requests
+web pages: standalone HTML, CSS and JavaScript pages, demos and visualisations
+media prompts: prompts for image and video generation models

@@ -262,7 +262,7 @@ project.
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
   tools.yaml
-  tags.yaml              # the session tag list (tags.file)
+  tags.yaml              # your session tag list; replaces the stock js/tags.yaml
   agents/<agent_id>/     # global agent prompts
   skills/
   toolbox/
@@ -522,18 +522,19 @@ index is built again from the sessions.
 
 ### Tags
 
-Sessions are tagged by TypeSafe's Jev from the operator's tag list,
-`~/.js/tags.yaml` (`tags.file`), one line per tag, its name and a short
-description:
+Sessions are tagged by TypeSafe's Jev from a tag list, one line per tag, its
+name and a short description:
 
 ```yaml
 js: the js harness itself, its code, config, tools and sessions
-nfs / mounts: NFS exports, mounts, automount, stale handles
-gpu / vram: GPUs, VRAM, drivers, CUDA
+nfs / storage: NFS exports and mounts, fstab, disks and filesystems
+amd gpus: AMD Radeon and RDNA2 cards, multi-GPU setups, VRAM, power and temperatures
 ```
 
-js does not create the file. Tags describe subjects; an activity such as
-"something broke" or "coding" fits nearly every session and tags nothing.
+js ships a stock list, `js/tags.yaml`. `~/.js/tags.yaml`, when there is one,
+replaces it whole: copy the stock list there and cut or add lines. `tags.file`
+names a file to read instead of both. Tags describe subjects; an activity such
+as "something broke" or "coding" fits nearly every session and tags nothing.
 
 A session is judged in one request: the state is its last `tags.messages`
 (10) operator and model messages, including the text the model wrote
@@ -552,8 +553,8 @@ editing `tags.yaml` retags every session. One sweep runs at a time. A failed
 request stops the sweep with one line in `~/.js/logs/tags.log`; the next
 sweep carries on.
 
-With no `TYPESAFE_API_KEY` (from the environment or `~/.js/.env`), or no tag
-list file, no sweep starts and nothing is printed. The text of the messages
+With no `TYPESAFE_API_KEY` (from the environment or `~/.js/.env`), or a
+`tags.file` that names a missing file, no sweep starts and nothing is printed. The text of the messages
 above is sent to api.typesafe.ai.
 
 ## The `.txt` Transcript

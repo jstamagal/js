@@ -259,8 +259,15 @@ def test_settings_decide_the_threshold_the_top_and_the_window(tmp_path, monkeypa
     assert state["conversation"] == [{"from": "model", "text": "done, it answers again"}]
 
 
-def test_the_tags_file_setting_defaults_to_the_home_tag_list():
-    assert session_tags.Options.from_settings(None).file == str(paths.tags_file())
+def test_the_tag_list_is_the_home_list_when_there_is_one(tag_list):
+    assert session_tags.Options.from_settings(None).file == str(tag_list)
+
+
+def test_without_a_home_list_the_tag_list_is_the_stock_one():
+    options = session_tags.Options.from_settings(None)
+    assert options.file == str(session_tags.STOCK_TAGS)
+    tags = session_tags.load_tags(Path(options.file))
+    assert tags and all(tag.description for tag in tags)
 
 
 # --- the sweep ----------------------------------------------------------------------
@@ -361,14 +368,21 @@ def test_a_sweep_starts_detached_with_the_live_settings(monkeypatch, tag_list):
     assert options.file == str(tag_list)
 
 
-def test_no_sweep_starts_without_an_api_key_or_a_tag_list(monkeypatch, tag_list):
+def test_no_sweep_starts_without_an_api_key_or_with_a_missing_tags_file(monkeypatch, tmp_path, tag_list):
     calls = _popen_calls(monkeypatch)
     monkeypatch.delenv(session_tags.API_KEY_ENV)
     session_tags.start_sweep(None)
     monkeypatch.setenv(session_tags.API_KEY_ENV, "test-key")
-    tag_list.unlink()
-    session_tags.start_sweep(None)
+    session_tags.start_sweep({"tags": {"file": str(tmp_path / "missing.yaml")}})
     assert calls == []
+
+
+def test_a_box_without_a_home_list_sweeps_with_the_stock_list(monkeypatch):
+    calls = _popen_calls(monkeypatch)
+    monkeypatch.setenv(session_tags.API_KEY_ENV, "test-key")
+    session_tags.start_sweep(None)
+    (argv,) = calls
+    assert session_tags.Options.from_json(argv[3]).file == str(session_tags.STOCK_TAGS)
 
 
 def test_ending_a_session_starts_a_sweep(monkeypatch, tmp_path):

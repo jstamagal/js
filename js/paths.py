@@ -7,7 +7,8 @@ skills, toolbox) stay with the project and are not named here.
 whole structure is always there:
 
     ~/.js/
-      jsrc  JS.md  tools.yaml  tags.yaml  keys   files; not created, only read
+      jsrc           written with every setting on the first run
+      JS.md  tools.yaml  tags.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, filed by the directory it started in
@@ -74,7 +75,8 @@ def tools_config_file() -> Path:
 
 
 def tags_file() -> Path:
-    """The operator's session tag list (`js.session_tags`)."""
+    """The operator's session tag list, which replaces the stock one
+    (`js.session_tags`)."""
     return home() / "tags.yaml"
 
 

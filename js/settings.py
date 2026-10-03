@@ -194,7 +194,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- tags ---
     SettingSpec("tags.file", "str",
                 "Session tag list: one `name: description` line per tag. Unset = "
-                "~/.js/tags.yaml. No file, or no TYPESAFE_API_KEY, means no tagging. "
+                "~/.js/tags.yaml when it exists, else the stock list js ships (js/tags.yaml). "
+                "A named file that is missing, or no TYPESAFE_API_KEY, means no tagging. "
                 "Editing the list retags every shown session at the next session end.",
                 empty=EMPTY_NONE),
     SettingSpec("tags.threshold", "float",

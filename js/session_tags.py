@@ -1,10 +1,12 @@
 """Session tags: a few subjects per session, judged by TypeSafe's Jev.
 
-The tag list is the operator's, in `~/.js/tags.yaml` (`tags.file`), one line
-per tag, its name and a short description:
+The tag list is one line per tag, its name and a short description:
 
     js: the js harness itself, its code, config, tools and sessions
-    nfs / mounts: NFS exports, mounts, automount, stale handles
+    nfs / storage: NFS exports and mounts, fstab, disks and filesystems
+
+It is the file `tags.file` names; unset, `~/.js/tags.yaml` when there is one,
+else the stock list js ships, `js/tags.yaml`.
 
 A session is tagged in one TypeSafe request. The state is the session's last
 `tags.messages` operator and model messages: what the operator typed, what the
@@ -48,6 +50,8 @@ from . import paths
 from . import settings as settings_mod
 
 API_KEY_ENV = "TYPESAFE_API_KEY"
+# The tag list js ships, read when there is no ~/.js/tags.yaml.
+STOCK_TAGS = Path(__file__).with_name("tags.yaml")
 RECORD_KIND = "tags"
 RECORD_VERSION = 1
 
@@ -92,7 +96,7 @@ class Options:
 
         file = knob("tags.file")
         return cls(
-            file=str(Path(file).expanduser() if file else paths.tags_file()),
+            file=str(Path(file).expanduser() if file else tag_list_file()),
             threshold=float(knob("tags.threshold")),
             top=int(knob("tags.max")),
             messages=int(knob("tags.messages")),
@@ -109,6 +113,13 @@ class Options:
 
 
 # --- the tag list ----------------------------------------------------------------
+
+
+def tag_list_file() -> Path:
+    """The tag list when `tags.file` is unset: ~/.js/tags.yaml when there is
+    one, which replaces the stock list whole, else the stock list."""
+    home_list = paths.tags_file()
+    return home_list if home_list.is_file() else STOCK_TAGS
 
 
 def load_tags(path: Path) -> list[Tag]:
