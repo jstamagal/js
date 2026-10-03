@@ -34,6 +34,66 @@ def test_rollback_index_is_applied_in_post_heal_space(tmp_path: Path):
     assert any(m.get("role") == "tool" for m in out)    # synthetic result survived
 
 
+def _tool_result(cid: str, text: str) -> dict:
+    return {"role": "tool", "tool_call_id": cid, "content": text}
+
+
+def _reappending_writer(f: Path) -> list[dict]:
+    """The session file the writer left before 2026-08-14: each save appended
+    the live history after its first message again, with no rollback mark,
+    then the new turn. Returns the live history it held at the end."""
+    u0, a1 = {"role": "user", "content": "yo"}, {"role": "assistant", "content": "yo KING"}
+    u2 = {"role": "user", "content": "read it"}
+    a3, t4 = _assistant_toolcall("call_X"), _tool_result("call_X", "file text")
+    a5, u6 = {"role": "assistant", "content": "read it all"}, {"role": "user", "content": "count"}
+    a7, t8 = _assistant_toolcall("call_Y"), _tool_result("call_Y", "42")
+    a9 = {"role": "assistant", "content": "counted"}
+    for message in (u0, a1, u2, a1, u2, a3, t4, a5, u6, a1, u2, a3, t4, a5, u6, a7, t8, a9):
+        M.append_message(f, message)
+    return [u0, a1, u2, a3, t4, a5, u6, a7, t8, a9]
+
+
+def test_history_the_old_writer_appended_again_replays_once(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = _reappending_writer(f)
+
+    assert M.load_replay_messages(f) == live
+
+
+def test_a_rollback_after_the_appended_runs_counts_in_the_live_history(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = _reappending_writer(f)
+    M.append_mark(f, "rollback_to:6")
+    M.append_message(f, {"role": "user", "content": "again"})
+
+    assert M.load_replay_messages(f) == [*live[:6], {"role": "user", "content": "again"}]
+
+
+def test_a_provider_reusing_a_tool_call_id_keeps_every_message(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    written = [
+        {"role": "user", "content": "one"}, _assistant_toolcall("call_0"), _tool_result("call_0", "a"),
+        {"role": "assistant", "content": "first"},
+        {"role": "user", "content": "two"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_0", "type": "function", "function": {"name": "read", "arguments": '{"path": "b"}'}}]},
+        _tool_result("call_0", "b"), {"role": "assistant", "content": "second"},
+    ]
+    for message in written:
+        M.append_message(f, message)
+
+    assert M.load_replay_messages(f) == written
+
+
+def test_a_repeated_exchange_in_a_sendable_history_is_kept(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    written = [{"role": "user", "content": "APE"}, {"role": "assistant", "content": "*grunt*"}] * 2
+    for message in written:
+        M.append_message(f, message)
+
+    assert M.load_replay_messages(f) == written
+
+
 def test_version_mismatch_warns_instead_of_silently_dropping_history(tmp_path: Path, capsys):
     """Bumping SCHEMA_VERSION must never make old sessions load as empty with no
     signal — js never crashes on bad input, but it must also never go silent."""

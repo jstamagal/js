@@ -235,12 +235,119 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     return messages
 
 
+def _compared(message: dict) -> dict:
+    """``message`` as persistence compares it (`_without_answer_reasoning_text`)."""
+    return _without_answer_reasoning_text([message])[0]
+
+
+def _message_key(message: dict) -> str:
+    return json.dumps(_compared(message), sort_keys=True, default=str)
+
+
+def _carries_tool_ids(message: dict) -> bool:
+    return bool(_tool_call_ids(message)) or (message.get("role") == "tool" and bool(message.get("tool_call_id")))
+
+
+class _Reappends:
+    """Undoes the runs the session writer appended again before 2026-08-14.
+
+    When the history on disk and the one in memory differed at some message,
+    that writer appended the in-memory history from that message on once more,
+    without the rollback mark that cuts the disk copy back. Such a file repeats
+    its own history: a run of records each equal to the next message of a
+    stretch already replayed, then the new turn. A run is dropped, keeping the
+    stretch it copies, once it has copied the whole tail of the history, or
+    when it stops short of that but copied a tool call or result, whose ids
+    are unique. That leaves the history the writer held in memory, so a later
+    mark counts in the list it was written against. Replay uses this only for
+    a file that repeats a tool-call id, which no provider takes."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        self.messages = messages
+        self.reset()
+
+    def reset(self) -> None:
+        """Index the history as it stands, after a mark rewrote it."""
+        self.at: dict[str, list[int]] = {}
+        self._index(range(len(self.messages)))
+        # A run in progress: it began at `base`, copying from each of `starts`;
+        # `length` of its records have matched so far, `tools` says whether
+        # one of them carried a tool id.
+        self.base = 0
+        self.starts: list[int] = []
+        self.length = 0
+        self.tools = False
+
+    def _index(self, positions: range) -> None:
+        for position in positions:
+            self.at.setdefault(_message_key(self.messages[position]), []).append(position)
+
+    def finish(self) -> None:
+        """End a run in progress: before a mark, and at the end of the file."""
+        if not self.starts:
+            return
+        if self.tools:
+            del self.messages[self.base:]
+        else:
+            self._index(range(self.base, len(self.messages)))
+        self.starts = []
+
+    def append(self, message: dict) -> None:
+        messages = self.messages
+        if self.starts:
+            compared = _compared(message)
+            alive = [start for start in self.starts if _compared(messages[start + self.length]) == compared]
+            if alive:
+                messages.append(message)
+                self.length += 1
+                self.tools = self.tools or _carries_tool_ids(message)
+                if any(start + self.length == self.base for start in alive):
+                    del messages[self.base:]
+                    self.starts = []
+                else:
+                    self.starts = alive
+                return
+            self.finish()
+        starts = list(self.at.get(_message_key(message), ()))
+        self.base = len(messages)
+        messages.append(message)
+        if not starts:
+            self._index(range(self.base, self.base + 1))
+        elif self.base - 1 in starts:
+            del messages[self.base:]
+        else:
+            self.starts, self.length, self.tools = starts, 1, _carries_tool_ids(message)
+
+
+def _tool_call_ids(message: dict) -> list[str]:
+    if message.get("role") != "assistant":
+        return []
+    return [call["id"] for call in message.get("tool_calls") or () if isinstance(call, dict) and call.get("id")]
+
+
 def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None) -> tuple[list[dict], int]:
     """The replayed history and the number of records skipped for their version.
-    ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read."""
+    ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read.
+    A file whose message records repeat a tool-call id is read again undoing
+    the runs the old writer appended twice (`_Reappends`)."""
+    messages, skipped_versions, repeats = _replay_records(memory_file, stamps, undo_reappends=False)
+    if repeats:
+        if stamps is not None:
+            stamps.clear()
+        messages, skipped_versions, _repeats = _replay_records(memory_file, stamps, undo_reappends=True)
+    return messages, skipped_versions
+
+
+def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None, *,
+                    undo_reappends: bool) -> tuple[list[dict], int, bool]:
+    """The replayed history, the records skipped for their version, and
+    whether two message records carry the same tool-call id."""
     if not memory_file.exists():
-        return [], 0
+        return [], 0, False
     messages: list[dict] = []
+    undo = _Reappends(messages) if undo_reappends else None
+    call_ids: set[str] = set()
+    repeats = False
     skipped_versions = 0
     with _open_locked(memory_file, "r") as f:
         for line in f:
@@ -264,6 +371,8 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
             if rec is None:
                 continue
             if rec.kind == "mark":
+                if undo is not None:
+                    undo.finish()
                 if rec.marker == "session_reset":
                     messages.clear()
                 elif rec.marker and rec.marker.startswith("rollback_to:"):
@@ -288,15 +397,25 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
                         drop_signed_reasoning(tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
                                        *([rehydrated] if rehydrated else []), *tail]
+                if undo is not None:
+                    undo.reset()
                 continue
             if rec.kind != "message" or rec.message is None:
                 continue
             if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
-                messages.append(rec.message)
+                for call_id in _tool_call_ids(rec.message):
+                    repeats = repeats or call_id in call_ids
+                    call_ids.add(call_id)
+                if undo is not None:
+                    undo.append(rec.message)
+                else:
+                    messages.append(rec.message)
                 stamp = _reply_stamp(rec.message, rec.stamp)
                 if stamps is not None and stamp is not None:
                     stamps[id(rec.message)] = (rec.message, stamp)
-    return _heal_orphaned_tool_calls(messages), skipped_versions
+    if undo is not None:
+        undo.finish()
+    return _heal_orphaned_tool_calls(messages), skipped_versions, repeats
 
 
 def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
