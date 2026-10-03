@@ -155,8 +155,11 @@ class Session:
 
 def kind(session: Session) -> str:
     """Subagent and script-started runs first, then empty (nothing came back),
-    then quick (one message, at most two tool calls, a short final reply)."""
-    if session.mode == "subagent" or session.parent is not None:
+    then quick (one message, at most two tool calls, a short final reply). A
+    subagent run filed before mode and parent were recorded is known by its
+    task name."""
+    if (session.mode == "subagent" or session.parent is not None
+            or session_store.is_task(Path(session.path).stem)):
         return SUBAGENT
     if session.mode in SCRIPT_MODES:
         return SCRIPT

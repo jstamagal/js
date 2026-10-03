@@ -62,6 +62,14 @@ def test_subagent_and_commit_runs_are_their_own_kinds_whatever_their_size():
     assert Q.kind(_session("a", mode="commit", turns=1, replied=False)) == Q.SCRIPT
 
 
+@pytest.mark.parametrize("stem", ["task-1790000000-ab12", "task-1789647867292-45d82d1580a3c4ed"])
+def test_a_task_named_run_without_mode_or_parent_is_a_nameless_subagent(stem):
+    # Subagent runs filed before mode and parent were recorded carry neither.
+    session = _session(str(paths.sessions_root() / "-home-op" / f"{stem}.jsonl"), mode=None)
+    assert Q.kind(session) == Q.SUBAGENT
+    assert session.name is None
+
+
 def test_hidden_kinds_show_only_with_all_or_when_the_query_names_them():
     quick = _session("q", turns=1, tool_calls=0, final_len=5)
     empty = _session("e", replied=False)
