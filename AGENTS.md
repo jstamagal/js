@@ -21,7 +21,10 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    recurring chore: bump them, relock, run the suites, bump the version. An
    upper bound needs the incompatibility it guards against named beside it.
 2. **Env feels broken? → `just sync`.** It is the real fix.
-3. **Make the change.**
+3. **Make the change in a worktree.** The `~/js` checkout stays on main: the
+   `js` on PATH runs whatever it has checked out, so a branch left there
+   changes the js the owner uses. Work on a branch in its own worktree:
+   `git worktree add ../js-<topic> -b <topic>`.
 4. **Run the tests that cover it.** The job is not done until the suite is
    green. Whose change broke it does not matter; "it was failing before me"
    is not a state of the tree, it is a description of you walking past it.
@@ -44,7 +47,10 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    not done while it sits unmerged. Merge to main when green; if main moved
    underneath, review then merge. Never park work on a branch silently: 28
    commits rotted that way once. Saying "awaiting review" once and moving on
-   counts as silent.
+   counts as silent. Once merged, remove the worktree and delete the branch.
+8. **Say where the work is.** The owner does not do git. End every report
+   with one plain line: the branch the work is on, whether main has it,
+   whether it is pushed. Anything he has to run, give as the exact command.
 
 ## Privacy 
 - Keep our chat out of the files unless its relavent.
