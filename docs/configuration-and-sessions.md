@@ -466,7 +466,9 @@ does not hit it. The children of an unsaved run are not saved either.
 ## The Session Picker
 
 `js --session` (no name) or `/session [query]` in the REPL lists every session,
-newest first, across every directory and agent. `•` marks sessions started in
+the one last written to first, across every directory and agent: a resumed
+session moves to the top, and a tag record does not move it. The date column
+is still when it started. `•` marks sessions started in
 the current directory; branches sit under the session they came from. A
 session started with `--session NAME` shows NAME in the last column, before
 its tags. `js --list` prints every session file as a table, newest first,

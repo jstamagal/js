@@ -623,7 +623,7 @@ Saved sessions are filed by the directory js started in:
 `<start-dir>` is the absolute path with `/` and `_` replaced by `-`. Use
 `--session NAME` to continue a saved session from any directory, and `/name
 <text>` to title one. A bare `js --session`, or `/session` in the REPL, opens
-the session picker: every session newest first, with search. See [configuration-and-sessions.md](configuration-and-sessions.md).
+the session picker: every session, the one last written to first, with search. See [configuration-and-sessions.md](configuration-and-sessions.md).
 
 The memory layer is append-only JSONL plus control marks:
 

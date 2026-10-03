@@ -93,6 +93,12 @@ def test_the_list_is_newest_first_across_dirs_and_agents():
     assert _paths(Q.select([old, new, mid], _parse(""), show_all=False)) == ["new", "mid", "old"]
 
 
+def test_a_session_written_to_since_comes_before_newer_ones():
+    resumed = _session("resumed", started=_ts(2026, 7, 18, 4, 0), last=_ts(2026, 9, 29, 11, 30))
+    new = _session("new", started=_ts(2026, 9, 29, 9, 0), last=_ts(2026, 9, 29, 9, 30))
+    assert _paths(Q.select([new, resumed], _parse(""), show_all=False)) == ["resumed", "new"]
+
+
 def test_branches_nest_under_their_parent_in_start_order():
     parent = _session("p", started=_ts(2026, 9, 17, 10, 0))
     first = _session("b1", branch_of="p", branch_point=31, started=_ts(2026, 9, 17, 11, 0))

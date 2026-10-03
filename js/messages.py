@@ -978,7 +978,7 @@ SESSIONS_KEYS = Message("v=view  /=search  b=messages  i=info  a=all  esc=close"
 SESSIONS_VIEW_FLAT = Message("flat", banner=False)
 SESSIONS_VIEW_DIR = Message("by dir", banner=False)
 SESSIONS_VIEW_AGENT = Message("by agent", banner=False)
-SESSIONS_NEWEST = Message("newest first", banner=False)
+SESSIONS_NEWEST = Message("last used first", banner=False)
 SESSIONS_RANKED = Message("best match first", banner=False)
 SESSIONS_ALL_DIRS = Message("all dirs", banner=False)
 SESSIONS_ALL_KINDS = Message("all dirs · every kind", banner=False)

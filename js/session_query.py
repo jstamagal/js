@@ -124,11 +124,17 @@ class Session:
 
     @property
     def when(self) -> float:
-        """When the session started, as the list orders it."""
+        """When the session started."""
         for value in (self.started, self.last, self.mtime):
             if value is not None:
                 return value
         return 0.0
+
+    @property
+    def active(self) -> float:
+        """When the session was last written to, as the list orders it. Tags
+        are written after a session ends and do not count (`js.session_text`)."""
+        return self.last if self.last is not None else self.when
 
     @property
     def name(self) -> str | None:
@@ -416,14 +422,15 @@ def visible(session: Session, query: Query, *, show_all: bool) -> bool:
 def select(sessions: list[Session], query: Query, *, show_all: bool,
            scores: dict[str, float] | None = None) -> list[Session]:
     """The sessions the list shows, in order: best BM25 score first when the
-    query has words (only sessions with a score), else newest first."""
+    query has words (only sessions with a score), else the one last written
+    to first, the newer start first between equals."""
     chosen = [session for session in sessions
               if visible(session, query, show_all=show_all) and matches(session, query)]
     if query.ranked:
         scores = scores or {}
         chosen = [session for session in chosen if session.path in scores]
-        return sorted(chosen, key=lambda session: (scores[session.path], -session.when))
-    return sorted(chosen, key=lambda session: -session.when)
+        return sorted(chosen, key=lambda session: (scores[session.path], -session.active, -session.when))
+    return sorted(chosen, key=lambda session: (-session.active, -session.when))
 
 
 # --- the list's rows -------------------------------------------------------------
