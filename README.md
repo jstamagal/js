@@ -73,8 +73,10 @@ Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
 applied at startup. Files layer lowest-to-highest as `js/jsrc` (shipped in the
 package: one line per setting, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
-CLI `--extra key=value` overrides env. js creates no `~/.js/jsrc`; `/save`
-writes it. `js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
+CLI `--extra key=value` overrides env. On its first run js writes `~/.js/jsrc`
+with every setting at its `js/jsrc` value; from then on that file sets every
+setting, so a default changed in `js/jsrc` does not reach it.
+`js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
 `JS_MODEL` overrides it. Explicit
 `set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
@@ -84,7 +86,8 @@ and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
 `config.toml` once with `js --migrate-config`. Files of commands run
 with `/load <file>`; any REPL command works there without the `/`, including
 typed event hooks (`on <event> <handler>`) and aliases (`alias <name>
-<command>`). `/save` writes settings, handlers and aliases back to `jsrc`.
+<command>`). `/save` replaces `~/.js/jsrc` with every setting at its live value,
+then the handlers and aliases.
 
 Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
 saved sessions at `sessions/<start-dir>/<session>.jsonl`, filed by the

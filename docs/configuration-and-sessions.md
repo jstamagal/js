@@ -23,14 +23,17 @@ A `jsrc` file is a config script: each non-comment line is
 `js/jsrc` value again.
 
 `js/jsrc` holds one line per registered setting and is where every default value
-lives: change a number there and js starts with it. A setting it leaves unset is
-written `set -<key>`. If `js/jsrc` is missing, leaves out a registered setting,
-or holds a line that does not apply, js stops at startup with one line naming
-the file.
+lives. A setting it leaves unset is written `set -<key>`. If `js/jsrc` is
+missing, leaves out a registered setting, or holds a line that does not apply,
+js stops at startup with one line naming the file.
 
-No other `jsrc` exists until you write one: js does not create
-`~/.js/jsrc`. `/save` writes it, holding only the settings whose live
-value differs from `js/jsrc`.
+When there is no `~/.js/jsrc`, js writes one on startup: one line per registered
+setting at its `js/jsrc` value. From then on that file sets every setting, so a
+number changed in `js/jsrc` does not reach a box that already has one; a setting
+registered after the file was written takes its `js/jsrc` value. `/save`
+replaces the file with every setting at its live value (`set -<key>` for one
+that holds none), then the `on` handlers and aliases, and keeps the old file as
+`jsrc.bak`.
 
 `provider.id`, `provider.base_url`, and `provider.api_key` are unset in
 `js/jsrc`. When `provider.id` is set, the provider is constructed explicitly with
@@ -254,7 +257,7 @@ project.
 
 ```text
 ~/.js/
-  jsrc                   # the user layer; /save writes it
+  jsrc                   # the user layer; js writes it on first run, /save replaces it
   .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md

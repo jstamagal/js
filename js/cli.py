@@ -1637,8 +1637,8 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
 
 
 def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
-    """Rewrite the global jsrc from everything resident: non-default settings,
-    `on` handlers, aliases."""
+    """Replace the global jsrc with everything resident: every setting at its
+    live value, `on` handlers, aliases."""
     eff = _effective_settings_snapshot(cfg, state)
     hooks = state.get("events")
     extra = setcmd.event_lines(hooks) if hooks is not None else []

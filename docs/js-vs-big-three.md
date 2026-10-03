@@ -75,7 +75,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **The tool policy is declarative, and you can see why each tool is on or off.** `agent.yaml` noun:modifier entries resolve against `tools.yaml` tags, and `/tools` prints the rule that decided each tool. The others decide in code.
 
-**One grammar for config.** `set key value` is the same line in `js/jsrc`, in `/set` and in `--extra`. `/save` writes only what differs from the defaults, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
+**One grammar for config.** `set key value` is the same line in `js/jsrc`, in `/set` and in `--extra`. `/save` writes every setting at its live value, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
 
 **`JS.md` rather than a global `AGENTS.md`**, so repo-shaped instructions don't leak into every project (`paths.py:74-81`). **Single-pass prompt directives**, so a directive's output is never re-scanned (`promptexpand.py`). **Agents are prompt directories** with ordered fragments and a manifest, which is a richer unit than Claude Code's single file or pi's `SYSTEM.md`.
 

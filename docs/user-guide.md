@@ -210,8 +210,8 @@ Review $1. Focus on ${2:-correctness}; list findings worst first.
 > /review js/cli.py "error paths"
 ```
 
-`/save` rewrites the global jsrc from everything the session holds: settings
-that differ from their defaults, `on` handlers, and aliases. On the next start
+`/save` replaces the global jsrc with everything the session holds: every
+setting at its live value, `on` handlers, and aliases. On the next start
 the settings layer applies the `set` lines (and a setting's short name, e.g.
 `model X` is `set model X`) under env and `--extra`; the REPL then runs every
 other jsrc line through the command table.
