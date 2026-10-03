@@ -1177,53 +1177,13 @@ def _models_for_provider(provider_id: str | None, base_url: str | None, api_key:
     return logins.test_login(_login_for_provider(provider_id, base_url, api_key))
 
 
-def _provider_qualified_model_id(provider_id: str | None, model: str) -> str:
-    if not provider_id:
-        return model
-    parsed_provider_id, parsed_model = providers.parse_model_prefix(model)
-    if parsed_provider_id == provider_id and parsed_model:
-        return model
-    return f"{provider_id}/{model}"
-
-
-def _is_active_model_id_line(line: str) -> bool:
-    body = line.strip()
-    if not body or body.startswith("#"):
-        return False
-    parts = body.split(maxsplit=2)
-    return len(parts) >= 2 and parts[0].lower() == "set" and parts[1] == "model.id"
-
-
 def _persist_default_model_id(model_id: str) -> tuple[Path | None, str | None]:
     config_path = _paths.global_config_file()
     try:
-        if config_path.exists():
-            lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
-        else:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = []
-        replacement = f"set model.id {model_id}\n"
-        changed = False
-        saw_model_line = False
-        new_lines: list[str] = []
-        for line in lines:
-            if _is_active_model_id_line(line):
-                saw_model_line = True
-                if line != replacement:
-                    changed = True
-                new_lines.append(replacement)
-            else:
-                new_lines.append(line)
-        if not saw_model_line:
-            if new_lines and not new_lines[-1].endswith("\n"):
-                new_lines[-1] = new_lines[-1] + "\n"
-            new_lines.append(replacement)
-            changed = True
-        if changed:
-            config_path.write_text("".join(new_lines), encoding="utf-8")
-        return config_path, None
+        settings.write_model_id(config_path, model_id)
     except OSError as exc:
         return None, f"{type(exc).__name__}: {exc}"
+    return config_path, None
 
 
 def _set_provider_state(state: dict, provider_id: str) -> None:
@@ -1251,7 +1211,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["model_source"] = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
         state["model"] = model_value
-        msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(configured_provider_id, model_value))
+        msgs.say(msgs.MODEL_SET, model=providers.qualified_model_id(configured_provider_id, model_value))
         return
 
     route = routing.resolve_model_route(
@@ -1270,7 +1230,7 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
     state["provider_base_url"] = route.base_url
     state["provider_api_key"] = route.api_key
     state["provider_headers"] = dict(route.headers)
-    msgs.say(msgs.MODEL_SET, model=_provider_qualified_model_id(route.provider_id, route.model))
+    msgs.say(msgs.MODEL_SET, model=providers.qualified_model_id(route.provider_id, route.model))
 
 
 def _pick_model_into_state(state: dict, cfg: Config) -> None:
@@ -1287,7 +1247,7 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["provider_api_key"] = selected.get("provider_api_key")
     state["provider_headers"] = dict(selected.get("provider_headers") or {})
     state["model"] = selected["model"]
-    default_model_id = _provider_qualified_model_id(selected.get("provider_id"), selected["model"])
+    default_model_id = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
     if isinstance(state.get("settings"), dict):
         settings.set_dotted(state["settings"], ("model", "id"), default_model_id)
     state["model_source"] = None  # the pick was persisted into the store

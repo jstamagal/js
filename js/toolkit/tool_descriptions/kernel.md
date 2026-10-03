@@ -132,12 +132,13 @@ Practical notes:
   wrap the work in `try`/`finally`, and `await client.aclose()` in the `finally`.
   A client left open keeps printing `Unclosed client session` onto kernel stderr,
   and that reaches you in a later result.
-- Cells run in the interpreter that runs js: the uv tool environment of a
-  `just install`-ed `js`, the project venv under `just run`. Modules installed
-  in some other project's venv are not importable here, so check
-  `sys.executable` in a cell and install into that one:
-  `uv pip install --python <that path> <package>`. `!pip install` and other
-  IPython magics reach the same environment.
+- Cells run in the interpreter that runs js: the js checkout's project venv,
+  under both the `js` on PATH and `just run`. Modules installed in some other
+  project's venv are not importable here, so check `sys.executable` in a cell
+  and install into that one: `uv pip install --python <that path> <package>`.
+  `!pip install` and other IPython magics reach the same environment. A package
+  added that way stays until `just sync`, which removes what uv.lock does not
+  list.
 
 {{#if shell}}
 Use `shell` instead for builds, tests, git, package managers, and anything that

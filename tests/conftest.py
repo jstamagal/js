@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from js import jail, model_metadata, paths
+from js import jail, logins, model_metadata, paths
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +45,10 @@ def isolated_user_profile(monkeypatch, tmp_path):
     for name in tuple(os.environ):
         if name.startswith(("JS_", "TYPESAFE_")):
             monkeypatch.delenv(name, raising=False)
+    # A test that points the login store at its own directory leaves that
+    # override behind for the next test on its worker; each test starts on
+    # the store under this HOME.
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", None)
     # `js -C` puts the whole process in a jail; one test's jail must not
     # confine the next test's tools.
     yield

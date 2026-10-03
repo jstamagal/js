@@ -12,7 +12,7 @@ aliases kept around just to make old prompts happy.
 ## Quick Start
 
 ```bash
-pip install -e ".[test]"
+just install    # js on PATH; asks for missing keys and a default model
 
 js
 js -p "summarize this repo"

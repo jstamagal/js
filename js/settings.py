@@ -194,7 +194,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- tags ---
     SettingSpec("tags.file", "str",
                 "Session tag list: one `name: description` line per tag. Unset = "
-                "~/.js/tags.yaml when it exists, else the stock list js ships (js/tags.yaml). "
+                "~/.js/tags.yaml when it exists, else js/tags.yaml, the stock list js ships. "
                 "A named file that is missing, or no TYPESAFE_API_KEY, means no tagging. "
                 "Editing the list retags every shown session at the next session end.",
                 empty=EMPTY_NONE),
@@ -1064,3 +1064,28 @@ def ensure_user_jsrc(path: Path) -> bool:
         return False
     save_settings_to_jsrc(path, seed_defaults(), source="js on first run")
     return True
+
+
+def _sets_model_id(line: str) -> bool:
+    """Whether a jsrc line is `set model.id ...` or `set -model.id`."""
+    body = line.strip()
+    if not body or body.startswith("#"):
+        return False
+    parts = body.split(maxsplit=2)
+    return len(parts) >= 2 and parts[0].lower() == "set" and parts[1] in ("model.id", "-model.id")
+
+
+def write_model_id(path: Path, model_id: str) -> None:
+    """Make ``model_id`` the `model.id` the jsrc at ``path`` sets: each line
+    that sets or unsets it becomes `set model.id <model_id>`, or one is
+    appended. The rest of the file is left as it is. Raises OSError."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
+    replacement = f"set model.id {model_id}\n"
+    new_lines = [replacement if _sets_model_id(line) else line for line in lines]
+    if replacement not in new_lines:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] += "\n"
+        new_lines.append(replacement)
+    if new_lines != lines:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(new_lines), encoding="utf-8")

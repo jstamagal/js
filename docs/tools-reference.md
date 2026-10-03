@@ -547,9 +547,10 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-Both need `jupyter_client` and `ipykernel`, which are base dependencies —
-`just install` puts them in the `js` on PATH, and `just sync` in this checkout's
-project venv. Without them the tools return one ERROR naming the missing package
+Both need `jupyter_client` and `ipykernel`, which are base dependencies in this
+checkout's project venv: `just sync` installs them, and the `js` that
+`just install` puts on PATH syncs that venv against `uv.lock` on every start.
+Without them the tools return one ERROR naming the missing package
 and the recipe that repairs the env js is running in, instead of a traceback,
 and the rest of js is unaffected.
 
@@ -606,12 +607,12 @@ queue behind a cell nobody is watching. The interrupt-on-cancel hook is
 `kernel.interrupt_inflight(context)`, called from the runtime's cancel path.
 
 Cells run in the interpreter running js, never in a venv of their own: the
-`python3` kernelspec's `python` argv is replaced with `sys.executable`, so a
-`just install`-ed `js` gives cells the uv tool environment and `just run` gives
-them this checkout's project venv. A module installed into some other project's
-venv is not importable in a cell. To add a package to the kernel's environment,
-read `sys.executable` in a cell and install with
-`uv pip install --python <that path> <package>`.
+`python3` kernelspec's `python` argv is replaced with `sys.executable`, so the
+`js` on PATH and `just run` both give cells this checkout's project venv. A
+module installed into some other project's venv is not importable in a cell. To
+add a package to the kernel's environment, read `sys.executable` in a cell and
+install with `uv pip install --python <that path> <package>`; it stays until
+`just sync`, which removes what `uv.lock` does not list.
 
 Cells run inside a live asyncio loop: `await` works at cell top level,
 `asyncio.run(...)` and `loop.run_until_complete(...)` raise `RuntimeError: This

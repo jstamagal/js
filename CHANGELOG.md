@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`just install` sets a box up in one command (`js-z3q`).** The `js` on PATH
+  is a launcher in `~/.local/bin` that syncs this checkout's venv against
+  `uv.lock` on every start and runs its js, so a new dependency no longer needs
+  a reinstall; the uv tool install is gone. The recipe then asks for each key js
+  uses that is not set (saved to `~/.js/.env`, mode 600) and, when the default
+  model has no provider, for a saved login and model or a new login. A rerun
+  asks only about what is still missing.
+
+- **A stock session tag list ships with js (`js-zhy`).** `js/tags.yaml` is read
+  when there is no `~/.js/tags.yaml`; a home list replaces it whole.
+
+- **A model stream the connection dropped mid-chunk is retried (`js-lmb`)**, and
+  text streamed before a failed turn stays on the REPL screen (`js-c81`).
+
 - **The session picker and session search (`js-1g1.4`, `js-1g1.5`).** A bare
   `js --session` or `/session [query]` in the REPL lists every session newest
   first across directories and agents, branches nested under their parent,

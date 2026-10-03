@@ -62,9 +62,9 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 MISSING_DEPS = (
     "ERROR: the kernel tool needs the {missing} package{plural}, which "
     "{verb} not importable in this environment. They are declared in "
-    "pyproject.toml: `just install` puts them in the `js` on PATH, `just sync` "
-    "puts them in this checkout's project venv. The kernel cannot run until "
-    "then; every other tool is unaffected."
+    "pyproject.toml: `just sync` puts them in this checkout's project venv, "
+    "which the `js` that `just install` puts on PATH runs and syncs on every "
+    "start. The kernel cannot run until then; every other tool is unaffected."
 )
 
 # Names IPython and js put in the user namespace themselves (`tools` is the js

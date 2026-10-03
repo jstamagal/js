@@ -713,6 +713,17 @@ OAUTH_BAD_CALLBACK = Message("Callback URL invalid or its state does not match. 
 OAUTH_DEVICE = Message("{service} login\n  URL:  {url}\n  Code: {code}\nWaiting for authorization.")
 OAUTH_REFRESH_NOT_SAVED = Message("Refreshed {service} login not saved: {error}", WARN)
 
+# --- just install ------------------------------------------------------------
+INSTALL_ASK_KEY = Message("{name} for {use}. Enter skips")
+INSTALL_KEY_SAVED = Message("Saved {name} to {path}")
+INSTALL_KEYS_MISSING = Message("Not set: {names}. Run just install in a terminal to save them to {path}", WARN)
+INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run on", WARN)
+INSTALL_MODEL_UNSET = Message("No default model is set", WARN)
+INSTALL_LOGINS = Message("Saved logins: {logins}")
+INSTALL_LOGIN_ROW = Message("{provider} with {models}", banner=False)
+INSTALL_ASK_MODEL = Message("p picks a login and a model, a adds a provider, Enter skips")
+INSTALL_ASK_PROVIDER = Message("a adds a provider, Enter skips")
+
 # --- Tool binaries -----------------------------------------------------------
 
 TOOL_DIR = Message("Tool directory: {path}")

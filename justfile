@@ -17,7 +17,6 @@ set dotenv-load
 # browser backend automatic everywhere it is installable without breaking the
 # rest of js on Alpine and other musl systems.
 browser-extra := `if ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
-browser-target := `if ldd --version 2>&1 | grep -qi musl; then printf '%s' '.'; else printf '%s' '.[browser]'; fi`
 
 # show all recipes (default when `just` is called with no argument)
 default:
@@ -56,87 +55,109 @@ sync:
 shell:
     uv run {{ browser-extra }} bash
 
-# install `js` onto PATH as launchers shebanged to a managed venv,
-# editable so they track the working tree (no reinstall after a code edit). uv
-# puts the launchers in its tool bin dir — usually ~/.local/bin. Also downloads
-# js's pinned CLI binaries into tools/bin and provisions optional interactive
-# helpers (fd/bat/fzf). `uv tool install` resolves from pyproject on its own,
-# so the recipe feeds it uv.lock as a constraints file: the tool venv gets the
-# same versions as `just run`'s env and reuses the wheels `just sync` already
-# cached instead of downloading whatever is newest on PyPI.
+# set js up on this box with one command; a rerun asks only about what is
+# still missing. `js` on PATH is a launcher in ~/.local/bin that brings this
+# checkout's venv in line with uv.lock on every start (`uv sync --inexact`, a
+# few ms when nothing changed) and runs the venv's js: one venv, the project's,
+# so a dependency added to the project is there the next time js starts. The
+# launcher execs .venv/bin/js rather than `uv run js` because uv run puts
+# .venv/bin first on PATH and sets VIRTUAL_ENV, and every shell command the
+# model runs would inherit them. Also: the wiki symlink, js's pinned CLI
+# binaries in tools/bin and the Chromium build, the PATH block in ~/.zshrc and
+# ~/.bashrc, then the questions (`python -m js.install`): each key js uses that
+# is set neither in the environment nor in ~/.js/.env, and a default model when
+# the configured one has no provider to run on.
 #   just install   then   js -p "hi"   from anywhere
-# put js + wiki on PATH as editable launchers, with pinned tool binaries.
+# set js up on this box: launcher, binaries, missing keys and default model.
 install:
     #!/usr/bin/env bash
     set -euo pipefail
-    # refuse to install from a linked worktree: the editable install and the
-    # wiki symlink would point at a tree that vanishes when the worktree is
-    # cleaned up, leaving `js` and `wiki` broken everywhere.
+    # refuse to install from a linked worktree: the launcher and the wiki
+    # symlink would point at a tree that vanishes when the worktree is cleaned
+    # up, leaving `js` and `wiki` broken everywhere.
     if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
         echo "!! this is a linked git worktree — run 'just install' from the main checkout:" >&2
         echo "!!   $(dirname "$(git rev-parse --git-common-dir)")" >&2
         exit 1
     fi
-    # pin the tool venv to uv.lock. without this, uv tool install resolves from
-    # pyproject constraints alone and pulls e.g. a fresh 47 MB playwright wheel
-    # on every upstream release — a download the lock-synced cache never needed.
-    constraints="$(mktemp)"
-    trap 'rm -f "$constraints"' EXIT
-    uv export --frozen --no-hashes --no-emit-project --no-dev {{ browser-extra }} \
-        --format requirements.txt --quiet --output-file "$constraints"
+    repo="$(pwd -P)"
+    uv_bin="$(command -v uv)"
+    bin="$HOME/.local/bin"
+    launcher="$bin/js"
+    marker="# js launcher written by just install"
     # large wheels over a flaky link: retry the transfer before giving up.
-    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" \
-        uv tool install --force --editable --constraints "$constraints" "{{ browser-target }}"
-    mkdir -p "$HOME/.local/bin"
-    ln -sf "$(pwd)/tools/wiki" "$HOME/.local/bin/wiki"
+    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --inexact {{ browser-extra }}
+    # the uv tool install this recipe used to make; its shim sits where the
+    # launcher goes.
+    if uv tool list 2>/dev/null | grep -q '^js '; then
+        uv tool uninstall js
+    fi
+    mkdir -p "$bin"
+    if [ -e "$launcher" ] && ! grep -qF "$marker" "$launcher" 2>/dev/null; then
+        echo "!! $launcher is not a js launcher — remove it and rerun" >&2
+        exit 1
+    fi
+    tmp="$(mktemp "$bin/.js.XXXXXX")"
+    cat > "$tmp" <<EOF
+    #!/bin/sh
+    $marker in $repo.
+    # Brings the checkout's venv in line with uv.lock, then runs its js.
+    "$uv_bin" sync --quiet --inexact --project "$repo" {{ browser-extra }} ||
+        echo "js launcher: uv sync failed; starting the venv as it stands" >&2
+    exec "$repo/.venv/bin/js" "\$@"
+    EOF
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$launcher"
+    ln -sf "$repo/tools/wiki" "$bin/wiki"
     just install-tool-binaries
     just install-browser
     # put the managed binaries on the operator's PATH too. js itself resolves
     # them by absolute path, but fd/bat/fzf are downloaded for a human and for
     # other agents to call by name, and hunting for them is the whole problem.
-    # One marked block per rc file, appended once.
+    # One marked block per rc file, appended once; ~/.local/bin joins it when
+    # it is not on PATH already.
+    case ":$PATH:" in
+        *":$bin:"*) bin_line="" ;;
+        *) bin_line="export PATH=\"$bin:\$PATH\"" ;;
+    esac
     for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
         [ -f "$rc" ] || continue
         if grep -q '# js tools PATH block begin' "$rc"; then
             if ! grep -q 'COLORTERM=truecolor' "$rc"; then
                 sed -i '/# js tools PATH block end/i export COLORTERM=truecolor' "$rc"
                 echo "added COLORTERM=truecolor to the js block in $rc"
-            else
-                echo "ok: $rc already has the js tools PATH block"
             fi
+            if [ -n "$bin_line" ] && ! grep -qF "$bin_line" "$rc"; then
+                sed -i "/# js tools PATH block end/i $bin_line" "$rc"
+                echo "added $bin to the js block in $rc"
+            fi
+            echo "ok: $rc has the js tools PATH block"
             continue
         fi
         {
             echo ''
             echo '# js tools PATH block begin'
-            echo "export PATH=\"$(pwd -P)/tools/bin:\$PATH\""
+            echo "export PATH=\"$repo/tools/bin:\$PATH\""
+            [ -z "$bin_line" ] || echo "$bin_line"
             echo 'export COLORTERM=truecolor'
             echo '# js tools PATH block end'
         } >> "$rc"
         echo "added the js tools PATH block to $rc"
     done
-    # verify the install took: whatever `js` PATH resolves must load code from
-    # THIS working tree, or an old/foreign install is still answering.
-    repo="$(pwd -P)"
-    shim="$(command -v js || true)"
-    if [ -z "$shim" ]; then
-        echo "!! js not on PATH after install — run: uv tool update-shell" >&2
-        exit 1
-    fi
-    pybin="$(sed -n '1s/^#!//p' "$shim")"
-    if [ ! -x "$pybin" ]; then
-        echo "!! $shim is not a uv tool shim (foreign install shadowing PATH?) — remove it and rerun" >&2
-        exit 1
-    fi
-    loaded="$("$pybin" -c 'import js, pathlib; print(pathlib.Path(js.__file__).resolve().parent)')"
-    case "$loaded" in
-        "$repo"/*) echo "ok: $shim loads $loaded — editable, tracks this tree (deps changes still need a rerun of: just install)" ;;
-        *)
-            echo "!! STALE INSTALL: $shim loads $loaded, NOT this tree ($repo)." >&2
-            echo "!! an old or non-editable install is still active — uv tool uninstall js, then rerun: just install" >&2
+    # verify the install took: the launcher starts this tree's js, and it is
+    # the js PATH resolves.
+    "$launcher" --help > /dev/null
+    if [ -n "$bin_line" ]; then
+        echo "ok: $launcher runs $repo/.venv/bin/js; open a new shell to put $bin on PATH"
+    else
+        shim="$(command -v js || true)"
+        if [ "$shim" != "$launcher" ]; then
+            echo "!! js on PATH is $shim, not $launcher — remove it or put $bin first on PATH" >&2
             exit 1
-            ;;
-    esac
+        fi
+        echo "ok: $launcher runs $repo/.venv/bin/js"
+    fi
+    "$repo/.venv/bin/python" -m js.install
 
 # Download js's pinned, checksummed subprocess binaries into tools/bin. The
 # managed aria2c performs transfers after urllib bootstraps it.
@@ -162,9 +183,17 @@ install-browser:
     fi
     uv run {{ browser-extra }} python -m playwright install chromium
 
-# remove the installed js launchers and the wiki symlink `just install` made.
+# remove the js launcher and the wiki symlink `just install` made, and a uv
+# tool install of js from before the launcher.
 uninstall:
-    uv tool uninstall js
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if grep -qF "# js launcher written by just install" "$HOME/.local/bin/js" 2>/dev/null; then
+        rm -f "$HOME/.local/bin/js"
+    fi
+    if uv tool list 2>/dev/null | grep -q '^js '; then
+        uv tool uninstall js
+    fi
     rm -f "$HOME/.local/bin/wiki"
 
 # ── testing ─────────────────────────────────────────────────────────────────

@@ -621,6 +621,17 @@ def parse_model_prefix(model: str | None) -> tuple[str | None, str | None]:
     return None, model
 
 
+def qualified_model_id(provider_id: str | None, model: str) -> str:
+    """`provider/model`, the form `model.id` takes; `model` alone without a
+    provider, and unchanged when it already carries that provider's prefix."""
+    if not provider_id:
+        return model
+    parsed_provider_id, parsed_model = parse_model_prefix(model)
+    if parsed_provider_id == provider_id and parsed_model:
+        return model
+    return f"{provider_id}/{model}"
+
+
 def first_env(names: tuple[str, ...], env: Mapping[str, str] | None = None) -> str | None:
     source = os.environ if env is None else env
     for name in names:
