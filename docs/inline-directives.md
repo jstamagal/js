@@ -1,19 +1,42 @@
-# Inline Directives In System Prompts
+# Prompt Expansion
 
 `js` expands a small set of directives in the assembled system prompt before it
 reaches the model. This lets a prompt file pull in environment values, file
-contents, and — when explicitly enabled — the output of commands and code
+contents, built-in session values, and the output of commands and code
 snippets.
 
 Expansion happens at the persona-load chokepoint
 (`js/persona.py:_expand_spec`), so it applies to the full assembled system
 prompt: every `*.md` file in the agent's prompt directory, the global
-`JS.md` / `JS.local.md`, and any stacked project `AGENTS.md` /
+`JS.md` / `JS.local.md`, and the start directory's `AGENTS.md` /
 `AGENTS.local.md`. The implementation is `js/promptexpand.py`.
 
 ## Syntax
 
-There are three forms.
+There are four forms.
+
+### `%%NAME%%` — built-in variables
+
+These values come from the current session, independently of environment
+variables and of any filename convention:
+
+| Variable | Value |
+| --- | --- |
+| `CURRENT_SESSION` | Session filename without `.jsonl`, e.g. `2026-10-04T1947-31ef`. Empty for an unsaved run. |
+| `CURRENT_SESSION_FULLPATH` | Absolute session JSONL path. `/dev/null` for an unsaved run, including benchmarks. |
+| `CURRENT_SESSION_AGENT` | Active agent id. |
+| `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
+
+```text
+This is session %%CURRENT_SESSION%% using %%CURRENT_SESSION_MODEL%%.
+!{sh grep -qw 'arr' '%%CURRENT_SESSION_FULLPATH%%' && echo 'ahoy' || echo 'are ye not a pirate matey'}
+```
+
+Built-ins expand directly in prompt text and inside inline or fenced subsystem
+bodies before the subsystem runs. Quote path values in shell commands. Unknown
+names stay literal. A backslash or a fully enclosing inline backtick span keeps
+a variable literal, just as for the other directive forms. Substituted values
+and subsystem output are never scanned again.
 
 ### `{{NAME}}` — environment shorthand
 

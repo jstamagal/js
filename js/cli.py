@@ -56,7 +56,7 @@ from . import paths as _paths
 from . import prompt_commands
 from . import prompt_history
 from . import transcript as transcript_mod
-from .promptexpand import expand_prompt
+from .promptexpand import expand_prompt, session_variables
 from . import screen
 from . import session_query
 from . import setcmd
@@ -2382,7 +2382,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         active_registry = tool_registry or _registry_for(cfg)
     else:
         try:
-            prompt_spec = P.load_configured_prompt_spec(cfg)
+            prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
         except (FileNotFoundError, ValueError) as e:
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
@@ -2403,6 +2403,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    if prompt_spec is not None:
+        prompt_spec = P._expand_spec(prompt_spec, cfg)
+        system = prompt_spec.system
     if unreachable_stamp is not None:
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
@@ -2675,7 +2678,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.FAILED, error=e)
         return 2
     try:
-        prompt_spec = P.load_configured_prompt_spec(cfg)
+        prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2
@@ -2694,6 +2697,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.FAILED, error=e)
         return 2
     agent_default_max = prompt_spec.max_output_tokens
+    prompt_spec = P._expand_spec(prompt_spec, cfg)
+    system = prompt_spec.system
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
 
     rows: list[dict] = []
@@ -2709,6 +2714,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             eff_max = agent_default_max
         prompt_text = expand_prompt(
             bench.prompt,
+            variables=session_variables(cfg),
             allow_code=allow_code,
             timeout_s=cfg.inline_code_timeout_s,
             max_output_bytes=cfg.max_bash_output_bytes,
@@ -3874,6 +3880,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         for bm in benches:
             body = expand_prompt(
                 bm.prompt,
+                variables=session_variables(cfg),
                 allow_code=allow_code,
                 timeout_s=timeout_s,
                 max_output_bytes=cfg.max_bash_output_bytes,
@@ -3887,12 +3894,14 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         "p": lambda: system,
         "e": lambda: expand_prompt(
             system,
+            variables=session_variables(cfg),
             allow_code=False,
             max_output_bytes=cfg.max_bash_output_bytes,
             on_error="warn",
         ),
         "i": lambda: expand_prompt(
             system,
+            variables=session_variables(cfg),
             allow_code=allow_code,
             timeout_s=timeout_s,
             max_output_bytes=cfg.max_bash_output_bytes,
@@ -4330,7 +4339,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     resumed_reasoning = _resume_reasoning(resumed, cfg) if resumed is not None and args.reasoning is None else None
 
     try:
-        prompt_spec = P.load_configured_prompt_spec(cfg)
+        prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2
@@ -4355,6 +4364,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if unreachable_stamp is not None:
         msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
                  model=_stamp_label(cfg.model, cfg.provider_id))
+    prompt_spec = P._expand_spec(prompt_spec, cfg)
+    if recorded_system is None:
+        system = prompt_spec.system
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(

@@ -181,7 +181,7 @@ async def _run_one_task_async(
         prompt_spec = P.load_configured_prompt_spec(replace(
             parent_cfg, agent_id=agent,
             prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
-        ))
+        ), expand=False)
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
 
@@ -226,6 +226,7 @@ async def _run_one_task_async(
         )
     if prompt_spec.reasoning_effort is not None:
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
+    prompt_spec = P._expand_spec(prompt_spec, cfg)
 
     registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
     system = prompt_spec.system

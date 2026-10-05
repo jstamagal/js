@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from .promptexpand import expand_prompt
+from .promptexpand import expand_prompt, session_variables
 from .toolkit import policy
 from . import settings
 
@@ -314,7 +314,7 @@ def apply_agent_max_tokens(cfg, prompt_spec):
     return replace(cfg, max_output_tokens=agent_max)
 
 
-def load_configured_prompt_spec(cfg) -> PromptSpec:
+def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     roots = tuple(getattr(cfg, "prompt_roots", ()))
     if len(roots) >= 3:
         spec = load_agent_prompt_spec(
@@ -332,7 +332,8 @@ def load_configured_prompt_spec(cfg) -> PromptSpec:
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
-    spec = _expand_spec(spec, cfg)
+    if expand:
+        spec = _expand_spec(spec, cfg)
     return spec
 
 
@@ -385,6 +386,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
         allow_code=allow_code,
         timeout_s=timeout_s,
         max_output_bytes=max_output_bytes,
+        **({"variables": session_variables(cfg)} if "%%" in spec.system else {}),
     )
     if system == spec.system:
         return spec

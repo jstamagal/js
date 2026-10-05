@@ -3,6 +3,7 @@ r"""Inline directive expansion for js system prompts.
 Three forms are resolved before the assembled system prompt reaches the model:
 
   {{NAME}}            -> value of environment variable NAME (unset -> "")
+  %%NAME%%            -> value of a js built-in variable
   !{subsystem args}   -> inline: run a subsystem, inject its output
   ```!subsystem       -> block: the fenced body is fed to the subsystem and the
   <body>                 whole fence is replaced by the subsystem's output
@@ -45,12 +46,13 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from collections.abc import Mapping
 
 from . import paths, settings
 from . import messages as msgs
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 
-__all__ = ["expand_prompt", "PromptExpansionError"]
+__all__ = ["expand_prompt", "session_variables", "PromptExpansionError"]
 
 
 class PromptExpansionError(ValueError):
@@ -59,6 +61,18 @@ class PromptExpansionError(ValueError):
 
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_VARIABLE = re.compile(r"(?P<vbs>\\)?(?P<vtick>`)?%%(?P<variable>[A-Za-z_][A-Za-z0-9_]*)%%(?(vtick)`)")
+
+
+def session_variables(cfg) -> dict[str, str]:
+    """Built-in values for the session and effective model in ``cfg``."""
+    path = Path(getattr(cfg, "session_file", os.devnull)).expanduser().absolute()
+    return {
+        "CURRENT_SESSION": path.stem if path != Path(os.devnull) else "",
+        "CURRENT_SESSION_FULLPATH": str(path),
+        "CURRENT_SESSION_AGENT": getattr(cfg, "agent_id", ""),
+        "CURRENT_SESSION_MODEL": getattr(cfg, "model", ""),
+    }
 
 # One combined scanner: fenced block | inline | env shorthand. Matched in this
 # order so a ```!fence wins over the inline form. re.sub replaces each match
@@ -84,6 +98,7 @@ _DIRECTIVE = re.compile(
     r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
+    r"|" + _VARIABLE.pattern +
     r")",
     re.DOTALL,
 )
@@ -94,6 +109,7 @@ def expand_prompt(
     *,
     allow_code: bool = False,
     env: dict | None = None,
+    variables: Mapping[str, str] | None = None,
     timeout_s: int | None = None,
     max_output_bytes: int | None = None,
     on_error: str = "warn",
@@ -120,7 +136,7 @@ def expand_prompt(
     ``timeout_s`` and ``max_output_bytes`` left None take the js/jsrc values of
     limits.inline_code_timeout_s and limits.max_bash_output_bytes.
     """
-    if "{{" not in text and "!{" not in text and "```!" not in text:
+    if "{{" not in text and "!{" not in text and "```!" not in text and "%%" not in text:
         return text
     if timeout_s is None:
         timeout_s = settings.default_value("limits.inline_code_timeout_s")
@@ -128,6 +144,14 @@ def expand_prompt(
         max_output_bytes = settings.default_value("limits.max_bash_output_bytes")
 
     environ = os.environ if env is None else env
+    builtins = variables or {}
+
+    def _variable(m: re.Match) -> str:
+        if m.group("vbs") is not None:
+            return m.group(0)[1:]
+        if m.group("vtick") is not None:
+            return m.group(0)
+        return builtins.get(m.group("variable"), m.group(0))
 
     def _resolve(m: re.Match) -> str:
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
@@ -145,7 +169,7 @@ def expand_prompt(
                 # of the prompt the model reads.
                 return m.group("find") + _run_subsystem(
                     m.group("fsub"),
-                    m.group("fbody"),
+                    _VARIABLE.sub(_variable, m.group("fbody")),
                     allow_code,
                     environ,
                     timeout_s,
@@ -158,12 +182,14 @@ def expand_prompt(
             if m.group("isub") is not None:
                 return _run_subsystem(
                     m.group("isub"),
-                    (m.group("iargs") or "").strip(),
+                    _VARIABLE.sub(_variable, (m.group("iargs") or "").strip()),
                     allow_code,
                     environ,
                     timeout_s,
                     max_output_bytes,
                 )
+            if m.group("variable") is not None:
+                return _variable(m)
             # {{...}} env shorthand
             name = m.group("env").strip()
             if not _NAME.fullmatch(name):
