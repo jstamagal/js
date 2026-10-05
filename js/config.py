@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -139,6 +140,8 @@ class Config(_turn_settings.ConfigSettings):
     sampling_cli: Sampling = field(default_factory=Sampling)
     explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
+    invocation_model: bool = False  # model.id was set by a JS_* env var or --extra, not a jsrc file
+    invocation_reasoning: bool = False  # model.reasoning_effort was set by a JS_* env var or --extra, not a jsrc file
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -355,6 +358,14 @@ def resolve_agent_id(
     return agent_from_settings(_settings.collect_settings(config_paths=config_paths, extras=extras), agent_id)
 
 
+def _set_by_invocation(key: str, env: Mapping[str, str], extras: list[str] | None) -> bool:
+    """True when a JS_* env var or a --extra argument sets ``key`` for this run."""
+    spec = _settings.SPEC_BY_KEY[key]
+    if any(name in env for name in _settings.env_names_for(spec)):
+        return True
+    return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras or ())
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -498,5 +509,7 @@ def from_env(
         mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
+        invocation_model=_set_by_invocation("model.id", env, extras),
+        invocation_reasoning=_set_by_invocation("model.reasoning_effort", env, extras),
         **_turn_settings.project(js_root_settings),
     )

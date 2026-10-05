@@ -206,9 +206,12 @@ tools:
 explicitly disables reasoning; omitting it inherits the parent/provider setting.
 Invalid values fail agent loading rather than being silently ignored.
 
-Top-level `js --agent <id>` also applies that agent's manifest `model:` through
-the same route resolver. Operator pins win: `-m` / `--model`, `JS_MODEL`, or a
-configured non-default `model.id` leave the agent manifest model unused.
+Top-level `js --agent <id>` also applies that agent's manifest through the same
+route resolver. A one-shot `-p` run applies `model:` and `reasoning:` over the
+jsrc files; `-m` / `--model`, `--reasoning`, a `JS_*` env var or `--extra` win
+over the manifest, and a resumed session stays on its last stamp. The REPL,
+`--bench` and `--commit` apply `model:` only, and there a configured
+non-default `model.id` also leaves the manifest model unused.
 
 `subagents.lock_model = true` (`Config.lock_subagent_model`) removes the `task`
 tool's `model` parameter from both the model-facing description and the JSON

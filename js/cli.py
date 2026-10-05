@@ -2262,11 +2262,13 @@ def _config_owned(raw: str) -> bool:
     return parsed is None or setcmd.config_owns(parsed[0])
 
 
-def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
+def _apply_agent_model(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> Config:
     """Apply the active agent's agent.yaml `model:` through the resolver, unless
-    the operator pinned a model with -m / JS_MODEL / config."""
+    the operator pinned a model. -m, a JS_* env var and --extra always pin; a
+    jsrc `model.id` pins only when ``config_pins``."""
     agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
-    if not agent_model or model is not None or getattr(cfg, "explicit_model", False):
+    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
+    if not agent_model or model is not None or pinned:
         return cfg
     route = routing.resolve_model_route(
         agent_model,
@@ -2286,6 +2288,15 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
         provider_headers=route.headers,
         vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
     )
+
+
+def _apply_agent_reasoning(cfg: Config, prompt_spec) -> Config:
+    """Apply the active agent's agent.yaml `reasoning:` unless a JS_* env var
+    or --extra set the effort for this run."""
+    effort = getattr(prompt_spec, "reasoning_effort", None) if prompt_spec is not None else None
+    if effort is None or getattr(cfg, "invocation_reasoning", False):
+        return cfg
+    return replace(cfg, reasoning_effort=effort)
 
 
 def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
@@ -2332,7 +2343,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 presets: list[str] | None = None,
                 stats_json: str | None = None, stats_csv: str | None = None,
                 caller_key: str | None = None, announce_generated: bool | None = None,
-                events: headless.JsonEvents | None = None) -> int:
+                events: headless.JsonEvents | None = None,
+                config_pins: bool = False) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         msgs.warn(msgs.PROMPT_EMPTY)
@@ -2391,11 +2403,15 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         system = prompt_spec.system
         active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         try:
-            cfg = _apply_agent_model(cfg, prompt_spec, model)
+            # A resumed session stays on its stamp; agent.yaml sets a fresh run.
+            if config_pins or resumed is None:
+                cfg = _apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
         except ValueError as e:
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=e)
             return 2
+        if not config_pins and resumed is None and reasoning_override is None:
+            cfg = _apply_agent_reasoning(cfg, prompt_spec)
         cfg = _apply_agent_max_tokens(cfg, prompt_spec)
 
     try:
@@ -2932,6 +2948,7 @@ def _run_commit(target: str | None,
         reasoning=reasoning,
         maxout=maxout,
         extras=extras,
+        config_pins=True,
         tool_context=ToolContext(cwd=target_dir),
         ignore_local_config=ignore_local_config,
         ignore_global_config=ignore_global_config,
@@ -3911,7 +3928,8 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         raw_spec = None
 
     try:
-        cfg = _apply_agent_model(cfg, raw_spec, model)
+        cfg = _apply_agent_model(cfg, raw_spec, model, config_pins=False)
+        cfg = _apply_agent_reasoning(cfg, raw_spec)
         cfg = _resolve_cli_model_override(cfg, model)
     except Exception as e:  # noqa: BLE001 — model routing cannot prevent a prompt preview
         msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")

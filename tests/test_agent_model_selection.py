@@ -435,3 +435,83 @@ def test_js_namespace_env_routes_without_any_login():
     assert route.model == "custom-model"
     assert route.base_url == "http://js-directed.test/v1"
     assert route.api_key == "sk-js"
+
+
+def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nreasoning: low\ntools: []\n"):
+    """A HOME whose jsrc pins a model and effort and whose `pinned` agent names its own."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL", "JS_REASONING", "JS_MODEL_ID", "JS_MODEL_REASONING_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".js").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".js" / "jsrc").write_text(
+        "set model.id jsrc-model\nset model.reasoning_effort high\n", encoding="utf-8")
+    _write_agent_dir(tmp_path / ".js" / "agents", "pinned", manifest)
+
+    seen: dict = {}
+
+    def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
+        override = kwargs.get("reasoning_effort_override", cfg.reasoning_effort)
+        seen["model"] = kwargs.get("model_override") or cfg.model
+        seen["effort"] = override
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    return seen
+
+
+def test_one_shot_agent_manifest_beats_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+
+    assert cli._run_prompt("foo", agent="pinned", save=False) == 0
+
+    assert seen == {"model": "agent-model", "effort": "low"}
+
+
+def test_one_shot_without_manifest_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path, manifest="tools: []\n")
+
+    assert cli._run_prompt("foo", agent="pinned", save=False) == 0
+
+    assert seen == {"model": "jsrc-model", "effort": "high"}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "env", "expected"),
+    [
+        ({"model": "flag-model"}, {}, {"model": "flag-model", "effort": "low"}),
+        ({"reasoning": "xhigh"}, {}, {"model": "agent-model", "effort": "xhigh"}),
+        ({}, {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
+        ({}, {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
+        ({"extras": ["model.id=extra-model"]}, {}, {"model": "extra-model", "effort": "low"}),
+        ({"extras": ["model.reasoning_effort=medium"]}, {}, {"model": "agent-model", "effort": "medium"}),
+    ],
+)
+def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, kwargs, env, expected):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    assert cli._run_prompt("foo", agent="pinned", save=False, **kwargs) == 0
+
+    assert seen == expected
+
+
+def test_one_shot_config_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+
+    assert cli._run_prompt("foo", agent="pinned", save=False, config_pins=True) == 0
+
+    assert seen == {"model": "jsrc-model", "effort": "high"}
+
+
+def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+    assert cli._run_prompt("foo", agent="pinned", session="kept") == 0
+    assert seen == {"model": "agent-model", "effort": "low"}
+
+    (tmp_path / ".js" / "agents" / "pinned" / "agent.yaml").write_text(
+        "model: other-model\nreasoning: xhigh\ntools: []\n", encoding="utf-8")
+    assert cli._run_prompt("again", agent="pinned", session="kept") == 0
+
+    assert seen == {"model": "agent-model", "effort": "low"}

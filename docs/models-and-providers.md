@@ -113,10 +113,14 @@ js -m "model/id" -p "prompt"
 `-m` / `--model` overrides the effective configured/env model for that run:
 layered config and `JS_MODEL`.
 
-Agent manifests may also declare `model:` in `agent.yaml`. `js --agent <id>`
-applies that model unless the operator has pinned one with `-m` / `--model`,
-`JS_MODEL`, or a configured non-default `model.id`. Subagent-specific precedence
-and lock behavior live in [subagents.md](subagents.md).
+Agent manifests may also declare `model:` and `reasoning:` in `agent.yaml`.
+A one-shot `js --agent <id> -p` applies both over the jsrc files; only what the
+run itself names wins over them: `-m` / `--model`, `--reasoning`, a `JS_*` env
+var, or `--extra`. A resumed session stays on the model and effort of its last
+stamp. The REPL, `--bench` and `--commit` apply the manifest `model:` unless
+the operator has pinned one with `-m` / `--model`, `JS_MODEL`, or a configured
+non-default `model.id`, and do not apply `reasoning:`. Subagent-specific
+precedence and lock behavior live in [subagents.md](subagents.md).
 
 REPL:
 
