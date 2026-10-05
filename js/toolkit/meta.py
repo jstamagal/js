@@ -164,6 +164,7 @@ async def _run_one_task_async(
 ) -> str:
     from .. import memory as M
     from .. import persona as P
+    from .. import agent_messages
     from ..runtime import Telemetry, run_turn_async
     from ..sampling import Sampling
     from .. import routing
@@ -247,20 +248,25 @@ async def _run_one_task_async(
         record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                              mode="subagent", parent=parent_cfg.session_file)
     messages = M.load_replay_messages(cfg.session_file)
-    messages.append(M.note_time({"role": "user", "content": prompt}))
     parent_hooks = getattr(parent_context, "tool_call_hooks", None)
+    telemetry = Telemetry(debug_log=cfg.debug_log)
+    turn_kwargs = {
+        "trace_override": False,
+        "tool_registry": registry,
+        "tool_context": child_context,
+        "suppress_output": True,
+        "sampling": sampling,
+        "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
+    }
     try:
+        await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
+        messages.append(M.note_time({"role": "user", "content": prompt}))
         await run_turn_async(
             cfg,
             system,
             messages,
-            Telemetry(debug_log=cfg.debug_log),
-            trace_override=False,
-            tool_registry=registry,
-            tool_context=child_context,
-            suppress_output=True,
-            sampling=sampling,
-            event_hooks=None if parent_hooks is None else RefusableOnly(parent_hooks),
+            telemetry,
+            **turn_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         return f"ERROR {type(exc).__name__}: {exc}"

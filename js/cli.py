@@ -30,6 +30,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from . import supervisor
 
 from . import attach, clipimage, codex_auth, colors as C
+from . import agent_messages
 from . import compaction
 from . import display as display_mod
 from . import dotenv
@@ -2445,11 +2446,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     user_bundle = _note_model_switch(cfg, user_bundle)
     if cut_off:
         user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
-    messages.append(user_bundle.runtime_message)
-    if save:
-        _append_turn(cfg, user_bundle.history_message)
-    if (sink := _transcript_sink(telemetry)) is not None:
-        sink.write_user(prompt)
     call_stats: list[dict] = []
     turn_kwargs = {
         "model_override": cfg.model,
@@ -2473,6 +2469,28 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         sink_paths.append(Path(debug_file))
     trace_sink = _open_debug_trace_sink(sink_paths)
     telemetry.trace_sink = trace_sink
+    user_started = False
+    turn_transcript = _transcript_sink(telemetry)
+
+    def run() -> None:
+        nonlocal before_len, user_started
+        if prompt_spec is not None and prompt_spec.exchanges and not messages:
+            model_client.run_owning_loop(agent_messages.initialize(
+                cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript), save=save,
+                trace_override=debug or bool(debug_file) or cfg.trace,
+                tool_context=tool_context, **turn_kwargs,
+            ))
+        before_len = len(messages)
+        messages.append(user_bundle.runtime_message)
+        user_started = True
+        if save:
+            _append_turn(cfg, user_bundle.history_message)
+        if turn_transcript is not None:
+            turn_transcript.write_user(prompt)
+        runtime.run_turn(cfg, system, messages, telemetry,
+                         trace_override=debug or bool(debug_file) or cfg.trace,
+                         tool_context=tool_context, **turn_kwargs)
+
     try:
         try:
             if debug:
@@ -2487,7 +2505,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                         else contextlib.nullcontext()
                     )
                     with stdout_ctx:
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
+                        run()
             else:
                 # Plain and --debug-file: stdout carries only the final answer,
                 # reprinted below. The log captures the streamed answer plus, for
@@ -2506,8 +2524,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     capture = _StdoutTee(sys.stderr, trace_sink) if trace_sink is not None else sys.stderr
                 try:
                     with contextlib.redirect_stdout(capture):
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=trace or bool(debug_file),
-                                         tool_context=tool_context, **turn_kwargs)
+                        run()
                 finally:
                     telemetry.transcript_log = visible_transcript
                     telemetry.display_factory = visible_display
@@ -2521,9 +2538,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             return 1
     finally:
         try:
-            _replace_runtime_user_message(
-                messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
-            )
+            if user_started:
+                _replace_runtime_user_message(
+                    messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
+                )
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
         finally:
@@ -2679,11 +2697,11 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         return 2
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
+        benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2
 
-    benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
     if not benchmarks:
         msgs.warn(msgs.NO_BENCHMARKS, agent=agent_id)
         return 2
@@ -2699,7 +2717,6 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     agent_default_max = prompt_spec.max_output_tokens
     prompt_spec = P._expand_spec(prompt_spec, cfg)
     system = prompt_spec.system
-    allow_code = bool(getattr(cfg, "allow_inline_code", False))
 
     rows: list[dict] = []
     interrupted = False
@@ -2712,14 +2729,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             eff_max = bench.max_tokens
         else:
             eff_max = agent_default_max
-        prompt_text = expand_prompt(
-            bench.prompt,
-            variables=session_variables(cfg),
-            allow_code=allow_code,
-            timeout_s=cfg.inline_code_timeout_s,
-            max_output_bytes=cfg.max_bash_output_bytes,
-        )
-        messages = [{"role": "user", "content": prompt_text}]
+        prompt_text = bench.prompt
+        messages = []
         call_stats: list[dict] = []
         turn_kwargs = {
             "model_override": cfg.model,
@@ -2743,8 +2754,19 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                 # -d turns on the per-turn trace here too. Without it a bench run
                 # records only the model's prose, which is its own claim about
                 # what it called, not evidence — useless for measuring tool use.
-                runtime.run_turn(cfg, system, messages, runtime.Telemetry(debug_log=cfg.debug_log),
-                                 trace_override=bool(debug), **turn_kwargs)
+                async def run_benchmark():
+                    nonlocal prompt_text
+                    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+                    await agent_messages.initialize(
+                        cfg, prompt_spec, messages, telemetry, trace_override=bool(debug), **turn_kwargs,
+                    )
+                    prompt_text = P.expand_agent_text(bench.prompt, cfg)
+                    messages.append({"role": "user", "content": prompt_text})
+                    await runtime.run_turn_async(
+                        cfg, system, messages, telemetry, trace_override=bool(debug), **turn_kwargs,
+                    )
+
+                model_client.run_owning_loop(run_benchmark())
         except KeyboardInterrupt:
             interrupted, ok, err = True, False, "interrupted"
         except Exception as e:  # noqa: BLE001
@@ -3412,6 +3434,24 @@ def _resume_view(state: dict, width: int) -> str:
     )
 
 
+async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
+    if not prompt_spec.exchanges or state["messages"]:
+        return
+    turn_cfg = _cfg_for_live_state(cfg, state)
+    try:
+        await agent_messages.initialize(
+            turn_cfg, prompt_spec, state["messages"], telemetry, system=state["system"],
+            tool_registry=state["tool_registry"],
+            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            event_hooks=state.get("events"), mcp_host=state.get("mcp_host"),
+            suppress_output=True,
+        )
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        msgs.warn(msgs.TURN_INTERRUPTED)
+    except Exception as exc:  # noqa: BLE001
+        msgs.warn(msgs.FAILED, error=_error_text(exc))
+
+
 async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
     """Non-blocking REPL: input, the active turn, and subagents all share ONE
     event loop. The screen has three regions (scrollback, status, input); turn
@@ -3420,6 +3460,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     steers it or queues behind it, per runtime.steer."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
+    await _initialize_repl_agent(cfg, state, telemetry, prompt_spec)
     sup = supervisor.Supervisor(loop)
     supervisor.set_current(sup)
     queue: asyncio.Queue = asyncio.Queue()
@@ -3635,6 +3676,8 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         pastes.key_bindings(lambda: state["settings"]),
     ])
     _emit_session_event(state, telemetry, cfg, "session_start")
+    if prompt_spec.exchanges and not state["messages"]:
+        mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
     while state["running"]:
         try:
             line = pastes.expand(session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"))).strip()
@@ -4256,6 +4299,26 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                            extra_context=extra_context, extras=args.extras,
                            ignore_local_config=args.ignore_local,
                            ignore_global_config=args.ignore_global, presets=presets)
+
+    try:
+        automatic_agent = _invocation_agent(args, presets)
+        automatic_dir = P._most_specific_prompt_dir(
+            automatic_agent, Path(P.__file__).resolve().parents[1] / "prompts",
+            _paths.global_agents_dir(), Path.cwd() / ".js" / "agents",
+        )
+    except ValueError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+    if P.has_benchmarks(automatic_dir):
+        if args.json:
+            msgs.warn(msgs.JSON_NEEDS_LIST)
+            return 2
+        return _run_bench(
+            automatic_agent, model=args.model, reasoning=args.reasoning,
+            maxout=args.max_out, quiet=args.quiet, extras=args.extras,
+            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            presets=presets, stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,
+        )
 
     if args.files and args.prompt is None and sys.stdin.isatty():
         msgs.warn(msgs.FILE_NEEDS_PROMPT)

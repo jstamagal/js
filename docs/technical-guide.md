@@ -62,7 +62,7 @@ persists each completed turn.
 
 ## Prompt Loading
 
-Prompt files (`*.md`, minus `NN-benchmark.md`) are sorted by filename and
+System-prompt files (`*.md`, minus the user/agent and benchmark files below) are sorted by filename and
 concatenated with blank lines. The manifest is `agent.yaml` in the same
 directory:
 
@@ -81,6 +81,42 @@ resolution and `tools.yaml` are described in [tool-system.md](tool-system.md).
 No entries means no tools exposed to the model. A `00-tools.yaml` or a
 frontmatter `00*.md` fails the load with a line naming `agent.yaml`; `just
 migrate-agents` converts them.
+
+### Message files
+
+`N-user.md` and `N-agent.md` initialize a new conversation, ordered by the
+numeric `N` (any width; `-` or `_` separators). Matching numbers form an
+exchange: the user file is recorded as a user message, then the agent file as
+an assistant message, without calling the model. A user file without a matching
+agent file runs a normal model turn; an agent file without a user file records
+an assistant message on its own. Bare `user.md` and `agent.md` are exchange 0.
+Two files defining the same numeric role are an error.
+
+Message contents retain their whitespace and are expanded when reached, using
+the same [prompt expansion](inline-directives.md) as system text. In saved
+sessions, every message and generated reply is saved before the next file expands, so an inline command
+can inspect the preceding exchange through `%%CURRENT_SESSION_FULLPATH%%`.
+They remain ordinary session history on resume; initialization is only applied
+to conversations without prior messages. This applies to the REPL, `-p`, pipe
+runs, and task agents. Other filenames, such as `01-troop.md`, `02-ape.md` and
+`03-env.md`, including symlinks, continue to supply system text.
+
+### Benchmark mode
+
+A `benchmark.md`, `N-benchmark.md`, or other filename ending in `-benchmark.md`
+or `_benchmark.md` selects benchmark mode automatically for the resolved agent.
+`js --agent codebench` runs its benchmarks rather than entering the REPL; the
+explicit `js --bench codebench` form also works. Even an empty benchmark file
+selects this mode (and reports no runnable benchmarks rather than entering the
+REPL). Explicit maintenance modes such as `--commit` and `--printonly` retain
+their own behavior.
+
+Each benchmark starts a fresh, unsaved conversation with the system prompt and
+any user/agent setup exchanges, then sends the benchmark body as its user
+message. Benchmark text expands after that setup. Conversations do not carry
+across benchmarks. Benchmark frontmatter may set `max_tokens`; `--max-out`
+overrides it. Timing and token statistics are printed, with `--stats-json` and
+`--stats-csv` available for reports.
 
 ## Default Registry
 

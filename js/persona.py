@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -28,6 +29,7 @@ class PromptSpec:
     # The assembled prompt files before directive expansion. `system` is what the
     # model is sent; for a spec that was never expanded the two are equal.
     source: str = ""
+    exchanges: tuple[AgentExchange, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -46,6 +48,37 @@ class Benchmark:
     prompt: str                  # the one-shot user turn (file body)
     max_tokens: int | None       # coerced per-benchmark cap; None = uncapped/default
     max_tokens_set: bool         # whether the frontmatter set max_tokens (distinguishes absent from -1)
+
+
+@dataclass(frozen=True)
+class AgentExchange:
+    """One numbered user/agent exchange, kept unexpanded until initialization."""
+    number: int
+    user: str | None = None
+    agent: str | None = None
+
+
+_MESSAGE_FILE = re.compile(r"(?:(\d+)[-_])?(user|agent)")
+
+
+def _is_message_file(path: Path) -> bool:
+    return _MESSAGE_FILE.fullmatch(path.stem) is not None
+
+
+def _load_exchanges(md_files: list[Path]) -> tuple[AgentExchange, ...]:
+    numbered: dict[int, dict[str, str]] = {}
+    for path in md_files:
+        match = _MESSAGE_FILE.fullmatch(path.stem)
+        if match is None:
+            continue
+        number = int(match[1] or 0)
+        role = match[2]
+        exchange = numbered.setdefault(number, {})
+        if role in exchange:
+            raise ValueError(f"duplicate {role} file for exchange {number}: {path}")
+        with path.open(encoding="utf-8", newline="") as stream:
+            exchange[role] = stream.read()
+    return tuple(AgentExchange(number, **numbered[number]) for number in sorted(numbered))
 
 
 def _is_zero_file(path: Path) -> bool:
@@ -90,7 +123,7 @@ def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
     if legacy is not None:
         raise ValueError(f"{legacy} is no longer read; {_MIGRATE_HINT}")
     for path in md_files:
-        if _is_zero_file(path) and path.read_text(encoding="utf-8").startswith("---"):
+        if _is_zero_file(path) and not _is_message_file(path) and path.read_text(encoding="utf-8").startswith("---"):
             raise ValueError(f"frontmatter in {path} is no longer read; {_MIGRATE_HINT}")
 
 
@@ -251,7 +284,7 @@ def load_agent_prompt_spec(
         # zero tools and default model/sampling.
         manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
         if manifest_dir is not None and manifest_dir != prompt_dir:
-            spec = _with_system(load_prompt_spec(manifest_dir), spec.system)
+            spec = replace(_with_system(load_prompt_spec(manifest_dir), spec.system), exchanges=spec.exchanges)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
@@ -297,12 +330,12 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
     for path in md_files:
-        if _is_benchmark_file(path):
+        if _is_benchmark_file(path) or _is_message_file(path):
             continue  # --bench turns, never persona text (see load_benchmarks)
         body = path.read_text(encoding="utf-8").rstrip()
         if body:
             parts.append(body)
-    return _with_system(spec, "\n\n".join(parts) + "\n")
+    return replace(_with_system(spec, "\n\n".join(parts) + "\n"), exchanges=_load_exchanges(md_files))
 
 
 
@@ -368,8 +401,13 @@ def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
     return out
 
 
-def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
-    """Expand {{VAR}} / !{sub ...} / ```!sub directives in the assembled system prompt."""
+def has_benchmarks(prompts_dir: Path) -> bool:
+    """Whether this agent selects benchmark mode, including empty benchmark files."""
+    return any(_is_benchmark_file(path) for path in prompts_dir.glob("*.md"))
+
+
+def expand_agent_text(text: str, cfg) -> str:
+    """Expand trusted agent text with this session's built-ins and code policy."""
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
     timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
     max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
@@ -381,13 +419,18 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.
     os.environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
-    system = expand_prompt(
-        spec.system,
+    return expand_prompt(
+        text,
         allow_code=allow_code,
         timeout_s=timeout_s,
         max_output_bytes=max_output_bytes,
-        **({"variables": session_variables(cfg)} if "%%" in spec.system else {}),
+        **({"variables": session_variables(cfg)} if "%%" in text else {}),
     )
+
+
+def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
+    """Expand directives in the assembled system prompt, retaining its source."""
+    system = expand_agent_text(spec.system, cfg)
     if system == spec.system:
         return spec
     return replace(spec, system=system, source=spec.source)

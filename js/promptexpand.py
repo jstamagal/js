@@ -1,6 +1,6 @@
 r"""Inline directive expansion for js system prompts.
 
-Three forms are resolved before the assembled system prompt reaches the model:
+Four forms are resolved before trusted prompt text reaches the model:
 
   {{NAME}}            -> value of environment variable NAME (unset -> "")
   %%NAME%%            -> value of a js built-in variable
@@ -17,7 +17,8 @@ what an inline is activating. Subsystems are a registry:
   python, py,    run when ``allow_code`` is true, which is the DEFAULT
   c, node, js    (``runtime.allow_inline_code``). Opt out with ``--im-a-pussy``
                  (or ``set runtime.allow_inline_code off`` / ``JS_ALLOW_INLINE_CODE=0``);
-                 a code directive then stays literal. Body is passed raw.
+                 a code directive then stays literal. Built-ins in its body
+                 are substituted before execution.
 
 Expansion is a SINGLE pass: a directive's output is never re-scanned, so a value
 (or a command's stdout) that happens to contain another ``!{...}`` / ``{{...}}``
@@ -114,7 +115,7 @@ def expand_prompt(
     max_output_bytes: int | None = None,
     on_error: str = "warn",
 ) -> str:
-    """Return ``text`` with ``{{VAR}}`` / ``!{sub ...}`` / ```` ```!sub ```` directives expanded.
+    """Expand ``%%VAR%%``, ``{{VAR}}``, inline and fenced subsystem directives.
 
     ``on_error`` governs what happens when a single directive cannot be resolved
     (unknown subsystem, a code subsystem while ``allow_code`` is false, an
@@ -132,6 +133,9 @@ def expand_prompt(
     ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
     code subsystems (sh/bash/python/node/c) always execute against the real
     process environment.
+
+    ``variables`` supplies the independent js built-ins, including substitutions
+    in subsystem bodies. Unknown built-ins stay literal.
 
     ``timeout_s`` and ``max_output_bytes`` left None take the js/jsrc values of
     limits.inline_code_timeout_s and limits.max_bash_output_bytes.

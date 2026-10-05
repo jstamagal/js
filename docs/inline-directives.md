@@ -22,8 +22,8 @@ variables and of any filename convention:
 
 | Variable | Value |
 | --- | --- |
-| `CURRENT_SESSION` | Session filename without `.jsonl`, e.g. `2026-10-04T1947-31ef`. Empty for an unsaved run. |
-| `CURRENT_SESSION_FULLPATH` | Absolute session JSONL path. `/dev/null` for an unsaved run, including benchmarks. |
+| `CURRENT_SESSION` | Session filename without `.jsonl`, e.g. `2026-10-04T1947-31ef`. Empty when no session file is selected. |
+| `CURRENT_SESSION_FULLPATH` | Absolute session JSONL path. `/dev/null` for runs without a session, including benchmarks. |
 | `CURRENT_SESSION_AGENT` | Active agent id. |
 | `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
 
@@ -37,6 +37,10 @@ bodies before the subsystem runs. Quote path values in shell commands. Unknown
 names stay literal. A backslash or a fully enclosing inline backtick span keeps
 a variable literal, just as for the other directive forms. Substituted values
 and subsystem output are never scanned again.
+
+The same expansion is used for [user/agent message files and benchmarks](technical-guide.md#message-files).
+Message files expand in conversation order, after preceding exchanges are saved;
+benchmark bodies expand after their optional user/agent setup.
 
 ### `{{NAME}}` — environment shorthand
 
