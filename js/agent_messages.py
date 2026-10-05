@@ -15,7 +15,8 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
     """
     if messages:
         return
-    stamp = memory.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
+    reasoning = turn_kwargs.get("reasoning_effort_override", cfg.reasoning_effort)
+    stamp = memory.stamp_for(cfg.model, cfg.provider_id, reasoning)
     sink = telemetry.transcript_log
     for exchange in spec.exchanges:
         if exchange.user is not None:

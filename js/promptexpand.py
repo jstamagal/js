@@ -75,14 +75,14 @@ def session_variables(cfg) -> dict[str, str]:
         "CURRENT_SESSION_MODEL": getattr(cfg, "model", ""),
     }
 
-# One combined scanner: fenced block | inline | env shorthand. Matched in this
+# One combined scanner: fenced block | inline | env shorthand | built-in. Matched in this
 # order so a ```!fence wins over the inline form. re.sub replaces each match
 # independently and never re-scans the replacement (single pass / injection-safe).
 #
-# A leading ``bs`` backslash escapes ANY of the three forms: when present the
+# A leading backslash escapes any form: when present the
 # whole match is emitted verbatim minus that backslash (see _resolve) -- the only
-# escape that reaches the fenced block. The inline / env forms additionally carry
-# an optional leading backtick (itick / etick); the trailing ``(?(name)`)``
+# escape that reaches the fenced block. The inline / env / built-in forms additionally carry
+# an optional leading backtick (itick / etick / vtick); the trailing ``(?(name)`)``
 # matches a closing backtick ONLY when the leading one was captured, so a directive
 # fully wrapped in a backtick code span is matched as a unit and emitted literally,
 # while a directive with no backticks -- or only a stray leading one -- backtracks

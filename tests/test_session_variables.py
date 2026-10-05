@@ -89,3 +89,23 @@ def test_system_variable_uses_the_model_selected_for_the_run(tmp_path, monkeypat
     assert cli._run_prompt("hello", model=cli_model, save=False) == 0
     model = "agent-model" if cli_model is None else "cli-model"
     assert seen == [(model, f"model={model}\n")]
+
+
+@pytest.mark.parametrize("cli_model", [None, "ollama/cli-model"])
+@pytest.mark.parametrize("section", ["e", "i", "b"])
+def test_printonly_variable_uses_the_model_selected_for_the_run(tmp_path, monkeypatch, capsys, cli_model, section):
+    monkeypatch.chdir(tmp_path)
+    logins.save_login(logins.Login(provider_id="ollama"))
+    agent = tmp_path / ".js" / "agents" / "voice"
+    agent.mkdir(parents=True)
+    (agent / "agent.yaml").write_text("model: ollama/agent-model\n", encoding="utf-8")
+    (agent / "01-role.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
+    (agent / "01-benchmark.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
+    cfg = replace(from_env(save_session=False, agent_id="voice"), explicit_model=False)
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    argv = ["--agent", "voice", f"--printonly={section}"]
+    if cli_model is not None:
+        argv.extend(["--model", cli_model])
+    assert cli.main(argv) == 0
+    model = "agent-model" if cli_model is None else "cli-model"
+    assert f"model={model}" in capsys.readouterr().out

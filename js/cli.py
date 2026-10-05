@@ -2692,6 +2692,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             ignore_local_config=ignore_local_config,
             ignore_global_config=ignore_global_config, presets=presets,
         )
+        cfg = replace(cfg, session_file=Path(os.devnull))
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -2758,7 +2759,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                     nonlocal prompt_text
                     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
                     await agent_messages.initialize(
-                        cfg, prompt_spec, messages, telemetry, trace_override=bool(debug), **turn_kwargs,
+                        cfg, prompt_spec, messages, telemetry, save=False,
+                        trace_override=bool(debug), **turn_kwargs,
                     )
                     prompt_text = P.expand_agent_text(bench.prompt, cfg)
                     messages.append({"role": "user", "content": prompt_text})
@@ -3678,6 +3680,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     _emit_session_event(state, telemetry, cfg, "session_start")
     if prompt_spec.exchanges and not state["messages"]:
         mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
+        print(_resume_view(state, display_mod.terminal_width() - 1), end="")
     while state["running"]:
         try:
             line = pastes.expand(session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"))).strip()
@@ -3885,6 +3888,7 @@ def _raw_configured_spec(cfg):
 
 
 def _printonly_run(spec: str, *, agent: str | None = None, session: str | None = None,
+                   model: str | None = None,
                    extras: list[str] | None = None, ignore_local_config: bool = False,
                    ignore_global_config: bool = False, presets: list[str] | None = None) -> int:
     letters, count, path = _printonly_slots(spec)
@@ -3905,6 +3909,12 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.PRINTONLY_NO_PROMPT, error=f"{type(e).__name__}: {e}")
         raw_spec = None
+
+    try:
+        cfg = _apply_agent_model(cfg, raw_spec, model)
+        cfg = _resolve_cli_model_override(cfg, model)
+    except Exception as e:  # noqa: BLE001 — model routing cannot prevent a prompt preview
+        msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
 
     allow_code = bool(getattr(cfg, "allow_inline_code", True))
     timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
@@ -4251,7 +4261,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 
     if args.printonly is not None:
         return _printonly_run(
-            args.printonly, agent=cli_agent, session=args.session, extras=args.extras,
+            args.printonly, agent=cli_agent, session=args.session, model=args.model, extras=args.extras,
             ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
             presets=presets,
         )

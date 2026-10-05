@@ -97,7 +97,8 @@ the same [prompt expansion](inline-directives.md) as system text. In saved
 sessions, every message and generated reply is saved before the next file expands, so an inline command
 can inspect the preceding exchange through `%%CURRENT_SESSION_FULLPATH%%`.
 They remain ordinary session history on resume; initialization is only applied
-to conversations without prior messages. This applies to the REPL, `-p`, pipe
+to conversations without prior messages. Interrupted setup retains its recorded
+prefix as history. This applies to the REPL, `-p`, pipe
 runs, and task agents. Other filenames, such as `01-troop.md`, `02-ape.md` and
 `03-env.md`, including symlinks, continue to supply system text.
 

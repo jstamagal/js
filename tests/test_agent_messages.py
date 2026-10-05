@@ -7,6 +7,7 @@ import pytest
 from js import cli, memory, persona, runtime, session_store
 from js.config import from_env
 from js.model_client import ModelStreamResult
+from js.session_catalog import last_stamp
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
 from repl_driver import run_async, run_blocking
@@ -256,3 +257,32 @@ def test_transcript_keeps_startup_exchanges_in_conversation_order(tmp_path, monk
         assert cli._run_prompt("typed prompt", session="seeded") == 0
     logs = (tmp_path / "transcript" / "seeded.log").read_text(encoding="utf-8")
     assert logs.index("opening prompt") < logs.index("opening reply") < logs.index("typed prompt") < logs.index("typed reply")
+
+
+def test_blocking_repl_shows_the_generated_startup_reply(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
+    _model(monkeypatch, ["VISIBLE_OPENING_REPLY"])
+    run_blocking(from_env(session="seeded"), [])
+    assert "VISIBLE_OPENING_REPLY" in capsys.readouterr().out
+
+
+def test_benchmarks_never_write_to_a_session_selected_by_environment(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {
+        "01-user.md": "opening %%CURRENT_SESSION_FULLPATH%%", "02-benchmark.md": "benchmark",
+    })
+    cfg = from_env(session="valuable")
+    memory.append_message(cfg.session_file, {"role": "user", "content": "valuable question"})
+    memory.append_message(cfg.session_file, {"role": "assistant", "content": "valuable reply"})
+    before = cfg.session_file.read_bytes()
+    monkeypatch.setenv("JS_SESSION", "valuable")
+    requests = _model(monkeypatch, ["opening reply", "benchmark reply"])
+    assert cli.main(["--bench", "voice", "-q"]) == 0
+    assert cfg.session_file.read_bytes() == before
+    assert requests[0][-1] == ("user", "opening /dev/null")
+
+
+def test_startup_reply_records_effective_reasoning_when_the_following_turn_fails(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
+    _model(monkeypatch, ["opening reply", RuntimeError("following turn failed")])
+    assert cli._run_prompt("now", session="seeded", reasoning="high") == 1
+    assert last_stamp(_saved(tmp_path))["reasoning"] == "high"
