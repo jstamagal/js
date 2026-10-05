@@ -310,6 +310,25 @@ def test_user_skill_shadows_builtin_of_same_name(tmp_path):
     assert catalog.load("grilling") == "my grilling"
 
 
+def test_skill_symlinked_into_both_global_roots_is_not_reported_as_a_collision(tmp_path, capsys):
+    shared = tmp_path / "shared"
+    native = tmp_path / "native"
+    _write(shared / "linked-skill-7c1" / "SKILL.md", "linked body")
+    _write(shared / "copied-skill-7c1" / "SKILL.md", "shared copy")
+    native.mkdir()
+    (native / "linked-skill-7c1").symlink_to(shared / "linked-skill-7c1", target_is_directory=True)
+    copied = _write(native / "copied-skill-7c1" / "SKILL.md", "native copy")
+
+    catalog = discover_skills(tmp_path / "project", builtin_dir=tmp_path / "none",
+                              global_dir=native, user_dir=shared)
+
+    err = capsys.readouterr().err
+    assert catalog.load("linked-skill-7c1") == "linked body"
+    assert "linked-skill-7c1" not in err
+    assert catalog.get("copied-skill-7c1").path == copied
+    assert str(shared / "copied-skill-7c1" / "SKILL.md") in err
+
+
 def test_each_builtin_skill_names_its_upstream_source():
     from js.skills import BUILTIN_SKILLS_DIR
 

@@ -268,6 +268,13 @@ def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tup
     return tuple(name for name in required if name in names)
 
 
+def _same_file(first: Path, second: Path) -> bool:
+    try:
+        return Path(first).resolve() == Path(second).resolve()
+    except OSError:
+        return False
+
+
 def discover_skills(
     project_dir: Path,
     *,
@@ -312,7 +319,8 @@ def discover_skills(
                 root_records[key] = record
             for key, record in root_records.items():
                 prior = layer_records.get(key)
-                if prior is not None:
+                # A dir symlinked into both roots is one skill, not a collision.
+                if prior is not None and not _same_file(prior.metadata.path, record.metadata.path):
                     _warn_once(msgs.SKILL_OVERRIDES.text(
                         name=record.metadata.name, path=record.metadata.path, prior=prior.metadata.path))
             layer_records.update(root_records)
