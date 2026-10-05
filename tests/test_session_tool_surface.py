@@ -107,6 +107,20 @@ def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path):
             assert not tracker.limit_reached()
 
 
+def test_unknown_tool_error_names_only_tools_the_agent_has(tmp_path):
+    eager = build_default_registry().select(['shell:eager', 'read:eager', 'write:eager'])
+    assert 'tool_discovery' not in eager.by_name
+    for name in ('dose_shell', 'imaginary'):
+        assert 'tool_discovery' not in eager.unavailable_error(name)
+    assert 'tool_discovery' not in eager.unavailable_error('patch')
+    assert 'shell' in eager.unavailable_error('dose_shell').replace('dose_shell', '')
+    assert 'write' in eager.unavailable_error('canal_write').replace('canal_write', '')
+
+    lazy = build_default_registry().select(['shell:lazy']).lazy_surface(tmp_path)
+    assert 'tool_discovery' in lazy.by_name
+    assert 'tool_discovery' in lazy.unavailable_error('imaginary')
+
+
 def test_load_does_not_authorize_sibling_and_next_call_can_recover(tmp_path, monkeypatch):
     responses = iter([
         _result(('load', 'tool_discovery', '{"load":"native:shell"}'),

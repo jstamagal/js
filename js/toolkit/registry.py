@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import threading
 from dataclasses import dataclass, field, replace
@@ -16,6 +17,17 @@ from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
 from . import lsp, notebook
+
+
+def _closest_tool_name(name: str, names: Iterable[str]) -> str:
+    """The published tool a mistyped ``name`` most likely meant, or ""."""
+    candidates = list(names)
+    lowered = name.lower()
+    suffixed = [c for c in candidates if lowered.endswith(f"_{c.lower()}")]
+    if suffixed:
+        return max(suffixed, key=len)
+    close = difflib.get_close_matches(name, candidates, n=1)
+    return close[0] if close else ""
 
 
 @dataclass(frozen=True)
@@ -41,11 +53,19 @@ class ToolRegistry:
         canonical = self.aliases.get(str(name).strip().lower(), str(name).strip())
         if canonical in self.unavailable_errors:
             return self.unavailable_errors[canonical]
+        names = self.by_name
+        has_discovery = discovery.DISCOVERY_TOOL_NAME in names
         if canonical in (self.known_names or ()):
-            return (f"ERROR: {canonical} is not allowed by this agent's tool policy. "
-                    "tool_discovery cannot load it here.")
-        return (f"ERROR: unknown tool {canonical}. Use tool_discovery to find an allowed "
-                "tool and load its exact catalog id before calling it.")
+            error = f"ERROR: {canonical} is not allowed by this agent's tool policy."
+            return f"{error} tool_discovery cannot load it here." if has_discovery else error
+        error = f"ERROR: unknown tool {canonical}."
+        closest = _closest_tool_name(canonical, names)
+        if closest:
+            error += f" Did you mean {closest}?"
+        if has_discovery:
+            return (f"{error} Use tool_discovery to find an allowed tool and load its "
+                    "exact catalog id before calling it.")
+        return f"{error} This agent's tools: {', '.join(names)}."
 
     @property
     def by_name(self) -> dict[str, Tool]:

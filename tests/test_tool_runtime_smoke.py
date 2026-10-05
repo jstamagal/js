@@ -665,7 +665,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
         error_tracker=tracker,
     )
     assert "unknown tool" in error and "missing_tool" in error
-    assert "tool_discovery" in error
+    assert "tool_discovery" not in error
     assert "<retry>" not in error
     assert not tracker.limit_reached()
 
