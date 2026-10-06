@@ -466,7 +466,8 @@ OPT_IM_A_PUSSY = Message(
     "always on.")
 OPT_PRINTONLY = Message(
     "Dry run: assemble what would be sent and print it instead of calling the model, then exit. "
-    "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark a=everything. "
+    "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark "
+    "x=startup exchanges a=everything. "
     "The default is a. An optional :COUNT caps output lines. An optional :PATH writes to a file instead of "
     "stdout, and an empty slot skips, e.g. p::/tmp/x.md. Unknown letters and unwritable paths are reported "
     "and skipped. The run still succeeds.")
@@ -550,6 +551,7 @@ PRINTONLY_UNKNOWN_LETTER = Message("--printonly: unknown letter {letter!r}. Skip
 PRINTONLY_NO_CONFIG = Message("--printonly: config not built: {error}", GRAVE)
 PRINTONLY_NO_PROMPT = Message("--printonly: prompt not loaded: {error}", GRAVE)
 PRINTONLY_NO_BENCHMARKS = Message("No NN-benchmark.md files.")
+PRINTONLY_NO_EXCHANGES = Message("No NN-user.md / NN-agent.md files.")
 PRINTONLY_SECTION_FAILED = Message("--printonly: section {section} unavailable: {error}", GRAVE)
 PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Printing to stdout.", WARN)
 

@@ -3865,13 +3865,14 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
 # every step degrades to a warning and keeps going (that is the whole point).
 # --------------------------------------------------------------------------
 
-_PRINTONLY_KNOWN = "tpeib"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
+_PRINTONLY_KNOWN = "tpeibx"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
 _PRINTONLY_TITLES = {
     "t": "TOOLS",
     "p": "PROMPT (raw)",
     "e": "PROMPT (env-expanded)",
     "i": "PROMPT (inlines-expanded)",
     "b": "BENCHMARKS",
+    "x": "EXCHANGES",
 }
 
 
@@ -3976,6 +3977,20 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             blocks.append(f"# bench {bm.name}\n{body}")
         return "\n\n".join(blocks)
 
+    def _exchanges() -> str:
+        """The agent's NN-user.md / NN-agent.md startup exchanges as
+        initialize() injects them: expanded, in order, one block per message."""
+        exchanges = raw_spec.exchanges if raw_spec is not None else ()
+        if not exchanges:
+            return msgs.PRINTONLY_NO_EXCHANGES.text()
+        blocks = []
+        for exchange in exchanges:
+            for role in ("user", "agent"):
+                text = getattr(exchange, role)
+                if text is not None:
+                    blocks.append(f"# {role} {exchange.number:02d}\n{P.expand_agent_text(text, cfg)}")
+        return "\n\n".join(blocks)
+
     builders = {
         "t": _tools,
         "p": lambda: system,
@@ -3995,6 +4010,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             on_error="warn",
         ),
         "b": _bench,
+        "x": _exchanges,
     }
 
     chunks: list[str] = []

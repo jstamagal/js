@@ -23,6 +23,9 @@ def _write_agent(root: Path) -> Path:
         "Role line.\nenv=<{{WHO}}>\ncode=<!{sh printf ran}>\n", encoding="utf-8"
     )
     (d / "01-benchmark.md").write_text("Bench turn for {{WHO}}.", encoding="utf-8")
+    (d / "01-user.md").write_text("First user turn for {{WHO}}.", encoding="utf-8")
+    (d / "01-agent.md").write_text("First agent reply.", encoding="utf-8")
+    (d / "02-user.md").write_text("Second user turn, unanswered.", encoding="utf-8")
     return d
 
 
@@ -72,7 +75,7 @@ def test_slots_bad_count_degrades_to_none(capsys):
 # ---- letter resolution ---------------------------------------------------
 
 def test_letters_all_expands_to_every_section():
-    assert _printonly_letters("a") == list("tpeib")
+    assert _printonly_letters("a") == list("tpeibx")
 
 
 def test_letters_dedup_and_order_preserved():
@@ -90,7 +93,7 @@ def test_letters_o_is_parked(capsys):
 
 
 def test_letters_nothing_valid_falls_back_to_all(capsys):
-    assert _printonly_letters("XYZ") == list("tpeib")
+    assert _printonly_letters("XYZ") == list("tpeibx")
 
 
 # ---- _printonly_run --------------------------------------------------------
@@ -182,3 +185,22 @@ def test_printonly_missing_agent_never_errors(offline_agent, capsys):
     # A nonexistent agent must not traceback — printonly degrades and exits 0.
     rc = cli._printonly_run("p", agent="nosuchagent")
     assert rc == 0
+
+
+def test_printonly_exchanges(offline_agent, capsys):
+    """The agent's NN-user.md / NN-agent.md startup exchanges are part of what
+    gets sent, so the dry run shows them, expanded, in order."""
+    rc = cli._printonly_run("x", agent="potest")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "First user turn for ape." in out
+    assert "First agent reply." in out
+    assert "Second user turn, unanswered." in out
+    assert out.index("First user turn") < out.index("First agent reply.") < out.index("Second user turn")
+
+
+def test_printonly_everything_includes_exchanges(offline_agent, capsys):
+    rc = cli._printonly_run("a", agent="potest")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "First user turn for ape." in out
