@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Provider resolution is read once, not once per model call.** The
+  models.dev provider table and `logins.toml` were re-read and re-parsed on
+  every routing lookup, several times per request; a third of a tool-using
+  run's CPU went there. Both are now kept with the identity of the file they
+  came from and reused while it is unchanged, so a `js --login` from another
+  window is still picked up on the next call.
+
 - **The conversation has two marks.** The input prompt is `❯ ` and a user line
   is drawn behind it in bold; an answer opens with a dim `❮` on its own line.
   An agent's startup user files now show that way as they run: in the REPL as

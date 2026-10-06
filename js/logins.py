@@ -192,11 +192,23 @@ def load_logins() -> dict[str, Login]:
     call and must never crash a turn. The write path (save_login/
     remove_login) calls _refuse_if_corrupt() first instead, since silently
     treating a corrupt file as empty there would truncate every stored login.
+
+    The file is parsed once per version of it: the result is kept with the
+    file's identity (path, inode, size, mtime) and returned again, as a copy,
+    while the file is unchanged. A write from this process or another one
+    changes that identity and the next call parses again.
     """
-    if not _logins_path().exists():
-        return {}
+    global _loaded
+    path = _logins_path()
     try:
-        with _logins_path().open("rb") as f:
+        info = os.stat(path)
+    except OSError:
+        return {}
+    key = (path, info.st_ino, info.st_size, info.st_mtime_ns)
+    if _loaded is not None and _loaded[0] == key:
+        return dict(_loaded[1])
+    try:
+        with path.open("rb") as f:
             data = tomllib.load(f)
     except Exception:  # noqa: BLE001
         return {}
@@ -221,7 +233,11 @@ def load_logins() -> dict[str, Login]:
             xai_token_endpoint=raw.get("xai_token_endpoint") or None,
             xai_email=raw.get("xai_email") or None,
         )
-    return logins
+    _loaded = (key, logins)
+    return dict(logins)
+
+
+_loaded: tuple[tuple, dict[str, Login]] | None = None
 
 
 def save_login(login: Login) -> None:

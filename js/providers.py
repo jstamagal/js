@@ -8,6 +8,7 @@ prefix parsing.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 
@@ -503,8 +504,23 @@ def _modelsdev_provider_def(provider: modelsdotdev.Provider) -> ProviderDef:
 
 
 def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
+    """The models.dev providers js can log in to, read from the catalog once
+    per version of it.
+
+    This runs on every routing lookup, several times per model call, and the
+    catalog is a SQLite file that only changes when a refresh replaces it. The
+    rows are kept with the identity (path, inode, size, mtime) of the catalog
+    and its status file and returned again while both are unchanged; the full
+    read, including the staleness check that can refresh the catalog, runs
+    again when either changes or after `_CATALOG_RECHECK_S`.
+    """
+    global _dynamic
     from . import model_metadata
 
+    key = _catalog_identity()
+    now = time.monotonic()
+    if _dynamic is not None and _dynamic[0] == key and now - _dynamic[1] < _CATALOG_RECHECK_S:
+        return _dynamic[2]
     model_metadata.ensure_fresh_catalog()
     rows: list[ProviderDef] = []
     for provider in modelsdotdev.iter_providers():
@@ -513,7 +529,27 @@ def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
         if not _modelsdev_provider_supported(provider):
             continue
         rows.append(_modelsdev_provider_def(provider))
-    return tuple(rows)
+    _dynamic = (_catalog_identity(), now, tuple(rows))
+    return _dynamic[2]
+
+
+_CATALOG_RECHECK_S = 60.0
+_dynamic: tuple[tuple, float, tuple[ProviderDef, ...]] | None = None
+
+
+def _catalog_identity() -> tuple:
+    """What a change to the catalog or its status file changes."""
+    from . import model_metadata
+
+    parts: list[tuple] = []
+    for path in (model_metadata._custom_db_path(), model_metadata._status_file_path()):
+        try:
+            info = os.stat(path)
+        except OSError:
+            parts.append((str(path), None))
+        else:
+            parts.append((str(path), info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(parts)
 
 
 def all_providers() -> tuple[ProviderDef, ...]:
