@@ -266,6 +266,51 @@ def test_blocking_repl_shows_the_generated_startup_reply(tmp_path, monkeypatch, 
     assert "VISIBLE_OPENING_REPLY" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("resume_exchanges", [0, 2])
+@pytest.mark.parametrize("blocking", [True, False])
+def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsys, blocking, resume_exchanges):
+    _agent(tmp_path, monkeypatch, {
+        "01-user.md": "first startup prompt",
+        "02-user.md": "second startup prompt",
+    })
+    cfg = from_env(session="seeded")
+    cfg.settings["ui"]["resume_exchanges"] = resume_exchanges
+    _model(monkeypatch, ["first startup reply", "second startup reply"])
+
+    if blocking:
+        run_blocking(cfg, [])
+    else:
+        run_async(monkeypatch, cfg, [])
+
+    output = capsys.readouterr().out
+    assert output.index("first startup prompt") < output.index("first startup reply")
+    assert output.index("first startup reply") < output.index("second startup prompt")
+    assert output.index("second startup prompt") < output.index("second startup reply")
+    # Drawn as they happen, not again from the resume view.
+    assert output.count("first startup prompt") == 1
+    assert output.count("second startup reply") == 1
+
+
+def test_debug_prompt_mode_shows_each_user_line_ahead_of_its_reply(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "startup prompt"})
+    _model(monkeypatch, ["startup reply", "typed reply"])
+    assert cli._run_prompt("typed prompt", session="seeded", debug=True) == 0
+    output = capsys.readouterr().out
+    assert output.index("startup prompt") < output.index("startup reply")
+    assert output.index("startup reply") < output.index("typed prompt")
+    assert output.index("typed prompt") < output.index("typed reply")
+
+
+def test_plain_prompt_mode_prints_only_the_answer(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "startup prompt"})
+    _model(monkeypatch, ["startup reply", "typed reply"])
+    assert cli._run_prompt("typed prompt", session="seeded") == 0
+    output = capsys.readouterr().out
+    assert "typed reply" in output
+    assert "typed prompt" not in output
+    assert "startup prompt" not in output
+
+
 def test_benchmarks_never_write_to_a_session_selected_by_environment(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {
         "01-user.md": "opening %%CURRENT_SESSION_FULLPATH%%", "02-benchmark.md": "benchmark",

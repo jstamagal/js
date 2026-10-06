@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from . import memory, persona, runtime
 
 
 async def initialize(cfg, spec, messages: list[dict], telemetry, *,
-                     system: str | None = None, save: bool = True, **turn_kwargs) -> None:
+                     system: str | None = None, save: bool = True,
+                     echo_user: Callable[[str], None] | None = None, **turn_kwargs) -> None:
     """Append startup exchanges to a fresh conversation, persisting each step.
 
     Paired exchanges and assistant-only entries are synthetic. An unpaired user
-    entry runs a normal model turn. Expansion happens when each entry is reached.
+    entry runs a normal model turn, shown through `echo_user` ahead of the
+    reply the turn streams. Expansion happens when each entry is reached.
     Existing conversation history already contains its initialization.
     """
     if messages:
@@ -36,7 +40,8 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
             if sink is not None:
                 sink.write_assistant(text)
         elif exchange.user is not None:
-            reply_start = len(messages)
+            if echo_user is not None:
+                echo_user(text)
             try:
                 await runtime.run_turn_async(
                     cfg, spec.system if system is None else system, messages, telemetry, **turn_kwargs,
@@ -44,7 +49,3 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
             finally:
                 if save:
                     memory.persist_messages(cfg.session_file, messages, stamp=stamp)
-                if sink is not None and turn_kwargs.get("suppress_output"):
-                    for message in messages[reply_start:]:
-                        if message.get("role") == "assistant" and message.get("content") and not message.get("tool_calls"):
-                            sink.write_assistant(message["content"])

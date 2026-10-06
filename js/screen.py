@@ -33,7 +33,7 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import keys, pastes
+from . import display, keys, pastes
 from . import messages as msgs
 from . import session_store
 from .context_budget import estimate_text_tokens
@@ -554,7 +554,7 @@ def build_app(
         input_buffer.append_to_history()
         input_buffer.reset()
         if line.strip():
-            scrollback.append(f"{prompt}{line}\n")
+            scrollback.append(display.user_line(line))
         await on_line(pastes.expand(line).strip())
 
     editor = InputEditor(input_buffer, submit)

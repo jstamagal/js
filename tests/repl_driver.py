@@ -7,7 +7,7 @@ session's state with `cli._repl_state` and return it after EOF.
 
 from __future__ import annotations
 
-import contextlib
+import sys
 
 from js import cli, model_client, runtime
 from js import persona as P
@@ -83,12 +83,28 @@ def run_async(monkeypatch, cfg, lines, **state_kwargs) -> dict:
         def invalidate(self):
             pass
 
+    class VisibleScrollback(cli.screen.Scrollback):
+        """What the screen would show, mirrored to the test's stdout in the
+        order the screen receives it: the real `capture_stdio` routes stdout
+        through the loop the same way the live answer arrives."""
+
+        def __init__(self, out) -> None:
+            super().__init__()
+            self._out = out
+
+        def append(self, text: str) -> None:
+            self._out.write(text)
+            super().append(text)
+
+        def answer_commit(self, rendered: str) -> None:
+            self._out.write(rendered)
+            super().answer_commit(rendered)
+
     def build_app_stub(*, on_line, on_eof, **_kwargs):
-        return AppStub(on_line, on_eof), cli.screen.Scrollback()
+        return AppStub(on_line, on_eof), VisibleScrollback(sys.stdout)
 
     monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
     monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
-    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
     state, prompt_spec = repl_state(cfg, **state_kwargs)
     assert model_client.run_owning_loop(
         cli._repl_main(cfg, state, _telemetry(cfg, state), LineSession([]), prompt_spec)

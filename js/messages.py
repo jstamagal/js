@@ -533,7 +533,7 @@ BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just 
 
 # --- The REPL ----------------------------------------------------------------
 
-INPUT_PROMPT = "LO> "
+INPUT_PROMPT = "❯ "
 NO_SKILLS = Message("No skills found.")
 SKILL_ROW = Message("{name} {source} {description}", banner=False)
 SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=False)

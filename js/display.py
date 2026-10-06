@@ -19,6 +19,7 @@ import io
 import json
 import re
 import shutil
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -62,6 +63,22 @@ CHROME_ERROR = "\033[1;91;48;2;48;48;48m"
 CHROME_STDERR = "\033[93;48;2;48;48;48m"
 STDERR = "\033[93m"
 CODE_THEME = "ansi_dark"
+
+# The two voices of a conversation. The user's line sits behind the input
+# prompt in bold; the answer opens with a dim mirrored glyph on its own line.
+PROMPT = f"{C.BOLD}{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"
+ASSISTANT_MARK = f"{C.GREY}❮{C.RESET}\n"
+
+
+def user_line(text: str) -> str:
+    """One user message as the conversation shows it."""
+    return f"{PROMPT}{C.BOLD}{text}{C.RESET}\n"
+
+
+def echo_user(text: str) -> None:
+    """Print `user_line(text)` where the answer will follow."""
+    sys.stdout.write(user_line(text))
+    sys.stdout.flush()
 
 
 def _setting(settings: Any, key: str) -> Any:
@@ -229,6 +246,14 @@ class Display:
     @property
     def pretty(self) -> bool:
         return self.live is not None
+
+    def mark(self, text: str) -> None:
+        """Write `text` ahead of the stream, outside its Markdown."""
+        if self.live is not None:
+            self.live.commit(text)
+        else:
+            self._write(text)
+        self._flush()
 
     def chunk(self, field: str, text: str) -> None:
         if not text:
@@ -587,12 +612,13 @@ def _call_args(call: dict) -> tuple[str, dict]:
     return str(function.get("name") or "?"), args if isinstance(args, dict) else {}
 
 
-def render_exchanges(messages: list[dict], count: int, *, prompt: str, width: int,
+def render_exchanges(messages: list[dict], count: int, *, width: int,
                      level: int, preview: int, markdown: bool = True) -> str:
     """The last `count` exchanges of `messages` as a turn prints them: the
-    user's line behind `prompt`, each tool exchange at `ui.tools` `level`, the
-    answer as Markdown at `width` (plain text when `markdown` is off). An
-    exchange starts at a user message that was not steered into a turn."""
+    user's line as `user_line` draws it, each tool exchange at `ui.tools`
+    `level`, the answer behind `ASSISTANT_MARK` as Markdown at `width` (plain
+    text when `markdown` is off). An exchange starts at a user message that was
+    not steered into a turn."""
     starts = [i for i, message in enumerate(messages)
               if message.get("role") == "user" and not message.get("steered")]
     if count <= 0 or not starts:
@@ -604,9 +630,10 @@ def render_exchanges(messages: list[dict], count: int, *, prompt: str, width: in
         role = message.get("role")
         text = clean(_content_text(message.get("content"))).strip("\n")
         if role == "user":
-            out.append(f"{prompt}{text}\n")
+            out.append(user_line(text))
         elif role == "assistant":
             if text.strip():
+                out.append(ASSISTANT_MARK)
                 out.append(render_markdown(text, width) if markdown else text + "\n")
             for call in message.get("tool_calls") or []:
                 name, args = _call_args(call)

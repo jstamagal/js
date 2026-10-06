@@ -16,6 +16,9 @@ class _Display:
         self.log = log
         self.log.append(("open", markdown))
 
+    def mark(self, text):
+        pass
+
     def chunk(self, kind, text):
         self.log.append((kind, text))
 

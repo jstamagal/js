@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **The conversation has two marks.** The input prompt is `❯ ` and a user line
+  is drawn behind it in bold; an answer opens with a dim `❮` on its own line.
+  An agent's startup user files now show that way as they run: in the REPL as
+  its first turn (`^C` cancels it) instead of being drawn after the fact from
+  the resume view, and in `-p` mode with `-d`, which also shows the typed
+  prompt. A line queued behind a running turn joins the transcript when its
+  turn starts, not when it was typed.
+
 - **`just install` sets a box up in one command (`js-z3q`).** The `js` on PATH
   is a launcher in `~/.local/bin` that syncs this checkout's venv against
   `uv.lock` on every start and runs its js, so a new dependency no longer needs

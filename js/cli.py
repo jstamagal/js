@@ -29,7 +29,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
 
-from . import attach, clipimage, codex_auth, colors as C
+from . import attach, clipimage, codex_auth
 from . import agent_messages
 from . import compaction
 from . import display as display_mod
@@ -2488,13 +2488,17 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     user_started = False
     turn_transcript = _transcript_sink(telemetry)
 
+    # -d shows the conversation as the REPL draws it: each user line, typed or
+    # fired from the agent's files, ahead of the answer it got.
+    echo_user = display_mod.echo_user if debug else None
+
     def run() -> None:
         nonlocal before_len, user_started
         if prompt_spec is not None and prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
                 cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript), save=save,
                 trace_override=debug or bool(debug_file) or cfg.trace,
-                tool_context=tool_context, **turn_kwargs,
+                tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
         before_len = len(messages)
         messages.append(user_bundle.runtime_message)
@@ -2503,6 +2507,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             _append_turn(cfg, user_bundle.history_message)
         if turn_transcript is not None:
             turn_transcript.write_user(prompt)
+        if echo_user is not None:
+            echo_user(prompt)
         runtime.run_turn(cfg, system, messages, telemetry,
                          trace_override=debug or bool(debug_file) or cfg.trace,
                          tool_context=tool_context, **turn_kwargs)
@@ -3264,14 +3270,19 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
     while True:
         line = await queue.get()
         try:
+            if callable(line):
+                # The agent's startup exchanges, queued ahead of the first typed
+                # line: a turn like any other, so ^C cancels it.
+                job = sup.spawn(line(), kind="turn", label="startup")
+                with contextlib.suppress(asyncio.CancelledError):
+                    await job.task
+                continue
             if _steer_mode(state) == "batch":
                 line = "\n".join([line, *_take_queued(queue)])
             await _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
             while steer_inbox:
                 leftover = "\n".join(steer_inbox)
                 steer_inbox.clear()
-                if (sink := _transcript_sink(telemetry)) is not None:
-                    sink.write_user(leftover)
                 await _run_repl_turn(leftover, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
         finally:
             queue.task_done()
@@ -3302,6 +3313,10 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     before_len = len(state["messages"])
     state["messages"].append(user_bundle.runtime_message)
     _append_turn(cfg, user_bundle.history_message)
+    # Logged as the turn starts, not as the line was typed: a line queued
+    # behind a running turn joins the transcript where the model sees it.
+    if (sink := _transcript_sink(telemetry)) is not None:
+        sink.write_user(line)
     steered: list[attach.UserMessageBundle] = []
 
     async def take_steer() -> dict | None:
@@ -3446,14 +3461,15 @@ def _resume_view(state: dict, width: int) -> str:
     live = state.get("settings") or {}
     count = settings.knob(live, "ui.resume_exchanges")
     return display_mod.render_exchanges(
-        state["messages"], count if isinstance(count, int) else 0,
-        prompt=f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}", width=width,
+        state["messages"], count if isinstance(count, int) else 0, width=width,
         level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
         markdown=display_mod.markdown_enabled(live),
     )
 
 
 async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
+    """Run the agent's startup exchanges as the REPL draws a turn: each fired
+    user line, then its reply as it streams."""
     if not prompt_spec.exchanges or state["messages"]:
         return
     turn_cfg = _cfg_for_live_state(cfg, state)
@@ -3463,7 +3479,7 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
             tool_registry=state["tool_registry"],
             sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
             event_hooks=state.get("events"), mcp_host=state.get("mcp_host"),
-            suppress_output=True,
+            echo_user=display_mod.echo_user,
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
         msgs.warn(msgs.TURN_INTERRUPTED)
@@ -3479,11 +3495,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     steers it or queues behind it, per runtime.steer."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
-    await _initialize_repl_agent(cfg, state, telemetry, prompt_spec)
     sup = supervisor.Supervisor(loop)
     supervisor.set_current(sup)
     queue: asyncio.Queue = asyncio.Queue()
     steer_inbox: list[str] = []
+    if prompt_spec.exchanges and not state["messages"]:
+        # Runs inside the screen, as the first turn, so its output streams into
+        # the scrollback instead of being drawn after the fact.
+        queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
     consumer = loop.create_task(
         _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
     )
@@ -3516,8 +3535,6 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             # The turn writes it to the transcript where the model receives it.
             steer_inbox.append(line)
             return
-        if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(line)
         queue.put_nowait(line)
         if sup.turn_active() or queue.qsize() > 1:
             msgs.say(msgs.QUEUED, ahead=queue.qsize())
@@ -3571,7 +3588,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         )
 
     app, scrollback = screen.build_app(
-        prompt=f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}",
+        prompt=display_mod.PROMPT,
         history=session.history,
         completer=session.completer,
         on_line=on_line,
@@ -3697,10 +3714,9 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     _emit_session_event(state, telemetry, cfg, "session_start")
     if prompt_spec.exchanges and not state["messages"]:
         mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
-        print(_resume_view(state, display_mod.terminal_width() - 1), end="")
     while state["running"]:
         try:
-            line = pastes.expand(session.prompt(ANSI(f"{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"))).strip()
+            line = pastes.expand(session.prompt(ANSI(display_mod.PROMPT))).strip()
             interrupt_armed = False
         except KeyboardInterrupt:
             # One stray ^C at the prompt should not end a session that took real
