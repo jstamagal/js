@@ -96,6 +96,7 @@ def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
         "TERM",
         "PWD",
         "SHELL",
+        "BEADS_ACTOR",
     )
     config_dir = _isolated_config_home(monkeypatch, tmp_path)
     config_dir.mkdir(parents=True)

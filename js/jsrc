@@ -62,7 +62,7 @@ set limits.max_bash_output_ceiling 150000
 set limits.max_tool_result_inline_bytes 51200
 set limits.max_tool_result_bytes 262144
 set limits.fetch_timeout_s 15
-set limits.shell_env_allow ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL"]
+set limits.shell_env_allow ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
 set limits.browse_timeout_s 60
 set limits.download_timeout_s 300
 set limits.max_download_bytes 0

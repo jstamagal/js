@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "js"
 version = "0.2.2"
-description = "LO-shaped AI SDK agent with hacking tools"
+description = "Personal terminal LLM harness with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
     "ai[openai,anthropic]>=0.5.2",
