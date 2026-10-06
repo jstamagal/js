@@ -637,13 +637,11 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     except OSError as exc:
         return f"ERROR: {exc}"
     content_hash = _hash_bytes(data)
-    if replacing:
-        # The model wrote every byte of the new content.
-        context.replace_read_coverage(
-            target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True
-        )
-    else:
-        context.file_hashes[target] = content_hash
+    # The model wrote every byte of the new content, so the file counts as
+    # fully read: a patch can follow without a read in between.
+    context.replace_read_coverage(
+        target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True
+    )
     context.remember_content(target, content_hash, data)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 

@@ -80,3 +80,16 @@ def test_patch_refuses_a_device_target(tmp_path):
     result = fs.patch(str(device), old_string="a", new_string="b", context=context)
 
     assert result == f"ERROR: not a regular file: {device}"
+
+
+def test_a_written_file_counts_as_fully_read_so_patch_needs_no_read_first(tmp_path):
+    """The model wrote every byte of a new file, so it has seen every line."""
+    target = tmp_path / "new.txt"
+    context = ToolContext(cwd=tmp_path)
+    assert fs.write(str(target), content="alpha\nbeta\ngamma\n", context=context).startswith("wrote ")
+    assert target in context.fully_read_paths
+    assert fs.patch(str(target), old_string="beta", new_string="BETA", context=context).startswith("patched ")
+    assert target.read_text() == "alpha\nBETA\ngamma\n"
+    assert fs.write(str(target), content="replaced\n", overwrite=True, context=context).startswith("wrote ")
+    assert fs.patch(str(target), old_string="replaced", new_string="again", context=context).startswith("patched ")
+    assert target.read_text() == "again\n"
