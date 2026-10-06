@@ -1411,7 +1411,7 @@ def test_container_arguments_serialized_as_strings_are_parsed_before_validation(
         "unknown": '["left", "alone"]',
     }
 
-    actual = tool_args.coerce_json_containers(arguments, schema)
+    actual = tool_args.coerce_to_schema(arguments, schema)
 
     assert actual == {
         "edits": [{"old_string": "a", "new_string": "b"}],
@@ -1427,8 +1427,59 @@ def test_container_coercion_leaves_genuinely_wrong_arguments_to_fail_validation(
 
     schema = {"type": "object", "properties": {"edits": {"type": "array"}}}
 
-    assert tool_args.coerce_json_containers({"edits": "not json"}, schema) == {"edits": "not json"}
-    assert tool_args.coerce_json_containers({"edits": '{"a": 1}'}, schema) == {"edits": '{"a": 1}'}
+    assert tool_args.coerce_to_schema({"edits": "not json"}, schema) == {"edits": "not json"}
+    assert tool_args.coerce_to_schema({"edits": '{"a": 1}'}, schema) == {"edits": '{"a": 1}'}
+
+
+def test_scalar_strings_are_coerced_to_the_declared_type_before_validation():
+    """Regression: shell's timeout=15 arrived as "15" and was rejected with
+    `'15' is not of type 'integer'` before the handler's own coercion ran."""
+    from js import tool_args
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "timeout": {"type": "integer"},
+            "ratio": {"type": "number"},
+            "keep_ansi": {"type": "boolean"},
+            "name": {"type": "string"},
+            "either": {"type": ["string", "integer"]},
+            "count": {"type": ["integer", "null"]},
+        },
+    }
+    arguments = {
+        "timeout": "15",
+        "ratio": "0.5",
+        "keep_ansi": "true",
+        "name": "42",
+        "either": "7",
+        "count": "3",
+    }
+
+    assert tool_args.coerce_to_schema(arguments, schema) == {
+        "timeout": 15,
+        "ratio": 0.5,
+        "keep_ansi": True,
+        "name": "42",
+        "either": "7",
+        "count": 3,
+    }
+    assert tool_args.schema_error(tool_args.coerce_to_schema(arguments, schema), schema) is None
+
+
+def test_scalar_coercion_leaves_genuinely_wrong_arguments_to_fail_validation():
+    from js import tool_args
+
+    schema = {
+        "type": "object",
+        "properties": {"timeout": {"type": "integer"}, "flag": {"type": "boolean"}},
+    }
+
+    wrong = {"timeout": "fifteen", "flag": "maybe"}
+    assert tool_args.coerce_to_schema(wrong, schema) == wrong
+    assert tool_args.coerce_to_schema({"timeout": "1.5"}, schema) == {"timeout": "1.5"}
+    assert tool_args.coerce_to_schema({"timeout": True}, schema) == {"timeout": True}
+    assert tool_args.schema_error(wrong, schema) is not None
 
 
 def test_string_serialized_edits_reach_the_patch_handler_as_an_array(tmp_path):

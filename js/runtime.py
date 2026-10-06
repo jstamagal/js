@@ -372,11 +372,11 @@ def _normalize_tool_call_batch(
             arguments = {}
             validation_error = f"could not parse arguments: {exc}"
         else:
-            # Before validation, not after: a container the model serialized as a
-            # JSON string is the right value in the wrong type, and rejecting it
-            # here means the handler never runs (patch's `edits` batch form was
-            # unusable for exactly this reason).
-            arguments = tool_args.coerce_json_containers(arguments, schema)
+            # Before validation, not after: a container or number the model
+            # serialized as a string is the right value in the wrong type, and
+            # rejecting it here means the handler never runs (patch's `edits`
+            # batch form and shell's timeout=15 were unusable for this reason).
+            arguments = tool_args.coerce_to_schema(arguments, schema)
         canonical_args = json.dumps(
             arguments,
             ensure_ascii=False,

@@ -269,7 +269,7 @@ class ToolBridge:
                 return {"error": f"ERROR: {tool.name} got {key!r} both by position and by name"}
             arguments[key] = value
         schema = tool.openai_spec()["function"]["parameters"]
-        arguments = tool_args.coerce_json_containers(arguments, schema)
+        arguments = tool_args.coerce_to_schema(arguments, schema)
         problem = tool_args.schema_error(arguments, schema)
         if problem is not None:
             return {"error": f"ERROR: invalid arguments for {tool.name}: {problem}"}

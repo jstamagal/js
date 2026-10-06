@@ -42,20 +42,43 @@ def repair_jsonish(raw: str) -> dict:
 _JSON_CONTAINERS = {"array": list, "object": dict}
 
 
-def coerce_json_containers(value: object, schema: object) -> object:
-    """Parse arguments a model serialized as JSON *strings* where its schema
-    declares a container.
+def _scalar_from_string(value: str, types: list) -> object:
+    """``value`` parsed as the one scalar type its schema declares, or
+    unchanged when it does not parse as that type."""
+    if "integer" in types:
+        try:
+            return int(value.strip())
+        except ValueError:
+            pass
+    if "number" in types:
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    if "boolean" in types:
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return value
 
-    Nested arrays and objects are the arguments backends get wrong: llama.cpp's
-    grammar path and several tool-call stream parsers hand back
-    ``"edits": "[{\\"old_string\\": ...}]"`` — the right JSON inside the wrong
-    type. Left alone, the call fails schema validation before the handler is
-    ever invoked, so a batch edit is unusable while the scalar form works.
 
-    Only a declared ``array``/``object`` property is touched, only when the
-    string parses to exactly that type, and never when ``string`` is also
-    allowed. Anything else is returned unchanged, so a genuinely wrong argument
-    still fails validation.
+def coerce_to_schema(value: object, schema: object) -> object:
+    """Convert arguments a model serialized as *strings* to the type its
+    schema declares.
+
+    Two shapes of the same mistake: a backend hands back
+    ``"edits": "[{\"old_string\": ...}]"`` (llama.cpp's grammar path and
+    several tool-call stream parsers) or ``"timeout": "15"`` — the right value
+    in the wrong type. Left alone, the call fails schema validation before the
+    handler is ever invoked.
+
+    Only a property whose declared type excludes ``string`` is touched: a
+    container only when the string parses to exactly that container, a scalar
+    only when the string parses as that integer, number or boolean (``"1.5"``
+    is not an integer; ``"yes"`` is not a boolean). Anything else is returned
+    unchanged, so a genuinely wrong argument still fails validation.
     """
     if not isinstance(schema, dict):
         return value
@@ -73,18 +96,20 @@ def coerce_json_containers(value: object, schema: object) -> object:
             if isinstance(parsed, expected):
                 value = parsed
                 break
+        if isinstance(value, str):
+            value = _scalar_from_string(value, types)
     if isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
             return {
-                key: coerce_json_containers(item, properties[key]) if key in properties else item
+                key: coerce_to_schema(item, properties[key]) if key in properties else item
                 for key, item in value.items()
             }
         return value
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            return [coerce_json_containers(item, items) for item in value]
+            return [coerce_to_schema(item, items) for item in value]
     return value
 
 
