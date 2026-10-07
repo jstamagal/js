@@ -25,16 +25,21 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    `js` on PATH runs whatever it has checked out, so a branch left there
    changes the js the owner uses. Work on a branch in its own worktree:
    `git worktree add ../js-<topic> -b <topic>`.
-4. **Run the tests that cover it.** The job is not done until the suite is
-   green. Whose change broke it does not matter; "it was failing before me"
-   is not a state of the tree, it is a description of you walking past it.
-   Do not delete the test. Do not edit the test to pass. If you cannot make
-   it pass, the only other way out is a written confession: append to
+4. **One bug, one test, one seam.** Write one test that fails on the bug.
+   Fix the bug. Run that test. Then run the test file for the seam you
+   touched (`just test-file tests/test_<seam>.py`). That is the whole loop.
+   A second test needs a second distinct behavior to pin. Wording, comments,
+   docstrings and messages get no test. Do not run `just test` after an
+   edit: it runs 2400+ tests on every logical core and lags the box. Run it
+   once before a merge. It is cached per tree state — an unchanged tree
+   replays the last run and says who ran it, so rerunning tells you nothing
+   new. Whose change broke a test does not matter; "it was failing before
+   me" is not a state of the tree, it is a description of you walking past
+   it. Do not delete the test. Do not edit the test to pass. If you cannot
+   make it pass, the only other way out is a written confession: append to
    `FAILURES.md` at the repo root your full model name, the date, the failing
    test names, what you tried, and the sentence "I could not make this pass."
-   A confession is public and permanent; that is the point. `just test` is
-   cached per tree state — an unchanged tree replays the last run and says
-   who ran it, so rerunning tells you nothing new.
+   A confession is public and permanent; that is the point.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
    Commits are authored by whoever made them. The owner is
