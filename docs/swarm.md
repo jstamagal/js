@@ -9,14 +9,33 @@ ROOT=/tmp/troop-42
 js -a troop -p --json --swarm $ROOT/kivu  "You are kivu. ..." &
 js -a troop -p --json --swarm $ROOT/twig  "You are twig. ..." &
 python -m js.swarm send $ROOT steer '*' "new evidence: the leak is in the writer"
+python -m js.swarm members $ROOT                 # kivu asleep holds parser / twig working
+python -m js.swarm quiet $ROOT && echo "nothing left to do"
 python -m js.swarm send $ROOT steer kivu --kind stop
 ```
 
 ## What an agent on the bus gets
 
-- **Two tools.** `send(to, text, kind)` posts to one agent or, with `*`, to
-  everyone else. `who` lists the names on the bus. The tools are added to the
-  agent's surface by the flag; `agent.yaml` does not name them.
+- **The bus tools**, added to the agent's surface by the flag; `agent.yaml`
+  does not name them.
+  - `send(to, text, kind)` posts to one agent or, with `*`, to everyone else.
+    `kind` is a free word the troop agrees on; it is what `subscribe` matches.
+  - `who` lists the names on the bus, asleep or working, and what each holds.
+  - `claim(key, ttl)` and `release(key)`: one holder per key for `ttl` seconds
+    (ten minutes by default). The holder renews by claiming again; a claim
+    whose ttl passed is free, so a dead agent blocks nobody. A claim is not a
+    message and wakes nobody.
+  - `subscribe(kind, off)`: every message of that kind reaches the subscriber,
+    whoever it was sent to. A disposition rather than an address: the skeptic
+    wakes on `claim`, the reviewer on `done`.
+  - `wake_me(seconds)`: be woken after a while even if nothing lands. The wake
+    is a `tick` from `clock`. One alarm, then sleep; not a polling loop.
+  - `retire(handoff)`: post the handoff to everyone, leave the bus, end after
+    this turn.
+  - `spawn(name, opener)`: start a sibling process under a new name, with this
+    agent's own command line and a session named after the parent's; the
+    opener is its first prompt. Its events go to `ROOT/<name>/events.jsonl`.
+    A bus takes at most eight spawned agents.
 - **Delivery at every tool boundary.** While a turn runs, the inbox is drained
   after each batch of tool results and the messages go in as one user message
   (a `--- messages ---` block) before the next model call. This is the same
@@ -24,9 +43,11 @@ python -m js.swarm send $ROOT steer kivu --kind stop
   `runtime.run_turn_async`).
 - **Turn end is sleep, not exit.** When the model stops calling tools, the
   process sleeps on its inbox. Nothing is sent to the model while it waits.
-  When messages land it wakes into a new turn with them as the user message.
-  The session grows across turns like a REPL session and is persisted after
-  every turn.
+  When messages land it wakes into a new turn with them as the user message;
+  a burst that lands within a third of a second of the first message is one
+  wake. The session grows across turns like a REPL session: it is persisted
+  before every sleep, and the between-turn compaction trigger runs then too,
+  so a long-lived agent compacts the way a REPL session does.
 - **Stop.** A message of kind `stop` ends the agent after the turn it lands in
   (or at once, if it arrives while asleep). `SIGTERM` ends it like `^C`.
 
@@ -37,8 +58,12 @@ see [headless-json.md](headless-json.md).
 
 ```
 ROOT/log.jsonl            every message, one JSON object per line: seq, ts, from, to, kind, body
+ROOT/claims.json          key -> holder and expiry
 ROOT/<name>/inbox/        one file per message not yet delivered to <name>
-ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends take
+ROOT/<name>/subs          the kinds <name> subscribed to, one per line
+ROOT/<name>/asleep        present while <name> waits on its inbox
+ROOT/<name>/spawned       who started <name>, its pid and command, when spawn did
+ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends and claims take
 ```
 
 The log is the blackboard: a runner or a UI tails it for the whole
@@ -48,7 +73,9 @@ joined yet waits in that name's inbox, so a runner can post the opener before
 it starts the process.
 
 The wait is a harness-side poll every quarter second. It costs no model call
-and no tool call.
+and no tool call. `python -m js.swarm quiet ROOT` exits 0 when every member
+is asleep with an empty inbox: the swarm has nothing to do until someone
+posts. A runner uses it to call a run over without asking a model.
 
 ## Shape of a swarm
 
@@ -57,12 +84,12 @@ address every other agent, anyone can broadcast, and the log is a wire tap,
 not a controller. What makes a group of agents a swarm rather than a queue is
 in their prompts: common visibility of the log, a few local rules (claim
 before you touch, say when you finish, ask when stuck), and dispositions that
-decide what each one reacts to.
+decide what each one reacts to. `subscribe` is how a disposition is wired;
+`claim` is how two agents avoid the same file; `spawn` and `retire` are how
+the troop changes shape without a runner's say-so.
 
 ## Not yet
 
-- Subscriptions by message kind or by board path; today every message to a
-  name or `*` wakes it.
-- Compaction between turns of a long-lived agent (the one-shot path compacts
-  once, at the end).
-- Running many agents in one process on the supervisor loop.
+- Running many agents in one process on the supervisor loop. One process per
+  agent is what the bus serves; the process-wide tool context is the seam
+  that would have to move first.

@@ -37,7 +37,7 @@ calls.
 | `error` | the turn or the run fails | `message`, `retryable` |
 | `turn_end` | the turn ends | `reason` (`stop`, `incomplete`, `error`, `cancelled`, `tool_error_limit`, `max_iterations`, `retry_budget_exhausted`), `usage` (the totals of this turn's own calls), `finish_reason` and `incomplete_reason` when set |
 | `sleep` | `--swarm` only: the turn ended and the agent waits on its inbox | `agent` |
-| `wake` | `--swarm` only: messages landed; a turn follows unless every one was a `stop` | `agent`, `count`, `seqs`, `kinds` |
+| `wake` | `--swarm` only: messages landed, or a `wake_me` alarm went off; a turn follows unless every one was a `stop` | `agent`, `count`, `seqs`, `kinds` (`tick` for the alarm) |
 | `result` | last line | `ok`, `exit_code`, `text` (the final answer; empty on failure), `session` (the id), `usage` (the session totals) |
 
 With `--swarm ROOT/NAME` (see [swarm.md](swarm.md)) a run has many turns: each

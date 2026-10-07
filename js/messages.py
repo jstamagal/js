@@ -451,14 +451,15 @@ OPT_LIST = Message("List saved sessions without loading config or contacting a p
 OPT_LAST = Message("Resume the most recently used session for this agent.")
 OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per line; "
                    "with --list, print compact JSON objects one per line.")
-OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the send and who tools, "
+OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the bus tools, "
                     "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
                     "exiting when a turn ends. A message of kind stop ends it.")
-SWARM_CLI = Message("Post on a swarm bus, or list who is on it.")
+SWARM_CLI = Message("Post on a swarm bus, list who is on it, or ask whether it is quiet.")
 SWARM_SEND = Message("Post a message. A text of - or no text reads stdin.")
 SWARM_SEND_TO = Message("An agent's name, or * for everyone else on the bus.")
 SWARM_SEND_KIND = Message("say, ask, reply, done, or stop. A stop ends the agent after its current turn.")
-SWARM_MEMBERS = Message("The names that have an inbox on the bus.")
+SWARM_MEMBERS = Message("Who is on the bus, asleep or working, and what each holds.")
+SWARM_QUIET = Message("Exit 0 when every agent on the bus is asleep with an empty inbox, else 1.")
 OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
 OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
 OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")

@@ -2535,14 +2535,19 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         # On a bus, a turn ending is the agent going idle, not the run ending.
         # Sleep on the inbox (no model call) and wake into the next turn with
         # whatever landed. A `stop` message ends it after the turn it lands in.
+        # The between-turn compaction trigger runs before each sleep, as it
+        # does between REPL turns, so a long-lived agent stays inside its window.
+        auto_state = {"system": system, "messages": messages, "model": cfg.model}
         while not bus.stop_seen:
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
+                with _transcript_stdio(telemetry):
+                    _maybe_auto_compact(cfg, auto_state)
             if events is not None:
                 events.emit("sleep", agent=bus.name)
             landed = bus.sleep()
             if events is not None:
-                events.emit("wake", agent=bus.name, count=len(landed), seqs=[m.seq for m in landed],
+                events.emit("wake", agent=bus.name, count=len(landed), seqs=[m.seq for m in landed if m.seq],
                             kinds=sorted({m.kind for m in landed}))
             if all(m.kind == swarm_mod.STOP for m in landed):
                 return
