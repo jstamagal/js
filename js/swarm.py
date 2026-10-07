@@ -11,7 +11,7 @@ ROOT/claims.json       what is claimed, by whom, until when
 ROOT/<name>/inbox/     one file per message not yet delivered to <name>
 ROOT/<name>/subs       the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep     present while <name> waits on its inbox
-ROOT/<name>/spawned    present when another agent's `spawn` started <name>
+ROOT/<name>/spawned    present when another agent's `recruit` started <name>
 
 An agent on the bus never spends a model call waiting:
 
@@ -519,7 +519,7 @@ def _retire(handoff: str = "", context: Any = None) -> str:
     return f"retired; your handoff is #{msg.seq}. This turn is your last: finish and stop calling tools"
 
 
-def _spawn(name: str = "", opener: str = "", context: Any = None) -> str:
+def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
     agent = _agent(context)
     if agent is None:
         return _OFF_BUS
@@ -562,7 +562,7 @@ def tools() -> tuple:
         Tool("retire", load_description("retire"), _retire, {
             "handoff": {"type": "string", "description": "What you did, what is left, where things are."},
         }, required=("handoff",), source="swarm"),
-        Tool("spawn", load_description("spawn"), _spawn, {
+        Tool("recruit", load_description("recruit"), _recruit, {
             "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
             "opener": {"type": "string", "description": "Its first prompt: who it is, the goal, what to do first."},
         }, required=("name", "opener"), source="swarm"),

@@ -32,10 +32,10 @@ python -m js.swarm send $ROOT steer kivu --kind stop
     is a `tick` from `clock`. One alarm, then sleep; not a polling loop.
   - `retire(handoff)`: post the handoff to everyone, leave the bus, end after
     this turn.
-  - `spawn(name, opener)`: start a sibling process under a new name, with this
-    agent's own command line and a session named after the parent's; the
+  - `recruit(name, opener)`: start a sibling process under a new name, with
+    this agent's own command line and a session named after the parent's; the
     opener is its first prompt. Its events go to `ROOT/<name>/events.jsonl`.
-    A bus takes at most eight spawned agents.
+    A bus takes at most eight recruited agents.
 - **Delivery at every tool boundary.** While a turn runs, the inbox is drained
   after each batch of tool results and the messages go in as one user message
   (a `--- messages ---` block) before the next model call. This is the same
@@ -62,7 +62,7 @@ ROOT/claims.json          key -> holder and expiry
 ROOT/<name>/inbox/        one file per message not yet delivered to <name>
 ROOT/<name>/subs          the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep        present while <name> waits on its inbox
-ROOT/<name>/spawned       who started <name>, its pid and command, when spawn did
+ROOT/<name>/spawned       who recruited <name>, its pid and command
 ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends and claims take
 ```
 
@@ -85,7 +85,7 @@ not a controller. What makes a group of agents a swarm rather than a queue is
 in their prompts: common visibility of the log, a few local rules (claim
 before you touch, say when you finish, ask when stuck), and dispositions that
 decide what each one reacts to. `subscribe` is how a disposition is wired;
-`claim` is how two agents avoid the same file; `spawn` and `retire` are how
+`claim` is how two agents avoid the same file; `recruit` and `retire` are how
 the troop changes shape without a runner's say-so.
 
 ## Not yet
