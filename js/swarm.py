@@ -5,9 +5,13 @@
   python -m js.swarm send ROOT steer kivu --kind stop   # end an agent after its current turn
   python -m js.swarm members ROOT                    # who is on the bus, asleep or working, what each holds
   python -m js.swarm quiet ROOT                      # exit 0 when every agent is asleep with an empty inbox
+  python -m js.swarm cells ROOT                      # the work board
+  python -m js.swarm post ROOT steer "title" "body"  # the operator puts work on the board
+  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
 
 ROOT/log.jsonl         every message ever sent, one JSON object per line, seq-numbered
 ROOT/claims.json       what is claimed, by whom, until when
+ROOT/cells.json        the work board: tasks posted, taken and finished
 ROOT/<name>/inbox/     one file per message not yet delivered to <name>
 ROOT/<name>/subs       the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep     present while <name> waits on its inbox
@@ -49,6 +53,8 @@ SPAWN_CAP = 8
 STOP = "stop"
 TICK = "tick"
 RETIRE = "retire"
+TASK = "task"
+DONE = "done"
 CLOCK = "clock"
 BROADCAST = "*"
 _NAME = re.compile(r"[A-Za-z0-9_.-]+")
@@ -85,6 +91,35 @@ class Msg:
         d = json.loads(text)
         return cls(int(d["seq"]), float(d["ts"]), str(d["from"]), str(d["to"]),
                    str(d.get("kind") or "say"), str(d.get("body") or ""))
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One piece of work on the board. `taken` is a live claim on `task:<id>`;
+    when that claim expires the cell is open again."""
+
+    id: int
+    title: str
+    body: str
+    by: str
+    ts: float
+    status: str = "open"      # open | taken | done
+    holder: str = ""
+    result: str = ""
+
+    @property
+    def key(self) -> str:
+        return f"task:{self.id}"
+
+    def as_dict(self) -> dict:
+        return {"id": self.id, "title": self.title, "body": self.body, "by": self.by, "ts": self.ts,
+                "status": self.status, "holder": self.holder, "result": self.result}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Cell:
+        return cls(int(d["id"]), str(d.get("title") or ""), str(d.get("body") or ""), str(d.get("by") or ""),
+                   float(d.get("ts") or 0), str(d.get("status") or "open"), str(d.get("holder") or ""),
+                   str(d.get("result") or ""))
 
 
 class Room:
@@ -226,6 +261,80 @@ class Room:
         tmp.write_text(json.dumps(claims, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self.root / "claims.json")
 
+    # the work board: cells posted, taken, finished
+
+    def post_cell(self, by: str, title: str, body: str = "") -> Cell:
+        """Put work on the board and tell everyone with a `task` message."""
+        check_name(by)
+        with self._locked():
+            cells = self._cells()
+            cell = Cell(max((c.id for c in cells), default=0) + 1, title.strip(), body, by, time.time())
+            self._write_cells([*cells, cell])
+        self.send(by, BROADCAST, f"task #{cell.id}: {cell.title}" + (f"\n{body}" if body.strip() else ""), TASK)
+        return cell
+
+    def take_cell(self, cell_id: int, who: str, ttl: float = CLAIM_TTL_S) -> tuple[bool, str, float]:
+        """Take cell `cell_id` for `who`: a claim on its key, renewed by taking again."""
+        cell = self.cell(cell_id)
+        if cell is None:
+            raise KeyError(cell_id)
+        if cell.status == "done":
+            return False, cell.holder, 0.0
+        yours, holder, expires = self.claim(cell.key, who, ttl)
+        if yours:
+            with self._locked():
+                self._write_cells([replace(c, status="taken", holder=who) if c.id == cell_id else c
+                                   for c in self._cells()])
+        return yours, holder, expires
+
+    def finish_cell(self, cell_id: int, who: str, result: str = "") -> Cell:
+        """Mark the cell done with `result`, free its claim, tell everyone with a `done` message."""
+        check_name(who)
+        with self._locked():
+            cells = self._cells()
+            done = next((c for c in cells if c.id == cell_id), None)
+            if done is None:
+                raise KeyError(cell_id)
+            done = replace(done, status="done", holder=who, result=result)
+            self._write_cells([done if c.id == cell_id else c for c in cells])
+            claims = self._claims()
+            if done.key in claims:
+                del claims[done.key]
+                self._write_claims(claims)
+        self.send(who, BROADCAST, f"done #{done.id}: {done.title}" + (f"\n{result}" if result.strip() else ""), DONE)
+        return done
+
+    def cell(self, cell_id: int) -> Cell | None:
+        return next((c for c in self.cells() if c.id == cell_id), None)
+
+    def cells(self) -> list[Cell]:
+        """The board as it stands: open and taken cells first, done ones last.
+        A taken cell whose claim expired is open again."""
+        with self._locked():
+            claims = self._claims()
+            cells = self._cells()
+        live = []
+        for c in cells:
+            if c.status == "done":
+                live.append(c)
+            elif c.key in claims:
+                live.append(replace(c, status="taken", holder=claims[c.key]["holder"]))
+            else:
+                live.append(replace(c, status="open", holder=""))
+        return sorted(live, key=lambda c: (c.status == "done", c.id))
+
+    def _cells(self) -> list[Cell]:
+        try:
+            raw = json.loads((self.root / "cells.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = []
+        return [Cell.from_dict(d) for d in raw if isinstance(d, dict)]
+
+    def _write_cells(self, cells: list[Cell]) -> None:
+        tmp = self.root / ".cells.tmp"
+        tmp.write_text(json.dumps([c.as_dict() for c in cells], ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self.root / "cells.json")
+
 
 class Inbox:
     def __init__(self, room: Room, name: str) -> None:
@@ -295,6 +404,18 @@ def roster(room: Room, me: str | None = None) -> str:
             bits.append("holds " + ", ".join(sorted(held[name])))
         lines.append(" ".join(bits))
     return "\n".join(lines) or "(nobody yet)"
+
+
+def board(room: Room) -> str:
+    """The work board as the model and the operator read it."""
+    lines = []
+    for c in room.cells():
+        state = {"open": "open", "taken": f"taken by {c.holder}", "done": f"done by {c.holder}"}[c.status]
+        lines.append(f"#{c.id} [{state}] {c.title}" + (f" (from {c.by})" if c.by else ""))
+        first = (c.result if c.status == "done" else c.body).strip().splitlines()
+        if first:
+            lines.append(f"    {first[0][:160]}")
+    return "\n".join(lines) or "(no tasks on the board)"
 
 
 def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
@@ -533,6 +654,64 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
     return f"started {name} (pid {proc.pid}); it is on the bus as {name} and reads your opener first"
 
 
+def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
+    agent = _agent(context)
+    if agent is None:
+        return _OFF_BUS
+    title = str(title or "").strip()
+    if not title:
+        return "ERROR: title is empty: say in one line what needs doing"
+    cell = agent.room.post_cell(agent.name, title, str(body or ""))
+    return f"posted task #{cell.id}: {cell.title}; everyone was told"
+
+
+def _cell_id(raw: Any) -> int | None:
+    try:
+        return int(str(raw).strip().lstrip("#"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _take_task(id: Any = None, context: Any = None) -> str:  # noqa: A002 - the tool's parameter is named id
+    agent = _agent(context)
+    if agent is None:
+        return _OFF_BUS
+    cell_id = _cell_id(id)
+    if cell_id is None:
+        return f"ERROR: id must be a task number, not {id!r}"
+    try:
+        yours, holder, expires = agent.room.take_cell(cell_id, agent.name)
+    except KeyError:
+        return f"no task #{cell_id} on the board"
+    cell = agent.room.cell(cell_id)
+    if yours:
+        return f"task #{cell_id} is yours until {_clock(expires)}: {cell.title}\n{cell.body}".rstrip()
+    if cell.status == "done":
+        return f"task #{cell_id} is already done by {holder}"
+    return f"task #{cell_id} is held by {holder} until {_clock(expires)}"
+
+
+def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str:  # noqa: A002
+    agent = _agent(context)
+    if agent is None:
+        return _OFF_BUS
+    cell_id = _cell_id(id)
+    if cell_id is None:
+        return f"ERROR: id must be a task number, not {id!r}"
+    try:
+        cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
+    except KeyError:
+        return f"no task #{cell_id} on the board"
+    return f"task #{cell.id} done; everyone was told"
+
+
+def _tasks(context: Any = None) -> str:
+    agent = _agent(context)
+    if agent is None:
+        return _OFF_BUS
+    return board(agent.room)
+
+
 def tools() -> tuple:
     from .toolkit.core import Tool
     from .toolkit.descriptions import load_description
@@ -566,6 +745,18 @@ def tools() -> tuple:
             "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
             "opener": {"type": "string", "description": "Its first prompt: who it is, the goal, what to do first."},
         }, required=("name", "opener"), source="swarm"),
+        Tool("post_task", load_description("post_task"), _post_task, {
+            "title": {"type": "string", "description": "One line: what needs doing."},
+            "body": {"type": "string", "default": "", "description": "What the taker needs to know: where, how, done when."},
+        }, required=("title",), source="swarm"),
+        Tool("take_task", load_description("take_task"), _take_task, {
+            "id": {"type": "integer", "description": "The task number from the board."},
+        }, required=("id",), source="swarm"),
+        Tool("finish_task", load_description("finish_task"), _finish_task, {
+            "id": {"type": "integer", "description": "The task number from the board."},
+            "result": {"type": "string", "default": "", "description": "What came of it: where the work is, what was found."},
+        }, required=("id",), source="swarm"),
+        Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
     )
 
 
@@ -595,6 +786,15 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("root")
     q = sub.add_parser("quiet", help=msgs.SWARM_QUIET.text())
     q.add_argument("root")
+    c = sub.add_parser("cells", help=msgs.SWARM_CELLS.text())
+    c.add_argument("root")
+    p = sub.add_parser("post", help=msgs.SWARM_POST.text())
+    p.add_argument("root")
+    p.add_argument("by")
+    p.add_argument("title")
+    p.add_argument("body", nargs="?", default="")
+    r = sub.add_parser("run", help=msgs.SWARM_RUN.text())
+    r.add_argument("spec")
     a = ap.parse_args(argv)
     if a.cmd == "send":
         body = a.text if a.text not in (None, "-") else sys.stdin.read()
@@ -602,8 +802,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"sent #{msg.seq}")
     elif a.cmd == "members":
         print(roster(Room(a.root)))
-    else:
+    elif a.cmd == "quiet":
         return 0 if Room(a.root).quiet() else 1
+    elif a.cmd == "cells":
+        print(board(Room(a.root)))
+    elif a.cmd == "post":
+        body = a.body if a.body != "-" else sys.stdin.read()
+        cell = Room(a.root).post_cell(a.by, a.title, body)
+        print(f"posted #{cell.id}")
+    else:
+        from . import swarm_run
+
+        return swarm_run.main(a.spec)
     return 0
 
 

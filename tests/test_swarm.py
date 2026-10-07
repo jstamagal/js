@@ -224,6 +224,56 @@ def test_retire_posts_the_handoff_and_leaves_the_bus(tmp_path):
     assert [(m.kind, m.body) for m in a.room.join("b").drain()] == [(swarm.RETIRE, "parser done; lexer left; branch feat/x")]
 
 
+def test_a_posted_cell_tells_everyone_and_sits_open_on_the_board(tmp_path):
+    room = swarm.Room(tmp_path / "bus")
+    for name in ("a", "b"):
+        room.join(name)
+    cell = room.post_cell("a", "write the parser", "in src/parse.py; done when tests pass")
+    assert (cell.id, cell.status) == (1, "open")
+    assert [(m.kind, m.sender) for m in room.join("b").drain()] == [(swarm.TASK, "a")]
+    assert [(c.id, c.status, c.holder) for c in room.cells()] == [(1, "open", "")]
+
+
+def test_a_taken_cell_is_open_again_when_its_hold_expires(tmp_path, monkeypatch):
+    room = swarm.Room(tmp_path / "bus")
+    room.join("a")
+    cell = room.post_cell("a", "write the parser")
+    assert room.take_cell(cell.id, "b", ttl=1)[:2] == (True, "b")
+    assert room.take_cell(cell.id, "c", ttl=1)[:2] == (False, "b")
+    assert [(c.status, c.holder) for c in room.cells()] == [("taken", "b")]
+    now = time.time()
+    monkeypatch.setattr(swarm.time, "time", lambda: now + 5)
+    assert [(c.status, c.holder) for c in room.cells()] == [("open", "")]
+    assert room.take_cell(cell.id, "c", ttl=60)[:2] == (True, "c")
+
+
+def test_finishing_a_cell_frees_it_tells_everyone_and_sinks_it_to_the_bottom(tmp_path):
+    room = swarm.Room(tmp_path / "bus")
+    for name in ("a", "b", "c"):
+        room.join(name)
+    first = room.post_cell("a", "write the parser")
+    room.post_cell("a", "write the lexer")
+    room.take_cell(first.id, "b")
+    room.join("c").drain()
+    done = room.finish_cell(first.id, "b", "branch feat/parser @ abc123")
+    assert (done.status, done.holder, done.result) == ("done", "b", "branch feat/parser @ abc123")
+    assert [(m.kind, m.sender) for m in room.join("c").drain()] == [(swarm.DONE, "b")]
+    assert first.key not in room.claims()
+    assert [(c.id, c.status) for c in room.cells()] == [(2, "open"), (1, "done")]
+
+
+def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
+    a = swarm.Agent(tmp_path / "bus" / "a")
+    registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))
+    post, take, finish, tasks = (registry.resolve(n) for n in ("post_task", "take_task", "finish_task", "tasks"))
+    on_bus = ToolContext(cwd=tmp_path, swarm=a)
+    assert post.handler(title="write the parser", body="in src", context=on_bus).startswith("posted task #1")
+    assert "write the parser" in take.handler(id=1, context=on_bus)
+    assert take.handler(id=7, context=on_bus).startswith("no task #7")
+    assert finish.handler(id=1, result="done on feat/parser", context=on_bus).startswith("task #1 done")
+    assert "done by a" in tasks.handler(context=on_bus)
+
+
 def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
     a = swarm.Agent(tmp_path / "bus" / "a")
 
