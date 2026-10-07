@@ -83,11 +83,22 @@ def _shell_argv(shell_path: str, command: str) -> list[str]:
     return [shell_path, *flags, "-c", command]
 
 
+# Names the shell sets for itself at startup, whatever its environment holds;
+# keeping them out of the command's environment does not unset them.
+_SHELL_OWN_NAMES = frozenset({
+    "SHLVL", "PWD", "OLDPWD", "_", "PPID", "UID", "EUID", "RANDOM", "LINENO",
+    "SECONDS", "HOSTNAME", "HOST", "BASHPID",
+})
+
+
 def _filtered_references(command: str, allowed: set[str]) -> list[str]:
     """Names the command references that are set in js's environment but kept
-    out of the command's."""
+    out of the command's, and that the shell does not set on its own."""
     names = set(_VAR_REF_RE.findall(command))
-    return sorted(name for name in names if name in os.environ and name not in allowed)
+    return sorted(
+        name for name in names
+        if name in os.environ and name not in allowed and name not in _SHELL_OWN_NAMES
+    )
 
 
 # Commands the shell tool started that had not exited when their call returned.
