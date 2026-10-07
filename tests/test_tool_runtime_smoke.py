@@ -1452,3 +1452,36 @@ def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():
     results = ["small", "also small"]
     assert runtime._cap_batch_results(results, 200_000) == results
     assert runtime._cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]
+
+
+def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
+    target = tmp_path / "unread_long.txt"
+    target.write_text("def compute_total(items):\n    return sum(items)\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    result = fs.patch(
+        file_path="unread_long.txt",
+        old_string="def compute_total(items):\n    return sum(items)",
+        new_string="def compute_total(items):\n    return sum(items) + 1",
+        context=context,
+    )
+
+    assert result.startswith(f"patched {target}")
+    assert target.read_text(encoding="utf-8") == "def compute_total(items):\n    return sum(items) + 1\n"
+    assert context.read_ranges[target] == [(1, 2)]
+
+
+def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
+    target = tmp_path / "unread_fuzzy.txt"
+    target.write_text("print(“hello there, world”)\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path)
+
+    result = fs.patch(
+        file_path="unread_fuzzy.txt",
+        old_string='print("hello there, world")',
+        new_string='print("goodbye there, world")',
+        context=context,
+    )
+
+    assert result == "ERROR: You must read the file with the read tool before attempting to edit it."
+    assert target.read_text(encoding="utf-8") == "print(“hello there, world”)\n"

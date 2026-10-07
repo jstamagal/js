@@ -1,14 +1,17 @@
 Replace exact text in one file.
 {{#if read}}
-Every line `old_string` touches must have been shown by a prior `read`. The
-`12|` prefix in read output is not file content; only the text after `|` is.
-If the file changed on disk since your read, the call writes nothing and the
-error shows the diff from what you read to what is there now; retry against the
-current text without reading again. Lines the diff shows count as read.
+An `old_string` of 24 characters or more that matches the file exactly needs
+no prior `read`: the match is the proof. A shorter or inexact `old_string` is
+applied only to lines a prior `read` showed. The `12|` prefix in read output is
+not file content; only the text after `|` is. If such an edit misses and the
+file changed on disk since your read, the error shows the diff from what you
+read to what is there now; retry against the current text without reading
+again. Lines the diff shows count as read.
 {{/if}}
 {{#unless read}}
-Every line `old_string` touches must have been shown by a prior read, and this
-surface has no read tool, so edits will be refused.
+This surface has no read tool: only an `old_string` of 24 characters or more
+that matches the file exactly can be edited. Shorter or inexact matches are
+refused.
 {{/unless}}
 `old_string` must match exactly once unless `replace_all` is set. When it is
 not in the file exactly, it is matched again with smart quotes, Unicode dashes,

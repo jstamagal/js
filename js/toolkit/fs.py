@@ -994,6 +994,12 @@ def _widen_over_whitespace(
     return widened
 
 
+# An exact match this long is its own proof: the model reproduced the lines
+# byte for byte and they are in the file now, so no prior read is needed.
+# Shorter or fuzzy matches still need the lines shown by a read.
+_SELF_EVIDENT_MIN_CHARS = 24
+
+
 def _apply_edit(
     text: str,
     old: str,
@@ -1004,11 +1010,18 @@ def _apply_edit(
     target: Path,
     context: ToolContext,
     seen_ranges: list[tuple[int, int]],
+    content_hash: str | None = None,
+    stale: str | None = None,
 ) -> tuple[str, int, list[tuple[int, int]], bool] | str:
     """Apply one replacement to ``text`` in memory. Returns the updated text,
     its match count, the read coverage moved to it, and whether the match was
     fuzzy; or an ERROR string. Line endings are normalised per edit against the
     text as it stands *now*, so a later edit sees an earlier one's result.
+
+    ``stale`` is the changed-since-read diff for the file, or None. It is the
+    error for an edit that misses, and for one that is not self-evident; an
+    exact match of _SELF_EVIDENT_MIN_CHARS or more is applied without it and
+    without the read ledger.
 
     When ``old`` is not in the text exactly, it is matched in _fuzzy_view of
     both, each match grows over the whitespace that view dropped from ``old``
@@ -1033,7 +1046,7 @@ def _apply_edit(
         needle = _fuzzy_view(old_norm)[0]
         occurrences = _count_overlapping(haystack, needle) if needle else 0
     if occurrences == 0:
-        return f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
+        return stale or f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
     if occurrences > 1 and not replace_all:
         return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
     positions: list[tuple[int, int]] = []
@@ -1061,15 +1074,18 @@ def _apply_edit(
             "whitespace, and new_string differs from it only there, so this edit would not "
             "change the file"
         )
-    line_ranges = [_line_span(text, start, end) for start, end in positions]
-    guard = context.require_read(
-        target,
-        "edit it",
-        line_ranges=line_ranges,
-        seen_ranges=seen_ranges,
-    )
-    if guard:
-        return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
+    if fuzzy or len(old_norm) < _SELF_EVIDENT_MIN_CHARS:
+        if stale:
+            return stale
+        guard = context.require_read(target, "edit it", content_hash=content_hash)
+        if guard:
+            return guard
+        line_ranges = [_line_span(text, start, end) for start, end in positions]
+        guard = context.require_read(
+            target, "edit it", line_ranges=line_ranges, seen_ranges=seen_ranges
+        )
+        if guard:
+            return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
     updated = text
     transformed = seen_ranges
     line_delta = new_norm.count(line_ending) - old_norm.count(line_ending)
@@ -1155,13 +1171,12 @@ def patch(
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"
     source_hash = _hash_bytes(source_bytes)
-    guard = _changed_since_read(
+    # The read guard is decided per edit: an exact match of the current text
+    # needs no read, and a stale read only matters for an edit that misses or
+    # is too short to be its own proof.
+    stale = _changed_since_read(
         context, target, "edit it", source_bytes, source_hash, edits_lines=True
-    ) or context.require_read(
-        target, "edit it", content_hash=source_hash
     )
-    if guard:
-        return guard
 
     updated = source
     seen_ranges = list(context.read_ranges.get(target, []))
@@ -1181,6 +1196,8 @@ def patch(
             target=target,
             context=context,
             seen_ranges=seen_ranges,
+            content_hash=source_hash,
+            stale=stale,
         )
         if isinstance(applied, str):
             return applied

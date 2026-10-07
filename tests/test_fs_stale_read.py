@@ -121,18 +121,16 @@ def _rewrite_lines_100_to_180_outside_js(tmp_path, **context_kwargs):
     return target, context, changed
 
 
-def test_a_diff_over_the_result_budget_is_withheld_and_patch_stays_gated_on_it(tmp_path):
+def test_a_diff_over_the_result_budget_is_withheld_and_a_short_edit_stays_gated_on_it(tmp_path):
     target, context, _changed = _rewrite_lines_100_to_180_outside_js(tmp_path)
 
     refused = fs.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
     unchanged_seen = fs.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
-    changed_unshown = fs.patch(
-        file_path=str(target), old_string="rewritten outside js 150\n", new_string="y\n", context=context
-    )
+    # Short enough that the exact match is not its own proof, so the withheld
+    # diff keeps the edit gated until those lines are read.
+    changed_unshown = fs.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
     fs.fs_read(file_path=str(target), start_line=100, end_line=180, context=context)
-    changed_read = fs.patch(
-        file_path=str(target), old_string="rewritten outside js 150\n", new_string="y\n", context=context
-    )
+    changed_read = fs.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
 
     assert refused.startswith("ERROR")
     assert "rewritten outside js" not in refused
