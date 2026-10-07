@@ -454,6 +454,11 @@ OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per l
 OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the send and who tools, "
                     "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
                     "exiting when a turn ends. A message of kind stop ends it.")
+SWARM_CLI = Message("Post on a swarm bus, or list who is on it.")
+SWARM_SEND = Message("Post a message. A text of - or no text reads stdin.")
+SWARM_SEND_TO = Message("An agent's name, or * for everyone else on the bus.")
+SWARM_SEND_KIND = Message("say, ask, reply, done, or stop (ends the agent after its current turn).")
+SWARM_MEMBERS = Message("The names that have an inbox on the bus.")
 OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
 OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
 OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")

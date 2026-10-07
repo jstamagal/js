@@ -252,16 +252,17 @@ def with_bus_tools(registry):
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    ap = argparse.ArgumentParser(prog="python -m js.swarm", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    from . import messages as msgs
+
+    ap = argparse.ArgumentParser(prog="python -m js.swarm", description=msgs.SWARM_CLI.text())
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("send", help="post a message; text '-' or absent reads stdin")
+    s = sub.add_parser("send", help=msgs.SWARM_SEND.text())
     s.add_argument("root")
     s.add_argument("sender")
-    s.add_argument("to", help="an agent name or *")
+    s.add_argument("to", help=msgs.SWARM_SEND_TO.text())
     s.add_argument("text", nargs="?")
-    s.add_argument("--kind", default="say")
-    m = sub.add_parser("members", help="who has an inbox")
+    s.add_argument("--kind", default="say", help=msgs.SWARM_SEND_KIND.text())
+    m = sub.add_parser("members", help=msgs.SWARM_MEMBERS.text())
     m.add_argument("root")
     a = ap.parse_args(argv)
     if a.cmd == "send":
