@@ -542,6 +542,14 @@ def registry_for_roots(
     return _cached_registry(tuple(prompt_roots or ()), tuple(flags))
 
 
+def _swarm_tools() -> tuple[Tool, ...]:
+    # send and who: on every agent's surface under --swarm, selectable by
+    # agent.yaml like any tool otherwise. js.swarm imports the toolkit lazily.
+    from .. import swarm
+
+    return swarm.tools()
+
+
 def build_default_registry(
     prompts_root: Path | Sequence[Path] | None = None,
     flags: tuple[str, ...] = ("model_override",),
@@ -559,6 +567,7 @@ def build_default_registry(
         ("toolbox", toolbox.tools()),
         ("lsp", lsp.tools()),
         ("notebook", notebook.tools()),
+        ("swarm", _swarm_tools()),
     )
     base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
     reserved = {tool.name for tool in base_tools}
