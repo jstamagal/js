@@ -39,7 +39,9 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    make it pass, the only other way out is a written confession: append to
    `FAILURES.md` at the repo root your full model name, the date, the failing
    test names, what you tried, and the sentence "I could not make this pass."
-   A confession is public and permanent; that is the point.
+   A confession is public and permanent; that is the point. The suite has
+   never found a bug here; using js and auditing it have. `just test-live`'s
+   e2e is the one that resembles use; run it now and then.
 5. **`just lint`** before calling it clean. ruff is the gate.
 6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
    Commits are authored by whoever made them. The owner is
