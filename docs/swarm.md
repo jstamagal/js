@@ -10,8 +10,11 @@ js -a troop -p --json --swarm $ROOT/kivu  "You are kivu. ..." &
 js -a troop -p --json --swarm $ROOT/twig  "You are twig. ..." &
 python -m js.swarm send $ROOT steer '*' "new evidence: the leak is in the writer"
 python -m js.swarm members $ROOT                 # kivu asleep holds parser / twig working
+python -m js.swarm cells $ROOT                   # the work board
+python -m js.swarm post $ROOT steer "check the writer" "src/writer.py; done when the test passes"
 python -m js.swarm quiet $ROOT && echo "nothing left to do"
 python -m js.swarm send $ROOT steer kivu --kind stop
+python -m js.swarm run spec.json                 # the same swarm, every agent in one process
 ```
 
 ## What an agent on the bus gets
@@ -32,10 +35,18 @@ python -m js.swarm send $ROOT steer kivu --kind stop
     is a `tick` from `clock`. One alarm, then sleep; not a polling loop.
   - `retire(handoff)`: post the handoff to everyone, leave the bus, end after
     this turn.
-  - `recruit(name, opener)`: start a sibling process under a new name, with
-    this agent's own command line and a session named after the parent's; the
-    opener is its first prompt. Its events go to `ROOT/<name>/events.jsonl`.
-    A bus takes at most eight recruited agents.
+  - `recruit(name, opener)`: start a sibling under a new name with this
+    agent's own agent, model and settings and a session named after the
+    parent's; the opener is its first prompt. One process per agent: a new
+    process whose events go to `ROOT/<name>/events.jsonl`. In an in-process
+    swarm: a new agent on the same loop. A bus takes at most eight recruits.
+  - `post_task(title, body)`, `take_task(id)`, `finish_task(id, result)`,
+    `tasks()`: the **work board**. A posted task tells everyone with a `task`
+    message and sits open on the board; taking it is a claim on `task:<id>`
+    with the usual ten-minute hold, renewed by taking again and freed when it
+    expires; finishing it records the result, frees the hold and tells
+    everyone with a `done` message. Work sits on the board, agents take it,
+    the board remembers.
 - **Delivery at every tool boundary.** While a turn runs, the inbox is drained
   after each batch of tool results and the messages go in as one user message
   (a `--- messages ---` block) before the next model call. This is the same
@@ -59,6 +70,7 @@ see [headless-json.md](headless-json.md).
 ```
 ROOT/log.jsonl            every message, one JSON object per line: seq, ts, from, to, kind, body
 ROOT/claims.json          key -> holder and expiry
+ROOT/cells.json           the work board: id, title, body, by, status, holder, result
 ROOT/<name>/inbox/        one file per message not yet delivered to <name>
 ROOT/<name>/subs          the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep        present while <name> waits on its inbox
@@ -88,8 +100,37 @@ decide what each one reacts to. `subscribe` is how a disposition is wired;
 `claim` is how two agents avoid the same file; `recruit` and `retire` are how
 the troop changes shape without a runner's say-so.
 
-## Not yet
+## Every agent in one process
 
-- Running many agents in one process on the supervisor loop. One process per
-  agent is what the bus serves; the process-wide tool context is the seam
-  that would have to move first.
+`python -m js.swarm run SPEC.json` runs every agent of a swarm on one asyncio
+loop in one process. The code is `js/swarm_run.py`.
+
+```json
+{"root": "/tmp/troop-42", "slots": 0,
+ "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash", "effort": "low",
+             "opener": "You are kivu ...", "session": "troop-42-kivu", "cwd": "/tmp/troop-42/kivu",
+             "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"limits.shell_env_allow": "[\"PATH\"]"}}]}
+```
+
+Each agent gets what a `--swarm` process gets, built the way the task tool
+builds a child turn: its own config from the layered settings plus `opts`
+(the same form as `--extra key=value`), its agent's prompt directory with the
+contents of `seat_file` appended to the system prompt, `model` and `effort`
+resolved like `-m` and `-r`, a session under its own `cwd`'s session folder
+named by `session`, its own tool context with the bus tools on the surface,
+the inbox drained at every tool boundary, the turn persisted and the
+compaction trigger run before every sleep. The sleep is an `await` on the
+inbox, so a hundred idle agents cost one process and no model calls.
+
+`slots` caps how many agents may be mid-turn at once; the rest wait for a
+slot before starting their next turn. Unset, it is the registered setting
+`swarm.slots`; 0 is no cap. `recruit` inside this runner adds an agent to the
+loop with the recruiter's agent, model and settings and a session named
+`<parent session>-<name>`; its `spawned` marker says `"inproc": true`.
+
+Events go to stdout as JSON lines, every one carrying `agent`. The runner adds
+`agent_start`, `agent_end` and `run_end`; see
+[headless-json.md](headless-json.md). An agent whose turn raises ends with
+`agent_end reason=error` and the others go on. The process ends when every
+agent has stopped or retired. `SIGTERM` and `SIGINT` cancel every agent,
+persist every session and exit 130.

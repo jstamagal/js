@@ -39,9 +39,17 @@ calls.
 | `sleep` | `--swarm` only: the turn ended and the agent waits on its inbox | `agent` |
 | `wake` | `--swarm` only: messages landed, or a `wake_me` alarm went off; a turn follows unless every one was a `stop` | `agent`, `count`, `seqs`, `kinds` (`tick` for the alarm) |
 | `result` | last line | `ok`, `exit_code`, `text` (the final answer; empty on failure), `session` (the id), `usage` (the session totals) |
+| `agent_start` | `python -m js.swarm run` only: an agent of the spec starts | `agent`, `model`, `provider`, `session` (the `.jsonl`), `cwd` |
+| `agent_end` | `python -m js.swarm run` only: an agent is done | `agent`, `reason` (`stopped`, `retired`, `cancelled`, `error`) |
+| `run_end` | `python -m js.swarm run` only: last line | `agents`, `exit_code` |
 
 With `--swarm ROOT/NAME` (see [swarm.md](swarm.md)) a run has many turns: each
 is a `turn_start` … `turn_end`, separated by `sleep` and `wake`.
+
+With `python -m js.swarm run SPEC.json` every agent of the spec writes to the
+same stream and every event carries `agent`: the name from the spec, so a
+reader demuxes by it. There is no `session` or `result` event; `agent_start`
+and `agent_end` take their place per agent, and `run_end` closes the stream.
 
 `text` deltas are not retracted. When a call fails after some text streamed
 and js retries it, the deltas of the failed attempt stay in the stream; the
