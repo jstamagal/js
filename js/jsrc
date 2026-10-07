@@ -75,6 +75,9 @@ set limits.max_tool_results_per_turn_bytes 200000
 set limits.task_max_depth 2
 set limits.subagent_max_workers 8
 
+# --- swarm ---
+set swarm.slots 0
+
 # --- kernel ---
 set kernel.verbosity normal
 set kernel.render_max_lines 24

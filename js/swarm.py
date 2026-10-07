@@ -467,7 +467,10 @@ class Agent:
         self.room = Room(p.parent)
         self.inbox = self.room.join(self.name)
         self.stop_seen = False
+        self.retired = False
         self.alarm: float | None = None
+        # Set by the in-process runner: recruit adds a coroutine there, not a process.
+        self.recruiter: Any = None
 
     def _take(self, msgs: list[Msg]) -> list[Msg]:
         if any(m.kind == STOP for m in msgs):
@@ -484,19 +487,43 @@ class Agent:
     def sleep(self) -> list[Msg]:
         """Block until something lands, or the alarm set by `wake_me` goes off.
         No model call is made while waiting. A burst is handed over as one wake."""
-        marker = self.room.root / self.name / "asleep"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
+        marker = self._asleep()
         try:
             timeout = None if self.alarm is None else max(0.0, self.alarm - time.monotonic())
             landed = self.inbox.wait(timeout)
             if not landed:
-                self.alarm = None
-                return [Msg(0, time.time(), CLOCK, self.name, TICK, "The time you asked to be woken after has passed.")]
+                return [self._tick()]
             time.sleep(COALESCE_S)
             return self._take(landed + self.inbox.drain())
         finally:
             marker.unlink(missing_ok=True)
+
+    async def sleep_async(self) -> list[Msg]:
+        """`sleep` for an agent on an event loop: the same wait as an await."""
+        import asyncio
+
+        marker = self._asleep()
+        try:
+            while True:
+                landed = self.inbox.drain()
+                if landed:
+                    await asyncio.sleep(COALESCE_S)
+                    return self._take(landed + self.inbox.drain())
+                if self.alarm is not None and time.monotonic() >= self.alarm:
+                    return [self._tick()]
+                await asyncio.sleep(POLL_S)
+        finally:
+            marker.unlink(missing_ok=True)
+
+    def _asleep(self) -> Path:
+        marker = self.room.root / self.name / "asleep"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return marker
+
+    def _tick(self) -> Msg:
+        self.alarm = None
+        return Msg(0, time.time(), CLOCK, self.name, TICK, "The time you asked to be woken after has passed.")
 
     def wake_message(self, msgs: list[Msg]) -> dict:
         return {"role": "user", "content": render(msgs, self.name)}
@@ -513,6 +540,7 @@ class Agent:
         msg = self.send(BROADCAST, handoff, RETIRE)
         self.room.leave(self.name)
         self.stop_seen = True
+        self.retired = True
         return msg
 
     def spawn(self, name: str, opener: str, argv: list[str] | None = None) -> subprocess.Popen:
@@ -648,10 +676,13 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
     if not opener.strip():
         return "ERROR: opener is empty: the new agent needs to be told who it is and what to do"
     try:
-        proc = agent.spawn(name, opener)
+        if agent.recruiter is not None:
+            agent.recruiter(name, opener)
+        else:
+            agent.spawn(name, opener)
     except (ValueError, OSError) as exc:
         return f"ERROR: {exc}"
-    return f"started {name} (pid {proc.pid}); it is on the bus as {name} and reads your opener first"
+    return f"started {name}; it is on the bus as {name} and reads your opener first"
 
 
 def _post_task(title: str = "", body: str = "", context: Any = None) -> str:

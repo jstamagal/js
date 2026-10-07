@@ -285,6 +285,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Maximum recursive task/subagent depth."),
     SettingSpec("limits.subagent_max_workers", "int",
                 "Maximum concurrent subagent workers per task call; minimum 1."),
+    # --- swarm ---
+    SettingSpec("swarm.slots", "int",
+                "How many agents of an in-process swarm may be mid-turn at once; 0 is no cap."),
     # --- kernel ---
     SettingSpec("kernel.verbosity", "str",
                 "How much of each kernel/toolbox call is rendered to your terminal. "

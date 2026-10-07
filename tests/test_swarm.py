@@ -5,18 +5,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import sys
 import threading
 import time
+from pathlib import Path
 
 import ai
 import ai.types.usage
 import pytest
 from ai.providers import history_utils
 
-from js import cli, headless, runtime, swarm
+from js import cli, headless, memory, runtime, swarm, swarm_run
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
@@ -346,6 +348,129 @@ def test_a_swarm_agent_sleeps_after_its_turn_and_wakes_on_a_message(tmp_path, mo
     second_turn = kinds.index("turn_start", kinds.index("turn_start") + 1)
     assert kinds.index("sleep") < kinds.index("wake") < second_turn
     assert kinds[-1] == "wake"  # the stop was the last thing it woke to; no turn ran on it
+
+
+# --------------------------------------------------------------------------
+# every agent in one process: python -m js.swarm run SPEC.json
+# --------------------------------------------------------------------------
+
+def _spec(tmp_path, agents: list[dict], slots=None) -> str:
+    spec = {"root": str(tmp_path / "bus"), "agents": agents}
+    if slots is not None:
+        spec["slots"] = slots
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec))
+    return str(path)
+
+
+def _user_texts(kwargs) -> list[str]:
+    return ["".join(p.text for p in m.parts if p.kind == "text") for m in kwargs["messages"] if m.role == "user"]
+
+
+def _events(out: io.StringIO) -> list[dict]:
+    return [json.loads(line) for line in out.getvalue().splitlines()]
+
+
+def test_run_spec_runs_every_agent_in_one_process_until_each_stops(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    turns: dict[str, int] = {"a": 0, "b": 0}
+
+    def stream(**kwargs):
+        me = "a" if "a-opener" in _user_texts(kwargs)[0] else "b"
+        turns[me] += 1
+        if me == "a":
+            room.send("a", "b", "ping")                       # b wakes to this
+        if sum(turns.values()) == 3:                          # a once, b twice: everyone has worked
+            room.send("steer", "*", "enough", kind="stop")
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)},
+                            {"name": "b", "agent": "voice", "opener": "b-opener", "session": "s-b", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    assert turns == {"a": 1, "b": 2}
+    assert all("agent" in e for e in events)
+    assert {(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"} == {("a", "stopped"), ("b", "stopped")}
+    assert events[-1]["type"] == "run_end"
+    sessions = {e["agent"]: e["session"] for e in events if e["type"] == "agent_start"}
+    assert len(memory.load_replay_messages(Path(sessions["b"]))) >= 4   # opener, reply, wake, reply
+    assert "ping" in _user_texts_of(memory.load_replay_messages(Path(sessions["b"])))[-1]
+
+
+def _user_texts_of(messages: list[dict]) -> list[str]:
+    return [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
+
+
+def test_recruit_in_process_adds_an_agent_to_the_same_loop(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    seen: list[str] = []
+
+    def stream(**kwargs):
+        texts = _user_texts(kwargs)
+        me = "twig" if "twig-opener" in texts[0] else "a"
+        seen.append(me)
+        if me == "a" and seen.count("a") == 1:
+            args = json.dumps({"name": "twig", "opener": "twig-opener"})
+            message = ai.types.messages.Message(role="assistant", parts=[
+                ai.types.messages.ToolCallPart(tool_call_id="c1", tool_name="recruit", tool_args=args)])
+            return ModelStreamResult(text="", tool_calls=[ModelToolCall(id="c1", name="recruit", arguments=args)],
+                                     reasoning="", usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1),
+                                     finish_reason="tool_calls", assistant_message=message)
+        if me == "twig":
+            room.send("steer", "*", "enough", kind="stop")
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    starts = {e["agent"]: e for e in events if e["type"] == "agent_start"}
+    assert set(starts) == {"a", "twig"}
+    assert starts["twig"]["session"].endswith("s-a-twig.jsonl")
+    assert "twig" in seen
+    assert json.loads((tmp_path / "bus" / "twig" / "spawned").read_text())["by"] == "a"
+    assert {e["agent"] for e in events if e["type"] == "agent_end"} == {"a", "twig"}
+
+
+def test_slots_cap_how_many_agents_are_mid_turn_at_once(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    busy = {"now": 0, "peak": 0, "turns": 0}
+
+    async def stream(**kwargs):
+        busy["now"] += 1
+        busy["peak"] = max(busy["peak"], busy["now"])
+        await asyncio.sleep(0.2)
+        busy["now"] -= 1
+        busy["turns"] += 1
+        if busy["turns"] == 2:
+            room.send("steer", "*", "enough", kind="stop")
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    agents = [{"name": n, "agent": "voice", "opener": f"{n}-opener", "session": f"s-{n}", "cwd": str(tmp_path)}
+              for n in ("a", "b")]
+
+    assert swarm_run.run(_spec(tmp_path, agents, slots=1), out=io.StringIO()) == 0
+    assert busy["peak"] == 1
+
+    busy.update(now=0, peak=0, turns=0)
+    for n in ("a", "b"):
+        swarm.Room(tmp_path / "bus").leave(n)
+    assert swarm_run.run(_spec(tmp_path, agents, slots=0), out=io.StringIO()) == 0
+    assert busy["peak"] == 2
 
 
 def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
