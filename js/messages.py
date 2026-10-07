@@ -451,6 +451,9 @@ OPT_LIST = Message("List saved sessions without loading config or contacting a p
 OPT_LAST = Message("Resume the most recently used session for this agent.")
 OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per line; "
                    "with --list, print compact JSON objects one per line.")
+OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the send and who tools, "
+                    "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
+                    "exiting when a turn ends. A message of kind stop ends it.")
 OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
 OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
 OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")

@@ -411,6 +411,7 @@ class ToolContext(_turn_settings.ContextSettings):
     vision_enabled: bool = False
     model: str = ""                       # model id, for toolbox revision provenance
     kernel_session: Any = None            # the live IPython kernel, one per process
+    swarm: Any = None                     # js.swarm.Agent when this process runs with --swarm
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
     tool_call_hooks: Any = field(default=None, repr=False)

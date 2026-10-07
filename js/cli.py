@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import sys
+import signal
 import threading
 import time
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from prompt_toolkit.key_binding import merge_key_bindings
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
+from . import swarm as swarm_mod
 
 from . import attach, clipimage, codex_auth
 from . import agent_messages
@@ -2330,6 +2332,10 @@ def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
     return settings.coerce_value(spec, reasoning)
 
 
+def _raise_keyboard_interrupt(*_args) -> None:
+    raise KeyboardInterrupt
+
+
 @_session_scope
 def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
@@ -2344,7 +2350,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 stats_json: str | None = None, stats_csv: str | None = None,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
-                config_pins: bool = False) -> int:
+                config_pins: bool = False, swarm: str | None = None) -> int:
     attachments = list(files or [])
     if not prompt.strip() and not attachments:
         msgs.warn(msgs.PROMPT_EMPTY)
@@ -2428,6 +2434,16 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
                       model=_stamp_label(cfg.model, cfg.provider_id))
 
+    bus = swarm_mod.Agent(swarm) if swarm else None
+    if bus is not None:
+        # On a bus the agent gets send/who, reads its inbox at every tool
+        # boundary, and sleeps on the inbox instead of exiting after the turn.
+        # SIGTERM (the runner stopping the swarm) ends it like ^C: the session
+        # is persisted and the exit code says interrupted.
+        active_registry = swarm_mod.with_bus_tools(active_registry)
+        (tool_context or runtime.T.STOCK_CONTEXT).swarm = bus
+        with contextlib.suppress(ValueError):  # not the main thread: no signal hook
+            signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
         if model is not None
@@ -2474,6 +2490,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     }
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
+    if bus is not None:
+        turn_kwargs["steer"] = bus.steer
     if reasoning_override is not None:
         turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
@@ -2512,6 +2530,33 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         runtime.run_turn(cfg, system, messages, telemetry,
                          trace_override=debug or bool(debug_file) or cfg.trace,
                          tool_context=tool_context, **turn_kwargs)
+        if bus is None:
+            return
+        # On a bus, a turn ending is the agent going idle, not the run ending.
+        # Sleep on the inbox (no model call) and wake into the next turn with
+        # whatever landed. A `stop` message ends it after the turn it lands in.
+        while not bus.stop_seen:
+            if save:
+                _persist_turn_messages(cfg, messages, reasoning_override)
+            if events is not None:
+                events.emit("sleep", agent=bus.name)
+            landed = bus.sleep()
+            if events is not None:
+                events.emit("wake", agent=bus.name, count=len(landed), seqs=[m.seq for m in landed],
+                            kinds=sorted({m.kind for m in landed}))
+            if all(m.kind == swarm_mod.STOP for m in landed):
+                return
+            wake = M.note_time(bus.wake_message(landed))
+            messages.append(wake)
+            if save:
+                _append_turn(cfg, wake)
+            if turn_transcript is not None:
+                turn_transcript.write_user(wake["content"])
+            if echo_user is not None:
+                echo_user(wake["content"])
+            runtime.run_turn(cfg, system, messages, telemetry,
+                             trace_override=debug or bool(debug_file) or cfg.trace,
+                             tool_context=tool_context, **turn_kwargs)
 
     try:
         try:
@@ -4108,6 +4153,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.text())
     parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.text())
     parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.text())
+    parser.add_argument("--swarm", metavar="ROOT/NAME", help=msgs.OPT_SWARM.text())
     parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.text())
     parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.text())
     parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.text())
@@ -4421,7 +4467,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                      files=args.files,
                      stdin_attachment=stdin_attachment,
                      presets=presets,
-                     stats_json=args.stats_json, stats_csv=args.stats_csv)
+                     stats_json=args.stats_json, stats_csv=args.stats_csv,
+                     swarm=args.swarm)
         if args.no_save:
             msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result
