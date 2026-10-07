@@ -43,8 +43,8 @@ from .toolkit.terminal import close_terminal_sessions
 @dataclass
 class AgentSpec:
     name: str
-    agent: str
     opener: str
+    agent: str | None = None      # None: the configured default agent, as plain `js -p` resolves it
     model: str | None = None
     effort: str | None = None
     session: str | None = None
@@ -56,8 +56,8 @@ class AgentSpec:
     def from_dict(cls, d: dict) -> AgentSpec:
         return cls(
             name=swarm.check_name(str(d.get("name") or "")),
-            agent=str(d.get("agent") or "").strip() or os.environ.get("JS_AGENT", "") or "default",
             opener=str(d.get("opener") or ""),
+            agent=str(d.get("agent") or "").strip() or None,
             model=str(d["model"]).strip() or None if d.get("model") else None,
             effort=str(d["effort"]).strip() or None if d.get("effort") else None,
             session=str(d["session"]).strip() or None if d.get("session") else None,
