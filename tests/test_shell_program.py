@@ -118,3 +118,13 @@ def test_shell_own_variables_are_not_reported_as_unset(tmp_path, monkeypatch):
     result = process_net.shell('echo "$SHLVL $PWD"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert "environment=filtered" not in result
+
+
+@needs_zsh
+def test_zsh_passes_an_unmatched_glob_through_like_bash(tmp_path):
+    context = ToolContext(cwd=tmp_path, shell_program="zsh")
+
+    result = process_net.shell("printf %s --include=*.log", context=context)
+
+    assert _exit_code(result) == 0
+    assert "--include=*.log" in result
