@@ -115,10 +115,14 @@ selects this mode (and reports no runnable benchmarks rather than entering the
 REPL). Explicit maintenance modes such as `--commit` and `--printonly` retain
 their own behavior.
 
-Each benchmark starts a fresh, unsaved conversation with the system prompt and
-any user/agent setup exchanges, then sends the benchmark body as its user
-message. Benchmark text expands after that setup. Conversations do not carry
-across benchmarks. Benchmark frontmatter may set `max_tokens`; `--max-out`
+The user/agent setup exchanges run once, before the first benchmark. Each
+benchmark then starts a fresh, unsaved conversation from a copy of that setup
+and sends the benchmark body as its user message, so every benchmark sees the
+same context, including the reply of any setup user file that ran a live model
+turn. Benchmark text expands after that setup. Conversations do not carry
+across benchmarks. A benchmark's stats count only its own turn; when setup
+called the model, its calls are reported once as a `setup` row (and a `setup`
+key in `--stats-json`). Benchmark frontmatter may set `max_tokens`; `--max-out`
 overrides it. Timing and token statistics are printed, with `--stats-json` and
 `--stats-csv` available for reports.
 
