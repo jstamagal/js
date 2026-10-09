@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import ai
@@ -331,3 +332,31 @@ def test_startup_reply_records_effective_reasoning_when_the_following_turn_fails
     _model(monkeypatch, ["opening reply", RuntimeError("following turn failed")])
     assert cli._run_prompt("now", session="seeded", reasoning="high") == 1
     assert last_stamp(_saved(tmp_path))["reasoning"] == "high"
+
+
+def _setup_and_two_benchmarks(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {
+        "01-user.md": "warm up",
+        "02-benchmark.md": "benchmark one", "03-benchmark.md": "benchmark two",
+    })
+    return _model(monkeypatch, ["warmed", "first", "second"])
+
+
+def test_benchmark_setup_turn_runs_once_and_every_benchmark_starts_from_it(tmp_path, monkeypatch):
+    requests = _setup_and_two_benchmarks(tmp_path, monkeypatch)
+    assert cli.main(["--bench", "voice", "-q"]) == 0
+    setup = [("system", "SYSTEM\n"), ("user", "warm up")]
+    assert requests == [
+        setup,
+        [*setup, ("assistant", "warmed"), ("user", "benchmark one")],
+        [*setup, ("assistant", "warmed"), ("user", "benchmark two")],
+    ]
+
+
+def test_benchmark_stats_count_only_the_benchmark_turn(tmp_path, monkeypatch):
+    _setup_and_two_benchmarks(tmp_path, monkeypatch)
+    out = tmp_path / "stats.json"
+    assert cli.main(["--bench", "voice", "-q", "--stats-json", str(out)]) == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert [row["calls"] for row in payload["benchmarks"]] == [1, 1]
+    assert payload["setup"]["calls"] == 1

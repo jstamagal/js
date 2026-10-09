@@ -2746,7 +2746,11 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
     context, no session), measuring TTFT / tok-s / turn time. The persona
     (NN-prompt.md + agent.yaml) is rebuilt into each benchmark's head;
-    benchmarks never see each other."""
+    benchmarks never see each other. The agent's startup exchanges run once,
+    before the first benchmark; every benchmark starts from a copy of that
+    conversation, so all of them see the same context, and a benchmark's
+    stats count only its own turn. A startup that called the model is
+    reported as its own `setup` row."""
     try:
         agent_id = validate_agent_id(bench_agent)
     except ValueError as e:
@@ -2791,7 +2795,52 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     prompt_spec = P._expand_spec(prompt_spec, cfg)
     system = prompt_spec.system
 
+    def _turn_kwargs(eff_max, call_stats: list[dict]) -> dict:
+        kwargs = {
+            "model_override": cfg.model,
+            "provider_id_override": cfg.provider_id,
+            "provider_base_url_override": cfg.provider_base_url,
+            "provider_api_key_override": cfg.provider_api_key,
+            "tool_registry": active_registry,
+            "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
+            "max_output_override": eff_max,
+            "call_stats": call_stats,
+        }
+        if reasoning is not None:
+            kwargs["reasoning_effort_override"] = reasoning_override
+        return kwargs
+
     rows: list[dict] = []
+    setup_row: dict | None = None
+    # The startup exchanges run once; each benchmark starts from a copy, so a
+    # live setup turn neither differs between benchmarks nor counts in them.
+    setup_messages: list[dict] = []
+    setup_stats: list[dict] = []
+    t_setup = time.time()
+    try:
+        sink = io.StringIO() if quiet else None
+        with contextlib.redirect_stdout(sink) if sink is not None else contextlib.nullcontext():
+            async def run_setup():
+                telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+                await agent_messages.initialize(
+                    cfg, prompt_spec, setup_messages, telemetry, save=False,
+                    trace_override=bool(debug),
+                    **_turn_kwargs(maxout if maxout is not None else agent_default_max, setup_stats),
+                )
+
+            model_client.run_owning_loop(run_setup())
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:  # noqa: BLE001
+        msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
+        return 1
+    if setup_stats:
+        setup_row = {
+            "name": "setup", "prompt": "", "max_tokens": None, "ok": True, "error": None,
+            **stats.summarize_calls(setup_stats, wall_s=time.time() - t_setup),
+        }
+        msgs.say_said(_bench_row_line(setup_row), file=sys.stderr)
+
     interrupted = False
     for bench in benchmarks:
         # max_tokens: --max-out wins; else per-benchmark frontmatter (already
@@ -2803,20 +2852,9 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         else:
             eff_max = agent_default_max
         prompt_text = bench.prompt
-        messages = []
+        messages = copy.deepcopy(setup_messages)
         call_stats: list[dict] = []
-        turn_kwargs = {
-            "model_override": cfg.model,
-            "provider_id_override": cfg.provider_id,
-            "provider_base_url_override": cfg.provider_base_url,
-            "provider_api_key_override": cfg.provider_api_key,
-            "tool_registry": active_registry,
-            "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
-            "max_output_override": eff_max,
-            "call_stats": call_stats,
-        }
-        if reasoning is not None:
-            turn_kwargs["reasoning_effort_override"] = reasoning_override
+        turn_kwargs = _turn_kwargs(eff_max, call_stats)
         if not quiet:
             msgs.warn(msgs.BENCH_START, name=bench.name, prompt=prompt_text.splitlines()[0][:80])
         ok, err = True, None
@@ -2830,10 +2868,6 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                 async def run_benchmark():
                     nonlocal prompt_text
                     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-                    await agent_messages.initialize(
-                        cfg, prompt_spec, messages, telemetry, save=False,
-                        trace_override=bool(debug), **turn_kwargs,
-                    )
                     prompt_text = P.expand_agent_text(bench.prompt, cfg)
                     messages.append({"role": "user", "content": prompt_text})
                     await runtime.run_turn_async(
@@ -2856,6 +2890,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             break
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
+    if setup_row is not None:
+        payload["setup"] = setup_row
     if stats_json:
         stats.write_json(stats_json, payload)
         msgs.warn(msgs.STATS_WRITTEN, path=stats_json)
