@@ -112,6 +112,23 @@ warning on stderr; it does not abort prompt assembly. (Callers of
 `expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
 default per-directive timeout is 300 seconds; set
 `limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT` to override it.
+Output is capped at `limits.max_bash_output_bytes`. A failing directive's
+stderr goes into the warning; a succeeding one's stderr is discarded.
+
+## When and where directives run
+
+- **Working directory.** Every code subsystem runs in the directory js was
+  started from. `python`, `node` and `c` write the snippet (and compile it)
+  in a temp dir under js's tmp dir, but the snippet itself runs in the
+  invocation directory, so it sees the same paths `!{sh pwd}` does.
+- **Environment.** Directives inherit js's environment, including the
+  exported `JS_ROOT` and `JS_SHELL`.
+- **How often.** The system prompt is expanded each time js loads the agent:
+  every js run, `--session` resumes included. A side effect in a prompt file
+  (making a directory, writing a file, downloading something) happens again on
+  every run, so keep it idempotent: create a fixed path if it is missing
+  rather than a fresh temp dir. Message files and benchmark bodies expand once,
+  when they are reached, so a `tempfile.mkdtemp()` work dir belongs there.
 
 ## Code execution is on by default
 
