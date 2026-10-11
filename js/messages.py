@@ -378,6 +378,7 @@ SHORT_HELP = Message(
     "  js --login [PROVIDER]   Sign in.\n"
     "  js --list-models        List the runnable models.\n"
     "  js --commit             Run the commit agent.\n"
+    "  js -p 'task' --loop 10   Repeat fresh turns (also 45M, 3H).\n"
     "  js --help-full          Every option.\n",
     banner=False)
 
@@ -431,6 +432,10 @@ OPT_MAX_OUT = Message("Max output tokens per call.")
 OPT_BENCH = Message(
     "Benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, "
     "measuring TTFT, tok/s and turn time. Pair with --stats-json or --stats-csv.")
+OPT_LOCK = Message("Refuse to start while another --lock run of the same agent is running (works for --bench, --agent, or a bare run).")
+OPT_LOOP = Message(
+    "Repeat fresh invocations: positive count, elapsed minutes (M), hours (H), or bare for Ctrl-C. "
+    "The deadline is checked between invocations; all other options carry through.")
 OPT_STATS_JSON = Message("Write per-turn stats to PATH as JSON: ttft, tok/s, turn time, tokens.")
 OPT_STATS_CSV = Message("Write per-turn stats to PATH as CSV.")
 OPT_BLOCKING = Message(

@@ -122,6 +122,15 @@ across benchmarks. Benchmark frontmatter may set `max_tokens`; `--max-out`
 overrides it. Timing and token statistics are printed, with `--stats-json` and
 `--stats-csv` available for reports.
 
+`js --loop 10`, `--loop 45M`, and `--loop 3H` repeat fresh invocations by
+completed turns or elapsed time; bare `--loop` runs until Ctrl-C. Time limits
+are checked between invocations, so an active turn finishes. Each child receives
+the original options and working directory, excluding `--loop`. Piped input is
+replayed for every child. Without a prompt or benchmark, the loop supplies a
+one-shot instruction to carry out the agent's assigned task, so it does not open
+an idle REPL. A counted loop stops on a failed child. Continuous and timed loops
+retry failed children with backoff, stopping after five consecutive failures.
+
 ## Default Registry
 
 `build_default_registry()` assembles tools in this order:

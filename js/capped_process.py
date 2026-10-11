@@ -432,7 +432,11 @@ def _run_capped(
     ``subprocess.run``, with the whole process tree killed and whatever was
     captured attached."""
     job = start_capped(argv, cwd=cwd, env=env, cap=cap)
-    result = job.wait(timeout)
+    try:
+        result = job.wait(timeout)
+    except BaseException:
+        job.kill()
+        raise
     if result is None:
         killed = job.kill()
         raise CappedProcessTimeout(

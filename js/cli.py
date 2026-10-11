@@ -85,6 +85,7 @@ from .config import (
 from . import session_store
 from . import session_picker
 from . import session_tags
+from . import agent_lock
 from .session_catalog import (
     acquire_session,
     append_title,
@@ -2749,7 +2750,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     benchmarks never see each other."""
     try:
         agent_id = validate_agent_id(bench_agent)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
     reasoning_override = None
@@ -2791,6 +2792,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     prompt_spec = P._expand_spec(prompt_spec, cfg)
     system = prompt_spec.system
 
+    # The request trace (system prompt, tools, messages, FLIGHT lines) goes to
+    # logs/<agent>/<agent>-<pid>.log like every other run. A bench keeps no session,
+    # so without this nothing records what the model was sent.
+    autolog = _debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
+    trace_sink = _open_debug_trace_sink([autolog] if autolog is not None else [])
+
     rows: list[dict] = []
     interrupted = False
     for bench in benchmarks:
@@ -2823,13 +2830,15 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         t_wall = time.time()
         try:
             sink = io.StringIO() if quiet else None
-            with contextlib.redirect_stdout(sink) if sink is not None else contextlib.nullcontext():
+            out = sink if sink is not None else (_StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
+            with contextlib.redirect_stdout(out) if out is not None else contextlib.nullcontext():
                 # -d turns on the per-turn trace here too. Without it a bench run
                 # records only the model's prose, which is its own claim about
                 # what it called, not evidence — useless for measuring tool use.
                 async def run_benchmark():
                     nonlocal prompt_text
                     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+                    telemetry.trace_sink = trace_sink
                     await agent_messages.initialize(
                         cfg, prompt_spec, messages, telemetry, save=False,
                         trace_override=bool(debug), **turn_kwargs,
@@ -2854,6 +2863,9 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.say_said(_bench_row_line(row), file=sys.stderr)
         if interrupted:
             break
+
+    if trace_sink is not None:
+        trace_sink.close()
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
     if stats_json:
@@ -4145,6 +4157,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.text())
     parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.text())
     parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.text())
+    parser.add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.text())
+    parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.text())
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.text())
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.text())
     parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.text())
@@ -4172,6 +4186,12 @@ def _main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
     args = parser.parse_args(argv)
+    if args.loop is not None:
+        from . import loop_controller
+        try:
+            return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
     if _json_run_requested(args):
         return _json_run(lambda: _run_args(args, dispatch_argv))
     return _run_args(args, dispatch_argv)
@@ -4366,6 +4386,13 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
             presets=presets,
         )
+
+    if args.lock:
+        try:
+            agent_lock.acquire(args.bench and validate_agent_id(args.bench) or _invocation_agent(args, presets))
+        except (ValueError, agent_lock.Busy, OSError) as e:
+            msgs.warn(msgs.FAILED, error=e)
+            return 2
 
     selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
