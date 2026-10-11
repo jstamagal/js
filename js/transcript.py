@@ -28,7 +28,7 @@ def strip_ansi(text: str) -> str:
     control left over, so no write (even one split mid-escape) puts an escape
     into the log. Other control bytes stay, so the log keeps carriage returns
     and tabs as they were shown."""
-    text = _display._STRING_SEQ.sub("", text)
+    text = _display._strip_string_sequences(text)
     text = _display._CSI.sub("", text)
     text = _display._ESC.sub("", text)
     return _RESIDUAL.sub("", text)

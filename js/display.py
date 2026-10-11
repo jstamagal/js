@@ -39,6 +39,30 @@ _CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
 # Any other escape: ESC, intermediates, one final byte (ESC c, ESC ( 0, ESC 7).
 _ESC = re.compile(r"\x1b[ -/]*[0-~]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_STRING_OPEN = re.compile(r"\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f]")
+_STRING_CLOSE = re.compile(r"\x07|\x1b\\|\x9c")
+
+
+def _strip_string_sequences(text: str) -> str:
+    """``_STRING_SEQ.sub("", text)`` in linear time. The lazy regex rescans to
+    the end of the text from every unterminated opener: quadratic, 2.4 s for
+    40 KB of ``\\x1b]``, re-run on the whole live answer every refresh. Here the
+    first opener with no terminator after it ends the scan, because no later
+    opener can have one either; the text from it on is kept for the later
+    passes to scrub, as before."""
+    out: list[str] = []
+    pos = 0
+    while True:
+        opened = _STRING_OPEN.search(text, pos)
+        if opened is None:
+            break
+        closed = _STRING_CLOSE.search(text, opened.end())
+        if closed is None:
+            break
+        out.append(text[pos:opened.start()])
+        pos = closed.end()
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def clean(text: str) -> str:
@@ -46,7 +70,7 @@ def clean(text: str) -> str:
 
     Removes OSC/DCS-style strings, CSI sequences and other escapes, then every
     C0/C1 control byte except newline and tab."""
-    text = _STRING_SEQ.sub("", text)
+    text = _strip_string_sequences(text)
     text = _CSI.sub("", text)
     text = _ESC.sub("", text)
     return _CONTROL.sub("", text)
