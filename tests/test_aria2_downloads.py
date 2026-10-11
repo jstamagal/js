@@ -415,6 +415,13 @@ def test_headers_reach_the_server_without_touching_argv(
     assert not list(tmp_path.glob("**/input"))      # the input file is gone afterwards
 
 
+def test_a_url_with_a_tab_is_refused(tmp_path: Path) -> None:
+    """neema #1095: TAB on the input-file URI line means 'another mirror URI'."""
+    with pytest.raises(tool_binaries.DownloadError):
+        tool_binaries.write_aria2_input(tmp_path / "in", "https://x.test/f\thttps://evil.test/g",
+                                        {"X": "1"}, tmp_path / ".f.aria2-part")
+
+
 def test_a_header_with_a_line_break_is_refused(tmp_path: Path) -> None:
     with pytest.raises(tool_binaries.DownloadError):
         tool_binaries.write_aria2_input(tmp_path / "in", "https://x.test/f", {"X": "a\n  out=/etc/x"},

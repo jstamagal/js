@@ -235,6 +235,9 @@ def write_aria2_input(path: Path, url: str, headers: dict[str, str], partial: Pa
     for value in (url, str(partial)):
         if any(ch in value for ch in "\r\n"):
             raise DownloadError("download URL or path contains a line break")
+    if "\t" in url:
+        # A TAB on the URI line separates mirror URIs in aria2's input format.
+        raise DownloadError("download URL contains a TAB")
     lines = [url, f"  dir={partial.parent}", f"  out={partial.name}"]
     for name, value in headers.items():
         if any(ch in f"{name}{value}" for ch in "\r\n"):
