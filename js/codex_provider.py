@@ -112,8 +112,21 @@ def _response_body(response: httpx.Response) -> object | None:
 
 
 def _error_message(body: object | None, fallback: str) -> tuple[str, str | None, str | None]:
+    """(message, code, type) from an error body or a stream error event.
+
+    A `response.failed` event carries its error at `response.error`; a flat
+    `error` event carries `code`/`message` at the top level, and its `type`
+    is the event name, not an error type."""
     code: str | None = None
     error_type: str | None = None
+    if isinstance(body, dict) and body.get("type") == "response.failed":
+        response = body.get("response")
+        nested = response.get("error") if isinstance(response, dict) else None
+        if isinstance(nested, dict):
+            return _error_message({"error": nested}, fallback)
+    if isinstance(body, dict) and body.get("type") == "error" and "error" not in body:
+        flat = {key: body[key] for key in ("code", "message") if key in body}
+        return _error_message({"error": flat}, fallback)
     if isinstance(body, dict):
         error = body.get("error")
         if isinstance(error, dict):

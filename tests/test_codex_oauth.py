@@ -828,3 +828,22 @@ def test_a_call_with_no_deltas_takes_its_done_arguments():
         {"type": "response.completed", "response": {"status": "completed"}},
     ])
     assert _tool_args(stream) == [("call_A", '{"x":true}')]
+
+
+@pytest.mark.parametrize("event,message", [
+    ({"type": "response.failed", "sequence_number": 12,
+      "response": {"id": "r", "status": "failed",
+                   "error": {"code": "server_error", "message": "boom: upstream overloaded"}}},
+     "boom: upstream overloaded"),
+    ({"type": "error", "code": "server_error", "message": "boom flat", "param": None}, "boom flat"),
+])
+def test_stream_errors_keep_their_message_and_code_so_retry_can_see_them(event, message):
+    """ALL-CLAIMS codex_provider.py:93 HIGH: response.failed nests its error
+    under `response`, a flat error has `code` at top level; both came out as
+    'OpenAI Codex stream failed' with code None, so is_retryable was always
+    False and a transient server_error was never retried."""
+    with pytest.raises(ai.ProviderAPIError) as caught:
+        _drain([event])
+    assert caught.value.message == message
+    assert caught.value.code == "server_error"
+    assert caught.value.is_retryable is True
