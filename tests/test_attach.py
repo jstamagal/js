@@ -385,3 +385,13 @@ def test_image_that_grows_past_limit_after_stat_is_refused(tmp_path, monkeypatch
         assert str(limit) in str(exc)
     else:
         raise AssertionError(f"oversized image ({real_size} bytes) was accepted")
+
+
+def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
+    note = tmp_path / "long.txt"
+    note.write_bytes(b"x" + ("é" * 50000).encode("utf-8"))  # odd offset: the cap lands mid-character
+    cfg = _cfg(tmp_path)
+    bundle = attach.build_user_message("read", [str(note)], cfg)
+    text = bundle.runtime_message["content"]
+    assert "[truncated to" in text
+    assert "\ufffd" not in text

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -36,7 +37,22 @@ _POLL_S = 0.05
 
 
 def _clip(data: bytes, cap: int) -> str:
-    return (bytes(data[:cap]) if cap > 0 else bytes(data)).decode("utf-8", errors="replace")
+    """The first ``cap`` bytes (all when ``cap`` is 0), cut back to a whole
+    UTF-8 character so a clip never ends in U+FFFD."""
+    if cap > 0 and len(data) > cap:
+        data = bytes(data[:cap])
+        # Drop a lead byte and the continuation bytes after it when the
+        # sequence it starts runs past the cap.
+        for back in range(1, min(4, len(data)) + 1):
+            byte = data[-back]
+            if byte < 0x80:
+                break
+            if byte >= 0xC0:
+                need = 4 if byte >= 0xF0 else 3 if byte >= 0xE0 else 2
+                if back < need:
+                    data = data[:-back]
+                break
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 def run(command: str, *, cwd: str, timeout: float, cap: int,
@@ -148,14 +164,20 @@ def _drive(proc: subprocess.Popen, stdin_bytes: bytes, *, timeout: float, cap: i
 
 
 def event_json(call: events.HandlerCall) -> str:
-    """The event a handler answers, as the JSON object its command reads."""
-    return json.dumps({"event": call.emission.event, **call.emission.payload},
+    """The event a handler answers, as the JSON object its command reads. The
+    real event name wins over a payload key of the same name."""
+    return json.dumps({**call.emission.payload, "event": call.emission.event},
                       ensure_ascii=False, default=str)
 
 
+_CLOSING_TAG = re.compile(r"</\s*js-reminder\s*>", re.IGNORECASE)
+
+
 def reminder(stdout: str) -> str | None:
-    """The js-reminder carrying ``stdout``; None for blank output."""
-    text = stdout.strip()
+    """The js-reminder carrying ``stdout``; None for blank output. A closing
+    tag inside the output is defused, so third-party text cannot end the frame
+    early and read as a plain user message."""
+    text = _CLOSING_TAG.sub("<\\/js-reminder>", stdout.strip())
     return f"<js-reminder>{text}</js-reminder>" if text else None
 
 
