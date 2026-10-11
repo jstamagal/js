@@ -1,4 +1,5 @@
-"""Runtime configuration. Read env once, freeze."""
+"""Runtime configuration. Read env once into a `Config` (see its docstring for
+what frozen does and does not cover)."""
 
 from __future__ import annotations
 
@@ -51,14 +52,6 @@ def _env_bool(raw: str) -> bool | None:
     if value in {"0", "false", "no", "off"}:
         return False
     return None
-
-
-def _env_int(*names: str, default: int | None = None) -> int | None:
-    for name in names:
-        raw = os.environ.get(name)
-        if raw not in (None, ""):
-            return int(raw)
-    return default
 
 
 def _sampling_from_extras(extras: list[str] | None) -> Sampling:
@@ -120,7 +113,11 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
 @dataclass(frozen=True)
 class Config(_turn_settings.ConfigSettings):
     """One run's configuration. The per-turn settings are fields of the
-    ``ConfigSettings`` base, one per row of ``js.turn_settings.TURN_SETTINGS``."""
+    ``ConfigSettings`` base, one per row of ``js.turn_settings.TURN_SETTINGS``.
+
+    ``frozen=True`` only stops field reassignment: ``settings``,
+    ``provider_headers`` and ``mcp`` are plain dicts that callers can and do
+    change in place, so a Config is not hashable and not a snapshot."""
 
     agent_id: str
     agent_dir: Path
@@ -415,7 +412,10 @@ def from_env(
     sampling_cli = _sampling_from_extras(extras)
     default_model = _settings.default_value("model.id")
     raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or default_model
-    invocation_explicit_model = bool(env.get("JS_MODEL"))
+    # Any env name that feeds model.id (JS_MODEL alias or canonical JS_MODEL_ID)
+    # makes the model invocation-explicit.
+    invocation_explicit_model = any(
+        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["model.id"]))
     explicit_model = invocation_explicit_model or raw_model != default_model
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("provider", "id"))
     explicit_provider = _cfg_provider_id is not None
