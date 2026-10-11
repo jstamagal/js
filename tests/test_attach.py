@@ -304,3 +304,57 @@ def test_looks_text_accepts_utf8_split_at_read_boundary():
 def test_split_repl_attachments_bare_at_signs_are_prose():
     line = "WTF IS THAT @ ERROR, and @@ too"
     assert attach.split_repl_attachments(line) == (line, [])
+
+
+def test_looks_text_rejects_nul_past_first_4k():
+    """The NUL check must cover the whole sample, not only its first 4096 bytes."""
+    assert attach._looks_text(b"a" * 5000 + b"\x00") is False
+
+
+def test_split_repl_attachments_same_path_twice_attaches_once():
+    prompt, attachments = attach.split_repl_attachments("diff @a.png and @a.png")
+    assert attachments == ["a.png"]
+    assert "@a.png" not in prompt
+
+
+def test_image_suffix_without_image_bytes_is_text(tmp_path):
+    """A `.png` holding text is not sent as image/png; it is inlined as text."""
+    fake = tmp_path / "fake.png"
+    fake.write_text("hello", encoding="utf-8")
+    bundle = attach.build_user_message("look", [str(fake)], _cfg(tmp_path, vision=True))
+    assert isinstance(bundle.runtime_message["content"], str)
+    assert "Attached file:" in bundle.runtime_message["content"]
+    assert "hello" in bundle.runtime_message["content"]
+
+
+def test_real_png_still_attaches_as_image(tmp_path):
+    png = tmp_path / "shot.png"
+    png.write_bytes(_TINY_PNG)
+    bundle = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
+    parts = bundle.runtime_message["content"]
+    assert isinstance(parts, list)
+    assert parts[-1].media_type == "image/png"
+    assert parts[-1].data == _TINY_PNG
+
+
+def test_image_that_grows_past_limit_after_stat_is_refused(tmp_path, monkeypatch):
+    """The image read is bounded by the limit, so a file that grew between the
+    stat and the read is refused instead of sent oversized."""
+    png = tmp_path / "big.png"
+    cfg = _cfg(tmp_path, vision=True)
+    limit = cfg.max_file_bytes
+    real_stat = Path.stat
+    png.write_bytes(_TINY_PNG + b"\x00" * (limit + 10))
+    real_size = real_stat(png).st_size
+
+    class _Stat:
+        st_size = len(_TINY_PNG)
+        st_mode = real_stat(png).st_mode
+
+    monkeypatch.setattr(Path, "stat", lambda self, *a, **k: _Stat() if self == png.resolve() else real_stat(self, *a, **k))
+    try:
+        attach.build_user_message("look", [str(png)], cfg)
+    except attach.AttachmentError as exc:
+        assert str(limit) in str(exc)
+    else:
+        raise AssertionError(f"oversized image ({real_size} bytes) was accepted")
