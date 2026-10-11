@@ -149,3 +149,34 @@ def test_transcript_logging_failure_never_raises(tmp_path):
     sink.write_user("hello")
     sink.write_plain("still no raise\n")
     sink.close()
+
+
+def test_strip_ansi_removes_string_sequences_and_two_byte_escapes():
+    """OSC (title, clipboard 52, hyperlink 8), DCS, APC and two-byte escapes
+    must not reach the transcript file, where `cat`/`tail -f` would run them."""
+    for raw in (
+        "a\x1b]0;PWNED\x07b",
+        "a\x1b]52;c;ZGF0YQ==\x07b",
+        "a\x1b]8;;http://x.test\x1b\\b",
+        "a\x1bPq#0;2;0;0;0\x1b\\b",
+        "a\x1b_payload\x1b\\b",
+        "a\x1b(Bb",
+        "a\x1b=b",
+        "a\x1b[31mb",
+    ):
+        assert transcript.strip_ansi(raw) == "ab", repr(raw)
+
+
+def test_strip_ansi_keeps_plain_control_characters():
+    assert transcript.strip_ansi("a\tb\r\nc") == "a\tb\r\nc"
+
+
+def test_transcript_file_gets_no_osc(tmp_path):
+    path = tmp_path / "t.log"
+    sink = transcript.open_transcript_sink([path])
+    sink.write_assistant("hi\x1b]0;PWNED\x07 there")
+    sink.write_plain("tool \x1b]52;c;eA==\x07out\n")
+    sink.close()
+    text = path.read_text(encoding="utf-8")
+    assert "\x1b" not in text
+    assert "hi there" in text and "tool out" in text

@@ -9,18 +9,21 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
-import re
 import threading
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
-
-_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+from . import display as _display
 
 
 def strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    """``text`` without terminal escapes: OSC/DCS/SOS/PM/APC strings, CSI and
+    two-byte escapes, the same set `display.clean` removes. Other control bytes
+    stay, so the log keeps carriage returns and tabs as they were shown."""
+    text = _display._STRING_SEQ.sub("", text)
+    text = _display._CSI.sub("", text)
+    return _display._ESC.sub("", text)
 
 
 class TranscriptLogSink:
