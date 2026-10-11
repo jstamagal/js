@@ -75,19 +75,28 @@ def test_login_cli_lists_and_dispatches_codex_oauth(monkeypatch):
     assert calls == ["openai-codex-device"]
 
 
-def test_save_refreshed_login_degrades_gracefully_on_corrupt_logins_file(monkeypatch, capsys):
+def test_save_refreshed_login_degrades_gracefully_on_corrupt_logins_file(monkeypatch, capsys, tmp_path: Path):
     # A background token refresh (codex_provider._ensure_access, or
     # ensure_fresh_login/_async here) must never crash an in-flight turn just
     # because logins.toml is corrupt — it should warn once and move on.
-    def boom(_login):
-        raise logins.LoginsCorruptError("logins.toml is broken")
+    logins.set_config_dir(tmp_path)
+    try:
+        stored = logins.Login(provider_id="openai-codex", provider_api_key="old", codex_refresh_token="r", codex_token_expires=0.0)
+        logins.save_login(stored)
 
-    monkeypatch.setattr(logins, "save_login", boom)
-    refreshed = codex_auth.login_from_token(
-        codex_auth.CodexToken(access=_fake_jwt(), refresh="r", expires_at=time.time() + 3600)
-    )
-    codex_auth.save_refreshed_login(refreshed)  # must not raise
-    assert "logins.toml is broken" in capsys.readouterr().err
+        def boom(_login):
+            raise logins.LoginsCorruptError("logins.toml is broken")
+
+        monkeypatch.setattr(logins, "save_login", boom)
+        refreshed = codex_auth.apply_refreshed_token(
+            stored, codex_auth.CodexToken(access=_fake_jwt(), refresh="r2", expires_at=time.time() + 3600)
+        )
+        assert codex_auth.save_refreshed_login(refreshed, derived_from=stored) is False  # must not raise
+        assert "logins.toml is broken" in capsys.readouterr().err
+        # The rotated token is kept for this process (not re-posted later).
+        assert logins.get_login("openai-codex").codex_refresh_token == "r2"
+    finally:
+        logins.set_config_dir(Path.home() / ".js" / "logins")
 
 
 @pytest.mark.parametrize("prefix", ["", "not-a-url\n", "http://localhost:1455/auth/callback?code=bad&state=wrong\n"])
@@ -678,6 +687,7 @@ def test_ensure_access_refresh_preserves_login_headers_end_to_end(tmp_path: Path
             codex_token_expires=0.0,  # already expired -> forces a refresh
             codex_account_id="acct_123",
         )
+        logins.save_login(login)  # a refresh persists only a STORED login (never resurrects a logout)
         provider = codex_provider.OpenAICodexProvider(
             access_token=login.provider_api_key,
             refresh_token=login.codex_refresh_token,

@@ -45,6 +45,10 @@ _TOKEN_TIMEOUT = 15.0
 _DISCOVERY_TIMEOUT = 15.0
 _REFRESH_SKEW_SECONDS = 300.0
 _MAX_RESPONSE_BYTES = 1 << 20
+# When a token response omits or garbles expires_in (RFC 6749 lets a client
+# assume a default): one hour, like xAI's real lifetime; must clear the
+# refresh skew below or every read would refresh again (maggie #1042).
+_DEFAULT_EXPIRES_IN_S = 3600.0
 
 
 def is_xai_oauth_provider(provider_id: str | None) -> bool:
@@ -180,8 +184,7 @@ def _post_token_form(
         # A refresh grant may legitimately return no new refresh token; keeping
         # the previous one is what makes the session survive past the first hour.
         refresh = str(payload.get("refresh_token") or "") or (previous.refresh if previous else None)
-        expires_in = payload.get("expires_in")
-        expires_at = time.time() + float(expires_in) if isinstance(expires_in, int | float) else 0.0
+        expires_at = _expires_at(payload.get("expires_in"))
         email, subject = _identity_from_id_token(payload.get("id_token"))
         return XaiToken(
             access=access,
@@ -194,6 +197,34 @@ def _post_token_form(
     finally:
         if owns_client:
             client.close()
+
+
+def _expires_at(expires_in: object) -> float:
+    """Absolute expiry from a token response's ``expires_in``.
+
+    A string ("3600") parses; a missing or unreadable value gets the
+    default lifetime so the token is usable until the next refresh,
+    instead of 0.0, which made every routing read POST a fresh refresh
+    (ALL-CLAIMS xai_auth.py:184).
+    """
+    if isinstance(expires_in, bool):
+        return time.time() + _DEFAULT_EXPIRES_IN_S
+    try:
+        seconds = float(expires_in)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return time.time() + _DEFAULT_EXPIRES_IN_S
+    if seconds != seconds or seconds <= 0 or seconds == float("inf"):
+        return time.time() + _DEFAULT_EXPIRES_IN_S
+    return time.time() + seconds
+
+
+def _expiry_or_zero(value: object) -> float:
+    """A stored expiry as a float; anything unreadable counts as expired."""
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else 0.0
 
 
 def exchange_code_for_token(endpoint: str, code: str, verifier: str, *, client: httpx.Client | None = None) -> XaiToken:
@@ -262,7 +293,7 @@ def _token_from_login(login: Login) -> XaiToken:
     return XaiToken(
         access=login.provider_api_key or "",
         refresh=login.xai_refresh_token,
-        expires_at=float(login.xai_token_expires) if login.xai_token_expires is not None else 0.0,
+        expires_at=_expiry_or_zero(login.xai_token_expires),
         token_endpoint=login.xai_token_endpoint or "",
         email=login.xai_email,
     )
@@ -276,7 +307,7 @@ def login_needs_refresh(login: Login, *, now: float | None = None) -> bool:
     expires = login.xai_token_expires
     if expires is None:
         return True
-    return (now if now is not None else time.time()) >= float(expires) - _REFRESH_SKEW_SECONDS
+    return (now if now is not None else time.time()) >= _expiry_or_zero(expires) - _REFRESH_SKEW_SECONDS
 
 
 def apply_refreshed_token(login: Login, token: XaiToken) -> Login:
@@ -297,25 +328,134 @@ def apply_refreshed_token(login: Login, token: XaiToken) -> Login:
     )
 
 
-def save_refreshed_login(refreshed: Login) -> None:
+def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
+    """Persist a refreshed login; True when it reached the file.
+
+    Compare-and-save under the store lock: the write happens only while the
+    file still carries the refresh token of ``derived_from`` (the login
+    whose token was spent). A removed section (a ``--logout``), a key login
+    in its place, or a newer rotation by another process all stand, and
+    nothing of ours is kept. On an unwritable/corrupt/busy store the
+    rotated token is kept process-wide (``logins.note_memory_login``) and
+    the failure is said out loud: the old silent ``except Exception:
+    return`` re-posted the burned token on every later routing read
+    (ALL-CLAIMS xai_auth.py:658, mikeno #515).
+    """
     from . import logins as logins_module
 
+    provider_id = logins_module._normalize_provider_id(derived_from.provider_id)
     try:
-        logins_module.save_login(refreshed)
-    except Exception:  # noqa: BLE001 - a refreshed token in hand beats a failed turn
-        return
+        with logins_module.hold_login_lock():
+            stored = logins_module.load_logins_fresh().get(provider_id)
+            if stored is None or stored.xai_refresh_token not in (
+                derived_from.xai_refresh_token,
+                refreshed.xai_refresh_token,
+            ):
+                msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error="login changed underneath the refresh")
+                return False
+            logins_module.save_login(refreshed)
+    except (logins_module.LoginsCorruptError, logins_module.LoginStoreBusyError, OSError) as exc:
+        logins_module.note_memory_login(refreshed, derived_from=derived_from)
+        msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error=exc)
+        return False
+    return True
+
+
+def relogin_error(detail: object) -> RuntimeError:
+    return RuntimeError(f"xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again")
+
+
+_REJECTED_GRANT_MARKERS = ("invalid_grant", "refresh_token_reused", "HTTP 400", "HTTP 401")
+
+
+def _is_rejected_grant(exc: BaseException) -> bool:
+    text = str(exc)
+    return any(marker in text for marker in _REJECTED_GRANT_MARKERS)
+
+
+def _stored_login(login: Login) -> Login | None:
+    """The freshest copy of ``login``: the file re-read now plus the
+    in-memory overlay; None when the store holds no such login."""
+    from . import logins as logins_module
+
+    logins_module.load_logins_fresh()
+    return logins_module.get_login(login.provider_id)
+
+
+def _refresh_endpoint(login: Login) -> str:
+    """The token endpoint the refresh token may be posted to.
+
+    The stored endpoint is checked against the same x.ai pin as discovery
+    output: a hand-edited logins.toml must not redirect the credential
+    (ALL-CLAIMS xai_auth.py:661, doc #521: static pin, no discovery per
+    refresh).
+    """
+    if login.xai_token_endpoint:
+        return _validate_endpoint(login.xai_token_endpoint, "token_endpoint")
+    return discover().token
+
+
+def _refresh_or_relogin(current: Login) -> XaiToken:
+    endpoint = _refresh_endpoint(current)
+    try:
+        return refresh_token(current.xai_refresh_token or "", endpoint, previous=_token_from_login(current))
+    except RuntimeError as exc:
+        if not _is_rejected_grant(exc):
+            raise
+        # Our token was already spent. Under the lock the file is the truth:
+        # a different token there is another process's winner (adopt it, or
+        # refresh it once); the same token means nothing newer exists.
+        stored = _stored_login(current)
+        if stored is not None and stored.xai_refresh_token and stored.xai_refresh_token != current.xai_refresh_token:
+            if not login_needs_refresh(stored):
+                return _token_from_login(stored)
+            return refresh_token(stored.xai_refresh_token, _refresh_endpoint(stored), previous=_token_from_login(stored))
+        raise relogin_error(exc) from exc
 
 
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
+    """Return ``login`` with a usable access token, refreshing once if needed.
+
+    Runs on every route resolve (routing.py), so the common case is the
+    lock-free fast path. A refresh holds the cross-process store lock
+    across re-read -> re-check -> POST -> save: with N processes on one
+    login only the first holder posts the refresh token; every waiter then
+    re-reads the rotated token and adopts it, no POST of its own. The
+    token is single-use once rotated, so a second POST of the same one
+    fails and may revoke the whole login (ALL-CLAIMS xai_auth.py:657).
+    """
+    from . import logins as logins_module
+
     if not login_needs_refresh(login):
         return login
-    endpoint = login.xai_token_endpoint or discover().token
-    token = refresh_token(
-        login.xai_refresh_token or "",
-        endpoint,
-        previous=_token_from_login(login),
-    )
-    refreshed = apply_refreshed_token(login, token)
-    if persist:
-        save_refreshed_login(refreshed)
-    return refreshed
+    try:
+        lock = logins_module.hold_login_lock()
+        lock.__enter__()
+    except (logins_module.LoginStoreBusyError, OSError) as exc:
+        # Could not take the lock in time, or the store dir is not ours to
+        # open (EACCES): use the file or a fresh overlay if either is
+        # usable; never post an unlocked refresh.
+        current = _stored_login(login)
+        if current is not None and not login_needs_refresh(current):
+            return current
+        if isinstance(exc, OSError):
+            raise RuntimeError(f"{logins_module.lock_path()} cannot be opened ({exc}); fix it before the xAI login can refresh") from exc
+        raise
+    try:
+        current = _stored_login(login)
+        stored = current is not None
+        if current is None:
+            if logins_module.store_unreadable():
+                raise RuntimeError(f"{logins_module.login_path()} cannot be read; fix it before the xAI login can refresh")
+            current = login  # standalone (unsaved) login: refresh, never persist
+        if not login_needs_refresh(current):
+            return current
+        if logins_module.store_unreadable():
+            raise RuntimeError(f"{logins_module.login_path()} cannot be read; fix it before the xAI login can refresh")
+        token = _refresh_or_relogin(current)
+        refreshed = apply_refreshed_token(current, token)
+        if persist and stored:
+            save_refreshed_login(refreshed, derived_from=current)
+        return refreshed
+    finally:
+        lock.__exit__(None, None, None)
