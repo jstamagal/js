@@ -39,3 +39,27 @@ def test_cap_result_over_the_spill_size_spills_and_notice_offsets_match(tmp_path
     data = files[0].read_bytes()
     assert len(data) == byte_size(text)
     assert b"?" in data and str(files[0]) in out
+
+
+def test_typed_result_under_budget_reaches_the_model_strictly_encodable():
+    from js import model_client
+    from js.toolkit.core import ToolResult
+
+    result = ToolResult([
+        {"type": "text", "text": LONE},
+        {"type": "structured", "value": {"x": "\udcff", "n": [1, "\ud800"]}},
+        {"type": "resource", "resource": {"uri": "u", "text": "\udcff"}},
+    ], is_error=True)
+    out = runtime._cap_result(result, 10_000, 0)
+    assert out.is_error
+    assert out.blocks[0]["text"] == "x?"
+    assert out.blocks[1]["value"] == {"x": "?", "n": [1, "?"]}
+    text, _media, _err = model_client._mixed_result_parts(out)
+    text.encode("utf-8")
+
+
+def test_clean_typed_result_is_passed_through_as_is():
+    from js.toolkit.core import ToolResult
+
+    result = ToolResult.text("fine")
+    assert runtime._cap_result(result, 10_000, 0) is result

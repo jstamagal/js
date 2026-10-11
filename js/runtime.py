@@ -665,6 +665,26 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     return ToolResult.text(cap_text(result.dehydrated() + marker, budget, marker))
 
 
+def _well_formed_value(value: Any) -> Any:
+    """``value`` with every string in it made strictly UTF-8 encodable."""
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        return {_well_formed_value(k): _well_formed_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_well_formed_value(v) for v in value)
+    return value
+
+
+def _well_formed_result(result: ToolResult) -> ToolResult:
+    """``result`` with lone surrogates in its text, structured and resource
+    blocks replaced by `?`; unchanged (same object) when there are none."""
+    blocks = [_well_formed_value(block) for block in result.blocks]
+    if blocks == result.blocks:
+        return result
+    return replace(result, blocks=blocks)
+
+
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
     """Spill-then-clip a tool result.
 
@@ -677,6 +697,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
     if isinstance(result, ToolResult):
+        result = _well_formed_result(result)
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
             marker = f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
             return _dehydrate_capped_result(result, cap_bytes, marker)
