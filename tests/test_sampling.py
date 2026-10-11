@@ -164,3 +164,36 @@ def test_loading_prompt_spec_sampling_does_not_mutate_os_environ(monkeypatch, tm
     spec = persona.load_configured_prompt_spec(cfg)
 
     assert spec.sampling == {"temperature": 0.2, "top_p": 0.75}
+
+
+def test_call_params_responses_transports_send_no_presence_penalty():
+    """openai's AsyncResponses.create has no presence_penalty (TypeError on
+    every turn), and Codex reads only temperature and top_p."""
+    sampling = Sampling(temperature=0.7, top_p=0.9, top_k=50, repetition_penalty=1.1, presence_penalty=1.2)
+    for transport in ("custom_responses", "codex_oauth"):
+        assert call_params(sampling, transport) == {"temperature": 0.7, "top_p": 0.9}, transport
+    assert call_params(sampling, "openai")["presence_penalty"] == 1.2
+
+
+def test_responses_request_params_carry_no_presence_penalty():
+    from js import model_client
+
+    sampling = Sampling(temperature=0.5, presence_penalty=1.2)
+    params = model_client._build_inference_params(
+        sampling, "custom_responses", reasoning=None, output=None, extra_body={})
+    samplers = params.sampling or {}
+    names = {type(value).__name__ for value in samplers.values()}
+    assert any("Temperature" in name for name in names)
+    assert not any("Presence" in name for name in names)
+    assert not (params.extra_body or {}).get("presence_penalty")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", float("nan")])
+def test_non_finite_sampling_values_are_refused(raw):
+    with pytest.raises(ValueError):
+        Sampling.from_mapping({"temperature": raw})
+    with pytest.raises(ValueError):
+        Sampling.from_env({"JS_TEMP": str(raw)})
