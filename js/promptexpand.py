@@ -96,7 +96,7 @@ def session_variables(cfg) -> dict[str, str]:
 # and reported `unknown inline subsystem 'sub'` on every single run.
 _DIRECTIVE = re.compile(
     r"(?:"
-    r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
+    r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r"|" + _VARIABLE.pattern +
@@ -167,13 +167,27 @@ def expand_prompt(
             return m.group(0).replace("\\", "", 1)
         try:
             if m.group("fsub") is not None:
+                # A body that itself carries a fence opener is a malformed or
+                # nested directive: running it would hand the shell a script
+                # the author never wrote (the prefix before the stray ``` runs,
+                # then the expansion fails). Leave the directive literal.
+                fbody = "\n".join(
+                    line.removesuffix("\r")
+                    for line in (m.group("fbody") or "").replace("\r\n", "\n").split("\n")
+                )
+                if re.search(r"(?m)^[ ]{0,3}```", fbody):
+                    raise PromptExpansionError(
+                        "fenced directive body carries a ``` line; the closing "
+                        "fence is ambiguous, so the directive is not run - indent "
+                        "the nested fence four spaces or split the directives"
+                    )
                 # Put the markdown indent back. The fence may sit up to three
                 # spaces in because it is nested in a list; dropping the indent
                 # pulls the expansion out of that list and changes the structure
                 # of the prompt the model reads.
                 return m.group("find") + _run_subsystem(
                     m.group("fsub"),
-                    _VARIABLE.sub(_variable, m.group("fbody")),
+                    _VARIABLE.sub(_variable, fbody),
                     allow_code,
                     environ,
                     timeout_s,
@@ -249,9 +263,11 @@ def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
     path = Path(os.path.expanduser(body.strip()))
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
         # A missing/unreadable file embeds nothing rather than aborting the
         # whole prompt, so optional box-info embeds never brick startup.
+        # ValueError: a non-UTF-8 file raises UnicodeDecodeError (a ValueError
+        # subclass), not OSError; same policy, embeds nothing.
         return ""
 
 

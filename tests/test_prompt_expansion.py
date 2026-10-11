@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from js import messages as msgs, promptexpand
+from unittest import mock
+
 from js.promptexpand import expand_prompt, PromptExpansionError
 
 
@@ -382,3 +384,76 @@ def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatc
     assert "envctx.c" not in expanded.system
     assert any(line.startswith("user=") for line in expanded.system.splitlines())
     assert Path(os.environ["JS_ROOT"]) == js_root
+
+
+def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
+    """An empty ```! body must not swallow the next fence (ALL-CLAIMS:380)."""
+    text = "```!sh\n```\nfoo\n```!sh\necho HI\n```\n"
+    bodies = []
+    real = promptexpand._run_subsystem
+
+    def spy(sub, body, *args, **kwargs):
+        bodies.append(body)
+        return real(sub, body, *args, **kwargs)
+
+    with mock.patch.object(promptexpand, "_run_subsystem", spy):
+        out = expand_prompt(text, allow_code=True)
+    assert bodies == ["", "echo HI"], bodies
+    assert out == "\nfoo\nHI\n", repr(out)
+
+
+def test_fenced_directive_allows_indented_closer():
+    """A fence closed with the same indent the opener has must run (ALL-CLAIMS:380)."""
+    text = "  ```!sh\necho IND\n  ```\n"
+    out = expand_prompt(text, allow_code=True)
+    assert out == "  IND\n", repr(out)
+
+
+def test_unterminated_stream_after_python_fence_fails_closed():
+    """A ```! opener must not close at the next ```python opener (ALL-CLAIMS:380):
+    the body fails to run and the text stays literal."""
+    text = "```!sh\necho SWALLOWED\n```python\nprint(1)\n```\n"
+    out = expand_prompt(text, allow_code=True)
+    # the body never runs: the fence stays in the prompt verbatim with a warn
+    assert out == text
+
+
+def test_fenced_directive_accepts_crlf_closer():
+    """A CRLF-terminated fence closes and runs (ALL-CLAIMS:380, shinda #488)."""
+    text = "```!sh\r\necho CRLF\r\n```\r\n"
+    out = expand_prompt(text, allow_code=True)
+    assert "CRLF" in out, repr(out)
+
+
+def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
+    """A body carrying its own ``` opener must not run AT ALL: the shell would
+    execute everything before the stray fence (ALL-CLAIMS:380, shinda #559)."""
+    marker = tmp_path / "marker"
+    text = "```!sh\nprintf SIDE_EFFECT > " + str(marker) + "\n```python\nprint(1)\n```\n"
+    assert "\n" in text  # real newlines, not escaped ones
+    runner_calls = []
+    real = promptexpand._run_subsystem
+
+    def spy(sub, body, *args, **kwargs):
+        runner_calls.append(body)
+        return real(sub, body, *args, **kwargs)
+
+    with mock.patch.object(promptexpand, "_run_subsystem", spy):
+        out = expand_prompt(text, allow_code=True)
+    assert runner_calls == [], runner_calls
+    assert not marker.exists()
+    assert out == text
+
+
+def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
+    """A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not OSError;
+    embeds nothing either way (ALL-CLAIMS:379)."""
+    import sys
+    path = tmp_path / "bin.dat"
+    path.write_bytes(b"\xff\xfe\x00binary\xff")
+    out = expand_prompt(f"!{{file {path}}}", allow_code=True)
+    assert out == ""
+    # the directive after a broken one still runs
+    text = f"!{{file {path}}} and !{{env PATH:0:0}}"
+    out2 = expand_prompt(text, allow_code=True)
+    assert "and" in out2
