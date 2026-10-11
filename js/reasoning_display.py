@@ -39,9 +39,16 @@ class StderrReasoning:
         self._chunks: list[str] = []
 
     def _write(self, text: str) -> None:
+        if self.level == 0:
+            return
         write = getattr(self.stream, "write_unlogged", self.stream.write)
-        write(grey(text) if self.tty else clean(text))
-        self.stream.flush()
+        try:
+            write(grey(text) if self.tty else clean(text))
+            self.stream.flush()
+        except (OSError, ValueError):
+            # A closed or broken stderr (`js -p ... 2>&1 | head`): reasoning is
+            # presentation only, so it stops showing and the model call goes on.
+            self.level = 0
 
     def append(self, text: str) -> None:
         if not text or self.level == 0:
