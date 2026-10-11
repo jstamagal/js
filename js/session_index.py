@@ -83,6 +83,15 @@ def _open(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=5, isolation_level=None, check_same_thread=False)
     try:
+        # WAL lets readers through while another process writes. Changing the
+        # journal mode takes a lock and fails at once (busy handler skipped)
+        # when another opener races it, so it is best-effort: the loser stays
+        # in rollback mode, which works. fetchone() steps the cursor so it
+        # does not keep holding a shared lock.
+        try:
+            connection.execute("PRAGMA journal_mode = WAL").fetchone()
+        except sqlite3.OperationalError:
+            pass
         connection.execute("PRAGMA synchronous = OFF")
         if connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA:
             _create(connection)
@@ -109,27 +118,35 @@ class _RebuildLock:
 
     def __enter__(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._stream = open(self._path, "a+b")  # noqa: SIM115 - closed in __exit__
-        fcntl.flock(self._stream.fileno(), fcntl.LOCK_EX)
+        stream = open(self._path, "a+b")  # noqa: SIM115 - closed in __exit__
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        except BaseException:
+            stream.close()  # __exit__ does not run when __enter__ raises
+            raise
+        self._stream = stream
 
     def __exit__(self, *exc_info) -> None:
         self._stream.close()
 
 
-def _recover(path: Path, seen: tuple[int, int] | None) -> sqlite3.Connection:
-    """A connection to the index after the file `seen` names failed as
-    corrupt. Another process may have rebuilt it in the meantime: under the
-    rebuild lock, a path that now names another file is opened as it is, and
-    only the file that failed, or one that fails again under the lock, is
-    deleted and built again."""
+def _recover(path: Path, seen: tuple[int, int] | None = None) -> sqlite3.Connection:
+    """A connection to the index after it failed as corrupt. Another process
+    may have rebuilt it in the meantime, so under the rebuild lock the file is
+    always opened and probed again first; only a file that fails as corrupt
+    under the lock is deleted and built again. Busy or I/O errors raise and
+    delete nothing.
+
+    `seen` (the identity of the file that failed) is not consulted: file
+    systems reuse a freed inode number, so the same (dev, ino) can be a
+    healthy file another process just built."""
+    del seen
     with _RebuildLock(path):
-        now = _identity(path)
-        if now is not None and now != seen:
-            try:
-                return _open(path)
-            except sqlite3.DatabaseError as exc:
-                if not _is_corrupt(exc):
-                    raise
+        try:
+            return _open(path)
+        except sqlite3.DatabaseError as exc:
+            if not _is_corrupt(exc):
+                raise
         _remove(path)
         return _open(path)
 
@@ -246,7 +263,7 @@ def catalog(root: Path | None = None) -> list[dict[str, Any]]:
     is gone is dropped. An index that turns out damaged is built again; a
     locked one raises."""
     try:
-        return _catalog(root)
+        return _catalog_busy_retry(root)
     except sqlite3.DatabaseError as exc:
         if not _is_corrupt(exc):
             raise
@@ -255,6 +272,26 @@ def catalog(root: Path | None = None) -> list[dict[str, Any]]:
             _drop_current()
             _recover(db_path(), seen).close()
         return _catalog(root)
+
+
+_BUSY_TRIES = 3
+
+
+def _is_busy(exc: sqlite3.Error) -> bool:
+    code = (getattr(exc, "sqlite_errorcode", None) or 0) & 0xFF
+    return code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+def _catalog_busy_retry(root: Path | None) -> list[dict[str, Any]]:
+    """`_catalog`, tried again when another process holds the database past
+    the 5s busy timeout; the third busy raises. Nothing is deleted."""
+    for attempt in range(_BUSY_TRIES):
+        try:
+            return _catalog(root)
+        except sqlite3.OperationalError as exc:
+            if not _is_busy(exc) or attempt == _BUSY_TRIES - 1:
+                raise
+    raise AssertionError("unreachable")
 
 
 def _catalog(root: Path | None) -> list[dict[str, Any]]:
