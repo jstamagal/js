@@ -16,6 +16,7 @@ ROOT/<name>/inbox/     one file per message not yet delivered to <name>
 ROOT/<name>/subs       the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep     present while <name> waits on its inbox
 ROOT/<name>/spawned    present when another agent's `recruit` started <name>
+ROOT/hold              seconds an asleep agent lets messages that are not addressed to it pile up before it wakes
 ROOT/<name>/ping       the stamp of the last rollcall
 ROOT/<name>/pong       <name>'s answer to it: the stamp, pid, asleep or working, when it last stepped
 
@@ -26,7 +27,9 @@ An agent on the bus never spends a model call waiting:
 - when the model stops calling tools, the process sleeps on the inbox and wakes
   into a new turn with whatever landed. The sleep is a harness-side poll every
   ``POLL_S`` seconds; the model is not called. A burst that lands within
-  ``COALESCE_S`` of the first message is one wake.
+  ``COALESCE_S`` of the first message is one wake. On a bus with a hold, a
+  message addressed to the agent by name still wakes it at once; broadcasts
+  and subscribed kinds wait in the inbox for the hold and wake it once.
 
 A message of kind ``stop`` ends the agent after the turn it lands in. ``retire``
 is the agent ending itself: it posts a handoff and leaves the bus. A message
@@ -163,6 +166,18 @@ class Room:
         """True when every member is asleep with nothing waiting: the swarm has nothing to do."""
         members = self.members()
         return bool(members) and all(self.asleep(m) and not Inbox(self, m).pending() for m in members)
+
+    # hold: how long an asleep agent lets messages not addressed to it pile up, so a run of them is one wake
+
+    def hold_s(self) -> float:
+        try:
+            return max(0.0, float((self.root / "hold").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return 0.0
+
+    def set_hold(self, seconds: float) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        _replace_text(self.root / "hold", repr(max(0.0, float(seconds))))
 
     # rollcall: a ping file per member, answered by the member's process, never by its model
 
@@ -405,6 +420,13 @@ class Inbox:
 
     def drain(self) -> list[Msg]:
         """Every waiting message in seq order, each handed over once."""
+        return self._read(take=True)
+
+    def peek(self) -> list[Msg]:
+        """Every waiting message in seq order, left in the inbox."""
+        return self._read(take=False)
+
+    def _read(self, take: bool) -> list[Msg]:
         try:
             names = sorted(n for n in os.listdir(self.path) if n.endswith(".json") and not n.startswith("."))
         except FileNotFoundError:
@@ -416,7 +438,8 @@ class Inbox:
                 out.append(Msg.loads(p.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 continue
-            p.unlink(missing_ok=True)
+            if take:
+                p.unlink(missing_ok=True)
         return out
 
     def wait(self, timeout: float | None = None) -> list[Msg]:
@@ -585,12 +608,12 @@ class Agent:
         No model call is made while waiting. A burst is handed over as one wake."""
         marker = self._asleep()
         try:
-            timeout = None if self.alarm is None else max(0.0, self.alarm - time.monotonic())
-            landed = self.inbox.wait(timeout)
-            if not landed:
-                return [self._tick()]
-            time.sleep(COALESCE_S)
-            return self._take(landed + self.inbox.drain())
+            first = None
+            while True:
+                first, landed = self._wake(first)
+                if landed:
+                    return landed
+                time.sleep(POLL_S)
         finally:
             marker.unlink(missing_ok=True)
 
@@ -600,16 +623,29 @@ class Agent:
 
         marker = self._asleep()
         try:
+            first = None
             while True:
-                landed = self.inbox.drain()
+                first, landed = self._wake(first)
                 if landed:
-                    await asyncio.sleep(COALESCE_S)
-                    return self._take(landed + self.inbox.drain())
-                if self.alarm is not None and time.monotonic() >= self.alarm:
-                    return [self._tick()]
+                    return landed
                 await asyncio.sleep(POLL_S)
         finally:
             marker.unlink(missing_ok=True)
+
+    def _wake(self, first: float | None) -> tuple[float | None, list[Msg]]:
+        """One look at the inbox while asleep. `first` is when the oldest waiting message was
+        first seen. Returns it, and what to wake with: nothing while the wait goes on."""
+        now = time.monotonic()
+        waiting = self.inbox.peek()
+        if not waiting:
+            if self.alarm is not None and now >= self.alarm:
+                return None, [self._tick()]
+            return None, []
+        first = now if first is None else first
+        for_me = any(m.to == self.name or m.kind == STOP for m in waiting)
+        if now - first >= (COALESCE_S if for_me else max(COALESCE_S, self.room.hold_s())):
+            return first, self._take(self.inbox.drain())
+        return first, []
 
     def _asleep(self) -> Path:
         marker = self.room.root / self.name / "asleep"
@@ -748,6 +784,10 @@ def _wake_me(seconds: Any = None, context: Any = None) -> str:
         s = float(seconds)
     except (TypeError, ValueError):
         return f"ERROR: seconds must be a number, not {seconds!r}"
+    left = None if agent.alarm is None else agent.alarm - time.monotonic()
+    if s > 0 and left is not None and left > 0:
+        return (f"an alarm is already set, {left:.0f} s from now, and it stays set when a message wakes you; "
+                "nothing changed. Stop calling tools to sleep. Messages wake you by themselves.")
     agent.wake_me(s)
     if s <= 0:
         return "alarm cleared"

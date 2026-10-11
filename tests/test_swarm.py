@@ -211,6 +211,31 @@ def test_a_burst_is_one_wake(tmp_path):
     assert [m.body for m in agent.sleep()] == ["one", "two"]
 
 
+def test_on_a_bus_with_a_hold_broadcasts_pile_up_into_one_wake_and_a_message_by_name_wakes_at_once(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.room.set_hold(1.0)
+    agent.room.send("b", "*", "one")
+    threading.Timer(0.4, agent.room.send, ("b", "*", "two")).start()
+    started = time.monotonic()
+    assert [m.body for m in agent.sleep()] == ["one", "two"]
+    assert time.monotonic() - started >= 1.0
+    agent.room.send("b", "*", "three")
+    agent.room.send("b", "a", "for you")
+    started = time.monotonic()
+    assert [m.body for m in agent.sleep()] == ["three", "for you"]
+    assert time.monotonic() - started < 0.9
+
+
+def test_a_second_wake_me_leaves_the_pending_alarm_where_it_was(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path)
+    context.swarm = agent
+    swarm._wake_me(300, context=context)
+    alarm = agent.alarm
+    swarm._wake_me(600, context=context)
+    assert agent.alarm == alarm
+
+
 def test_wake_me_wakes_the_agent_with_a_tick_when_nothing_lands(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     agent.wake_me(0.3)

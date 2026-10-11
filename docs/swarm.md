@@ -75,6 +75,7 @@ ROOT/<name>/inbox/        one file per message not yet delivered to <name>
 ROOT/<name>/subs          the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep        present while <name> waits on its inbox
 ROOT/<name>/spawned       who recruited <name>, its pid and command
+ROOT/hold                 seconds an asleep agent lets messages not addressed to it pile up
 ROOT/<name>/ping          the stamp of the last rollcall
 ROOT/<name>/pong          the answer: ping (that stamp), ts, pid, state (asleep or working), step
 ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends and claims take
@@ -90,6 +91,16 @@ The wait is a harness-side poll every quarter second. It costs no model call
 and no tool call. `python -m js.swarm quiet ROOT` exits 0 when every member
 is asleep with an empty inbox: the swarm has nothing to do until someone
 posts. A runner uses it to call a run over without asking a model.
+
+## Hold
+
+`ROOT/hold` holds a number of seconds; `Room.set_hold(seconds)` writes it and
+it can change while the swarm runs. An asleep agent wakes at once for a
+message addressed to it by name, and for a `stop`. A broadcast, or a message
+that reaches it through a subscription, stays in its inbox until the oldest
+one has waited the hold; then everything waiting is one wake. An agent in the
+middle of a turn is not affected: its inbox is read at every tool boundary.
+With no `hold` file the hold is zero.
 
 ## Rollcall
 
