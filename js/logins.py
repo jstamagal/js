@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ import httpx
 import tomli_w
 import tomllib
 
+from . import messages as msgs
 from . import paths, providers
 
 _CONFIG_DIR_OVERRIDE: Path | None = None
@@ -185,6 +187,121 @@ def _refuse_if_corrupt() -> None:
         ) from exc
 
 
+_STR_FIELDS = (
+    "sdk_provider_id",
+    "shape_provider_id",
+    "provider_base_url",
+    "provider_api_key",
+    "codex_refresh_token",
+    "codex_account_id",
+    "codex_email",
+    "xai_refresh_token",
+    "xai_token_endpoint",
+    "xai_email",
+)
+_EXPIRY_FIELDS = ("codex_token_expires", "xai_token_expires")
+_KNOWN_FIELDS = frozenset(f.name for f in fields(Login))
+
+
+class _BadSection(ValueError):
+    """A logins.toml section whose values have the wrong shape."""
+
+
+def _optional_str(raw: dict[str, Any], name: str) -> str | None:
+    value = raw.get(name)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise _BadSection(f"{name} must be a string, not {type(value).__name__}")
+    return value
+
+
+def _optional_expiry(raw: dict[str, Any], name: str) -> float | None:
+    """A token expiry as a float, or None when unreadable.
+
+    None reads as "expired" to login_needs_refresh, so a hand-edited
+    ``codex_token_expires = "soon"`` costs one refresh instead of crashing
+    every request.
+    """
+    value = raw.get(name)
+    if value is None or isinstance(value, bool):
+        return None
+    parsed: float | None = None
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            parsed = None
+    # nan compares False against everything, so a nan expiry would read as
+    # "fresh forever"; inf would never refresh either. Both mean "unknown".
+    return parsed if parsed is not None and math.isfinite(parsed) else None
+
+
+def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
+    """Build a Login from one TOML table; raises _BadSection on wrong types."""
+    stored_id = raw.get("provider_id", provider_id)
+    if not isinstance(stored_id, str) or not stored_id.strip():
+        raise _BadSection(f"provider_id must be a non-empty string, not {stored_id!r}")
+    headers_raw = raw.get("provider_headers")
+    if headers_raw is None:
+        headers_raw = {}
+    if not isinstance(headers_raw, dict):
+        raise _BadSection("provider_headers must be a table")
+    strings = {name: _optional_str(raw, name) for name in _STR_FIELDS}
+    return Login(
+        provider_id=providers.normalize_provider_id(stored_id) or stored_id,
+        provider_headers={str(k): str(v) for k, v in headers_raw.items()},
+        codex_token_expires=_optional_expiry(raw, "codex_token_expires"),
+        xai_token_expires=_optional_expiry(raw, "xai_token_expires"),
+        **strings,
+    )
+
+
+def _parse_store(data: dict[str, Any]) -> tuple[dict[str, Login], dict[str, Any]]:
+    """Split a parsed logins.toml into usable logins and quarantined tables.
+
+    A section whose values have the wrong shape (a hand edit, ``provider_id
+    = 5``) is kept verbatim in the second map, so a later save writes it
+    back unchanged instead of deleting it. Unknown keys inside a good
+    section are kept the same way (``extra`` below), so a newer js writing a
+    field this checkout does not know survives a save from here.
+    """
+    logins: dict[str, Login] = {}
+    quarantined: dict[str, Any] = {}
+    for provider_id, raw in data.items():
+        if not isinstance(raw, dict):
+            quarantined[provider_id] = raw
+            msgs.warn(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error="not a table")
+            continue
+        try:
+            login = _login_from_section(provider_id, raw)
+        except _BadSection as exc:
+            quarantined[provider_id] = raw
+            msgs.warn(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error=exc)
+            continue
+        key = providers.normalize_provider_id(provider_id) or provider_id
+        logins[key] = login
+        extra = {k: v for k, v in raw.items() if k not in _KNOWN_FIELDS}
+        if extra:
+            _extra_fields[key] = extra
+    return logins, quarantined
+
+
+def _read_store() -> tuple[dict[str, Login], dict[str, Any]]:
+    """Parse logins.toml now, bypassing the identity cache. ({}, {}) when
+    missing or unparseable."""
+    path = _logins_path()
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except Exception:  # noqa: BLE001
+        return {}, {}
+    _extra_fields.clear()
+    return _parse_store(data)
+
+
 def load_logins() -> dict[str, Login]:
     """Return map provider_id -> Login.
 
@@ -192,6 +309,9 @@ def load_logins() -> dict[str, Login]:
     call and must never crash a turn. The write path (save_login/
     remove_login) calls _refuse_if_corrupt() first instead, since silently
     treating a corrupt file as empty there would truncate every stored login.
+    A single section with wrong-typed values (valid TOML, bad shape) is
+    skipped with one warning and quarantined: the other logins load, and a
+    later save writes the bad section back untouched.
 
     The file is parsed once per version of it: the result is kept with the
     file's identity (path, inode, size, mtime) and returned again, as a copy,
@@ -207,37 +327,31 @@ def load_logins() -> dict[str, Login]:
     key = (path, info.st_ino, info.st_size, info.st_mtime_ns)
     if _loaded is not None and _loaded[0] == key:
         return dict(_loaded[1])
-    try:
-        with path.open("rb") as f:
-            data = tomllib.load(f)
-    except Exception:  # noqa: BLE001
-        return {}
-    logins: dict[str, Login] = {}
-    for provider_id, raw in data.items():
-        if not isinstance(raw, dict):
-            continue
-        headers = raw.get("provider_headers") if isinstance(raw.get("provider_headers"), dict) else {}
-        logins[providers.normalize_provider_id(provider_id) or provider_id] = Login(
-            provider_id=providers.normalize_provider_id(raw.get("provider_id", provider_id)) or provider_id,
-            sdk_provider_id=raw.get("sdk_provider_id") or None,
-            shape_provider_id=raw.get("shape_provider_id") or None,
-            provider_base_url=raw.get("provider_base_url") or None,
-            provider_api_key=raw.get("provider_api_key") or None,
-            provider_headers={str(k): str(v) for k, v in headers.items()},
-            codex_refresh_token=raw.get("codex_refresh_token") or None,
-            codex_token_expires=raw.get("codex_token_expires") or None,
-            codex_account_id=raw.get("codex_account_id") or None,
-            codex_email=raw.get("codex_email") or None,
-            xai_refresh_token=raw.get("xai_refresh_token") or None,
-            xai_token_expires=raw.get("xai_token_expires") or None,
-            xai_token_endpoint=raw.get("xai_token_endpoint") or None,
-            xai_email=raw.get("xai_email") or None,
-        )
-    _loaded = (key, logins)
+    logins, quarantined = _read_store()
+    _loaded = (key, logins, quarantined)
     return dict(logins)
 
 
-_loaded: tuple[tuple, dict[str, Login]] | None = None
+def _quarantined() -> dict[str, Any]:
+    """Sections the last load could not use, to be written back verbatim."""
+    return dict(_loaded[2]) if _loaded is not None else {}
+
+
+_loaded: tuple[tuple, dict[str, Login], dict[str, Any]] | None = None
+# Unknown keys per good section, carried through a rewrite (see _parse_store).
+_extra_fields: dict[str, dict[str, Any]] = {}
+
+
+def _serialize(loaded: dict[str, Login]) -> dict[str, dict[str, Any]]:
+    data: dict[str, dict[str, Any]] = {}
+    for lid, item in loaded.items():
+        row = {k: v for k, v in asdict(item).items() if v not in (None, {}, [])}
+        for k, v in _extra_fields.get(lid, {}).items():
+            row.setdefault(k, v)
+        data[lid] = row
+    for lid, raw in _quarantined().items():
+        data.setdefault(lid, raw)
+    return data
 
 
 def save_login(login: Login) -> None:
@@ -252,10 +366,7 @@ def save_login(login: Login) -> None:
     login = replace(login, provider_id=canonical_id)
     loaded = load_logins()
     loaded[canonical_id] = login
-    data: dict[str, dict[str, Any]] = {}
-    for lid, item in loaded.items():
-        data[lid] = {k: v for k, v in asdict(item).items() if v not in (None, {}, [])}
-    _write_logins_toml(data)
+    _write_logins_toml(_serialize(loaded))
 
 
 def _normalize_provider_id(provider_id: str) -> str:
@@ -275,10 +386,7 @@ def remove_login(provider_id: str) -> bool:
     if existed:
         del loaded[provider_id]
         _ensure_config_dir()
-        data: dict[str, dict[str, Any]] = {}
-        for lid, item in loaded.items():
-            data[lid] = {k: v for k, v in asdict(item).items() if v not in (None, {}, [])}
-        _write_logins_toml(data)
+        _write_logins_toml(_serialize(loaded))
     # Also drop its cached models.
     cache = load_model_cache()
     if provider_id in cache:
