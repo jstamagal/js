@@ -37,7 +37,22 @@ _POLL_S = 0.05
 
 
 def _clip(data: bytes, cap: int) -> str:
-    return (bytes(data[:cap]) if cap > 0 else bytes(data)).decode("utf-8", errors="replace")
+    """The first ``cap`` bytes (all when ``cap`` is 0), cut back to a whole
+    UTF-8 character so a clip never ends in U+FFFD."""
+    if cap > 0 and len(data) > cap:
+        data = bytes(data[:cap])
+        # Drop a lead byte and the continuation bytes after it when the
+        # sequence it starts runs past the cap.
+        for back in range(1, min(4, len(data)) + 1):
+            byte = data[-back]
+            if byte < 0x80:
+                break
+            if byte >= 0xC0:
+                need = 4 if byte >= 0xF0 else 3 if byte >= 0xE0 else 2
+                if back < need:
+                    data = data[:-back]
+                break
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 def run(command: str, *, cwd: str, timeout: float, cap: int,

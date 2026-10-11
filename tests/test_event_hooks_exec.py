@@ -593,3 +593,8 @@ def test_event_json_keeps_the_real_event_name():
     call = SimpleNamespace(emission=SimpleNamespace(event="tool_call", payload={"event": "spoofed", "tool": "shell"}))
     data = json.loads(hookexec.event_json(call))
     assert data["event"] == "tool_call" and data["tool"] == "shell"
+
+
+@pytest.mark.parametrize("cap,expected", [(2, "a"), (3, "aé"), (1, "a"), (0, "aé€"), (6, "aé€"), (4, "aé"), (5, "aé")])
+def test_clip_never_cuts_a_character_in_half(cap, expected):
+    assert hookexec._clip("aé€".encode(), cap) == expected
