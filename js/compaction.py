@@ -1,7 +1,7 @@
 """Context compaction — one module owns the "history is too big" decision and the deed.
 
 Three triggers funnel through here so they can never drift on what "full"
-means: the REPL between-turn trigger (``maybe_auto_compact``), the in-turn
+means: the REPL between-turn trigger (``maybe_auto_compact_async``), the in-turn
 budget check (the runtime measures, then calls ``compact_now``), and the
 overflow recovery escalation (``recover_overflow``). The summarize pipeline
 exists only as an async core; ``compact_now_sync`` is one ``asyncio.run``, so
@@ -58,6 +58,8 @@ def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
 
 
 def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
+    """A boolean knob. Garbage reads as the default, and a default that is not
+    a bool itself (a bad jsrc value) reads as False, so the result is a bool."""
     default = _fallback(key, default)
     value = get(cfg, key, default)
     if isinstance(value, bool):
@@ -68,7 +70,7 @@ def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
-    return default
+    return default if isinstance(default, bool) else False
 
 
 def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
@@ -242,6 +244,10 @@ MAX_OVERFLOW_ROUNDS = 3
 MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
 
 
+# Tool results shorter than this are not worth clearing.
+_MICROCOMPACT_MIN_CHARS = 400
+
+
 # Tool results are the bulk of a long session and the cheapest thing to drop:
 # the assistant's own reasoning about them survives in its messages, and the
 # file can always be read again. Clearing them needs no model call, so unlike a
@@ -250,7 +256,7 @@ def microcompact(
     messages: list[dict],
     *,
     keep_recent: int = 20,
-    min_chars: int = 400,
+    min_chars: int = _MICROCOMPACT_MIN_CHARS,
 ) -> tuple[int, int]:
     """Blank the bodies of old tool results in place.
 
@@ -315,7 +321,7 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
         if old != new and old.get("role") == "tool"
     ]
     flight.record("cleared_results", results=changed, cleared=cleared,
-                  reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=400)
+                  reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=_MICROCOMPACT_MIN_CHARS)
     if cleared:
         stamp = _stamp(flight.cfg)
         M.persist_messages(flight.cfg.session_file, before, stamp=stamp)
@@ -664,6 +670,9 @@ _SUMMARY_SPLIT_DEPTH = 3
 
 
 def _run_pre_hook(cfg: Config) -> str:
+    """The compact pre-hook's stdout, the guidance for the summarizer. A hook
+    that fails or times out warns the user and gives no guidance: its error
+    text is not instructions for the model."""
     hook = _pre_hook_command(cfg)
     if not hook:
         return ""
@@ -681,7 +690,8 @@ def _run_pre_hook(cfg: Config) -> str:
             cap=cap,
         )
     except Exception as exc:  # noqa: BLE001
-        return f"WARNING: compact pre_hook failed: {type(exc).__name__}: {exc}"
+        msgs.warn(msgs.FAILED_WARN, error=f"compact pre_hook failed: {type(exc).__name__}: {exc}")
+        return ""
     if not isinstance(result, CappedProcessResult):
         result = CappedProcessResult(result[0], result[1], result[2])
     stdout = result.stdout.decode("utf-8", errors="replace")
@@ -691,7 +701,9 @@ def _run_pre_hook(cfg: Config) -> str:
     if result.stderr_truncated:
         stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
-        return f"WARNING: compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}"
+        msgs.warn(msgs.FAILED_WARN,
+                  error=f"compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}")
+        return ""
     return stdout.strip()
 
 
@@ -973,7 +985,8 @@ async def compact_now(
         if emit is not None:
             emit("pre_compact", phase=phase, forced=forced, focus=focus, model=compact_model,
                  messages=original_len, keep_from=keep_from)
-        guidance = _run_pre_hook(cfg)
+        # The hook is a blocking subprocess (up to 30 s): off the event loop.
+        guidance = await asyncio.to_thread(_run_pre_hook, cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
@@ -998,6 +1011,13 @@ async def compact_now(
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)
+            # A summary was paid for and thrown away. Count it like a failed
+            # summary, or the next turn pays for the same one again, and the
+            # next, until the breaker would have stopped it.
+            if trigger and trigger.get("phase") == "between-turn":
+                owner = context or T.STOCK_CONTEXT
+                if (paused := record_auto_failure(cfg, owner)) is not None:
+                    msgs.warn(paused.message, **paused.fields)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)

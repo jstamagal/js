@@ -288,3 +288,11 @@ def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
     assert compaction.configured_context_window(cfg, lambda: 500000) == 750000
     cfg.settings["compact"]["context_window"] = 1000000
     assert compaction.configured_context_window(cfg, lambda: None) == 1000000
+
+
+def test_get_bool_always_returns_a_bool(tmp_path):
+    """ALL-CLAIMS compaction.py:60-71: garbage returned a non-bool default unchanged."""
+    cfg = _compact_test_cfg(tmp_path, {"flag": "maybe"})
+    assert compaction.get_bool(cfg, "flag", "not-a-bool") is False
+    assert compaction.get_bool(cfg, "flag", True) is True
+    assert compaction.get_bool(_compact_test_cfg(tmp_path, {"flag": "yes"}), "flag", None) is True

@@ -458,3 +458,93 @@ def test_cache_break_is_silent_below_net_level_two(monkeypatch, tmp_path, net_li
     level["value"] = 1
     _cached_turns(monkeypatch, tmp_path, [100_000, 20_000])
     assert not any("20000" in _plain(line) for line in lines)
+
+
+def test_a_paid_summary_that_saves_too_little_counts_toward_the_breaker(monkeypatch, tmp_path):
+    """ALL-CLAIMS compaction.py:955-963: the post-summary savings skip was not a
+    failure, so every turn paid for the same summary again."""
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "max_summary_failures": 2})
+    context = ToolContext(cwd=tmp_path)
+    calls = []
+
+    async def huge_summary(*args, **kwargs):
+        calls.append(1)
+        return "word " * 60000            # bigger than what it replaces
+
+    monkeypatch.setattr(compaction, "summarize", huge_summary)
+    trigger = {"phase": "between-turn"}
+    for _ in range(4):
+        if compaction.auto_paused(cfg, context):
+            break
+        result = compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context,
+                                             trigger=trigger)
+        assert result.message == msgs.COMPACT_SKIPPED_SAVINGS
+    assert len(calls) == 2
+    assert compaction.auto_paused(cfg, context)
+
+
+def test_a_manual_compact_skip_does_not_touch_the_breaker(monkeypatch, tmp_path):
+    cfg = _config(tmp_path, _SMALL_WINDOW)
+    context = ToolContext(cwd=tmp_path)
+
+    async def huge_summary(*args, **kwargs):
+        return "word " * 60000
+
+    monkeypatch.setattr(compaction, "summarize", huge_summary)
+    compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
+    assert getattr(context, "summary_failures", 0) == 0
+
+
+def test_a_failing_pre_hook_warns_the_user_and_feeds_the_model_nothing(monkeypatch, tmp_path, capsys):
+    """ALL-CLAIMS compaction.py:627-656: the hook's WARNING text went to the
+    summarizer as guidance, and the 30 s subprocess ran on the event loop."""
+    from js.capped_process import CappedProcessResult
+
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "pre_hook": "false"})
+    monkeypatch.setattr(compaction, "_run_capped",
+                        lambda *a, **k: CappedProcessResult(returncode=3, stdout=b"", stderr=b"boom"))
+    seen = {}
+
+    async def summary(cfg, model, messages, focus, guidance):
+        seen["guidance"] = guidance
+        return "short"
+
+    monkeypatch.setattr(compaction, "summarize", summary)
+    compaction.compact_now_sync(cfg, "system", _over_budget_history(), forced=True)
+    assert seen["guidance"] == ""
+    err = capsys.readouterr().err
+    assert "pre_hook exited 3: boom" in err
+
+
+def test_the_pre_hook_runs_off_the_event_loop(monkeypatch, tmp_path):
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "pre_hook": "slow"})
+    ticks = []
+
+    window = {}
+
+    def slow_hook(_cfg):
+        window["start"] = time.monotonic()
+        time.sleep(0.3)
+        window["end"] = time.monotonic()
+        return "guide"
+
+    async def summary(cfg, model, messages, focus, guidance):
+        return "short"
+
+    monkeypatch.setattr(compaction, "_run_pre_hook", slow_hook)
+    monkeypatch.setattr(compaction, "summarize", summary)
+
+    async def main():
+        async def ticker():
+            for _ in range(5):
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.05)
+
+        task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        await compaction.compact_now(cfg, "system", _over_budget_history(), forced=True)
+        await task
+
+    asyncio.run(main())
+    # The loop kept ticking while the hook slept.
+    assert any(window["start"] < tick < window["end"] for tick in ticks)
