@@ -742,3 +742,89 @@ def test_codex_refresh_falls_back_to_previous_profile_when_jwt_is_bare():
     # Without a previous snapshot, a bare JWT still fails loudly.
     with pytest.raises(RuntimeError):
         codex_auth._token_from_response(data)
+
+
+class _SSEResponse:
+    status_code = 200
+
+    def __init__(self, events):
+        self._events = events
+
+    async def aiter_lines(self):
+        for event in self._events:
+            yield f"data: {json.dumps(event)}"
+            yield ""
+
+
+class _SSEClient:
+    def __init__(self, events):
+        self._events = events
+
+    def stream(self, method, url, *, headers=None, json=None):
+        return _FakeStreamContext(_SSEResponse(self._events))
+
+    async def aclose(self):
+        return None
+
+
+def _drain(events):
+    provider = _provider_with_client(_SSEClient(events))
+
+    async def run():
+        stream = ai.models.Stream(provider.stream(
+            ai.Model(id="gpt-5.5", provider=provider), [ai.user_message("hi")], tools=None, params=None))
+        async for _ in stream:
+            pass
+        return stream
+
+    return asyncio.run(run())
+
+
+def _tool_args(stream):
+    return [(part.tool_call_id, part.tool_args) for part in stream.message.parts
+            if isinstance(part, ai.types.messages.ToolCallPart)]
+
+
+def _call_item(item_id, call_id, name, arguments=None):
+    item = {"id": item_id, "type": "function_call", "call_id": call_id, "name": name}
+    if arguments is not None:
+        item["arguments"] = arguments
+    return item
+
+
+def test_final_arguments_complete_partial_deltas():
+    """ALL-CLAIMS codex_provider.py:104 (doc #491 HIGH): deltas `{"a":` then
+    the authoritative done `{"a":1}` assembled to `{"a":` -- a truncated call."""
+    stream = _drain([
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "f_a")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"a":'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_A", "arguments": '{"a":1}'},
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"a":1}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"a":1}')]
+
+
+def test_parallel_calls_with_interleaved_deltas_each_get_their_own_arguments():
+    """ALL-CLAIMS codex_provider.py:101: deltas went to whichever call was
+    'active', and a second ToolStart for call_A appeared with empty args."""
+    stream = _drain([
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "f_a")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"a":'},
+        {"type": "response.output_item.added", "item": _call_item("item_B", "call_B", "f_b")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_B", "delta": '{"b":'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_B", "arguments": '{"b":2}'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_A", "arguments": '{"a":1}'},
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"a":1}')},
+        {"type": "response.output_item.done", "item": _call_item("item_B", "call_B", "f_b", '{"b":2}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"a":1}'), ("call_B", '{"b":2}')]
+
+
+def test_a_call_with_no_deltas_takes_its_done_arguments():
+    stream = _drain([
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"x":true}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"x":true}')]
