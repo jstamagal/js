@@ -157,3 +157,16 @@ class MemoryReplayGuards(unittest.TestCase):
     def test_a_huge_int_ts_does_not_raise(self):
         path = self.write([{'kind': 'message', 'ts': 10 ** 400, 'version': 1, 'message': user('big')}])
         self.assertEqual(M.load_replay_messages(path), [user('big')])
+
+    def test_an_epoch_flagged_only_against_the_unrepaired_history_is_not_repaired(self):
+        # doc #1083: epoch 0 is legacy (X twice); its compaction keep_from=3
+        # was written against the repaired history, so nothing of epoch 0
+        # survives and epoch 1's single X is no repeat. Epoch 1 also repeats
+        # an exchange by content, which a wrong repair would drop.
+        a, t = pair('X')
+        marker = 'compaction:' + json.dumps({'summary': 'S', 'keep_from': 3})
+        later = [a, t, user('go'), assistant('ok'), user('go'), assistant('ok')]
+        path = self.write([*(record(m) for m in (user('u'), a, t, a, t)), mark(marker),
+                           *(record(m) for m in later)])
+        self.assertEqual(M.load_replay_messages(path),
+                         [user('<compaction-summary>\nS\n</compaction-summary>'), *later])

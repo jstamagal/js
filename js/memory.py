@@ -356,15 +356,26 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
     appended runs twice; only such epochs are read again undoing those runs
     (`_Reappends`). A clean epoch, before or after one, replays as written."""
     flagged: frozenset[int] = frozenset()
-    for _pass in range(4):
+    tried: set[frozenset[int]] = set()
+    while True:
         if stamps is not None:
             stamps.clear()
         messages, skipped_versions, found = _replay_records(memory_file, stamps, undo_epochs=flagged)
-        # Repairing an epoch changes what the next one starts from, so read
-        # again until the epochs that need repair stop changing.
-        if found <= flagged:
+        # Repairing an epoch changes what the next one starts from (a
+        # compaction keeps a different tail), so an epoch flagged against the
+        # unrepaired history may be clean against the repaired one. Read again
+        # with exactly the epochs found until the set is stable; on a cycle,
+        # repair every epoch any reading flagged.
+        if found == flagged:
             break
-        flagged = flagged | found
+        tried.add(flagged)
+        if found in tried:
+            flagged = frozenset().union(*tried, found)
+            if stamps is not None:
+                stamps.clear()
+            messages, skipped_versions, _found = _replay_records(memory_file, stamps, undo_epochs=flagged)
+            break
+        flagged = found
     return messages, skipped_versions
 
 
