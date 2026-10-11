@@ -7,6 +7,7 @@ login store, not in the normal js config file.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -140,12 +141,19 @@ def _token_from_login(login: Login) -> CodexToken | None:
     return CodexToken(
         access=login.provider_api_key or "",
         refresh=login.codex_refresh_token,
-        expires_at=float(login.codex_token_expires)
-        if login.codex_token_expires is not None
-        else 0.0,
+        expires_at=_expiry_or_zero(login.codex_token_expires),
         account_id=login.codex_account_id,
         email=login.codex_email,
     )
+
+
+def _expiry_or_zero(value: object) -> float:
+    """An expiry as a float; anything unreadable counts as already expired."""
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else 0.0
 
 
 def _post_token_form(
@@ -278,6 +286,10 @@ def build_authorize_url(state: str, challenge: str, *, originator: str = "openco
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     server: _CallbackServer
+    # An idle connection (browser preconnect, any local client) must not
+    # hold the single-threaded server's rfile.readline() forever: the real
+    # redirect would then never be read and the deadline never re-checked.
+    timeout = 5
 
     def log_message(self, _format: str, *_args: Any) -> None:  # noqa: A003 - stdlib API
         return
@@ -288,10 +300,17 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         query = urllib.parse.parse_qs(parsed.query)
-        self.server.received_state = (query.get("state") or [None])[0]
-        self.server.received_code = (query.get("code") or [None])[0]
-        self.server.received_error = (query.get("error") or [None])[0]
-        ok = self.server.received_code and self.server.received_state == self.server.expected_state
+        state = (query.get("state") or [None])[0]
+        code = (query.get("code") or [None])[0]
+        error = (query.get("error") or [None])[0]
+        # Only a hit carrying this login's state counts. Anything else (a
+        # local process, a page pointing the browser here) gets a 400 and
+        # changes nothing, so it cannot end the login as "state mismatch".
+        ok = bool(code) and state == self.server.expected_state
+        if state == self.server.expected_state and (code or error):
+            self.server.received_state = state
+            self.server.received_code = code
+            self.server.received_error = error
         self.send_response(200 if ok else 400)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -397,7 +416,7 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
                     continue
                 srv = key.data
                 srv.handle_request()
-                if srv.received_code or srv.received_error:
+                if srv.received_state == state and (srv.received_code or srv.received_error):
                     winner = srv
                     break
     finally:
@@ -496,7 +515,7 @@ def login_needs_refresh(login: Login, *, now: float | None = None) -> bool:
     expires = login.codex_token_expires
     if expires is None:
         return True
-    return (now if now is not None else time.time()) >= float(expires) - _REFRESH_SKEW_SECONDS
+    return (now if now is not None else time.time()) >= _expiry_or_zero(expires) - _REFRESH_SKEW_SECONDS
 
 
 def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
@@ -538,34 +557,199 @@ async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | Non
     return apply_refreshed_token(login, token)
 
 
-def save_refreshed_login(refreshed: Login) -> None:
-    # A background token refresh must not crash an in-flight turn just
-    # because logins.toml is unwritable/corrupt: the caller already has the
-    # refreshed token in memory and can keep going, it just won't survive a
-    # process restart until the file is fixed.
+def save_refreshed_login(refreshed: Login, *, derived_from: Login | None = None) -> bool:
+    """Persist a refreshed login; True when it reached the file.
+
+    Compare-and-save under the store lock: when ``derived_from`` is given,
+    the write happens only while the file still carries the refresh token
+    that was spent to obtain ``refreshed``. Any other token on disk is
+    another process's newer rotation (or a new ``--login``); writing over
+    it would store a burned token and force a re-login for everyone
+    (mikeno #731 ACT 4), so the stale save is dropped instead.
+
+    A background token refresh must not crash an in-flight turn just
+    because logins.toml is unwritable/corrupt: the caller already has the
+    refreshed token in memory and can keep going. The rotated token is
+    kept process-wide (``logins.note_memory_login``) so the next read in
+    this process uses it instead of re-posting the burned one; it will not
+    survive a restart until the file is fixed, so the warning says so.
+    """
     from . import logins
 
     try:
-        logins.save_login(refreshed)
-    except logins.LoginsCorruptError as exc:
+        with logins.hold_login_lock():
+            if derived_from is not None:
+                stored = logins.load_logins_fresh().get(logins._normalize_provider_id(refreshed.provider_id))
+                if stored is not None and stored.codex_refresh_token not in (
+                    None,
+                    derived_from.codex_refresh_token,
+                    refreshed.codex_refresh_token,
+                ):
+                    return False  # someone rotated past us; their token stands
+            logins.save_login(refreshed)
+    except (logins.LoginsCorruptError, logins.LoginStoreBusyError, OSError) as exc:
+        logins.note_memory_login(refreshed, derived_from=derived_from)
         msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error=exc)
+        return False
+    return True
+
+
+def relogin_error(detail: object) -> RuntimeError:
+    return RuntimeError(
+        f"OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
+    )
+
+
+def _stored_login(login: Login) -> Login:
+    """The freshest copy of ``login``: the file re-read now, the in-memory
+    overlay, or ``login`` itself when the store has nothing."""
+    from . import logins
+
+    logins.load_logins_fresh()
+    current = logins.get_login(login.provider_id)
+    return current if current is not None else login
+
+
+def _adopt_or_refresh_decision(login: Login) -> tuple[Login, bool]:
+    """Under the store lock: (login to use, whether a POST is still needed)."""
+    current = _stored_login(login)
+    if not login_needs_refresh(current):
+        return current, False
+    return current, True
 
 
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
+    """Return ``login`` with a usable access token, refreshing once if needed.
+
+    The refresh runs under the cross-process store lock, which spans
+    re-read -> re-check -> POST -> save: with N processes on one login only
+    the first holder posts the refresh token; every waiter then re-reads the
+    rotated token from the file and adopts it with no POST of its own. A
+    refresh token is single-use once rotated, so a second POST of the same
+    one fails and may revoke the whole login (ALL-CLAIMS codex_auth.py:82).
+    ``persist=False`` still writes nothing itself; the caller owns the save.
+    """
+    from . import logins
+
     if not login_needs_refresh(login):
         return login
-    refreshed = refreshed_login(login)
-    if persist:
-        save_refreshed_login(refreshed)
-    return refreshed
+    try:
+        lock = logins.hold_login_lock()
+        lock.__enter__()
+    except logins.LoginStoreBusyError:
+        # Could not take the lock in time: use the file if someone else
+        # refreshed meanwhile; never post an unlocked refresh.
+        current = _stored_login(login)
+        if not login_needs_refresh(current):
+            return current
+        raise
+    try:
+        current, needed = _adopt_or_refresh_decision(login)
+        if not needed:
+            return current
+        token = _refresh_or_relogin(current)
+        refreshed = apply_refreshed_token(current, token)
+        if persist:
+            save_refreshed_login(refreshed, derived_from=current)
+        return refreshed
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _refresh_or_relogin(current: Login) -> CodexToken:
+    assert current.codex_refresh_token
+    try:
+        return refresh_token(current.codex_refresh_token, previous=_token_from_login(current))
+    except RuntimeError as exc:
+        if not _is_rejected_grant(exc):
+            raise
+        # The token we hold was already spent. Under the lock the file is the
+        # truth: a different token there is another process's winner, adopt
+        # it; the same token means nobody has a newer one -> re-login.
+        stored = _stored_login(current)
+        if stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
+            if not login_needs_refresh(stored):
+                return _token_from_login(stored)
+            return refresh_token(stored.codex_refresh_token, previous=_token_from_login(stored))
+        raise relogin_error(exc) from exc
+
+
+_REJECTED_GRANT_MARKERS = ("invalid_grant", "refresh_token_reused", "HTTP 400", "HTTP 401")
+
+
+def _is_rejected_grant(exc: BaseException) -> bool:
+    text = str(exc)
+    return any(marker in text for marker in _REJECTED_GRANT_MARKERS)
 
 
 async def ensure_fresh_login_async(
     login: Login, *, persist: bool = True, client: httpx.AsyncClient | None = None
 ) -> Login:
+    """Async twin of ensure_fresh_login: same lock order (per-provider
+    asyncio.Lock first, then the store lock polled without blocking the
+    loop). The whole hold -> re-read -> POST -> save runs as ONE shielded
+    task (the store lock is owned per task, so the saver must be the task
+    that took it, maggie #783); a caller cancelled mid-refresh waits,
+    bounded, for that task to land the rotation before the cancellation
+    propagates, else the next holder would post a burned token.
+    """
+    from . import logins
+
     if not login_needs_refresh(login):
         return login
-    refreshed = await refreshed_login_async(login, client=client)
-    if persist:
-        save_refreshed_login(refreshed)
-    return refreshed
+    async with logins.refresh_lock(login.provider_id):
+        inner = asyncio.ensure_future(_locked_refresh(login, persist=persist, client=client))
+        try:
+            return await asyncio.shield(inner)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.wait_for(asyncio.shield(inner), _POST_TIMEOUT_S + logins._LOCK_TIMEOUT_S)
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            raise
+
+
+_POST_TIMEOUT_S = 20.0
+
+
+async def _locked_refresh(login: Login, *, persist: bool, client: httpx.AsyncClient | None) -> Login:
+    """Hold the store lock across re-read, re-check, POST (bounded) and save."""
+    from . import logins
+
+    try:
+        async with logins.ahold_login_lock():
+            current, needed = _adopt_or_refresh_decision(login)
+            if not needed:
+                return current
+            token = await asyncio.wait_for(_refresh_or_relogin_async(current, client=client), _POST_TIMEOUT_S)
+            refreshed = apply_refreshed_token(current, token)
+            if persist:
+                save_refreshed_login(refreshed, derived_from=current)
+            return refreshed
+    except logins.LoginStoreBusyError:
+        # Could not take the lock in time: use the file if someone else
+        # refreshed meanwhile; never post an unlocked refresh.
+        current = _stored_login(login)
+        if not login_needs_refresh(current):
+            return current
+        raise
+
+
+async def _refresh_or_relogin_async(current: Login, *, client: httpx.AsyncClient | None) -> CodexToken:
+    assert current.codex_refresh_token
+    try:
+        return await refresh_token_async(
+            current.codex_refresh_token, client=client, previous=_token_from_login(current)
+        )
+    except RuntimeError as exc:
+        if not _is_rejected_grant(exc):
+            raise
+        stored = _stored_login(current)
+        if stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
+            if not login_needs_refresh(stored):
+                return _token_from_login(stored)
+            return await refresh_token_async(
+                stored.codex_refresh_token, client=client, previous=_token_from_login(stored)
+            )
+        raise relogin_error(exc) from exc
+

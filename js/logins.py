@@ -151,7 +151,7 @@ def _leave(store: Path) -> None:
 
 
 @contextlib.contextmanager
-def hold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> Iterator[None]:
+def hold_login_lock(timeout_s: float | None = None) -> Iterator[None]:
     """Hold the cross-process store lock for the block (sync callers).
 
     Non-blocking flock in a sleep loop, never a blocking flock: a blocking
@@ -161,15 +161,16 @@ def hold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> Iterator[None]:
     held lock works; a different task or thread waits for the flock, which
     excludes separate open-file-descriptions within one process too.
     """
-    if _reenter(lock_path()):
+    store = lock_path()
+    if _reenter(store):
         try:
             yield
         finally:
-            _leave(lock_path())
+            _leave(store)
         return
-    store = lock_path()
     fd = _open_lock_fd()
     try:
+        timeout_s = _LOCK_TIMEOUT_S if timeout_s is None else timeout_s
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
@@ -186,7 +187,7 @@ def hold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> Iterator[None]:
 
 
 @contextlib.asynccontextmanager
-async def ahold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> AsyncIterator[None]:
+async def ahold_login_lock(timeout_s: float | None = None) -> AsyncIterator[None]:
     """Async twin of hold_login_lock: the same non-blocking flock, polled with
     ``asyncio.sleep`` so the event loop never blocks. A waiter cancelled
     mid-poll holds nothing and just closes its fd; a holder's ``finally``
@@ -196,15 +197,16 @@ async def ahold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> AsyncIterator[
     a thread that later acquires and holds the lock with nobody to release
     it.
     """
-    if _reenter(lock_path()):
+    store = lock_path()
+    if _reenter(store):
         try:
             yield
         finally:
-            _leave(lock_path())
+            _leave(store)
         return
-    store = lock_path()
     fd = _open_lock_fd()
     try:
+        timeout_s = _LOCK_TIMEOUT_S if timeout_s is None else timeout_s
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
@@ -241,8 +243,11 @@ def refresh_lock(provider_id: str) -> asyncio.Lock:
 # life of this process so the next read uses the rotated token instead of
 # re-posting the burned one (bakari #207). get_login() merges it in. Keyed
 # by store path as well, so a config-dir switch never sees another store's
-# memory (shinda #729).
-_overlay: dict[tuple[Path, str], Login] = {}
+# memory (shinda #729). Each entry remembers the disk refresh token it was
+# derived from: the overlay is used only while the file still carries that
+# base; any other token on disk (a new --login, another process's save)
+# wins and drops the overlay (ruhondo #788).
+_overlay: dict[tuple[Path, str], tuple[str | None, Login]] = {}
 _overlay_guard = threading.Lock()
 
 
@@ -250,10 +255,22 @@ def _overlay_key(provider_id: str) -> tuple[Path, str]:
     return (_logins_path(), _normalize_provider_id(provider_id))
 
 
-def note_memory_login(login: Login) -> None:
-    """Remember a refreshed login that did not make it to disk."""
+def _refresh_token_of(login: Login | None) -> str | None:
+    if login is None:
+        return None
+    return login.codex_refresh_token or login.xai_refresh_token
+
+
+def note_memory_login(login: Login, *, derived_from: Login | None = None) -> None:
+    """Remember a refreshed login that did not make it to disk.
+
+    ``derived_from`` is the login whose refresh token was spent to get
+    ``login``; when omitted, the file's current entry is taken as the base.
+    """
+    key = _overlay_key(login.provider_id)
+    base = derived_from if derived_from is not None else load_logins().get(key[1])
     with _overlay_guard:
-        _overlay[_overlay_key(login.provider_id)] = login
+        _overlay[key] = (_refresh_token_of(base), login)
 
 
 def forget_memory_login(provider_id: str) -> None:
@@ -261,32 +278,42 @@ def forget_memory_login(provider_id: str) -> None:
         _overlay.pop(_overlay_key(provider_id), None)
 
 
-def _expiry(login: Login) -> float:
-    expires = login.codex_token_expires if login.codex_refresh_token else login.xai_token_expires
-    return float(expires) if expires is not None else 0.0
-
-
 def get_login(provider_id: str) -> Login | None:
-    """The stored login for ``provider_id``, or the fresher in-memory one.
+    """The stored login for ``provider_id``, with the token fields of a
+    refresh that could not be written laid over it.
 
-    The sole read for the OAuth refresh paths: the overlay wins only while it
-    is newer than what the file says, so a later successful save (or a
-    ``--login`` / ``--logout`` from any process) takes over at once.
+    The sole read for the OAuth refresh paths. The overlay answers only
+    while the file still holds the refresh token it was derived from; the
+    moment the file says anything else (a later save, a new ``--login``, a
+    ``--logout``), disk wins and the overlay is dropped. The overlay owns
+    exactly the fields a refresh writes: access token (``provider_api_key``),
+    refresh token, expiry. Everything else (base URL, headers, shape,
+    account, email) always comes from disk, so an external edit shows up at
+    once (ruhondo #829/#835, doc #838).
     """
     normalized = _normalize_provider_id(provider_id)
     stored = load_logins().get(normalized)
     with _overlay_guard:
-        memory = _overlay.get(_overlay_key(normalized))
-    if memory is None:
+        entry = _overlay.get(_overlay_key(normalized))
+    if entry is None:
         return stored
-    if stored is None:
-        # Removed on disk since: honour the removal.
-        forget_memory_login(normalized)
-        return None
-    if _expiry(stored) >= _expiry(memory):
+    base, memory = entry
+    if stored is None or _refresh_token_of(stored) != base:
         forget_memory_login(normalized)
         return stored
-    return memory
+    if memory.codex_refresh_token:
+        return replace(
+            stored,
+            provider_api_key=memory.provider_api_key,
+            codex_refresh_token=memory.codex_refresh_token,
+            codex_token_expires=memory.codex_token_expires,
+        )
+    return replace(
+        stored,
+        provider_api_key=memory.provider_api_key,
+        xai_refresh_token=memory.xai_refresh_token,
+        xai_token_expires=memory.xai_token_expires,
+    )
 
 
 @dataclass
@@ -895,10 +922,10 @@ def cache_models(
 
 def clear_model_cache(provider_id: str) -> None:
     with hold_login_lock():
-        cache = load_model_cache()
-        if provider_id in cache:
-            del cache[provider_id]
-            save_model_cache(cache)
+        records = _read_model_cache_records()
+        if provider_id in records:
+            del records[provider_id]
+            _write_model_cache_records(records)
 
 
 def _models_url(base_url: str) -> str:

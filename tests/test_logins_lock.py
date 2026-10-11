@@ -15,6 +15,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -195,13 +196,38 @@ def test_overlay_is_scoped_to_the_store(tmp_path: Path):
     store_a, store_b = tmp_path / "a", tmp_path / "b"
     try:
         logins.set_config_dir(store_a)
-        logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="RA1", xai_token_expires=100.0))
-        logins.note_memory_login(logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="RA2", xai_token_expires=999.0))
+        disk_a = logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="RA1", xai_token_expires=100.0)
+        logins.save_login(disk_a)
+        logins.note_memory_login(logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="RA2", xai_token_expires=999.0), derived_from=disk_a)
         logins.set_config_dir(store_b)
         logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="B1", xai_refresh_token="RB1", xai_token_expires=1.0))
         assert logins.get_login("xai-oauth").xai_refresh_token == "RB1"
         logins.set_config_dir(store_a)
         assert logins.get_login("xai-oauth").xai_refresh_token == "RA2"
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
+
+
+def test_nested_hold_survives_a_store_switch_inside(tmp_path: Path):
+    # maggie #803/#811: the inner level must release the store it entered,
+    # not whatever the config dir says at exit time.
+    store_a, store_b = tmp_path / "a", tmp_path / "b"
+    try:
+        logins.set_config_dir(store_a)
+        with logins.hold_login_lock():
+            with logins.hold_login_lock():
+                logins.set_config_dir(store_b)
+            logins.set_config_dir(store_a)
+        assert logins._owner.holders == {}
+        # And a foreign holder of A's sidecar is honoured afterwards (no stale ownership).
+        proc = _hold_in_subprocess(logins.lock_path(), 2.0)
+        try:
+            with pytest.raises(logins.LoginStoreBusyError):
+                with logins.hold_login_lock(timeout_s=0.3):
+                    pass
+        finally:
+            proc.kill()
+            proc.wait()
     finally:
         logins.set_config_dir(paths.login_store_dir())
 
@@ -242,21 +268,30 @@ def test_model_cache_write_is_atomic_and_never_overwrites_an_unreadable_file(sto
     assert not any(name.endswith(".tmp") for name in names)
 
 
-def test_get_login_prefers_a_fresher_memory_login_until_disk_catches_up(store):
-    disk = logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="R1", xai_token_expires=100.0)
+def test_get_login_overlay_rides_on_the_disk_token_it_was_derived_from(store):
+    disk = logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="R1", xai_token_expires=100.0, provider_headers={"h": "old"})
     logins.save_login(disk)
-    memory = logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="R2", xai_token_expires=200.0)
-    logins.note_memory_login(memory)
-    assert logins.get_login("xai-oauth").xai_refresh_token == "R2"
-    # Disk catches up (any process saved something newer): disk wins and the overlay is dropped.
-    logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="A3", xai_refresh_token="R3", xai_token_expires=300.0))
-    assert logins.get_login("xai-oauth").xai_refresh_token == "R3"
-    assert "xai-oauth" not in logins._overlay
+    memory = logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="R2", xai_token_expires=200.0, provider_headers={"h": "old"})
+    logins.note_memory_login(memory, derived_from=disk)
+    got = logins.get_login("xai-oauth")
+    assert (got.provider_api_key, got.xai_refresh_token) == ("A2", "R2")
+    # ruhondo #829: the overlay owns only the token fields; an external edit
+    # of anything else (headers here) shows through while the base token holds.
+    logins.save_login(replace(disk, provider_headers={"h": "new"}))
+    logins.note_memory_login(memory, derived_from=disk)
+    got = logins.get_login("xai-oauth")
+    assert got.provider_headers == {"h": "new"} and got.xai_refresh_token == "R2"
+    # ruhondo #788: disk carries a DIFFERENT token (external --login, even
+    # with a lower expiry): disk wins outright and the overlay is dropped.
+    logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="A9", xai_refresh_token="R9", xai_token_expires=1.0))
+    logins.note_memory_login(memory, derived_from=disk)
+    assert logins.get_login("xai-oauth").xai_refresh_token == "R9"
+    assert logins._overlay_key("xai-oauth") not in logins._overlay
     # A logout wins over memory too.
     logins.note_memory_login(memory)
     logins.remove_login("xai-oauth")
     assert logins.get_login("xai-oauth") is None
-    assert "xai-oauth" not in logins._overlay
+    assert logins._overlay_key("xai-oauth") not in logins._overlay
 
 
 def test_json_cache_file_shape_unchanged(store):
