@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -47,6 +48,31 @@ def test_a_message_waits_for_an_agent_that_has_not_joined_yet(tmp_path):
     room = swarm.Room(tmp_path / "bus")
     room.send("runner", "late", "opener")
     assert [m.body for m in room.join("late").drain()] == ["opener"]
+
+
+def test_a_rollcall_is_answered_by_the_process_and_touches_no_inbox_or_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    answers = agent.room.rollcall(wait=5)
+    assert answers["a"]["pid"] == os.getpid() and answers["a"]["state"] == "working"
+    assert not agent.inbox.pending() and not agent.room.log.exists()
+
+
+def test_a_member_with_no_process_is_silent_at_rollcall_and_who_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    monkeypatch.setattr(swarm, "ROLLCALL_WAIT_S", 0.0)
+    here = swarm.Agent(tmp_path / "bus" / "here")
+    here.room.join("gone")
+    assert here.room.rollcall(wait=0.5)["gone"] is None
+    lines = dict(line.split(" ", 1) for line in swarm.roster(here.room).splitlines())
+    assert "no answer" in lines["gone"] and "no answer" not in lines["here"]
+
+
+def test_a_retired_agent_is_not_called_at_rollcall(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.retire("done")
+    assert agent.room.rollcall(wait=0.1) == {}
 
 
 def test_drain_hands_each_message_over_once_in_seq_order(tmp_path):

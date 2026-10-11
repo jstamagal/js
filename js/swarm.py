@@ -16,6 +16,8 @@ ROOT/<name>/inbox/     one file per message not yet delivered to <name>
 ROOT/<name>/subs       the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep     present while <name> waits on its inbox
 ROOT/<name>/spawned    present when another agent's `recruit` started <name>
+ROOT/<name>/ping       the stamp of the last rollcall
+ROOT/<name>/pong       <name>'s answer to it: the stamp, pid, asleep or working, when it last stepped
 
 An agent on the bus never spends a model call waiting:
 
@@ -29,6 +31,10 @@ An agent on the bus never spends a model call waiting:
 A message of kind ``stop`` ends the agent after the turn it lands in. ``retire``
 is the agent ending itself: it posts a handoff and leaves the bus. A message
 sent to a name that has not joined yet waits in that name's inbox.
+
+A rollcall is a ping file in every member's directory. The agent's process
+answers it from a thread of its own; the model is not called and nothing lands
+in an inbox or the log. A member whose process is gone stays silent.
 """
 
 from __future__ import annotations
@@ -41,13 +47,17 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import weakref
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 POLL_S = 0.25
 COALESCE_S = 0.3
+PULSE_S = 1.0
+ROLLCALL_WAIT_S = 3.0
 CLAIM_TTL_S = 600.0
 SPAWN_CAP = 8
 STOP = "stop"
@@ -138,7 +148,7 @@ class Room:
         """Drop <name> from the bus: its inbox, subscriptions and sleep marker. Its claims expire."""
         home = self.root / name
         shutil.rmtree(home / "inbox", ignore_errors=True)
-        for marker in ("subs", "asleep"):
+        for marker in ("subs", "asleep", "ping", "pong"):
             (home / marker).unlink(missing_ok=True)
 
     def members(self) -> list[str]:
@@ -153,6 +163,52 @@ class Room:
         """True when every member is asleep with nothing waiting: the swarm has nothing to do."""
         members = self.members()
         return bool(members) and all(self.asleep(m) and not Inbox(self, m).pending() for m in members)
+
+    # rollcall: a ping file per member, answered by the member's process, never by its model
+
+    def ping(self) -> float:
+        """Call the roll: stamp every member's ping file. Returns the stamp."""
+        stamp = time.time()
+        for name in self.members():
+            _replace_text(self.root / name / "ping", repr(stamp))
+        return stamp
+
+    def pinged(self, name: str) -> float | None:
+        try:
+            return float((self.root / name / "ping").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def pong(self, name: str) -> dict | None:
+        """<name>'s last answer: ping (the stamp it answers), ts, pid, state, step."""
+        try:
+            answer = json.loads((self.root / name / "pong").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return answer if isinstance(answer, dict) else None
+
+    def answered(self, name: str, stamp: float) -> dict | None:
+        """<name>'s answer to the rollcall stamped `stamp`, or None while it has not answered."""
+        answer = self.pong(name)
+        return answer if answer is not None and answer.get("ping") == stamp else None
+
+    def silent_since(self, name: str) -> float | None:
+        """The stamp of a rollcall <name> has left unanswered past the wait, or None."""
+        stamp = self.pinged(name)
+        if stamp is None or time.time() - stamp < ROLLCALL_WAIT_S or self.answered(name, stamp):
+            return None
+        return stamp
+
+    def rollcall(self, wait: float = ROLLCALL_WAIT_S) -> dict[str, dict | None]:
+        """Ping every member and wait up to `wait` seconds: each member's answer, None for one that stayed silent."""
+        stamp = self.ping()
+        names = self.members()
+        deadline = time.monotonic() + wait
+        while True:
+            answers = {name: self.answered(name, stamp) for name in names}
+            if all(answers.values()) or time.monotonic() >= deadline:
+                return answers
+            time.sleep(POLL_S)
 
     @contextlib.contextmanager
     def _locked(self):
@@ -375,6 +431,25 @@ class Inbox:
             time.sleep(POLL_S)
 
 
+def _replace_text(path: Path, text: str) -> None:
+    """Write `path` whole: a reader sees the old text or the new, never half."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _pulse(ref: weakref.ref[Agent]) -> None:
+    """The thread that answers rollcalls for one agent, for as long as the agent is on the bus."""
+    while True:
+        agent = ref()
+        if agent is None or agent.retired:
+            return
+        with contextlib.suppress(OSError):
+            agent.answer_ping()
+        del agent
+        time.sleep(PULSE_S)
+
+
 def render(msgs: list[Msg], me: str) -> str:
     """The messages as the model reads them."""
     lines = ["--- messages ---"]
@@ -390,7 +465,7 @@ def render(msgs: list[Msg], me: str) -> str:
 
 
 def roster(room: Room, me: str | None = None) -> str:
-    """One line per member: name, you, asleep or working, what it holds."""
+    """One line per member: name, you, asleep or working or silent at rollcall, what it holds."""
     held: dict[str, list[str]] = {}
     for key, claim in room.claims().items():
         held.setdefault(claim["holder"], []).append(key)
@@ -399,7 +474,11 @@ def roster(room: Room, me: str | None = None) -> str:
         bits = [name]
         if name == me:
             bits.append("(you)")
-        bits.append("asleep" if room.asleep(name) else "working")
+        silent = None if name == me else room.silent_since(name)
+        if silent is not None:
+            bits.append(f"no answer at rollcall since {_clock(silent)}")
+        else:
+            bits.append("asleep" if room.asleep(name) else "working")
         if held.get(name):
             bits.append("holds " + ", ".join(sorted(held[name])))
         lines.append(" ".join(bits))
@@ -471,8 +550,25 @@ class Agent:
         self.alarm: float | None = None
         # Set by the in-process runner: recruit adds a coroutine there, not a process.
         self.recruiter: Any = None
+        # When the agent last stepped: joined, crossed a tool boundary, went to sleep or woke.
+        self.step = time.time()
+        self._answered: float | None = None
+        threading.Thread(target=_pulse, args=(weakref.ref(self),), name=f"swarm-pulse-{self.name}", daemon=True).start()
+
+    def answer_ping(self) -> bool:
+        """Answer the rollcall waiting in this agent's ping file. True when there was a new one."""
+        stamp = self.room.pinged(self.name)
+        if stamp is None or stamp == self._answered:
+            return False
+        home = self.room.root / self.name
+        state = "asleep" if (home / "asleep").is_file() else "working"
+        _replace_text(home / "pong", json.dumps(
+            {"ping": stamp, "ts": time.time(), "pid": os.getpid(), "state": state, "step": self.step}))
+        self._answered = stamp
+        return True
 
     def _take(self, msgs: list[Msg]) -> list[Msg]:
+        self.step = time.time()
         if any(m.kind == STOP for m in msgs):
             self.stop_seen = True
         return msgs
@@ -519,6 +615,7 @@ class Agent:
         marker = self.room.root / self.name / "asleep"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
+        self.step = time.time()
         return marker
 
     def _tick(self) -> Msg:
