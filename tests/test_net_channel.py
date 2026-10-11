@@ -336,3 +336,19 @@ def test_turn_counts_response_bytes_into_its_turn_status(sink, tmp_path):
     history = context.turn_status.__dict__["history"]
     assert len([n for n in history if n > 0]) >= 2
     assert context.turn_status.net_bytes == 0          # zeroed at turn end
+
+
+def test_a_multi_line_provider_error_is_one_capped_banner_line():
+    # ALL-CLAIMS.md:570: the fallback and connect branches printed str(exc) whole.
+    body = '{\n  "error": {\n    "message": "boom",\n    "type": "server_error"\n  }\n}'
+    text = _plain(stream_transport.describe_failure(RuntimeError(body)))
+    assert len(text.splitlines()) == 1 and '"message": "boom"' in text
+    long = _plain(stream_transport.describe_failure(RuntimeError("x" * 5000)))
+    assert len(long) < 200 and long.endswith("…")
+
+
+def test_a_multi_line_connect_error_is_one_line():
+    import httpx2
+
+    text = _plain(stream_transport.describe_failure(httpx2.ConnectError("refused\nsecond line")))
+    assert len(text.splitlines()) == 1 and "refused second line" in text
