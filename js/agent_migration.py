@@ -296,6 +296,10 @@ def _plan_both(agent_dir: Path, old: Path, keep: Keep) -> tuple[Result, Path | N
         return both
     if not same:
         return both
+    try:
+        persona.load_agent_manifest(agent_dir / persona.AGENT_MANIFEST)
+    except (OSError, ValueError):
+        return both
     # manifest_text "" tells _apply not to write agent.yaml.
     return Result(agent_dir, "migrate", msgs.AGENT_MIGRATE_CONVERTED.text(file=old.name),
                   "", result.dropped), old, new_body

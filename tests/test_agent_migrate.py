@@ -308,3 +308,12 @@ def test_finishing_both_never_rewrites_the_existing_agent_yaml(tmp_path):
     assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "migrate"
     assert (agent / "agent.yaml").read_bytes() == yaml_bytes
     assert not (agent / "00-tools.yaml").exists()
+
+
+def test_both_whose_agent_yaml_does_not_load_is_left_alone(tmp_path):
+    """neema #734: never delete the old manifest beside an agent.yaml the loader refuses."""
+    files = {"00-tools.yaml": "max_tokens: bad\n", "agent.yaml": "max_tokens: bad\n"}
+    agent = _agent(tmp_path, "both", files)
+    assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "skip"
+    for name, text in files.items():
+        assert (agent / name).read_text(encoding="utf-8") == text
