@@ -664,6 +664,9 @@ _SUMMARY_SPLIT_DEPTH = 3
 
 
 def _run_pre_hook(cfg: Config) -> str:
+    """The compact pre-hook's stdout, the guidance for the summarizer. A hook
+    that fails or times out warns the user and gives no guidance: its error
+    text is not instructions for the model."""
     hook = _pre_hook_command(cfg)
     if not hook:
         return ""
@@ -681,7 +684,8 @@ def _run_pre_hook(cfg: Config) -> str:
             cap=cap,
         )
     except Exception as exc:  # noqa: BLE001
-        return f"WARNING: compact pre_hook failed: {type(exc).__name__}: {exc}"
+        msgs.warn(msgs.FAILED_WARN, error=f"compact pre_hook failed: {type(exc).__name__}: {exc}")
+        return ""
     if not isinstance(result, CappedProcessResult):
         result = CappedProcessResult(result[0], result[1], result[2])
     stdout = result.stdout.decode("utf-8", errors="replace")
@@ -691,7 +695,9 @@ def _run_pre_hook(cfg: Config) -> str:
     if result.stderr_truncated:
         stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
-        return f"WARNING: compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}"
+        msgs.warn(msgs.FAILED_WARN,
+                  error=f"compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}")
+        return ""
     return stdout.strip()
 
 
@@ -973,7 +979,8 @@ async def compact_now(
         if emit is not None:
             emit("pre_compact", phase=phase, forced=forced, focus=focus, model=compact_model,
                  messages=original_len, keep_from=keep_from)
-        guidance = _run_pre_hook(cfg)
+        # The hook is a blocking subprocess (up to 30 s): off the event loop.
+        guidance = await asyncio.to_thread(_run_pre_hook, cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
@@ -998,6 +1005,13 @@ async def compact_now(
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)
+            # A summary was paid for and thrown away. Count it like a failed
+            # summary, or the next turn pays for the same one again, and the
+            # next, until the breaker would have stopped it.
+            if trigger and trigger.get("phase") == "between-turn":
+                owner = context or T.STOCK_CONTEXT
+                if (paused := record_auto_failure(cfg, owner)) is not None:
+                    msgs.warn(paused.message, **paused.fields)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
