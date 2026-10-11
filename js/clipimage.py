@@ -33,7 +33,9 @@ READ_TIMEOUT_S = 5.0
 # A name without a suffix, so the paste check takes the mime type from the bytes.
 _DETECT_NAME = Path("clipboard")
 
-_PLACEHOLDER = re.compile(r"\[image #(\d+)\]")
+# ASCII digits, no leading zero, bounded: `[image #01]` is not image 1, and a
+# long digit run cannot hit int()'s digit limit.
+_PLACEHOLDER = re.compile(r"\[image #([1-9][0-9]{0,8})\]")
 _images: dict[int, bytes] = {}
 
 
@@ -80,6 +82,7 @@ def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = 
     under X11. None when there is no clipboard (no display server)."""
     configured = _settings.knob(settings, "ui.paste_image_command")
     if configured:
+        # Raises ValueError on an unbalanced quote; read_image reports it.
         return shlex.split(str(configured))
     env = os.environ if env is None else env
     if env.get("WAYLAND_DISPLAY"):
@@ -98,11 +101,16 @@ def read_image(
     """The image bytes on the clipboard. Raises ClipboardError when there is no
     clipboard, no tool to read it, no image on it, or an image over
     `limits.max_file_bytes`."""
-    argv = clipboard_command(settings, env)
+    try:
+        argv = clipboard_command(settings, env)
+    except ValueError as exc:
+        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="ui.paste_image_command", error=exc) from exc
     if argv is None:
         raise ClipboardError(msgs.CLIPBOARD_NONE)
-    if not argv or shutil.which(argv[0]) is None:
-        raise ClipboardError(msgs.CLIPBOARD_TOOL_MISSING, tool=argv[0] if argv else "")
+    if not argv:
+        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="ui.paste_image_command", error="empty command")
+    if shutil.which(argv[0]) is None:
+        raise ClipboardError(msgs.CLIPBOARD_TOOL_MISSING, tool=argv[0])
     try:
         done = run(argv, capture_output=True, timeout=READ_TIMEOUT_S, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
