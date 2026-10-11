@@ -140,16 +140,27 @@ def coerce_to_schema(value: object, schema: object) -> object:
     # very validation this coercion exists to pass. A branch that declares
     # string means the string is already valid - leave it alone. `$ref` is
     # left unresolved (no resolver lives in this file).
+    def _collect(schema_part: dict) -> None:
+        branch_type = schema_part.get("type")
+        if isinstance(branch_type, list):
+            types.extend(branch_type)
+        elif branch_type is not None:
+            types.append(branch_type)
+        for combiner in ("anyOf", "oneOf"):
+            branches = schema_part.get(combiner)
+            if isinstance(branches, list):
+                for branch in branches:
+                    if isinstance(branch, dict) and "$ref" not in branch:
+                        _collect(branch)
+
     for combiner in ("anyOf", "oneOf"):
         branches = schema.get(combiner)
         if isinstance(branches, list):
             for branch in branches:
-                if isinstance(branch, dict):
-                    branch_type = branch.get("type")
-                    if isinstance(branch_type, list):
-                        types.extend(branch_type)
-                    elif branch_type is not None:
-                        types.append(branch_type)
+                if isinstance(branch, dict) and "$ref" not in branch:
+                    _collect(branch)
+    seen_types: set = set()
+    types = [t for t in types if not (t in seen_types or seen_types.add(t))]
     if isinstance(value, str) and "string" not in types:
         for name in types:
             expected = _JSON_CONTAINERS.get(name)
