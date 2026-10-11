@@ -682,10 +682,11 @@ def _well_formed_value(value: Any) -> Any:
     if isinstance(value, str):
         return well_formed(value)
     if isinstance(value, dict):
-        clean_keys = {k for k in value if not isinstance(k, str) or well_formed(k) is k}
+        taken = {k for k in value if not isinstance(k, str) or well_formed(k) is k}
         out: dict = {}
         for k, v in value.items():
-            nk = _well_formed_key(k, clean_keys | out.keys())
+            nk = _well_formed_key(k, taken)
+            taken.add(nk)
             out[nk] = _well_formed_value(v)
         return out
     if isinstance(value, (list, tuple)):

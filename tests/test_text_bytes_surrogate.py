@@ -75,3 +75,14 @@ def test_surrogate_dict_keys_never_merge_into_other_keys():
     assert fixed["?"] == "SECOND" and fixed["\\udcff"] == "FOURTH"
     for key in fixed:
         key.encode("utf-8")
+
+
+def test_normalizing_a_large_dict_is_linear_work(monkeypatch):
+    # shinda #408: a per-entry set union made 30000 keys take 16 s. Count
+    # _well_formed_key calls, not time.
+    calls = []
+    real = runtime._well_formed_key
+    monkeypatch.setattr(runtime, "_well_formed_key", lambda k, taken: calls.append(len(taken)) or real(k, taken))
+    value = {f"k{i}": i for i in range(30_000)}
+    assert runtime._well_formed_value(value) == value
+    assert len(calls) == 30_000
