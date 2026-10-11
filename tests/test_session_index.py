@@ -172,3 +172,95 @@ def test_rolled_back_rows_leave_the_search_text(tmp_path):
     M.persist_messages(path, [{"role": "user", "content": "giraffe question"}], STAMP)
     assert set(_search("giraffe")) == {_key(path)}
     assert _search("zebra") == {}
+
+
+# --- recovery must always re-probe (neema #958, titus #986, kito #964) --------
+
+import fcntl  # noqa: E402
+import sqlite3  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+
+def test_recover_keeps_a_healthy_file_even_when_its_identity_matches_the_failed_one(tmp_path):
+    # A freed inode number is reused, so (dev, ino) equality does not prove
+    # this is the file that failed. Under the lock the file is probed again.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    seen = session_index._identity(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO sessions(path,size,mtime_ns,info) VALUES ('SURVIVOR',0,0,'{}')")
+    recovered = session_index._recover(path, seen)
+    assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 1
+    recovered.close()
+
+
+def test_recover_still_rebuilds_a_file_that_is_corrupt_under_the_lock(tmp_path):
+    path = tmp_path / "index.sqlite"
+    path.write_bytes(b"not a database" * 64)
+    recovered = session_index._recover(path)
+    assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    recovered.close()
+
+
+def test_a_failed_rebuild_lock_closes_its_stream(tmp_path):
+    lock = session_index._RebuildLock(tmp_path / "index.sqlite")
+    opened = []
+    real_open = open
+
+    def spy(*args, **kwargs):
+        stream = real_open(*args, **kwargs)
+        opened.append(stream)
+        return stream
+
+    with patch("builtins.open", spy), patch.object(fcntl, "flock", side_effect=PermissionError("no")):
+        with pytest.raises(PermissionError):
+            lock.__enter__()
+    assert opened and all(stream.closed for stream in opened)
+
+
+class _Corrupt(sqlite3.DatabaseError):
+    sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+
+
+class _Busy(sqlite3.OperationalError):
+    sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+
+def test_corrupt_mid_walk_after_a_cached_connection_recovers_once(tmp_path):
+    path = tmp_path / "sessions.sqlite"
+    calls = []
+
+    def fail_once(root):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _Corrupt("injected corrupt mid-walk")
+        return []
+
+    with patch.object(session_index, "db_path", return_value=path), \
+            patch.object(session_index, "_catalog", side_effect=fail_once):
+        session_index._connection()
+        assert session_index.catalog(tmp_path) == []
+        session_index._drop_current()
+    assert len(calls) == 2
+
+
+def test_a_busy_catalog_is_retried_and_deletes_nothing(tmp_path):
+    calls = []
+
+    def busy_twice(root):
+        calls.append(1)
+        if len(calls) < 3:
+            raise _Busy("database is locked")
+        return ["ok"]
+
+    with patch.object(session_index, "_catalog", side_effect=busy_twice), \
+            patch.object(session_index, "_remove", side_effect=AssertionError("deleted")):
+        assert session_index.catalog(tmp_path) == ["ok"]
+    assert len(calls) == 3
+
+
+def test_a_catalog_busy_three_times_raises_and_deletes_nothing(tmp_path):
+    with patch.object(session_index, "_catalog", side_effect=_Busy("database is locked")), \
+            patch.object(session_index, "_remove", side_effect=AssertionError("deleted")):
+        with pytest.raises(sqlite3.OperationalError):
+            session_index.catalog(tmp_path)
