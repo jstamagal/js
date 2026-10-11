@@ -36,6 +36,20 @@ def _redact(value):
     return value
 
 
+_LIFECYCLE = frozenset({"start", "success", "failure", "cancelled", "skipped"})
+
+
+def _stem(cfg) -> str:
+    """The session file's name, or `<agent>-<pid>` for a one-shot run with no
+    persisted session (whose session file is /dev/null), the same rule as the
+    debug autolog in cli.py. One-shot runs no longer share `null.log` and
+    `null-<id>.jsonl`."""
+    session = getattr(cfg, "session_file", None)
+    if not session or Path(session) == Path(os.devnull):
+        return f"{cfg.agent_id}-{os.getpid()}"
+    return Path(session).stem
+
+
 class CompactionFlight:
     def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details, operation="summary"):
         self.operation = operation
@@ -47,8 +61,18 @@ class CompactionFlight:
         override = compact.get("flight_log_dir")
         directory = Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.path = directory / f"{cfg.session_file.stem}-{self.id}.jsonl"
+        self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
         self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        try:
+            self._start(system, messages, settings, operation=operation, trigger=trigger, forced=forced,
+                        focus=focus, preserve_from=preserve_from, details=details)
+        except BaseException:
+            # The caller never gets this object, so nobody else would close it.
+            self.stream.close()
+            raise
+
+    def _start(self, system, messages, settings, *, operation, trigger, forced, focus, preserve_from, details):
+        cfg = self.cfg
         self.record("start", operation=operation, model=cfg.model, provider=cfg.provider_id,
                     base_url=cfg.provider_base_url, session=str(cfg.session_file),
                     pid=os.getpid(), parent_pid=os.getppid(),
@@ -63,8 +87,13 @@ class CompactionFlight:
         self.stream.write(json.dumps({"version": 1, "id": self.id, "event": event,
                                       "ts": time.time(), **payload}, ensure_ascii=False, default=_json) + "\n")
         self.stream.flush()
+        if event not in _LIFECYCLE and event not in {"before", "after"}:
+            # Streamed chunks and traces: flushed, not fsynced. One fsync per
+            # summary chunk was thousands per compaction; the lifecycle events
+            # and snapshots below still reach the disk.
+            return
         os.fsync(self.stream.fileno())
-        if event in {"start", "success", "failure", "cancelled", "skipped"}:
+        if event in _LIFECYCLE:
             settings = getattr(self.cfg, "settings", {}) or {}
             runtime = settings.get("runtime", {})
             directory = runtime.get("debug_autolog_dir")
@@ -72,7 +101,7 @@ class CompactionFlight:
             if runtime.get("debug_autolog", True):
                 try:
                     directory.mkdir(parents=True, exist_ok=True)
-                    with (directory / f"{self.cfg.session_file.stem}.log").open("a", encoding="utf-8") as log:
+                    with (directory / f"{_stem(self.cfg)}.log").open("a", encoding="utf-8") as log:
                         log.write("FLIGHT " + json.dumps({"ts": time.time(), "kind": "compaction_" + event,
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")

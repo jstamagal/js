@@ -150,3 +150,69 @@ def test_summary_request_and_response_are_recorded(monkeypatch, tmp_path):
     assert response["usage"] == {"input_tokens": 20}
     assert response["finish_reason"] == "stop"
     assert response["text"] == "summary"
+
+
+def _flight_cfg(tmp_path, session_file):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        agent_id="voice", session_file=session_file, model="m", provider_id=None, provider_base_url=None,
+        max_output_tokens=None,
+        settings={"compact": {"flight_log_dir": str(tmp_path / "flights")},
+                  "runtime": {"debug_autolog_dir": str(tmp_path / "logs")}},
+    )
+
+
+def test_one_shot_flight_and_autolog_are_named_per_run_not_null(tmp_path):
+    import os
+
+    from js.compaction_flight import CompactionFlight
+
+    cfg = _flight_cfg(tmp_path, Path(os.devnull))
+    flight = CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None, preserve_from=0, details={})
+    flight.close()
+    stem = f"voice-{os.getpid()}"
+    assert flight.path.name.startswith(stem + "-")
+    assert (tmp_path / "logs" / f"{stem}.log").exists()
+    assert not (tmp_path / "logs" / "null.log").exists()
+
+
+def test_failed_start_closes_the_stream(tmp_path, monkeypatch):
+    from js import compaction_flight
+
+    opened = []
+    real_fdopen = compaction_flight.os.fdopen
+
+    def tracking_fdopen(*args, **kwargs):
+        stream = real_fdopen(*args, **kwargs)
+        opened.append(stream)
+        return stream
+
+    def boom(self, *args, **kwargs):
+        raise OSError("snapshot failed")
+
+    monkeypatch.setattr(compaction_flight.os, "fdopen", tracking_fdopen)
+    monkeypatch.setattr(compaction_flight.CompactionFlight, "snapshot", boom)
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    with pytest.raises(OSError, match="snapshot failed"):
+        compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
+                                           preserve_from=0, details={})
+    assert opened and all(stream.closed for stream in opened)
+
+
+def test_summary_chunks_are_not_fsynced_but_lifecycle_events_are(tmp_path, monkeypatch):
+    from js import compaction_flight
+
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    flight = compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
+                                                preserve_from=0, details={})
+    syncs = []
+    monkeypatch.setattr(compaction_flight.os, "fsync", lambda fd: syncs.append(fd))
+    for chunk in range(50):
+        flight.record("summary_chunk", text=str(chunk))
+    assert syncs == []
+    flight.finish("success", "S", [], result="ok")
+    assert len(syncs) == 2  # the "after" snapshot and the terminal event
+    flight.close()
+    lines = flight.path.read_text().splitlines()
+    assert sum('"summary_chunk"' in line for line in lines) == 50
