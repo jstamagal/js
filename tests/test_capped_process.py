@@ -128,3 +128,33 @@ def test_stopping_readers_never_closes_a_file_opened_under_a_freed_fd(monkeypatc
             os.killpg(job.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_a_reader_busy_past_the_grace_keeps_its_pipe_until_it_exits(monkeypatch):
+    monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.05)
+    entered = threading.Event()
+    release = threading.Event()
+    real_feed = capped_process._StreamCapture.feed
+
+    def stuck_feed(self, chunk):
+        entered.set()
+        release.wait(10)
+        real_feed(self, chunk)
+
+    monkeypatch.setattr(capped_process._StreamCapture, "feed", stuck_feed)
+    job = capped_process.start_capped(["/bin/sh", "-c", "echo out; sleep 30 &"], cwd=None, cap=4096)
+    try:
+        assert entered.wait(5)
+        assert job.wait(5) is not None
+        stdout_reader = job._threads[0]
+        assert stdout_reader.is_alive()
+        assert not job.proc.stdout.closed
+        release.set()
+        stdout_reader.join(5)
+        assert job.proc.stdout.closed
+    finally:
+        release.set()
+        try:
+            os.killpg(job.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
