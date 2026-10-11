@@ -448,8 +448,9 @@ class ToolContext(_turn_settings.ContextSettings):
     turn_status: TurnStatus = field(default_factory=TurnStatus)
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
     # The sessions above a `task` worker, nearest first: its model calls are
-    # charged to each of them as well as to its own (js.usage).
-    usage_chain: tuple[Path, ...] = ()
+    # charged to each of them as well as to its own (js.usage). An unsaved
+    # session above a worker appears as its in-memory key (usage.session_key).
+    usage_chain: tuple[Path | str, ...] = ()
     # Names this context as the owner of the background tasks it starts; only
     # the owner can poll, wait on or kill them.
     task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)

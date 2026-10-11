@@ -1825,7 +1825,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
     usage_token = usage_mod.start(usage_mod.Meter(
-        (getattr(cfg, "session_file", None), *getattr(active_context, "usage_chain", ())),
+        (usage_mod.session_key(getattr(cfg, "session_file", None), active_context),
+         *getattr(active_context, "usage_chain", ())),
         on_call=events.on_usage,
     ))
     try:

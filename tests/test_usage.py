@@ -262,3 +262,53 @@ def test_concurrent_charges_leave_the_file_with_the_final_totals(tmp_path):
 
     assert usage.totals(session_file).input_tokens == 200
     assert usage.load(session_file).input_tokens == 200
+
+
+def test_sibling_task_workers_of_an_unsaved_session_do_not_see_each_other(tmp_path, monkeypatch):
+    """Unsaved sessions all map to /dev/null; two `task` workers of an unsaved
+    parent must each see only their own call, while the parent is charged
+    for both (ALL-CLAIMS usage.py:181)."""
+    import os
+
+    cfg = replace(_priced_cfg(tmp_path), session_file=Path(os.devnull))
+    usage.forget(cfg.session_file)
+    parent = ToolContext(cwd=tmp_path)
+    seen: list[int] = []
+    for _ in range(2):
+        worker = ToolContext(cwd=tmp_path, usage_chain=(usage.session_key(cfg.session_file, parent),))
+        worker.task_depth = 1
+        _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(100, 10))], context=worker)
+        seen.append(usage.totals(usage.session_key(cfg.session_file, worker)).input_tokens)
+    assert seen == [100, 100]
+    assert usage.totals(cfg.session_file).input_tokens == 200
+
+
+def test_one_session_named_twice_is_charged_once(tmp_path):
+    session = tmp_path / "s.jsonl"
+    session.touch()
+    (tmp_path / "link").symlink_to(tmp_path)
+    rel = tmp_path / "link" / "s.jsonl"  # the same file through a symlink
+    token = usage.start(usage.Meter((session, rel)))
+    try:
+        usage.record(_usage(100, 10), model="gpt-5", provider_id="openai")
+    finally:
+        usage.stop(token)
+    assert usage.totals(session).calls == 1
+
+
+def test_the_running_session_stays_first_when_an_ancestor_repeats(tmp_path):
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    seen = []
+    token = usage.start(usage.Meter((a, b, a), on_call=lambda call, totals: seen.append(totals)))
+    try:
+        usage.record(_usage(100, 10), model="gpt-5", provider_id="openai")
+    finally:
+        usage.stop(token)
+    assert seen == [usage.totals(a)]
+    assert usage.totals(a).calls == 1 and usage.totals(b).calls == 1
+
+
+def test_a_real_file_named_like_an_unsaved_key_is_still_a_file(tmp_path):
+    real = tmp_path / "unsaved:x.jsonl"
+    assert usage._persisted(real)
+    assert not usage._persisted(usage.UnsavedKey("unsaved:x"))

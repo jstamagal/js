@@ -278,3 +278,23 @@ def test_overflow_recovery_with_nothing_to_clear_summarizes(tmp_path, monkeypatc
 def test_the_provider_window_is_the_larger_known_window(tmp_path, resolved, configured, expected):
     setup = _Setup(tmp_path, [], window=resolved, compact={"context_window": configured})
     assert setup.budget.provider_window() == expected
+
+
+def test_a_failed_clear_is_a_skipped_step_not_a_dead_turn(tmp_path, monkeypatch):
+    """Disk full / read-only while clearing used to raise out of fit() and kill
+    the turn (ALL-CLAIMS turn_budget.py MED _clear). Now: history restored,
+    warning, and the turn goes on."""
+    _summaries(monkeypatch)
+    setup = _Setup(tmp_path, _prefix_then_turn(0, 22))
+    real_clear = compaction.microcompact
+
+    def clear_then_fail(messages, **kwargs):
+        real_clear(messages, **kwargs)  # edits in place, as the real one does
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(compaction, "microcompact", clear_then_fail)
+    setup.fit(phase="preflight")  # must not raise
+    assert "context_clear_failed" in setup.kinds()
+    # The half-done clear was undone: no tool result carries the cleared
+    # marker, whatever later steps did to the rest of the history.
+    assert compaction.MICROCOMPACT_CLEARED_MESSAGE not in str(setup.messages)

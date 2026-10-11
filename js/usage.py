@@ -174,11 +174,34 @@ _LOCK = threading.RLock()
 _TOTALS: dict[str, UsageTotals] = {}
 
 
-def _persisted(session_file: Path | None) -> bool:
-    return session_file is not None and str(session_file) not in ("", os.devnull)
+class UnsavedKey(str):
+    """The in-memory key of a `task` worker's unsaved session. A distinct type,
+    so no real file name (`unsaved:x.jsonl` included) can be taken for one."""
 
 
-def _key(session_file: Path | None) -> str:
+def session_key(session_file: Path | None, context: object | None = None) -> Path | UnsavedKey | None:
+    """What a meter charges for the session running in ``context``: its file
+    when it is saved; for a session that is not saved, the process-wide
+    unsaved bucket on the main turn (what `/cost` and the status bar read),
+    and a bucket of its own for each `task` worker, so sibling workers do not
+    see each other's calls. A worker's parent is still charged through the
+    worker's `usage_chain`."""
+    if _persisted(session_file):
+        return session_file
+    if context is None or not getattr(context, "task_depth", 0):
+        return session_file
+    return UnsavedKey(f"unsaved:{getattr(context, 'task_owner', id(context))}")
+
+
+def _persisted(session_file: Path | str | None) -> bool:
+    if session_file is None or isinstance(session_file, UnsavedKey):
+        return False
+    return str(session_file) not in ("", os.devnull)
+
+
+def _key(session_file: Path | str | None) -> str:
+    if isinstance(session_file, UnsavedKey):
+        return str(session_file)
     if not _persisted(session_file):
         return os.devnull
     return str(Path(session_file).resolve(strict=False))
@@ -273,7 +296,13 @@ def record(usage: Any, *, model: str, provider_id: str | None,
         return None
     call = call_usage(usage, model=model, provider_id=provider_id)
     first: UsageTotals | None = None
-    for index, session in enumerate(dict.fromkeys(sessions)):
+    # One charge per session even when it is named twice (relative and
+    # absolute, or through a symlink): dedupe on the resolved key, keeping the
+    # first occurrence so the running session stays first.
+    unique: dict[str, Path | str | None] = {}
+    for session in sessions:
+        unique.setdefault(_key(session), session)
+    for index, session in enumerate(unique.values()):
         live = charge(session, call)
         if index == 0:
             first = live
