@@ -30,7 +30,7 @@ from . import paths
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _PLACEHOLDER = re.compile(
-    r"\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
+    r"\$\$|\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
 )
 _DESCRIPTION_CHARS = 60
 
@@ -113,36 +113,42 @@ def discover(project_dir: Path) -> dict[str, PromptCommand]:
 
 
 def split_args(text: str) -> list[str]:
-    """Words of ``text``; single or double quotes group a run with spaces."""
+    """Words of ``text``; single or double quotes group a run with spaces.
+
+    A quote opens a group only at the start of a word, so an apostrophe inside
+    one ("don't") is an ordinary character. A group left open at the end of
+    the line is taken literally, quote included, instead of swallowing the
+    rest of the line."""
     args: list[str] = []
-    current = ""
-    quote: str | None = None
-    started = False
-    for char in text:
-        if quote is not None:
-            if char == quote:
-                quote = None
-            else:
-                current += char
-        elif char in ("'", '"'):
-            quote = char
-            started = True
-        elif char.isspace():
-            if started or current:
-                args.append(current)
-            current, started = "", False
-        else:
-            current += char
-    if started or current:
-        args.append(current)
+    i, n = 0, len(text)
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        quote = text[i] if text[i] in ("'", '"') else None
+        end = text.find(quote, i + 1) if quote is not None else -1
+        if quote is not None and end != -1:
+            args.append(text[i + 1:end])
+            i = end + 1
+            continue
+        start = i
+        while i < n and not text[i].isspace():
+            i += 1
+        args.append(text[start:i])
     return args
 
 
-def substitute(body: str, args: list[str]) -> str:
-    """``body`` with its placeholders filled from ``args``, in one pass."""
-    joined = " ".join(args)
+def substitute(body: str, args: list[str], raw: str | None = None) -> str:
+    """``body`` with its placeholders filled from ``args``, in one pass.
+
+    ``$@``/``$ARGUMENTS`` take ``raw``, the argument text as typed, when given,
+    so a pasted multi-line argument keeps its line breaks and indentation.
+    ``$$`` is a literal ``$``."""
+    joined = raw if raw is not None else " ".join(args)
 
     def fill(match: re.Match) -> str:
+        if match.group(0) == "$$":
+            return "$"
         default_target, default_value, slice_start, slice_length, simple = match.groups()
         if default_target is not None:
             value = joined if default_target in ("@", "ARGUMENTS") else _nth(args, int(default_target))
@@ -171,4 +177,5 @@ def expand(line: str, commands: dict[str, PromptCommand]) -> str | None:
     command = commands.get(words[0]) if words else None
     if command is None:
         return None
-    return substitute(command.body, split_args(words[1] if len(words) > 1 else "")).strip()
+    raw = stripped[1:][len(words[0]):].strip() if words else ""
+    return substitute(command.body, split_args(raw), raw=raw).strip()

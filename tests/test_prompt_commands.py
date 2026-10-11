@@ -195,3 +195,24 @@ def test_the_blocking_repl_sends_a_collapsed_paste_in_full(repl):
     sent = run([f"summarize {token}"])
 
     assert sent == [f"summarize {text}"]
+
+
+def test_apostrophe_inside_a_word_does_not_open_a_quote():
+    assert pc.split_args("don't break it") == ["don't", "break", "it"]
+    assert pc.split_args("it's 'a group' here") == ["it's", "a group", "here"]
+
+
+def test_unclosed_quote_is_literal_not_rest_of_line():
+    assert pc.split_args("'open and more") == ["'open", "and", "more"]
+
+
+def test_all_arguments_keep_line_breaks_and_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("review.md"), description="", body="Review:\n$@")}
+    out = pc.expand("/review def f():\n    return 1", commands)
+    assert out == "Review:\ndef f():\n    return 1"
+
+
+def test_double_dollar_is_a_literal_dollar():
+    assert pc.substitute("awk '{print $$1}' costs $$5.00 for $1", ["X"]) == "awk '{print $1}' costs $5.00 for X"
