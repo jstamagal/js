@@ -202,6 +202,32 @@ def test_recover_still_rebuilds_a_file_that_is_corrupt_under_the_lock(tmp_path):
     recovered.close()
 
 
+def test_recover_rebuilds_a_file_whose_table_pages_are_damaged(tmp_path):
+    # `_open` counts rows through the small UNIQUE(path) index, so a damaged
+    # page of the sessions table passes it while every catalog walk fails.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    connection = sqlite3.connect(path)
+    connection.executemany("INSERT INTO sessions(path,size,mtime_ns,info) VALUES (?,0,0,?)",
+                           [(f"s{i}", "x" * 1500) for i in range(300)])
+    connection.commit()
+    connection.execute("PRAGMA journal_mode = DELETE").fetchall()
+    page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+    leaves = [row[0] for row in connection.execute(
+        "SELECT pageno FROM dbstat WHERE name = 'sessions' AND pagetype = 'leaf' ORDER BY pageno")]
+    connection.close()
+    data = bytearray(path.read_bytes())
+    page = leaves[len(leaves) // 2]
+    data[(page - 1) * page_size:page * page_size] = b"\xff" * page_size
+    path.write_bytes(bytes(data))
+    session_index._open(path).close()
+    recovered = session_index._recover(path)
+    try:
+        assert recovered.execute("SELECT path FROM sessions").fetchall() == []
+    finally:
+        recovered.close()
+
+
 def test_a_failed_rebuild_lock_closes_its_stream(tmp_path):
     lock = session_index._RebuildLock(tmp_path / "index.sqlite")
     opened = []

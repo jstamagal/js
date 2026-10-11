@@ -130,12 +130,28 @@ class _RebuildLock:
         self._stream.close()
 
 
+def _intact(connection: sqlite3.Connection) -> bool:
+    """Whether every page of the open index, and the search index's own
+    structure, check out. `_open`'s probe reads one small index and passes a
+    file whose table pages are damaged. A busy database raises: it says
+    nothing either way."""
+    try:
+        if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            return False
+        connection.execute("INSERT INTO docs(docs) VALUES ('integrity-check')")
+    except sqlite3.DatabaseError as exc:
+        if _is_corrupt(exc):
+            return False
+        raise
+    return True
+
+
 def _recover(path: Path, seen: tuple[int, int] | None = None) -> sqlite3.Connection:
     """A connection to the index after it failed as corrupt. Another process
     may have rebuilt it in the meantime, so under the rebuild lock the file is
-    always opened and probed again first; only a file that fails as corrupt
-    under the lock is deleted and built again. Busy or I/O errors raise and
-    delete nothing.
+    always opened and checked whole again first; only a file that fails that
+    check under the lock is deleted and built again. Busy or I/O errors raise
+    and delete nothing.
 
     `seen` (the identity of the file that failed) is not consulted: file
     systems reuse a freed inode number, so the same (dev, ino) can be a
@@ -143,10 +159,18 @@ def _recover(path: Path, seen: tuple[int, int] | None = None) -> sqlite3.Connect
     del seen
     with _RebuildLock(path):
         try:
-            return _open(path)
+            connection = _open(path)
         except sqlite3.DatabaseError as exc:
             if not _is_corrupt(exc):
                 raise
+        else:
+            try:
+                if _intact(connection):
+                    return connection
+            except BaseException:
+                connection.close()
+                raise
+            connection.close()
         _remove(path)
         return _open(path)
 
