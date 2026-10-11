@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import shlex
@@ -652,7 +653,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_NUMBER.text()
         if spec.key in _NONNEGATIVE_KNOBS and number < 0:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
-        if spec.key == "mcp.request_timeout_s" and number <= 0:
+        if spec.key == "mcp.request_timeout_s" and not (math.isfinite(number) and number > 0):
             return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
         if spec.key == "tags.threshold" and not 0 <= number <= 1:
             return None, msgs.EXPECTED_PROBABILITY.text()
