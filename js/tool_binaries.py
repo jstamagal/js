@@ -184,12 +184,20 @@ def aria2_argv(
     *,
     timeout_s: float,
     headers: dict[str, str] | None = None,
+    input_file: Path | None = None,
 ) -> list[str]:
-    """Build the single-file aria2c invocation used by runtime and installer."""
+    """Build the single-file aria2c invocation used by runtime and installer.
+
+    `--no-conf=true`: a ~/.aria2/aria2.conf must not change what a download
+    does (check-certificate=false, all-proxy, on-download-complete hooks).
+    Headers never go on the command line, where `ps` and /proc/<pid>/cmdline
+    show them to every user: with headers, pass `input_file` (see
+    `write_aria2_input`) and the URL and headers are read from it."""
     socket_timeout = max(1, min(30, math.ceil(timeout_s)))
     connect_timeout = max(1, min(10, math.ceil(timeout_s)))
     argv = [
         binary,
+        "--no-conf=true",
         "--continue=true",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
@@ -210,9 +218,34 @@ def aria2_argv(
         f"--dir={partial.parent}",
         f"--out={partial.name}",
     ]
-    argv.extend(f"--header={name}: {value}" for name, value in (headers or {}).items())
-    argv.append(url)
+    if headers:
+        if input_file is None:
+            raise ValueError("aria2c headers go through input_file, never argv")
+        argv.append(f"--input-file={input_file}")
+    else:
+        argv.append(url)
     return argv
+
+
+def write_aria2_input(path: Path, url: str, headers: dict[str, str], partial: Path) -> None:
+    """An aria2c input file holding `url`, its headers and where it goes, mode
+    0600 from the first byte (aria2c ignores a command-line --out for input-file
+    entries). A line break in any value is refused: it would end the option and
+    start another."""
+    for value in (url, str(partial)):
+        if any(ch in value for ch in "\r\n"):
+            raise DownloadError("download URL or path contains a line break")
+    if "\t" in url:
+        # A TAB on the URI line separates mirror URIs in aria2's input format.
+        raise DownloadError("download URL contains a TAB")
+    lines = [url, f"  dir={partial.parent}", f"  out={partial.name}"]
+    for name, value in headers.items():
+        if any(ch in f"{name}{value}" for ch in "\r\n"):
+            raise DownloadError(f"header {name!r} contains a line break")
+        lines.append(f"  header={name}: {value}")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(lines) + "\n")
 
 
 def _partial_download_path(destination: Path) -> Path:
@@ -234,6 +267,35 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def _wait_for_aria2(
+    process: subprocess.Popen[bytes],
+    partial: Path,
+    control: Path,
+    metadata: Path,
+    *,
+    url: str,
+    timeout_s: float,
+    max_bytes: int | None,
+    started: float,
+) -> None:
+    """Wait for aria2c to exit, stopping it on the size limit or the deadline."""
+    while process.poll() is None:
+        if max_bytes is not None and partial.exists() and partial.stat().st_size > max_bytes:
+            _stop_process(process)
+            partial.unlink(missing_ok=True)
+            control.unlink(missing_ok=True)
+            metadata.unlink(missing_ok=True)
+            raise DownloadError(f"response exceeds {max_bytes} byte download limit")
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining <= 0:
+            _stop_process(process)
+            raise DownloadError(f"aria2c timed out after {timeout_s:g}s downloading {url}")
+        try:
+            process.wait(timeout=min(0.05, remaining))
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def download_with_aria2(
@@ -273,28 +335,27 @@ def download_with_aria2(
         stream.write(identity)
     temporary_metadata.chmod(0o600)
     os.replace(temporary_metadata, metadata)
-    argv = aria2_argv(binary, url, partial, timeout_s=timeout_s, headers=headers)
     started = time.monotonic()
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+    with tempfile.TemporaryDirectory(prefix="js-aria2-") as private, \
+            tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        input_file = None
+        if headers:
+            input_file = Path(private) / "input"
+            write_aria2_input(input_file, url, headers, partial)
+        argv = aria2_argv(binary, url, partial, timeout_s=timeout_s, headers=headers, input_file=input_file)
         try:
             process = subprocess.Popen(argv, stdout=stdout, stderr=stderr)
         except OSError as exc:
             raise DownloadError(f"could not start aria2c for {url}: {exc}") from exc
-        while process.poll() is None:
-            if max_bytes is not None and partial.exists() and partial.stat().st_size > max_bytes:
+        try:
+            _wait_for_aria2(process, partial, control, metadata, url=url, timeout_s=timeout_s,
+                            max_bytes=max_bytes, started=started)
+        except BaseException:
+            # Ctrl-C, a cancelled task, an OSError from stat racing aria2's
+            # rename: the caller gave up, so aria2c must not keep writing.
+            if process.poll() is None:
                 _stop_process(process)
-                partial.unlink(missing_ok=True)
-                control.unlink(missing_ok=True)
-                metadata.unlink(missing_ok=True)
-                raise DownloadError(f"response exceeds {max_bytes} byte download limit")
-            remaining = timeout_s - (time.monotonic() - started)
-            if remaining <= 0:
-                _stop_process(process)
-                raise DownloadError(f"aria2c timed out after {timeout_s:g}s downloading {url}")
-            try:
-                process.wait(timeout=min(0.05, remaining))
-            except subprocess.TimeoutExpired:
-                pass
+            raise
 
         if process.returncode != 0:
             captured = _captured_tail(stderr) or _captured_tail(stdout)
