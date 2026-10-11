@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 
 from .toolkit.core import compact_json
 
@@ -86,7 +85,7 @@ def repair_jsonish(raw: str) -> dict:
             if not isinstance(parsed, dict):
                 raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
             return parsed
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, RecursionError) as exc:
             last_error = exc
     raise ValueError(str(last_error) if last_error else "could not parse arguments")
 
@@ -135,7 +134,22 @@ def coerce_to_schema(value: object, schema: object) -> object:
     if not isinstance(schema, dict):
         return value
     declared = schema.get("type")
-    types = declared if isinstance(declared, list) else [declared]
+    types = list(declared) if isinstance(declared, list) else [declared]
+    # `anyOf`/`oneOf` branches count as declared types: a stringified object
+    # under anyOf[object, array] would otherwise stay a string and fail the
+    # very validation this coercion exists to pass. A branch that declares
+    # string means the string is already valid - leave it alone. `$ref` is
+    # left unresolved (no resolver lives in this file).
+    for combiner in ("anyOf", "oneOf"):
+        branches = schema.get(combiner)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict):
+                    branch_type = branch.get("type")
+                    if isinstance(branch_type, list):
+                        types.extend(branch_type)
+                    elif branch_type is not None:
+                        types.append(branch_type)
     if isinstance(value, str) and "string" not in types:
         for name in types:
             expected = _JSON_CONTAINERS.get(name)
@@ -143,7 +157,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
                 continue
             try:
                 parsed = json.loads(value)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, RecursionError):
                 break
             if isinstance(parsed, expected):
                 value = parsed
@@ -168,7 +182,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
 def is_json_object(raw: str) -> bool:
     try:
         return isinstance(json.loads(raw), dict)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return False
 
 
@@ -185,7 +199,7 @@ def canonical_tool_args(raw: str) -> str:
         return raw
     try:
         return compact_json(repair_jsonish(raw))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return raw
 
 
