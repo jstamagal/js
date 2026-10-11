@@ -80,3 +80,51 @@ def test_run_capped_stops_readers_when_grandchild_keeps_pipes_open(monkeypatch):
             os.kill(grandchild_pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+
+
+def test_stopping_readers_never_closes_a_file_opened_under_a_freed_fd(monkeypatch, tmp_path):
+    # A grandchild keeps both pipes open, so the readers are stopped after the
+    # grace. Each time a descriptor is released, another thread opens a file
+    # and gets that number back; that file must still be open afterwards.
+    monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
+    job = capped_process.start_capped(["/bin/sh", "-c", "sleep 30 &"], cwd=None, cap=4096)
+    real_close = os.close
+    reopened = []
+
+    def close_then_reopen(fd):
+        real_close(fd)
+        spare = []
+        while len(spare) < 4096:
+            new = os.open(tmp_path / f"other-{len(reopened)}-{len(spare)}", os.O_RDWR | os.O_CREAT)
+            if new == fd:
+                reopened.append((new, os.fstat(new).st_ino))
+                break
+            spare.append(new)
+        for extra in spare:
+            real_close(extra)
+
+    monkeypatch.setattr(os, "close", close_then_reopen)
+    try:
+        assert job.wait(5) is not None
+    finally:
+        monkeypatch.setattr(os, "close", real_close)
+    try:
+        for thread in job._threads:
+            thread.join(5)
+        lost = []
+        for fd, inode in reopened:
+            try:
+                alive = os.fstat(fd).st_ino == inode
+            except OSError:
+                alive = False
+            if alive:
+                real_close(fd)
+            else:
+                lost.append(fd)
+        assert lost == []
+        assert job.proc.stdout.closed and job.proc.stderr.closed
+    finally:
+        try:
+            os.killpg(job.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
