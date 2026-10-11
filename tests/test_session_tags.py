@@ -349,6 +349,57 @@ def test_a_broken_tag_list_is_logged_and_tags_nothing(tmp_path, monkeypatch, tag
     assert (paths.logs_root() / "tags.log").is_file()
 
 
+def test_a_tag_list_that_is_not_utf8_is_logged_not_a_crash(tmp_path, monkeypatch, tag_list):
+    # ALL-CLAIMS.md:511
+    FakeJev(monkeypatch, {"js": 0.9})
+    _long_session(tmp_path / "proj")
+    tag_list.write_bytes(b"js: caf\xe9\n")
+    assert session_tags.sweep(_options()) == 0
+    assert (paths.logs_root() / "tags.log").is_file()
+
+
+def test_a_session_that_fails_on_its_own_does_not_stop_the_older_ones(tmp_path, monkeypatch, tag_list):
+    # ALL-CLAIMS.md:508: one always-failing session stopped every sweep.
+    jev = FakeJev(monkeypatch, error=typesafe_sdk.TypeSafeBadRequestError(400, {}, httpx2.Headers(), "rejected payload"))
+    _long_session(tmp_path / "a")
+    _long_session(tmp_path / "b")
+    assert session_tags.sweep(_options()) == 0
+    assert len(jev.requests) == 2
+    assert len((paths.logs_root() / "tags.log").read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_a_second_sweep_exits_at_once_while_one_holds_the_lock(tmp_path, monkeypatch, tag_list):
+    # ALL-CLAIMS.md:509: queued sweeps blocked on LOCK_EX, one per exiting js.
+    import fcntl
+    import threading
+
+    jev = FakeJev(monkeypatch, {"js": 0.9})
+    _long_session(tmp_path / "proj")
+    lock_path = paths.cache_root() / "tags.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    result: list[int] = []
+    with lock_path.open("a") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        worker = threading.Thread(target=lambda: result.append(session_tags.sweep(_options())), daemon=True)
+        worker.start()
+        worker.join(5)
+        blocked = worker.is_alive()
+    worker.join(5)
+    assert not blocked, "the second sweep waited on the lock instead of exiting"
+    assert result == [0]
+    assert jev.requests == []
+
+
+def test_main_logs_what_escapes_instead_of_dying_silently(monkeypatch, tag_list):
+    # ALL-CLAIMS.md:510
+    def broken(options):
+        raise RuntimeError("catalog exploded")
+
+    monkeypatch.setattr(session_tags, "sweep", broken)
+    assert session_tags.main([_options().to_json()]) == 1
+    assert "catalog exploded" in (paths.logs_root() / "tags.log").read_text(encoding="utf-8")
+
+
 # --- starting a sweep ---------------------------------------------------------------
 
 
