@@ -311,7 +311,7 @@ def _chain(key: str, fd: int) -> tuple[_Chain, bool]:
         read += len(chunk)
         data = carry + chunk
         fed = data.rfind(b"\n") + 1
-        for line in data[:fed].splitlines():
+        for line in data[:fed].split(b"\n")[:-1]:
             chain.feed(line)
         carry = data[fed:]
         if fed:
