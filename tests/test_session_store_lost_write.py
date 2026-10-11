@@ -227,3 +227,34 @@ def _fd_ino(fd: int) -> int:
         return os.fstat(fd).st_ino
     except OSError:
         return -1
+
+
+def test_chain_reads_in_chunks_with_long_lines(tmp_path):
+    """A cold cache over a multi-MB session reads in chunks, never the whole
+    file at once (ALL-CLAIMS session_store MED). A line longer than the chunk
+    still feeds once, whole."""
+    path = tmp_path / "big.jsonl"
+    # records with real ids, the shape the chain tracks
+    path.write_text(json.dumps({"id": "a" * 8, "parent": None, "role": "user", "content": "x" * (2 << 20)}) + "\n"
+                    + json.dumps({"id": "b" * 8, "parent": "a" * 8, "role": "user", "content": "tail"}) + "\n")
+
+    with ss._open_locked(path, "a+b") as stream:
+        chain, torn = ss._chain(str(path), stream.fileno())
+    assert not torn
+    assert chain.leaf == "b" * 8
+    assert chain.offset == path.stat().st_size
+    assert chain.taken == {"a" * 8, "b" * 8}
+
+
+def test_chain_lf_split_only(tmp_path):
+    """Records split on LF only: \\x0c or \\r inside a JSON string must not
+    split a record (doc #1114)."""
+    path = tmp_path / "s.jsonl"
+    record = {"id": "c" * 8, "parent": None, "role": "user", "content": "page"}
+    # raw \x0c/\x0b bytes in the file: what a writer with ensure_ascii=False emits
+    body = json.dumps(record, separators=(",", ":"))
+    path.write_bytes(body[:-1].encode("utf-8") + b"\x0c\x0b\x0c}\n")
+    with ss._open_locked(path, "a+b") as stream:
+        chain, torn = ss._chain(str(path), stream.fileno())
+    assert not torn
+    assert chain.taken == {"c" * 8}
