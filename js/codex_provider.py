@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import ai
@@ -111,8 +112,21 @@ def _response_body(response: httpx.Response) -> object | None:
 
 
 def _error_message(body: object | None, fallback: str) -> tuple[str, str | None, str | None]:
+    """(message, code, type) from an error body or a stream error event.
+
+    A `response.failed` event carries its error at `response.error`; a flat
+    `error` event carries `code`/`message` at the top level, and its `type`
+    is the event name, not an error type."""
     code: str | None = None
     error_type: str | None = None
+    if isinstance(body, dict) and body.get("type") == "response.failed":
+        response = body.get("response")
+        nested = response.get("error") if isinstance(response, dict) else None
+        if isinstance(nested, dict):
+            return _error_message({"error": nested}, fallback)
+    if isinstance(body, dict) and body.get("type") == "error" and "error" not in body:
+        flat = {key: body[key] for key in ("code", "message") if key in body}
+        return _error_message({"error": flat}, fallback)
     if isinstance(body, dict):
         error = body.get("error")
         if isinstance(error, dict):
@@ -471,6 +485,25 @@ async def _build_body_async(
     return body
 
 
+# The owned client's timeouts. `read` is the longest silence between two
+# chunks, not a total: SSE deltas and keepalives reset it, so a long reasoning
+# turn streams on, while a stalled connection fails in two minutes instead of
+# hanging the turn forever (it was timeout=None).
+_READ_GAP_S = 120.0
+_CLIENT_TIMEOUT = httpx.Timeout(connect=15.0, read=_READ_GAP_S, write=30.0, pool=15.0)
+
+
+@dataclass
+class _ToolCall:
+    """One function call being streamed: what has been sent for it so far."""
+
+    item_id: str
+    call_id: str
+    name: str
+    chunks: list[str] = field(default_factory=list)
+    done: bool = False
+
+
 class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     """Provider backed by ChatGPT/Codex OAuth and the Codex Responses endpoint.
 
@@ -518,7 +551,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         self._login = login
         self._owns_client = client is None
         self._refresh_guard = asyncio.Lock()
-        self._set_client(client or httpx.AsyncClient(timeout=None))
+        # An injected client keeps the caller's own timeouts.
+        self._set_client(client or httpx.AsyncClient(timeout=_CLIENT_TIMEOUT))
 
     @classmethod
     def from_login(cls, login: Login) -> OpenAICodexProvider:
@@ -599,16 +633,27 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         headers = _codex_headers(access, account_id, stream=False)
         errors: list[str] = []
         for path in _MODEL_PATHS:
-            response = await self.client.get(
-                f"{base}{path}",
-                params={"client_version": _client_version()},
-                headers=headers,
-            )
+            try:
+                response = await self.client.get(
+                    f"{base}{path}",
+                    params={"client_version": await asyncio.to_thread(_client_version)},
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                raise ai.ProviderTimeoutError(
+                    "OpenAI Codex model list timed out", provider=_PROVIDER, is_retryable=True) from exc
+            except httpx.TransportError as exc:
+                raise ai.ProviderConnectionError(
+                    f"OpenAI Codex connection failed: {exc}", provider=_PROVIDER, is_retryable=True) from exc
             if response.status_code >= 400:
                 summary, _code, _type = _error_message(_response_body(response), "")
                 errors.append(f"{path}: HTTP {response.status_code}{(': ' + summary[:200]) if summary else ''}")
                 continue
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:
+                errors.append(f"{path}: response was not JSON")
+                continue
             if not isinstance(payload, dict):
                 errors.append(f"{path}: response was not a JSON object")
                 continue
@@ -675,20 +720,56 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         # output_item.done, which can land after text closed the block.
         reasoning_block: str | None = None
         closed_reasoning: set[str] = set()
-        active_tool_id: str | None = None
-        active_tool_name = ""
-        active_tool_chunks: list[str] = []
-        emitted_tool_ids: set[str] = set()
+        # Function calls by output item id. Parallel calls interleave their
+        # argument deltas, and each delta/done names its item_id, so there is
+        # no "active" call: every event goes to the call it names.
+        tools_by_item: dict[str, _ToolCall] = {}
+        tool_order: list[_ToolCall] = []
         terminal_usage: ai.types.usage.Usage | None = None
 
-        def start_tool(tool_id: str, name: str) -> ai.events.ToolStart | None:
-            nonlocal active_tool_id, active_tool_name, active_tool_chunks
-            if not tool_id:
-                return None
-            active_tool_id = tool_id
-            active_tool_name = name
-            active_tool_chunks = []
-            return ai.events.ToolStart(tool_call_id=tool_id, tool_name=name)
+        def start_tool(item: Mapping[str, Any]) -> list[ai.events.Event]:
+            item_id = str(item.get("id") or item.get("call_id") or "")
+            call_id = str(item.get("call_id") or item.get("id") or "")
+            if not call_id or item_id in tools_by_item:
+                return []
+            call = _ToolCall(item_id=item_id, call_id=call_id, name=str(item.get("name") or ""))
+            tools_by_item[item_id] = call
+            tool_order.append(call)
+            return [ai.events.ToolStart(tool_call_id=call_id, tool_name=call.name)]
+
+        def tool_for(raw: Mapping[str, Any]) -> _ToolCall | None:
+            item_id = raw.get("item_id")
+            if isinstance(item_id, str) and item_id in tools_by_item:
+                return tools_by_item[item_id]
+            open_calls = [call for call in tool_order if not call.done]
+            # A delta with no item_id can only belong to the one open call.
+            return open_calls[0] if item_id is None and len(open_calls) == 1 else None
+
+        def settle_args(call: _ToolCall, final: str | None) -> list[ai.events.Event]:
+            """The server's authoritative arguments: emit what the deltas missed."""
+            if final is None or call.done:
+                return []
+            sent = "".join(call.chunks)
+            if final == sent:
+                return []
+            if not final.startswith(sent):
+                # The deltas disagree with the final arguments; a ToolDelta
+                # can only append, so the call cannot be made right.
+                raise ai.ProviderResponseError(
+                    f"OpenAI Codex tool call {call.call_id} arguments do not match their deltas",
+                    provider=_PROVIDER, is_retryable=True,
+                )
+            rest = final[len(sent):]
+            call.chunks.append(rest)
+            return [ai.events.ToolDelta(tool_call_id=call.call_id, chunk=rest)]
+
+        def end_tool(call: _ToolCall, final: str | None) -> list[ai.events.Event]:
+            if call.done:
+                return []
+            out = settle_args(call, final)
+            call.done = True
+            out.append(ai.events.ToolEnd(tool_call_id=call.call_id, tool_call=ai.types.messages.DUMMY_TOOL_CALL))
+            return out
 
         def open_reasoning(block_id: str) -> list[ai.events.Event]:
             nonlocal reasoning_block
@@ -721,25 +802,6 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             out.append(ai.events.ReasoningEnd(block_id=block_id, provider_metadata=metadata))
             return out
 
-        def close_tool(tool_id: str | None = None, name: str | None = None, args: str | None = None) -> list[ai.events.Event]:
-            nonlocal active_tool_id, active_tool_name, active_tool_chunks
-            tid = tool_id or active_tool_id
-            if not tid or tid in emitted_tool_ids:
-                return []
-            out: list[ai.events.Event] = []
-            if active_tool_id != tid:
-                out.append(ai.events.ToolStart(tool_call_id=tid, tool_name=name or active_tool_name))
-            final_args = args if args is not None else "".join(active_tool_chunks)
-            if final_args and not active_tool_chunks:
-                out.append(ai.events.ToolDelta(tool_call_id=tid, chunk=final_args))
-            out.append(ai.events.ToolEnd(tool_call_id=tid, tool_call=ai.types.messages.DUMMY_TOOL_CALL))
-            emitted_tool_ids.add(tid)
-            if active_tool_id == tid:
-                active_tool_id = None
-                active_tool_name = ""
-                active_tool_chunks = []
-            return out
-
         try:
             async with self.client.stream("POST", url, headers=headers, json=body) as response:
                 if response.status_code >= 400:
@@ -751,10 +813,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                     if event_type == "response.output_item.added":
                         item = raw.get("item")
                         if isinstance(item, dict) and item.get("type") in {"function_call", "custom_tool_call"}:
-                            call_id = str(item.get("call_id") or item.get("id") or "")
-                            name = str(item.get("name") or "")
-                            ev = start_tool(call_id, name)
-                            if ev is not None:
+                            for ev in start_tool(item):
                                 yield ev
                         continue
                     if event_type == "response.reasoning_summary_text.delta":
@@ -768,11 +827,15 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                     if event_type in {"response.reasoning_summary_part.done", "response.output_item.done"}:
                         item = raw.get("item")
                         if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") in {"function_call", "custom_tool_call"}:
-                            call_id = str(item.get("call_id") or item.get("id") or active_tool_id or "")
-                            name = str(item.get("name") or active_tool_name or "")
                             args = item.get("arguments") if item.get("type") == "function_call" else item.get("input")
-                            for ev in close_tool(call_id, name, args if isinstance(args, str) else None):
-                                yield ev
+                            item_id = str(item.get("id") or item.get("call_id") or "")
+                            if item_id not in tools_by_item:
+                                for ev in start_tool(item):  # done with no added event
+                                    yield ev
+                            call = tools_by_item.get(item_id)
+                            if call is not None:
+                                for ev in end_tool(call, args if isinstance(args, str) else None):
+                                    yield ev
                             continue
                         if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") == "reasoning":
                             for ev in finish_reasoning_item(item):
@@ -790,14 +853,17 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         continue
                     if event_type in {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}:
                         delta = raw.get("delta")
-                        if isinstance(delta, str) and active_tool_id:
-                            active_tool_chunks.append(delta)
-                            yield ai.events.ToolDelta(tool_call_id=active_tool_id, chunk=delta)
+                        call = tool_for(raw)
+                        if isinstance(delta, str) and delta and call is not None and not call.done:
+                            call.chunks.append(delta)
+                            yield ai.events.ToolDelta(tool_call_id=call.call_id, chunk=delta)
                         continue
                     if event_type in {"response.function_call_arguments.done", "response.custom_tool_call_input.done"}:
                         args = raw.get("arguments") if event_type == "response.function_call_arguments.done" else raw.get("input")
-                        if isinstance(args, str):
-                            active_tool_chunks = [args]
+                        call = tool_for(raw)
+                        if isinstance(args, str) and call is not None:
+                            for ev in settle_args(call, args):
+                                yield ev
                         continue
                     if event_type in {"response.completed", "response.done", "response.incomplete"}:
                         response_obj = raw.get("response")
@@ -817,8 +883,9 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         if text_open:
                             text_open = False
                             yield ai.events.TextEnd(block_id="text")
-                        for ev in close_tool():
-                            yield ev
+                        for call in tool_order:
+                            for ev in end_tool(call, None):
+                                yield ev
                         yield ai.events.StreamEnd(usage=terminal_usage, provider_metadata=provider_metadata)
                         return
                     if event_type in {"response.failed", "error"}:
@@ -831,13 +898,18 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             error_type=error_type,
                             is_retryable=code in {"model_error", "server_error", "internal_error"},
                         )
-                for ev in close_reasoning():
-                    yield ev
-                if text_open:
-                    yield ai.events.TextEnd(block_id="text")
-                for ev in close_tool():
-                    yield ev
-                yield ai.events.StreamEnd(usage=terminal_usage)
+                # The body ended without response.completed/done/incomplete:
+                # the connection broke. Ending cleanly would pass a cut answer
+                # or a half-streamed tool call off as finished, and a call
+                # marked "incomplete" still reaches _dispatch unless every
+                # consumer checks the flag (doc #372, ruhondo #378). Raise a
+                # retryable error instead; a server-stated response.incomplete
+                # above stays data.
+                raise ai.ProviderResponseError(
+                    "OpenAI Codex stream ended without a terminal event",
+                    provider=_PROVIDER,
+                    is_retryable=True,
+                )
         except httpx.TimeoutException as exc:
             raise ai.ProviderTimeoutError("OpenAI Codex request timed out", provider=_PROVIDER, is_retryable=True) from exc
         except httpx.TransportError as exc:

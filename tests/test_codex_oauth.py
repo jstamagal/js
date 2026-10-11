@@ -742,3 +742,225 @@ def test_codex_refresh_falls_back_to_previous_profile_when_jwt_is_bare():
     # Without a previous snapshot, a bare JWT still fails loudly.
     with pytest.raises(RuntimeError):
         codex_auth._token_from_response(data)
+
+
+class _SSEResponse:
+    status_code = 200
+
+    def __init__(self, events):
+        self._events = events
+
+    async def aiter_lines(self):
+        for event in self._events:
+            yield f"data: {json.dumps(event)}"
+            yield ""
+
+
+class _SSEClient:
+    def __init__(self, events):
+        self._events = events
+
+    def stream(self, method, url, *, headers=None, json=None):
+        return _FakeStreamContext(_SSEResponse(self._events))
+
+    async def aclose(self):
+        return None
+
+
+def _drain(events):
+    provider = _provider_with_client(_SSEClient(events))
+
+    async def run():
+        stream = ai.models.Stream(provider.stream(
+            ai.Model(id="gpt-5.5", provider=provider), [ai.user_message("hi")], tools=None, params=None))
+        async for _ in stream:
+            pass
+        return stream
+
+    return asyncio.run(run())
+
+
+def _tool_args(stream):
+    return [(part.tool_call_id, part.tool_args) for part in stream.message.parts
+            if isinstance(part, ai.types.messages.ToolCallPart)]
+
+
+def _call_item(item_id, call_id, name, arguments=None):
+    item = {"id": item_id, "type": "function_call", "call_id": call_id, "name": name}
+    if arguments is not None:
+        item["arguments"] = arguments
+    return item
+
+
+def test_final_arguments_complete_partial_deltas():
+    """ALL-CLAIMS codex_provider.py:104 (doc #491 HIGH): deltas `{"a":` then
+    the authoritative done `{"a":1}` assembled to `{"a":` -- a truncated call."""
+    stream = _drain([
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "f_a")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"a":'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_A", "arguments": '{"a":1}'},
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"a":1}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"a":1}')]
+
+
+def test_parallel_calls_with_interleaved_deltas_each_get_their_own_arguments():
+    """ALL-CLAIMS codex_provider.py:101: deltas went to whichever call was
+    'active', and a second ToolStart for call_A appeared with empty args."""
+    stream = _drain([
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "f_a")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"a":'},
+        {"type": "response.output_item.added", "item": _call_item("item_B", "call_B", "f_b")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_B", "delta": '{"b":'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_B", "arguments": '{"b":2}'},
+        {"type": "response.function_call_arguments.done", "item_id": "item_A", "arguments": '{"a":1}'},
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"a":1}')},
+        {"type": "response.output_item.done", "item": _call_item("item_B", "call_B", "f_b", '{"b":2}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"a":1}'), ("call_B", '{"b":2}')]
+
+
+def test_a_call_with_no_deltas_takes_its_done_arguments():
+    stream = _drain([
+        {"type": "response.output_item.done", "item": _call_item("item_A", "call_A", "f_a", '{"x":true}')},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ])
+    assert _tool_args(stream) == [("call_A", '{"x":true}')]
+
+
+@pytest.mark.parametrize("event,message", [
+    ({"type": "response.failed", "sequence_number": 12,
+      "response": {"id": "r", "status": "failed",
+                   "error": {"code": "server_error", "message": "boom: upstream overloaded"}}},
+     "boom: upstream overloaded"),
+    ({"type": "error", "code": "server_error", "message": "boom flat", "param": None}, "boom flat"),
+])
+def test_stream_errors_keep_their_message_and_code_so_retry_can_see_them(event, message):
+    """ALL-CLAIMS codex_provider.py:93 HIGH: response.failed nests its error
+    under `response`, a flat error has `code` at top level; both came out as
+    'OpenAI Codex stream failed' with code None, so is_retryable was always
+    False and a transient server_error was never retried."""
+    with pytest.raises(ai.ProviderAPIError) as caught:
+        _drain([event])
+    assert caught.value.message == message
+    assert caught.value.code == "server_error"
+    assert caught.value.is_retryable is True
+
+
+def test_a_stream_that_ends_without_a_terminal_event_raises_retryable():
+    """ALL-CLAIMS codex_provider.py:97 (doc #372, ruhondo #378): a broken pipe
+    used to end as a clean StreamEnd, so a cut answer or a half tool call
+    passed as finished."""
+    with pytest.raises(ai.ProviderResponseError) as caught:
+        _drain([
+            {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
+            {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "a'},
+        ])
+    assert caught.value.is_retryable is True
+
+
+def test_the_owned_client_bounds_silence_not_total_time():
+    """ALL-CLAIMS codex_provider.py:96: httpx.AsyncClient(timeout=None) let a
+    stalled connection hang the turn forever."""
+    provider = codex_provider.OpenAICodexProvider(access_token=_fake_jwt(), account_id="acct_123")
+    try:
+        timeout = provider.client.timeout
+        assert timeout.read == codex_provider._READ_GAP_S and timeout.connect is not None
+    finally:
+        asyncio.run(provider.aclose())
+
+
+def test_a_silent_server_times_out_as_a_retryable_provider_error(monkeypatch):
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    held = []
+
+    def accept_and_stall():
+        conn, _ = listener.accept()
+        held.append(conn)                       # read the request, never answer
+
+    threading.Thread(target=accept_and_stall, daemon=True).start()
+    monkeypatch.setattr(codex_provider, "_CLIENT_TIMEOUT", httpx.Timeout(1.0, read=0.3))
+    provider = codex_provider.OpenAICodexProvider(
+        access_token=_fake_jwt(), account_id="acct_123",
+        base_url=f"http://127.0.0.1:{listener.getsockname()[1]}")
+
+    async def run():
+        try:
+            async for _ in provider.stream(ai.Model(id="gpt-5.5", provider=provider),
+                                           [ai.user_message("hi")], tools=None, params=None):
+                pass
+        finally:
+            await provider.aclose()
+
+    with pytest.raises(ai.ProviderTimeoutError) as caught:
+        asyncio.run(asyncio.wait_for(run(), 10))
+    assert caught.value.is_retryable is True
+    listener.close()
+
+
+def test_list_models_maps_non_json_and_transport_failures():
+    """ALL-CLAIMS codex_provider.py:99: a 200 non-JSON body raised a raw
+    JSONDecodeError; transport errors were not mapped."""
+    class NotJson:
+        status_code = 200
+
+        def json(self):
+            raise json.JSONDecodeError("x", "<html>", 0)
+
+    class Client:
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        async def get(self, *a, **k):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+        async def aclose(self):
+            return None
+
+    with pytest.raises(ai.ProviderResponseError):
+        asyncio.run(_provider_with_client(Client(NotJson())).list_models())
+    with pytest.raises(ai.ProviderConnectionError):
+        asyncio.run(_provider_with_client(Client(httpx.ConnectError("refused"))).list_models())
+    with pytest.raises(ai.ProviderTimeoutError):
+        asyncio.run(_provider_with_client(Client(httpx.ReadTimeout("slow"))).list_models())
+
+
+def test_a_half_streamed_tool_call_never_reaches_the_caller(monkeypatch):
+    """maggie #1153: through the real assembler (model_client._stream_async),
+    a tool call cut by EOF raises before any ModelStreamResult exists, so
+    nothing is dispatched."""
+    import contextlib
+    import types as _types
+
+    from js import model_client
+
+    events = [
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "/etc/pass'},
+    ]
+
+    @contextlib.asynccontextmanager
+    async def fake_open(**_kwargs):
+        provider = _provider_with_client(_SSEClient(events))
+        yield ai.models.Stream(provider.stream(
+            ai.Model(id="gpt-5.5", provider=provider), [ai.user_message("hi")], tools=None, params=None))
+
+    monkeypatch.setattr(model_client, "_open_stream", fake_open)
+    model = _types.SimpleNamespace(id="gpt-5.5", provider=_types.SimpleNamespace(name="stub"))
+    results = []
+
+    async def run():
+        results.append(await model_client._stream_async(model, [], None, None, on_text=lambda _s: None))
+
+    with pytest.raises(ai.ProviderResponseError):
+        asyncio.run(run())
+    assert results == []
