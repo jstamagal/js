@@ -71,3 +71,16 @@ def test_recursion_depth_spam_is_safe():
     assert sdk_safe_tool_args(raw) == "{}"
     raw_dict = "{" * 200000
     assert sdk_safe_tool_args(raw_dict) == "{}"
+
+
+def test_coerce_does_not_mutate_the_schema():
+    """The declared type list must survive repeated calls (shinda #824)."""
+    import copy
+
+    from js.tool_args import coerce_to_schema
+
+    schema = {"type": ["object"], "anyOf": [{"type": "array"}]}
+    snapshot = copy.deepcopy(schema)
+    coerce_to_schema('{"A": "b"}', schema)
+    coerce_to_schema('{"A": "b"}', schema)
+    assert schema == snapshot

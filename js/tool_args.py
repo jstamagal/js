@@ -134,7 +134,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
     if not isinstance(schema, dict):
         return value
     declared = schema.get("type")
-    types = declared if isinstance(declared, list) else [declared]
+    types = list(declared) if isinstance(declared, list) else [declared]
     # `anyOf`/`oneOf` branches count as declared types: a stringified object
     # under anyOf[object, array] would otherwise stay a string and fail the
     # very validation this coercion exists to pass. A branch that declares
