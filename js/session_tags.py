@@ -26,7 +26,11 @@ quick, empty, subagent or script-started; `js.session_query.kind`) that is not
 open in another process and whose newest record is missing, judged against a
 different list, or older than its last message. So a session is tagged when
 it ends, and editing the list retags every session. One sweep runs at a time;
-a failed request ends the sweep with one line in `~/.js/logs/tags.log`.
+a sweep that finds another holding the lock exits at once, since the holder
+scans again after each pass. A request that fails for every session (no
+network, a bad key, a rate limit, a server error) ends the sweep with one
+line in `~/.js/logs/tags.log`; a failure that belongs to one session is
+logged and the sweep goes on to the next.
 """
 
 from __future__ import annotations
@@ -131,6 +135,8 @@ def load_tags(path: Path) -> list[Tag]:
         return []
     except OSError as exc:
         raise TagListError(msgs.TAGS_FILE_UNREADABLE.text(path=path, error=exc.strerror or exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise TagListError(msgs.TAGS_FILE_UNREADABLE.text(path=path, error=exc)) from exc
     try:
         data = yaml.safe_load(text) if text.strip() else {}
     except yaml.YAMLError as exc:
@@ -276,7 +282,10 @@ def sweep(options: Options) -> int:
     tagged = 0
     tried: set[str] = set()
     with lock_path.open("a", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0  # the running sweep scans again after each pass
         while True:
             try:
                 tags = load_tags(Path(options.file))
@@ -300,8 +309,23 @@ def sweep(options: Options) -> int:
                     tag_session(path, tags, options)
                 except Exception as exc:  # noqa: BLE001 - detached; the log is where it goes
                     _log(str(path), exc)
-                    return tagged
+                    if _ends_sweep(exc):
+                        return tagged
+                    continue
                 tagged += 1
+
+
+def _ends_sweep(error: BaseException) -> bool:
+    """Whether ``error`` would fail every session alike: no connection, a
+    refused key, a rate limit, a server fault. Anything else (a payload the
+    service rejects, a session file that cannot be read) is that session's."""
+    import typesafe_sdk as ts
+
+    return isinstance(error, (
+        ts.TypeSafeAPIConnectionError, ts.TypeSafeAuthenticationError,
+        ts.TypeSafePermissionDeniedError, ts.TypeSafeRateLimitError,
+        ts.TypeSafeInternalServerError,
+    ))
 
 
 def start_sweep(settings: dict | None) -> None:
@@ -324,8 +348,14 @@ def start_sweep(settings: dict | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    options = Options.from_json(argv[0]) if argv else Options.from_settings(None)
-    sweep(options)
+    # Detached with stdout/stderr on /dev/null: anything that escapes goes to
+    # tags.log or nowhere.
+    try:
+        options = Options.from_json(argv[0]) if argv else Options.from_settings(None)
+        sweep(options)
+    except Exception as exc:  # noqa: BLE001
+        _log("sweep", exc)
+        return 1
     return 0
 
 
