@@ -204,3 +204,19 @@ def test_a_collapsed_reasoning_block_names_the_toggle_key():
     block.finish()
 
     assert "Ctrl-T" in block.render()
+
+
+def test_pseudo_keys_are_not_bindable():
+    for pseudo in ("<any>", "<sigint>", "<bracketed-paste>", "<ignore>", "<cursor-position-response>"):
+        assert keys.key_error(pseudo) is not None, pseudo
+    assert keys.key_error("c-f") is None
+    keymap, error = keys.apply_line(keys.default_keymap(), "bind <any> redraw")
+    assert error is not None
+    assert keymap == keys.default_keymap()
+
+
+def test_trailing_comment_is_dropped_even_after_a_lone_quote_key():
+    for quote in ("'", '"'):
+        keymap, error = keys.apply_line(keys.default_keymap(), f"bind {quote} redraw  # c")
+        assert error is None, (quote, error)
+        assert (quote,) in keymap["redraw"]

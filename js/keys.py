@@ -17,6 +17,7 @@ one `path:line: error` line and skipped; the rest of the file still applies.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,7 +63,9 @@ ACTIONS: tuple[Action, ...] = (
 )
 ACTION_BY_NAME: dict[str, Action] = {action.name: action for action in ACTIONS}
 
-_KEY_NAMES = frozenset(key.value for key in Keys)
+# prompt_toolkit's pseudo-keys (`<any>`, `<sigint>`, `<bracketed-paste>`, ...) are
+# not keys a person presses; `bind <any> redraw` would fire on every keypress.
+_KEY_NAMES = frozenset(key.value for key in Keys if not key.value.startswith("<"))
 
 
 def keys_file(settings: dict | None) -> Path:
@@ -125,7 +128,9 @@ def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
     if parsed is None:
         return keymap, None
     verb, arg = parsed
-    words = setcmd._strip_load_comment(arg).split()
+    # Words are split on whitespace and never quoted, so a ` #` starts the
+    # trailing comment wherever it is; a key that is a lone quote stays a key.
+    words = re.split(r"\s#", f" {arg}", maxsplit=1)[0].split()
     if verb == "bind":
         if len(words) < 2:
             return keymap, msgs.KEYS_BIND_USAGE.text()
