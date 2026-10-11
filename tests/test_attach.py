@@ -306,6 +306,33 @@ def test_split_repl_attachments_bare_at_signs_are_prose():
     assert attach.split_repl_attachments(line) == (line, [])
 
 
+def test_split_repl_attachments_backslash_escaped_space():
+    r"""`@a\ b.png` (tab-completed / drag-dropped) names `a b.png`, like shlex."""
+    prompt, attachments = attach.split_repl_attachments(r"look @a\ b.png now")
+    assert attachments == ["a b.png"]
+    assert prompt == "look  now"
+
+
+def test_split_repl_attachments_quoted_path_beside_prose_apostrophe():
+    """A prose apostrophe must not mangle a quoted @path elsewhere on the line."""
+    prompt, attachments = attach.split_repl_attachments('isn\'t @"a b.png" great')
+    assert attachments == ["a b.png"]
+    assert prompt == "isn't  great"
+
+
+def test_split_repl_attachments_apostrophe_keeps_escaped_and_plain_paths():
+    prompt, attachments = attach.split_repl_attachments(r"don't @x\ y.txt or @z.md")
+    assert attachments == ["x y.txt", "z.md"]
+    assert prompt == "don't  or "
+
+
+def test_split_repl_attachments_open_quote_in_at_token_is_literal():
+    """An @token whose own quote never closes stays literal text, not a run to EOL."""
+    prompt, attachments = attach.split_repl_attachments("see @it's here")
+    assert attachments == ["it's"]
+    assert prompt == "see  here"
+
+
 def test_looks_text_rejects_nul_past_first_4k():
     """The NUL check must cover the whole sample, not only its first 4096 bytes."""
     assert attach._looks_text(b"a" * 5000 + b"\x00") is False

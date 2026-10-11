@@ -331,3 +331,25 @@ def test_startup_reply_records_effective_reasoning_when_the_following_turn_fails
     _model(monkeypatch, ["opening reply", RuntimeError("following turn failed")])
     assert cli._run_prompt("now", session="seeded", reasoning="high") == 1
     assert last_stamp(_saved(tmp_path))["reasoning"] == "high"
+
+
+def test_seeded_reply_stamp_follows_model_and_provider_overrides(tmp_path, monkeypatch):
+    """The stamp names the model the turn runs with, not cfg's, when a caller
+    passes `model_override`/`provider_id_override`."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from js import agent_messages
+
+    directory = _agent(tmp_path, monkeypatch, {"01-user.md": "example", "01-agent.md": "example reply"})
+    cfg = from_env(session="seeded")
+    spec = persona.load_prompt_spec(directory)
+    messages: list[dict] = []
+    telemetry = SimpleNamespace(transcript_log=None)
+    asyncio.run(agent_messages.initialize(
+        cfg, spec, messages, telemetry,
+        model_override="other-model", provider_id_override="other-provider",
+    ))
+    stamp = last_stamp(cfg.session_file)
+    assert stamp["model"] == "other-model"
+    assert stamp["provider"] == "other-provider"
