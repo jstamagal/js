@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -27,7 +28,11 @@ _ENV_KEYS = {
 }
 
 _ANTHROPIC_TRANSPORTS = frozenset({"anthropic", "custom_anthropic"})
-_OPENAI_TRANSPORTS = frozenset({"openai", "custom_responses", "codex_oauth"})
+_OPENAI_TRANSPORTS = frozenset({"openai"})
+# The Responses API (custom_responses, Codex OAuth) takes temperature and top_p
+# only: openai's AsyncResponses.create has no presence_penalty and raises
+# TypeError on it, and the Codex provider reads just those two.
+_RESPONSES_TRANSPORTS = frozenset({"custom_responses", "codex_oauth"})
 _OPENAI_COMPATIBLE_TRANSPORTS = frozenset(
     {
         "openai_compatible",
@@ -51,6 +56,10 @@ _TRANSPORT_CAPABILITIES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
             frozenset(),
         )
         for transport in _OPENAI_TRANSPORTS
+    },
+    **{
+        transport: (frozenset({"temperature", "top_p"}), frozenset())
+        for transport in _RESPONSES_TRANSPORTS
     },
     **{
         transport: (
@@ -127,9 +136,12 @@ def _coerce_float(key: str, raw: Any) -> float:
     if isinstance(raw, bool):
         raise ValueError(f"sampling.{key} must be a number")
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"sampling.{key} must be a number") from exc
+    if not math.isfinite(value):  # nan/inf serialize as invalid JSON
+        raise ValueError(f"sampling.{key} must be a finite number")
+    return value
 
 
 def _coerce_int(key: str, raw: Any) -> int:
