@@ -237,6 +237,7 @@ _ID_BYTES = 4
 _PATH_KINDS = frozenset({"message", "mark"})
 _HEAD = re.compile(rb'^\{"id":"([^"]+)","parent":(?:null|"[^"]*"),"(kind|role)":"([^"]*)"')
 _CACHED_CHAINS = 64
+_PREAD_CHUNK = 1 << 20
 
 
 def on_path(record: dict) -> bool:
@@ -294,15 +295,31 @@ def _chain(key: str, fd: int) -> tuple[_Chain, bool]:
     chain = _chains.pop(key, None)
     if chain is None or (chain.device, chain.inode) != (info.st_dev, info.st_ino) or info.st_size < chain.offset:
         chain = _Chain(info.st_dev, info.st_ino)
-    data = os.pread(fd, info.st_size - chain.offset, chain.offset) if info.st_size > chain.offset else b""
-    end = data.rfind(b"\n") + 1
-    for line in data[:end].splitlines():
-        chain.feed(line)
-    chain.offset += end
+    # Chunked: a cold cache on a 100+ MB session must not load the whole
+    # file at once just to collect ids (ALL-CLAIMS session_store MED). The
+    # read position advances by bytes READ; `chain.offset` stays at the byte
+    # after the last complete line, so a torn tail is re-fed on the next
+    # append. Chunks split on LF only, so a boundary inside a multibyte
+    # character cannot corrupt a line; the carry holds one partial line
+    # (bounded by the record size, never the file size).
+    read = chain.offset
+    carry = b""
+    while read < info.st_size:
+        chunk = os.pread(fd, min(_PREAD_CHUNK, info.st_size - read), read)
+        if not chunk:
+            break
+        read += len(chunk)
+        data = carry + chunk
+        fed = data.rfind(b"\n") + 1
+        for line in data[:fed].splitlines():
+            chain.feed(line)
+        carry = data[fed:]
+        if fed:
+            chain.offset = read - len(carry)
     _chains[key] = chain
     while len(_chains) > _CACHED_CHAINS:
         _chains.popitem(last=False)
-    return chain, end < len(data)
+    return chain, chain.offset < info.st_size
 
 
 def _encode(record: dict) -> bytes:
