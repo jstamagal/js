@@ -304,7 +304,8 @@ def _prepare_bytes(
     sample = data[: cap + 1]
     if _looks_text(sample):
         truncated = len(sample) > cap or (total_size is not None and total_size > cap)
-        text = sample[:cap].decode("utf-8", errors="replace")
+        kept = _strip_incomplete_utf8_tail(sample[:cap]) if truncated else sample[:cap]
+        text = kept.decode("utf-8", errors="replace")
         return _PreparedAttachment(_format_text_attachment(display_path, text, size, truncated, cap))
 
     guessed, _ = mimetypes.guess_type(str(path))
