@@ -159,6 +159,63 @@ def test_the_timeout_holds_when_a_descendant_leaves_the_group(tmp_path):
     assert time.monotonic() - started < 3
 
 
+def _alive(pid: int) -> bool:
+    import os
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("where", ["select", "register"])
+def test_an_interrupt_mid_run_kills_the_process_group(tmp_path, monkeypatch, where):
+    """The child runs in its own session, so Ctrl-C never reaches it; an
+    exception or cancellation anywhere in run() must kill the group."""
+    import os
+    import selectors
+
+    pidfile = tmp_path / "pid"
+    real_select = selectors.DefaultSelector.select
+    real_register = selectors.DefaultSelector.register
+
+    def wait_for_pid():
+        deadline = time.monotonic() + 5
+        while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    def interrupting_select(self, timeout=None):
+        wait_for_pid()
+        raise KeyboardInterrupt
+
+    def interrupting_register(self, fileobj, events, data=None):
+        wait_for_pid()
+        raise KeyboardInterrupt
+
+    if where == "select":
+        monkeypatch.setattr(selectors.DefaultSelector, "select", interrupting_select)
+    else:
+        monkeypatch.setattr(selectors.DefaultSelector, "register", interrupting_register)
+    with pytest.raises(KeyboardInterrupt):
+        hookexec.run(f"sleep 30 & echo $! > {pidfile}; wait", cwd=str(tmp_path), timeout=0, cap=0)
+    monkeypatch.setattr(selectors.DefaultSelector, "select", real_select)
+    monkeypatch.setattr(selectors.DefaultSelector, "register", real_register)
+    pid = int(pidfile.read_text())
+    deadline = time.monotonic() + 3
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    alive = _alive(pid)
+    if alive:
+        os.kill(pid, 9)
+    assert not alive
+
+
+def test_stdin_with_a_lone_surrogate_does_not_raise(tmp_path):
+    outcome = hookexec.run("cat", cwd=str(tmp_path), timeout=5, cap=0, stdin_text="a\udcffb")
+    assert outcome.returncode == 0
+    assert outcome.stdout == "a?b"
+
+
 # --- tool_call refusal -----------------------------------------------------------
 
 

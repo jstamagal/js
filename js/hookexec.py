@@ -48,6 +48,7 @@ def run(command: str, *, cwd: str, timeout: float, cap: int,
     being read after DRAIN_S. Each stream keeps its first ``cap`` bytes; 0
     keeps all."""
     shell = os.environ.get("SHELL") or "/bin/sh"
+    stdin_bytes = stdin_text.encode("utf-8", errors="replace")
     proc = subprocess.Popen(
         [shell, "-c", command],
         stdin=subprocess.PIPE,
@@ -57,20 +58,46 @@ def run(command: str, *, cwd: str, timeout: float, cap: int,
         env=env,
         start_new_session=True,
     )
+    try:
+        return _drive(proc, stdin_bytes, timeout=timeout, cap=cap)
+    except BaseException:
+        # Ctrl-C never reaches the child (its own session), so an exception or
+        # cancellation here must not leave the group running.
+        _kill_group(proc)
+        raise
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _drive(proc: subprocess.Popen, stdin_bytes: bytes, *, timeout: float, cap: int) -> ExecOutcome:
     deadline = time.monotonic() + timeout if timeout > 0 else None
     captured = {proc.stdout: bytearray(), proc.stderr: bytearray()}
-    pending = memoryview(stdin_text.encode("utf-8"))
+    pending = memoryview(stdin_bytes)
     selector = selectors.DefaultSelector()
-    for stream in captured:
-        selector.register(stream, selectors.EVENT_READ)
-    if pending:
-        os.set_blocking(proc.stdin.fileno(), False)
-        selector.register(proc.stdin, selectors.EVENT_WRITE)
-    else:
-        proc.stdin.close()
-    timed_out = False
-    exited_at: float | None = None
     try:
+        for stream in captured:
+            selector.register(stream, selectors.EVENT_READ)
+        if pending:
+            os.set_blocking(proc.stdin.fileno(), False)
+            selector.register(proc.stdin, selectors.EVENT_WRITE)
+        else:
+            proc.stdin.close()
+        timed_out = False
+        exited_at: float | None = None
         while selector.get_map():
             now = time.monotonic()
             if exited_at is None and proc.poll() is not None:
