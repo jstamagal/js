@@ -515,3 +515,20 @@ def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, 
     assert cli._run_prompt("again", agent="pinned", session="kept") == 0
 
     assert seen == {"model": "agent-model", "effort": "low"}
+
+
+@pytest.mark.parametrize("env_name", ["JS_MODEL", "JS_MODEL_ID"])
+def test_env_model_prefix_without_login_errors_under_either_env_name(monkeypatch, tmp_path, env_name):
+    """JS_MODEL_ID is the canonical name of the JS_MODEL alias; both make the
+    model invocation-explicit, so an unlogged provider prefix fails loud instead
+    of running with provider_id=None and the raw slashy id."""
+    from js.config import from_env
+    from js.routing import ProviderNotLoggedInError
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for name in ("JS_MODEL", "JS_MODEL_ID", "JS_PROVIDER", "JS_PROVIDER_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(env_name, "deepseek/deepseek-chat")
+    with pytest.raises(ProviderNotLoggedInError):
+        from_env(save_session=False)
