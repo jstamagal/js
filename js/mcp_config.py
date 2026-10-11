@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -52,8 +53,14 @@ class MCPPolicy:
             return False
         return allow is None or any(fnmatch.fnmatchcase(value, pattern) for pattern in allow)
 
-    def allows_server(self, server_name: str) -> bool:
-        return self._allowed(server_name, self.server_allow, self.server_deny)
+    def allows_server(self, *names: str) -> bool:
+        """Whether a server is permitted, given every name it goes by (the
+        configured name and its normalized form). A deny on ANY name wins;
+        otherwise an allow list must match at least one name."""
+        if any(fnmatch.fnmatchcase(name, pattern) for name in names for pattern in self.server_deny):
+            return False
+        allow = self.server_allow
+        return allow is None or any(fnmatch.fnmatchcase(name, pattern) for name in names for pattern in allow)
 
     def allows_tool(self, namespaced_tool_name: str) -> bool:
         """Return whether a model-facing ``server__tool`` name is permitted."""
@@ -253,11 +260,25 @@ def resolve(settings: Mapping[str, Any], agent_id: str) -> MCPConfiguration:
     enabled = tuple(
         server
         for server, is_enabled in parsed_servers
-        if is_enabled and policy.allows_server(server.name)
+        if is_enabled and policy.allows_server(server.name, server.normalized_name)
     )
     timeout = mcp.get("request_timeout_s")
     return MCPConfiguration(
         servers=enabled,
         policy=policy,
-        request_timeout_s=float(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else None,
+        request_timeout_s=_request_timeout(timeout),
     )
+
+
+def _request_timeout(value: Any) -> float | None:
+    """``mcp.request_timeout_s`` as a positive finite float; None when unset.
+    Anything else is a config error now, not a ValueError (or a NaN that kills
+    the event loop in ``asyncio.wait_for``) on the first MCP call."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise MCPConfigError(f"mcp.request_timeout_s must be a positive number, got {value!r}")
+    number = float(value)
+    if not (math.isfinite(number) and number > 0):
+        raise MCPConfigError(f"mcp.request_timeout_s must be a positive number, got {value!r}")
+    return number

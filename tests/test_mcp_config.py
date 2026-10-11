@@ -183,3 +183,33 @@ def test_agent_policy_validation_failures(value):
     assert result.changed is False
     assert result.error is not None
     assert live["mcp"]["agents"] == {}
+
+
+def test_deny_on_the_normalized_name_also_disables_the_server():
+    """`Local Files` goes by `local_files` everywhere; a deny on either name wins."""
+    for deny in (["local_files"], ["Local Files"], ["local_*"]):
+        resolved = mcp_config.resolve(
+            {"mcp": {"servers": _servers(), "agents": {"a": {"servers": {"deny": deny}}}}}, "a")
+        assert "Local Files" not in [server.name for server in resolved.servers], deny
+        assert resolved.policy.allows_server("Local Files", "local_files") is False
+    allowed = mcp_config.resolve(
+        {"mcp": {"servers": _servers(), "agents": {"a": {"servers": {"allow": ["local_files"]}}}}}, "a")
+    assert [server.name for server in allowed.servers] == ["Local Files"]
+
+
+@pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), "30", True])
+def test_bad_request_timeout_is_a_config_error(bad):
+    with pytest.raises(mcp_config.MCPConfigError):
+        mcp_config.resolve({"mcp": {"servers": {}, "agents": {}, "request_timeout_s": bad}}, "a")
+
+
+def test_request_timeout_values_that_resolve():
+    for raw, want in ((None, None), (30, 30.0), (0.5, 0.5)):
+        assert mcp_config.resolve({"mcp": {"request_timeout_s": raw}}, "a").request_timeout_s == want
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf", "0", "-5"])
+def test_set_refuses_non_finite_or_non_positive_request_timeout(text):
+    spec = settings.SPEC_BY_KEY["mcp.request_timeout_s"]
+    value, error = settings.coerce_value(spec, text)
+    assert value is None and error

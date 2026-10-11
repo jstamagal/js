@@ -395,7 +395,7 @@ class MCPHost:
         terms = search_tokens(query) - {"mcp"}
         servers = [
             server for server in self.config.servers
-            if self.config.policy.allows_server(server.name)
+            if self.config.policy.allows_server(server.name, server.normalized_name)
         ]
         source_scope = str(source).strip().casefold()
         if source_scope and source_scope != "mcp":
@@ -427,7 +427,7 @@ class MCPHost:
                 (item for item in self.config.servers if item.name == server_name),
                 None,
             )
-            if server is None or not self.config.policy.allows_server(server.name):
+            if server is None or not self.config.policy.allows_server(server.name, server.normalized_name):
                 continue
             entries.append(CatalogEntry(
                 f"mcp:server-error:{server.normalized_name}",
