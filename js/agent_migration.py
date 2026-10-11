@@ -20,7 +20,9 @@ runs it over any agent root.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,16 +49,30 @@ def repo_prompts_dir() -> Path:
 
 
 def default_roots(*roots: Path) -> tuple[Path, ...]:
-    """The repo prompts, the global agents dir, then `roots`, each once."""
+    """The repo prompts, the global agents dir, the project agents dir of the
+    working directory, then `roots`, each once (by resolved path). These are the
+    roots `Config.prompt_roots` loads agents from, so an entry naming a
+    project-local agent is not pruned as dead."""
     ordered: list[Path] = []
-    for root in (repo_prompts_dir(), paths.global_agents_dir(), *roots):
-        if root not in ordered:
+    seen: set[Path] = set()
+    for root in (repo_prompts_dir(), paths.global_agents_dir(), Path.cwd() / ".js" / "agents", *roots):
+        key = root.resolve(strict=False)
+        if key not in seen:
+            seen.add(key)
             ordered.append(root)
     return tuple(ordered)
 
 
+# MCP tools are named `mcp__<server>__<tool>` and exist only while their server
+# runs; the registry built here never holds them, so a match proves nothing.
+_MCP_PREFIX = "mcp__"
+
+
 def tool_matcher(roots: Sequence[Path]) -> Keep:
-    """Whether a `noun:modifier` entry matches a tool of the registry for `roots`."""
+    """Whether a `noun:modifier` entry matches a tool of the registry for `roots`.
+    An MCP entry (`mcp__...`) or a glob is always kept: neither can be proven dead
+    against this registry, and the loader ignores one that matches nothing.
+    Only a plain name that names no tool and no agent is dropped."""
     tools = registry_for_roots(tuple(roots)).tools
 
     def keep(entry: str) -> bool:
@@ -64,9 +80,13 @@ def tool_matcher(roots: Sequence[Path]) -> Keep:
             parsed = policy.parse_entry(entry, persona.AGENT_MANIFEST)
         except policy.ToolPolicyError:
             return True
-        if parsed.noun == "tag":
+        if parsed.noun == "tag" or parsed.noun.startswith(_MCP_PREFIX):
             return True
         rule = policy.Rule(parsed)
+        if parsed.is_glob:
+            # A glob that matches nothing today is harmless at load time
+            # (warn_unmatched skips globs) and may match a tool added later.
+            return True
         return any(rule.matches(tool) for tool in tools)
 
     return keep
@@ -171,15 +191,33 @@ def render_manifest(text: str, data: dict[str, Any], keep: Keep) -> tuple[str, l
     return _leading_comments(text) + dumped, dropped
 
 
+def _is_manifest_candidate(path: Path) -> bool:
+    """A `00*.md` that may hold a legacy frontmatter manifest. Message files
+    (`00-user.md`, `00-agent.md`) and benchmark turns (`00-benchmark.md`) are
+    their own kinds of file: frontmatter there is content, not settings."""
+    return persona._is_zero_file(path) and not persona._is_message_file(path) and not persona._is_benchmark_file(path)
+
+
 def _zero_md_with_frontmatter(agent_dir: Path) -> Path | None:
     for path in sorted(agent_dir.glob("*.md")):
-        if persona._is_zero_file(path) and path.read_text(encoding="utf-8").startswith("---"):
+        if _is_manifest_candidate(path) and path.read_text(encoding="utf-8").startswith("---"):
             return path
     return None
 
 
 def _one_line(exc: BaseException) -> str:
     return " ".join(str(exc).split())
+
+
+def _undecodable_name(agent_dir: Path) -> str:
+    """The first manifest-ish file in `agent_dir` that is not UTF-8, for the error."""
+    for path in sorted(agent_dir.iterdir()):
+        if path.name == persona.AGENT_MANIFEST or path.suffix in (".md", ".yaml"):
+            try:
+                path.read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                return path.name
+    return agent_dir.name
 
 
 def _plan_prune(agent_dir: Path, keep: Keep) -> Result:
@@ -199,19 +237,18 @@ def _plan_prune(agent_dir: Path, keep: Keep) -> Result:
     return Result(agent_dir, "prune", msgs.AGENT_MIGRATE_PRUNED.text(file=manifest.name), manifest_text, dropped)
 
 
-def plan(agent_dir: Path, keep: Keep) -> tuple[Result, Path | None, str | None]:
+def plan(agent_dir: Path, keep: Keep, *, _beside_manifest: bool = False) -> tuple[Result, Path | None, str | None]:
     """What migrating one agent dir would do: (result, file rewritten, new md body)."""
     legacy = persona._find_yaml_zero_file(agent_dir)
     frontmatter_md = _zero_md_with_frontmatter(agent_dir)
     if legacy is None and frontmatter_md is None:
         result = _plan_prune(agent_dir, keep)
         return result, (agent_dir / persona.AGENT_MANIFEST if result.action == "prune" else None), None
-    if (agent_dir / persona.AGENT_MANIFEST).exists():
-        old = legacy or frontmatter_md
-        return Result(agent_dir, "skip", msgs.AGENT_MIGRATE_BOTH.text(file=old.name)), None, None
+    if not _beside_manifest and (agent_dir / persona.AGENT_MANIFEST).exists():
+        return _plan_both(agent_dir, legacy or frontmatter_md, keep)
     new_body: str | None = None
     if legacy is not None:
-        zero_md = [p.name for p in agent_dir.glob("*.md") if persona._is_zero_file(p)]
+        zero_md = [p.name for p in agent_dir.glob("*.md") if _is_manifest_candidate(p)]
         if zero_md:
             return Result(agent_dir, "skip", msgs.AGENT_MIGRATE_ZERO_MD.text(
                 files=", ".join(sorted(zero_md)), file=legacy.name)), None, None
@@ -243,28 +280,96 @@ def plan(agent_dir: Path, keep: Keep) -> tuple[Result, Path | None, str | None]:
                   manifest_text, dropped), old, new_body
 
 
+def _plan_both(agent_dir: Path, old: Path, keep: Keep) -> tuple[Result, Path | None, str | None]:
+    """agent.yaml and an old manifest side by side. When the old one converts to
+    exactly the settings agent.yaml already holds, an earlier run stopped half
+    way: finish it (agent.yaml is rewritten with its own text, the old manifest
+    goes or keeps only its body). Anything else is for a person to merge."""
+    both = Result(agent_dir, "skip", msgs.AGENT_MIGRATE_BOTH.text(file=old.name)), None, None
+    result, legacy, new_body = plan(agent_dir, keep, _beside_manifest=True)
+    if result.action != "migrate" or legacy != old:
+        return both
+    current_text = (agent_dir / persona.AGENT_MANIFEST).read_text(encoding="utf-8")
+    try:
+        same = yaml.safe_load(result.manifest_text) == yaml.safe_load(current_text)
+    except yaml.YAMLError:
+        return both
+    if not same:
+        return both
+    return Result(agent_dir, "migrate", msgs.AGENT_MIGRATE_CONVERTED.text(file=old.name),
+                  current_text, result.dropped), old, new_body
+
+
 def migrate_agent_dir(agent_dir: Path, *, apply: bool = False, keep: Keep | None = None) -> Result:
     """Convert or prune one agent dir. `keep` defaults to the tools of the repo
-    prompts, the global agents dir and this agent's own root."""
+    prompts, the global agents dir and this agent's own root. A file that cannot
+    be read or is not UTF-8 makes this agent an error and touches nothing."""
     keep = keep if keep is not None else tool_matcher(default_roots(agent_dir.parent))
-    result, old, new_body = plan(agent_dir, keep)
+    try:
+        result, old, new_body = plan(agent_dir, keep)
+    except UnicodeDecodeError as exc:
+        return Result(agent_dir, "error", msgs.AGENT_MIGRATE_BAD_YAML.text(
+            file=_undecodable_name(agent_dir), error=_one_line(exc)))
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
     if result.action not in ("migrate", "prune") or not apply:
         return result
+    try:
+        return _apply(agent_dir, result, old, new_body)
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace `path` with `text` whole: a unique temp file beside it, then os.replace."""
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".migrating", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> Result:
+    """Write one planned change so that any failure leaves the agent as it was.
+
+    agent.yaml is written whole and checked to load before the old manifest is
+    touched; the old manifest is changed last, and if that fails agent.yaml is
+    taken back out, so a rerun sees the same legacy agent and tries again.
+    """
     manifest = agent_dir / persona.AGENT_MANIFEST
     old_text = old.read_text(encoding="utf-8")
-    manifest.write_text(result.manifest_text, encoding="utf-8")
-    if result.action == "migrate":
-        if new_body is not None and new_body.strip():
-            old.write_text(new_body.rstrip() + "\n", encoding="utf-8")
+    # A finished-half-way run already left agent.yaml (see _plan_both): undoing
+    # puts that text back instead of removing the file.
+    before = manifest.read_text(encoding="utf-8") if manifest.exists() else None
+
+    def undo_manifest() -> None:
+        if before is None:
+            manifest.unlink(missing_ok=True)
         else:
-            old.unlink()
+            _write_atomic(manifest, before)
+
+    _write_atomic(manifest, result.manifest_text)
     try:
         persona.load_agent_manifest(manifest)
     except (OSError, ValueError) as exc:
         if result.action == "migrate":
-            manifest.unlink()
-        old.write_text(old_text, encoding="utf-8")
+            undo_manifest()
+        else:
+            _write_atomic(old, old_text)
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_RESTORED.text(file=old.name, error=_one_line(exc)))
+    if result.action != "migrate":
+        return result
+    try:
+        if new_body is not None and new_body.strip():
+            _write_atomic(old, new_body.rstrip() + "\n")
+        else:
+            old.unlink()
+    except OSError:
+        undo_manifest()
+        raise
     return result
 
 
