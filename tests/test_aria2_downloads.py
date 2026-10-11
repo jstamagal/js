@@ -60,6 +60,7 @@ class _TransferHandler(BaseHTTPRequestHandler):
         requested_range = self.headers.get("Range", "")
         with self.state.lock:
             self.state.requests.append((self.path, requested_range))
+            self.state.headers.append((self.path, dict(self.headers)))
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/file")
@@ -110,7 +111,7 @@ class _TransferHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def transfer_server() -> Iterator[tuple[str, SimpleNamespace]]:
-    state = SimpleNamespace(requests=[], bytes_sent=0, slow=True, lock=threading.Lock())
+    state = SimpleNamespace(requests=[], headers=[], bytes_sent=0, slow=True, lock=threading.Lock())
     server = _TransferServer(("127.0.0.1", 0), _TransferHandler)
     server.state = state  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -138,6 +139,7 @@ def _ranges(state: SimpleNamespace, path: str) -> list[str]:
 def _clear_server_state(state: SimpleNamespace) -> None:
     with state.lock:
         state.requests.clear()
+        state.headers.clear()
         state.bytes_sent = 0
 
 
@@ -355,6 +357,7 @@ def test_aria2_argv_enables_segmentation_resume_retry_and_quiet_output(
         tmp_path / ".file.aria2-part",
         timeout_s=12,
         headers={"X-Test": "yes"},
+        input_file=tmp_path / "in",
     )
 
     assert "--continue=true" in argv
@@ -369,7 +372,81 @@ def test_aria2_argv_enables_segmentation_resume_retry_and_quiet_output(
     assert "--console-log-level=warn" in argv
     assert "--summary-interval=0" in argv
     assert "--download-result=hide" in argv
-    assert "--header=X-Test: yes" in argv
+    assert "--no-conf=true" in argv
+    assert not any("X-Test" in arg for arg in argv)
+    assert f"--input-file={tmp_path / 'in'}" in argv
+    assert "https://example.test/file" not in argv   # the URL rides in the input file
+
+
+def test_aria2_argv_refuses_headers_without_an_input_file(aria2c: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        tool_binaries.aria2_argv(aria2c, "https://x.test/f", tmp_path / "p", timeout_s=5,
+                                 headers={"Authorization": "Bearer s"})
+
+
+def test_headers_reach_the_server_without_touching_argv(
+    transfer_server, aria2c: str, tmp_path: Path, monkeypatch
+) -> None:
+    """ALL-CLAIMS tool_binaries.py:213: headers on argv are world-readable in ps."""
+    base_url, state = transfer_server
+    _clear_server_state(state)
+    seen_argv: list[list[str]] = []
+    seen_input: list[tuple[int, str]] = []
+    real_popen = tool_binaries.subprocess.Popen
+
+    def spy(argv, **kwargs):
+        seen_argv.append(list(argv))
+        for arg in argv:
+            if arg.startswith("--input-file="):
+                path = Path(arg.split("=", 1)[1])
+                seen_input.append((path.stat().st_mode & 0o777, path.read_text()))
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "Popen", spy)
+    target = tmp_path / "authed.bin"
+    tool_binaries.download_with_aria2(aria2c, f"{base_url}/file", target, timeout_s=10,
+                                      headers={"Authorization": "Bearer SECRET-TOKEN"})
+    assert target.read_bytes() == _PAYLOAD
+    assert not any("SECRET-TOKEN" in arg for arg in seen_argv[0])
+    assert seen_input and seen_input[0][0] == 0o600 and "SECRET-TOKEN" in seen_input[0][1]
+    with state.lock:
+        sent = [h for path, h in state.headers if path == "/file"]
+    assert sent and all(h.get("Authorization") == "Bearer SECRET-TOKEN" for h in sent)
+    assert not list(tmp_path.glob("**/input"))      # the input file is gone afterwards
+
+
+def test_a_header_with_a_line_break_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(tool_binaries.DownloadError):
+        tool_binaries.write_aria2_input(tmp_path / "in", "https://x.test/f", {"X": "a\n  out=/etc/x"},
+                                        tmp_path / ".f.aria2-part")
+
+
+def test_aria2c_is_stopped_when_the_caller_gives_up(
+    transfer_server, aria2c: str, tmp_path: Path, monkeypatch
+) -> None:
+    """ALL-CLAIMS tool_binaries.py:280: Ctrl-C or a cancelled task left aria2c
+    running and writing after the caller was gone."""
+    base_url, state = transfer_server
+    _clear_server_state(state)
+    state.slow = True
+    started: list = []
+    real_popen = tool_binaries.subprocess.Popen
+
+    def spy(argv, **kwargs):
+        process = real_popen(argv, **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(tool_binaries.subprocess, "Popen", spy)
+
+    def wait_then_interrupt(process, *args, **kwargs):
+        time.sleep(0.2)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tool_binaries, "_wait_for_aria2", wait_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        tool_binaries.download_with_aria2(aria2c, f"{base_url}/slow", tmp_path / "x.bin", timeout_s=30)
+    assert started and started[0].poll() is not None
 
 
 def test_aria2c_is_a_known_system_tool() -> None:
