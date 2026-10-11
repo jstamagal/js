@@ -264,3 +264,32 @@ def test_call_limits_read_the_resilience_settings():
         "max_output_escalation": 32000, "max_output_resumes": 2}})
     assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream_idle=None,
                                 max_output_escalation=32000, max_output_resumes=2)
+
+
+def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
+    """Room must come from the window even when the usage carries no prompt
+    count (ALL-CLAIMS turn_call LOW: the old expression dropped the window
+    constraint entirely when prompt_tokens was falsy)."""
+    from js.turn_call import CallLimits, ModelRequest
+
+    request = ModelRequest(
+        model="m", provider_id="openai", base_url=None, api_key=None,
+        effort=None, max_out=1000, thinking_budget=None, headers=None,
+        extra=None, sampling=None, cache_key=None,
+    )
+    caller = ModelCaller.__new__(ModelCaller)
+    caller._request = request
+    caller._limits = CallLimits(
+        retry=retry.Budget(attempts=1, max_wait=0), stream_idle=None,
+        max_output_escalation=8000, max_output_resumes=0,
+    )
+    caller._context = SimpleNamespace(last_output_tokens=500)
+
+    class _Usage:
+        prompt_tokens = 0
+        output_tokens = 0
+
+    # window 9000, prompt unknown -> room = 9000, escalation 8000 fits under it
+    assert caller._escalation(_Usage(), 1000, 9000) == 8000
+    # window smaller than the escalation: room binds it
+    assert caller._escalation(_Usage(), 1000, 5000) == 5000

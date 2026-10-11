@@ -418,7 +418,7 @@ class ModelCaller:
             max_out if max_out is not None else out_tokens or None,
             model_metadata.resolve_max_output(request.model, request.provider_id),
             self._limits.max_output_escalation,
-            window - prompt_tokens if window and prompt_tokens else None,
+            window - prompt_tokens if window else None,
         )
 
     async def _recover(self, error: BaseException) -> bool:
