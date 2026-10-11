@@ -174,19 +174,40 @@ def release_session(lease: SessionLease) -> None:
     _with_liveness_lock(lease.session_file, remove)
 
 
-def session_in_flight(session_file: Path) -> bool:
-    """Return true only when at least one recorded opener is still alive."""
+def session_in_flight(session_file: Path) -> bool | None:
+    """Whether a recorded opener of *session_file* is still alive: True when
+    one is, False when none is or no state file exists, None when the state
+    cannot be read or parsed (a permission, a torn or foreign file).
 
-    def inspect(opens):
-        live = [
-            item
-            for item in opens
-            if isinstance(item.get("pid"), int)
-            and _pid_alive(item["pid"], item.get("process_start"))
-        ]
-        return bool(live), live if live != opens else None
-
-    return _with_liveness_lock(Path(session_file).resolve(strict=False), inspect)
+    Read-only: it takes no lock and creates nothing, so a listing in a
+    read-only directory works and leaves no lock files behind. Dead openers
+    are pruned by the next acquire. Each caller chooses what None means: a
+    listing shows the session as not live; anything destructive (moving the
+    journal, tagging it) must treat it as live."""
+    try:
+        state_path, _ = _sidecar_paths(Path(session_file).resolve(strict=False))
+        raw = json.loads(state_path.read_bytes().decode("utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or raw.get("version") != _LIVENESS_VERSION:
+        return None
+    opens = raw.get("opens")
+    if not isinstance(opens, list):
+        return None
+    # A row this version cannot read is not evidence the opener is dead.
+    if not all(
+        isinstance(item, dict)
+        and type(item.get("pid")) is int and item["pid"] > 0
+        and (item.get("process_start") is None or isinstance(item["process_start"], str))
+        for item in opens
+    ):
+        return None
+    try:
+        return any(_pid_alive(item["pid"], item.get("process_start")) for item in opens)
+    except (OverflowError, ValueError):
+        return None  # a pid no kernel call can take proves nothing
 
 
 def _append_record(session_file: Path, record: dict[str, Any]) -> None:
@@ -391,7 +412,7 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
                 "user_turns": user_turns,
-                "in_flight": session_in_flight(path),
+                "in_flight": session_in_flight(path) is True,
                 "cwd": metadata.get("cwd") if metadata else None,
                 "caller_key": metadata.get("caller_key") if metadata else None,
                 "job_id": metadata.get("job_id") if metadata else None,

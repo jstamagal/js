@@ -500,8 +500,9 @@ def _liveness_files(path: Path) -> tuple[Path, Path]:
 
 
 def _in_use(path: Path) -> bool:
-    state, _ = _liveness_files(path)
-    return state.exists() and session_catalog.session_in_flight(path)
+    # Unknown liveness (unreadable state, a permission) refuses the move: a
+    # live journal moved under its writer loses records.
+    return session_catalog.session_in_flight(path) is not False
 
 
 def _old_session_folders(apply: bool) -> list[Path]:

@@ -133,8 +133,10 @@ def test_stale_pid_is_pruned_and_mtime_never_implies_liveness(tmp_path):
     )
 
     assert session_in_flight(session) is False
-    assert not state_path.exists()
     assert catalog_sessions(tmp_path / "sessions")[0]["in_flight"] is False
+    # Inspection is read-only; the next acquire prunes the dead opener.
+    acquire_session(session).release()
+    assert not state_path.exists()
 
 
 def test_exited_unreaped_opener_is_not_in_flight(tmp_path):
@@ -180,3 +182,115 @@ def test_context_manager_releases_liveness(tmp_path):
         assert session_in_flight(session) is True
 
     assert session_in_flight(session) is False
+
+
+# --- read-only, tri-state liveness (ALL-CLAIMS session_catalog.py:133) -------------
+
+import pytest  # noqa: E402
+
+from js import home  # noqa: E402
+from js import session_catalog as C  # noqa: E402
+
+
+def _sidecars(session: Path) -> tuple[Path, Path]:
+    return C._sidecar_paths(session)
+
+
+def _state_live(session: Path) -> None:
+    state, _ = _sidecars(session)
+    state.write_text(json.dumps({"version": C._LIVENESS_VERSION, "opens": [
+        {"pid": os.getpid(), "process_start": C._process_start(os.getpid()), "token": "alive"}]}))
+
+
+@pytest.fixture
+def session(tmp_path):
+    path = tmp_path / "sessions" / "agent" / "s.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    return path
+
+
+def test_no_state_file_is_idle_and_inspecting_creates_no_lock(session):
+    assert session_in_flight(session) is False
+    assert not _sidecars(session)[1].exists()
+
+
+@pytest.mark.parametrize("data", [
+    b"{", b"\xff", b"null", b"[]", b'{"version":999,"opens":[]}',
+    b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}',
+    b'{"version":1,"opens":[{"pid":true}]}', b'{"version":1}',
+    b'{"version":1,"opens":[{"pid":0}]}', b'{"version":1,"opens":[{"pid":-3}]}',
+    b'{"version":1,"opens":[{"pid":999999999,"process_start":7}]}',
+    b'{"version":1,"opens":[{"pid":1' + b'0' * 100 + b'}]}',
+])
+def test_unparseable_state_is_unknown(session, data):
+    state, lock = _sidecars(session)
+    state.write_bytes(data)
+    assert session_in_flight(session) is None
+    assert not lock.exists()
+
+
+def test_a_read_only_directory_lists_and_reports_live_without_a_lock(session):
+    _state_live(session)
+    session.parent.chmod(0o555)
+    try:
+        assert session_in_flight(session) is True
+        assert catalog_sessions(session.parent.parent)[0]["in_flight"] is True
+        assert not _sidecars(session)[1].exists()
+    finally:
+        session.parent.chmod(0o700)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+def test_an_unreadable_state_is_unknown_and_the_listing_survives(session):
+    _state_live(session)
+    state, _ = _sidecars(session)
+    state.chmod(0)
+    try:
+        assert session_in_flight(session) is None
+        assert catalog_sessions(session.parent.parent)[0]["in_flight"] is False
+    finally:
+        state.chmod(0o600)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+def test_an_unsearchable_parent_is_unknown_not_missing(session):
+    _state_live(session)
+    session.parent.chmod(0)
+    try:
+        assert session_in_flight(session) is None
+    finally:
+        session.parent.chmod(0o700)
+
+
+@pytest.mark.parametrize("answer, refused", [(None, True), (True, True), (False, False)])
+def test_home_refuses_to_move_a_journal_it_cannot_prove_idle(session, monkeypatch, answer, refused):
+    monkeypatch.setattr(C, "session_in_flight", lambda _path: answer)
+    assert home._in_use(session) is refused
+
+
+@pytest.mark.parametrize("data", [b'{"version":1,"opens":[]}', b'{"version":1,"opens":[{"pid":999999999}]}'])
+def test_well_formed_state_with_no_live_opener_is_idle(session, data):
+    _sidecars(session)[0].write_bytes(data)
+    assert session_in_flight(session) is False
+
+
+@pytest.mark.parametrize("data", [b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}'])
+def test_home_refuses_a_journal_whose_state_rows_are_unreadable(session, data):
+    _sidecars(session)[0].write_bytes(data)
+    assert home._in_use(session) is True
+
+
+def test_a_symlink_loop_is_unknown_not_a_crash(tmp_path):
+    loop = tmp_path / "loop.jsonl"
+    loop.symlink_to(loop)
+    # resolve() sits inside the guarded read; on this Python it returns the
+    # path, which has no state file.
+    assert session_in_flight(loop) is False
+
+
+def test_a_live_pid_with_a_malformed_start_is_unknown(session):
+    _sidecars(session)[0].write_text(json.dumps(
+        {"version": 1, "opens": [{"pid": os.getpid(), "process_start": 42}]}))
+    assert session_in_flight(session) is None
+    assert home._in_use(session) is True
