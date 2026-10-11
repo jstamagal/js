@@ -521,14 +521,20 @@ def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
     now = time.monotonic()
     if _dynamic is not None and _dynamic[0] == key and now - _dynamic[1] < _CATALOG_RECHECK_S:
         return _dynamic[2]
-    model_metadata.ensure_fresh_catalog()
-    rows: list[ProviderDef] = []
-    for provider in modelsdotdev.iter_providers():
-        if provider.id in _BUILTIN_BY_ID:
-            continue
-        if not _modelsdev_provider_supported(provider):
-            continue
-        rows.append(_modelsdev_provider_def(provider))
+    try:
+        model_metadata.ensure_fresh_catalog()
+        rows: list[ProviderDef] = []
+        for provider in modelsdotdev.iter_providers():
+            if provider.id in _BUILTIN_BY_ID or provider.id.lower() in _ALIAS:
+                continue
+            if not _modelsdev_provider_supported(provider):
+                continue
+            rows.append(_modelsdev_provider_def(provider))
+    except Exception:  # noqa: BLE001 - ensure_fresh_catalog re-raises any refresh failure
+        # No catalog and none to fetch (offline fresh install, broken catalog
+        # path): routing must still work for builtins and saved logins. Nothing
+        # is cached, so the next lookup tries the catalog again.
+        return ()
     _dynamic = (_catalog_identity(), now, tuple(rows))
     return _dynamic[2]
 

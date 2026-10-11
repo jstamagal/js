@@ -106,3 +106,32 @@ def test_stat_only_lookups_are_cheap(tmp_logins_dir, monkeypatch):
         providers.normalize_provider_id("mine")
         logins.load_logins()
     assert time.perf_counter() - started < 0.5
+
+
+def test_catalog_failure_degrades_to_no_dynamic_providers_and_retries(monkeypatch):
+    """Offline fresh install: no catalog and the refresh fails. Builtins and
+    unknown ids still resolve instead of raising, nothing is cached, and the
+    next lookup tries the catalog again (ALL-CLAIMS providers.py MED)."""
+    monkeypatch.setattr(providers, "_dynamic", None)
+    calls = []
+
+    def offline(*_args, **_kwargs):
+        calls.append(1)
+        raise RuntimeError("catalog refresh failed: offline")
+
+    monkeypatch.setattr(model_metadata, "ensure_fresh_catalog", offline)
+    assert providers._dynamic_login_providers() == ()
+    assert providers._dynamic is None
+    assert providers.normalize_provider_id("mylocal") in (None, "mylocal")
+    assert providers.get_provider("anthropic") is not None
+    providers._dynamic_login_providers()
+    assert len(calls) >= 2
+    monkeypatch.undo()
+
+
+def test_catalog_alias_rows_are_not_listed_twice(monkeypatch):
+    """models.dev `xiaomi` is the builtin mimo's alias; it must not appear as a
+    second login row that silently becomes mimo."""
+    monkeypatch.setattr(providers, "_dynamic", None)
+    ids = {provider.id.lower() for provider in providers._dynamic_login_providers()}
+    assert not ids & set(providers._ALIAS)
