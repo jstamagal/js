@@ -289,19 +289,22 @@ class CappedProcess:
         return self._captures[name]
 
     def _finish_readers(self) -> None:
+        """Give the readers ``READER_GRACE_S`` to drain, then stop the ones
+        still polling. A pipe is closed only through its file object and only
+        once its reader is gone: a reader still alive closes its own pipe on
+        the way out, so no thread can read or close an fd number the kernel
+        has handed to someone else."""
         deadline = time.monotonic() + READER_GRACE_S
         for thread in self._threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in self._threads):
             self._stop_readers.set()
-            for stream in (self.proc.stdout, self.proc.stderr):
-                with contextlib.suppress(Exception):
-                    os.close(stream.fileno())
             for thread in self._threads:
                 thread.join(timeout=0.5)
-        for stream in (self.proc.stdout, self.proc.stderr):
-            with contextlib.suppress(Exception):
-                stream.close()
+        for thread, stream in zip(self._threads, (self.proc.stdout, self.proc.stderr), strict=True):
+            if not thread.is_alive():
+                with contextlib.suppress(Exception):
+                    stream.close()
         for capture in self._captures.values():
             capture.close()
 
@@ -397,6 +400,10 @@ def start_capped(
                 capture.feed(chunk)
         except Exception:  # noqa: BLE001 - a dying pipe just ends the capture
             return
+        finally:
+            if stop_readers.is_set():
+                with contextlib.suppress(Exception):
+                    stream.close()
 
     threads = [
         threading.Thread(
