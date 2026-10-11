@@ -169,7 +169,13 @@ class SessionPicker:
         return session.path if session is not None else None
 
     def _open_messages(self, session: Q.Session) -> None:
-        self.message_rows = list(self._rows(session.path)) if self._rows is not None else []
+        # The file can vanish (deleted, moved, unmounted) while the picker is
+        # open; an empty list beats killing the full-screen app.
+        try:
+            rows = list(self._rows(session.path)) if self._rows is not None else []
+        except (OSError, ValueError):
+            rows = []
+        self.message_rows = rows
         self.message_lines = Q.message_lines(self.message_rows)
         last = max(0, len(self.message_rows) - 1)
         self.message_cursor = min(self._message_positions.get(session.path, last), last)
@@ -330,7 +336,7 @@ class SessionPicker:
                 line += 1
                 continue
             session = item.session
-            here = (session.cwd or "").rstrip("/") == self.cwd
+            here = ((session.cwd or "").rstrip("/") or "/") == self.cwd
             selected = index == self.cursor
             marker = ">" if selected else "•" if here else " "
             text = Q.session_line(item, now=self.now, home=self.home, marker=marker)
