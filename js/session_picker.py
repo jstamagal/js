@@ -336,7 +336,7 @@ class SessionPicker:
                 line += 1
                 continue
             session = item.session
-            here = ((session.cwd or "").rstrip("/") or "/") == self.cwd
+            here = bool(session.cwd) and (session.cwd.rstrip("/") or "/") == self.cwd
             selected = index == self.cursor
             marker = ">" if selected else "•" if here else " "
             text = Q.session_line(item, now=self.now, home=self.home, marker=marker)
