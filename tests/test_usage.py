@@ -294,3 +294,21 @@ def test_one_session_named_twice_is_charged_once(tmp_path):
     finally:
         usage.stop(token)
     assert usage.totals(session).calls == 1
+
+
+def test_the_running_session_stays_first_when_an_ancestor_repeats(tmp_path):
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    seen = []
+    token = usage.start(usage.Meter((a, b, a), on_call=lambda call, totals: seen.append(totals)))
+    try:
+        usage.record(_usage(100, 10), model="gpt-5", provider_id="openai")
+    finally:
+        usage.stop(token)
+    assert seen == [usage.totals(a)]
+    assert usage.totals(a).calls == 1 and usage.totals(b).calls == 1
+
+
+def test_a_real_file_named_like_an_unsaved_key_is_still_a_file(tmp_path):
+    real = tmp_path / "unsaved:x.jsonl"
+    assert usage._persisted(real)
+    assert not usage._persisted(usage.UnsavedKey("unsaved:x"))
