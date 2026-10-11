@@ -665,6 +665,44 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     return ToolResult.text(cap_text(result.dehydrated() + marker, budget, marker))
 
 
+def _well_formed_key(key: Any, taken: set) -> Any:
+    """A dict key made encodable without merging it into another key: a lone
+    surrogate is spelled `\\udcff`, and a clash with a key already present
+    gets `~` appended until it is unique."""
+    if not isinstance(key, str) or well_formed(key) is key:
+        return key
+    fixed = key.encode("utf-8", "backslashreplace").decode("utf-8")
+    while fixed in taken:
+        fixed += "~"
+    return fixed
+
+
+def _well_formed_value(value: Any) -> Any:
+    """``value`` with every string in it made strictly UTF-8 encodable."""
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        taken = {k for k in value if not isinstance(k, str) or well_formed(k) is k}
+        out: dict = {}
+        for k, v in value.items():
+            nk = _well_formed_key(k, taken)
+            taken.add(nk)
+            out[nk] = _well_formed_value(v)
+        return out
+    if isinstance(value, (list, tuple)):
+        return type(value)(_well_formed_value(v) for v in value)
+    return value
+
+
+def _well_formed_result(result: ToolResult) -> ToolResult:
+    """``result`` with lone surrogates in its text, structured and resource
+    blocks replaced by `?`; unchanged (same object) when there are none."""
+    blocks = [_well_formed_value(block) for block in result.blocks]
+    if blocks == result.blocks:
+        return result
+    return replace(result, blocks=blocks)
+
+
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
     """Spill-then-clip a tool result.
 
@@ -677,6 +715,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
     if isinstance(result, ToolResult):
+        result = _well_formed_result(result)
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
             marker = f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
             return _dehydrate_capped_result(result, cap_bytes, marker)
@@ -1842,18 +1881,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
-        # turn_start is emitted unconditionally and every normal/handled exit
-        # already emitted turn_end; only cancellation (CancelledError /
-        # KeyboardInterrupt — BaseException, not Exception) reaches here
-        # unbalanced, so pair turn_start with a turn_end before propagating.
+        # turn_start is emitted unconditionally, so every exit pairs it with
+        # exactly one turn_end: cancellation (CancelledError /
+        # KeyboardInterrupt) ends "cancelled", an unexpected Exception ends
+        # "error", and an exit that already ended the turn adds nothing.
         # Either way the answer streamed so far is finished where it stands:
         # left open, the next reply would take over its place on the screen.
         sink.close()
         if not isinstance(_turn_exc, Exception):
             sink.commit_partial(messages)
-            events.end("cancelled")
+            if not events.ended:
+                events.end("cancelled")
         else:
             stream_transport.report_held_failure()
+            if not events.ended:
+                events.end("error", error=f"{type(_turn_exc).__name__}: {_turn_exc}")
         raise
     finally:
         sink.close_reasoning()

@@ -30,6 +30,7 @@ class TurnEvents:
         self._model = model
         self._provider_id = provider_id
         self.usage = usage_mod.Tally()
+        self.ended = False
 
     def emit(self, event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
         """Raise ``event`` to the ON hooks and the event sink; the emission, or
@@ -57,6 +58,7 @@ class TurnEvents:
 
     def end(self, reason: str, **extra: Any) -> None:
         """Raise turn_end; the event sink also gets the turn's usage totals."""
+        self.ended = True
         self.emit("turn_end", reason=reason, model=self._model, provider_id=self._provider_id,
                   sink_extra={"usage": self.usage.as_dict()}, **extra)
 

@@ -39,3 +39,50 @@ def test_cap_result_over_the_spill_size_spills_and_notice_offsets_match(tmp_path
     data = files[0].read_bytes()
     assert len(data) == byte_size(text)
     assert b"?" in data and str(files[0]) in out
+
+
+def test_typed_result_under_budget_reaches_the_model_strictly_encodable():
+    from js import model_client
+    from js.toolkit.core import ToolResult
+
+    result = ToolResult([
+        {"type": "text", "text": LONE},
+        {"type": "structured", "value": {"x": "\udcff", "n": [1, "\ud800"]}},
+        {"type": "resource", "resource": {"uri": "u", "text": "\udcff"}},
+    ], is_error=True)
+    out = runtime._cap_result(result, 10_000, 0)
+    assert out.is_error
+    assert out.blocks[0]["text"] == "x?"
+    assert out.blocks[1]["value"] == {"x": "?", "n": [1, "?"]}
+    text, _media, _err = model_client._mixed_result_parts(out)
+    text.encode("utf-8")
+
+
+def test_clean_typed_result_is_passed_through_as_is():
+    from js.toolkit.core import ToolResult
+
+    result = ToolResult.text("fine")
+    assert runtime._cap_result(result, 10_000, 0) is result
+
+
+def test_surrogate_dict_keys_never_merge_into_other_keys():
+    from js.toolkit.core import ToolResult
+
+    value = {"\udcff": "FIRST", "?": "SECOND", "\ud800": "THIRD", "\\udcff": "FOURTH"}
+    out = runtime._cap_result(ToolResult([{"type": "structured", "value": value}]), 10_000, 0)
+    fixed = out.blocks[0]["value"]
+    assert sorted(fixed.values()) == ["FIRST", "FOURTH", "SECOND", "THIRD"]
+    assert fixed["?"] == "SECOND" and fixed["\\udcff"] == "FOURTH"
+    for key in fixed:
+        key.encode("utf-8")
+
+
+def test_normalizing_a_large_dict_is_linear_work(monkeypatch):
+    # shinda #408: a per-entry set union made 30000 keys take 16 s. Count
+    # _well_formed_key calls, not time.
+    calls = []
+    real = runtime._well_formed_key
+    monkeypatch.setattr(runtime, "_well_formed_key", lambda k, taken: calls.append(len(taken)) or real(k, taken))
+    value = {f"k{i}": i for i in range(30_000)}
+    assert runtime._well_formed_value(value) == value
+    assert len(calls) == 30_000

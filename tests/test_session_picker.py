@@ -143,6 +143,34 @@ def test_esc_q_and_ctrl_c_close_with_no_choice(key):
     assert _picker([_session("a")]).press(key) is session_picker.CLOSED
 
 
+def test_b_on_a_session_whose_file_is_gone_shows_an_empty_list():
+    # ALL-CLAIMS.md:493: FileNotFoundError out of the key handler killed the app.
+    def gone(path):
+        raise FileNotFoundError(path)
+
+    picker = _picker([_session("a")], rows=gone)
+    picker.press("b")
+    assert picker.screen == "messages"
+    assert picker.message_rows == []
+
+
+def test_root_cwd_sessions_carry_the_here_dot():
+    picker = session_picker.SessionPicker(
+        [_session("a", cwd="/"), _session("b", cwd=HOME, started=_ts(2026, 9, 28, 8, 0))],
+        cwd="/", home=HOME, now=NOW)
+    picker.press("down")
+    assert any(line.startswith("•") for line in _body_lines(picker))
+
+
+@pytest.mark.parametrize("unknown", [None, ""])
+def test_a_session_with_no_known_cwd_is_not_marked_here_under_root(unknown):
+    # shinda #439: an unknown cwd must not read as "/".
+    picker = session_picker.SessionPicker(
+        [_session("b", cwd=HOME), _session("a", cwd=unknown, started=_ts(2026, 9, 28, 8, 0))],
+        cwd="/", home=HOME, now=NOW)
+    assert not any(line.startswith("•") for line in _body_lines(picker))
+
+
 # --- messages and info ---------------------------------------------------------
 
 
