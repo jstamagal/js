@@ -176,7 +176,8 @@ def resolve_model_route(
     if provider_id is not None:
         if use_saved_login:
             saved = _saved_login(provider_id)
-        elif switched and prefix_login is not None and provider_id == parsed_provider_id:
+        elif prefix_login is not None and provider_id == parsed_provider_id:
+            # Pinned, switched or unpinned alike: the login is why this routed.
             saved = prefix_login
     if saved is not None:
         base_url = base_url or saved.provider_base_url
