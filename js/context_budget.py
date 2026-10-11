@@ -17,7 +17,12 @@ import re
 from typing import Any
 
 
-_TOKENISH_RE = re.compile(r"[A-Za-z0-9_]+|[^\w\s]", re.UNICODE)
+# A word run (any script) or one punctuation/symbol character. The old first
+# branch was ASCII-only and the second excluded \w, so CJK and accented letters
+# matched neither and were never counted: 800 chars of Japanese estimated at the
+# chars/4 floor (200). An all-ASCII run still takes the len/6 branch below, so
+# English estimates do not move; a run with any non-ASCII letter takes len/2.
+_TOKENISH_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 
 @dataclass(frozen=True)

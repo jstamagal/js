@@ -431,10 +431,12 @@ def test_one_start_converts_moved_agents_and_prints_what_it_dropped(tmp_path, mo
 
     builder = paths.global_agents_dir() / "builder"
     assert not (builder / "00-tools.yaml").exists()
-    assert persona.load_prompt_spec(builder).tool_selectors == ("read:eager", "helper:eager", "wiki_*:eager")
+    assert persona.load_prompt_spec(builder).tool_selectors == (
+        "read:eager", "helper:eager", "wiki_*:eager", "artifact_*:eager")
     printed = [line for line in capsys.readouterr().err.splitlines() if _is(msgs.HOME_DROPPED, line)]
     assert len(printed) == 1
-    assert "multi_patch" in printed[0] and "artifact_*" in printed[0] and "builder" in printed[0]
+    # Plain dead names drop; a glob is kept even when it matches nothing today.
+    assert "multi_patch" in printed[0] and "artifact_*" not in printed[0] and "builder" in printed[0]
 
 
 def test_the_dry_run_names_the_conversion_and_changes_nothing(tmp_path):

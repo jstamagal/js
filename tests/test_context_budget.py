@@ -106,3 +106,16 @@ def test_signed_reasoning_payload_counts_toward_the_estimate():
 
     grown = context_budget.estimate_message_tokens(signed) - context_budget.estimate_message_tokens(plain)
     assert grown >= 1000
+
+
+def test_non_ascii_word_characters_are_counted():
+    """ALL-CLAIMS:169: CJK and accented letters matched no token branch."""
+    japanese = "日本語のテキスト" * 100      # 800 chars
+    assert context_budget.estimate_text_tokens(japanese) >= 400   # was 200 (chars/4 floor)
+    assert context_budget.estimate_text_tokens("é" * 400) >= 200  # was 100
+    assert context_budget.estimate_text_tokens("Привет мир " * 40) > 110  # was the floor, 110
+
+
+def test_ascii_estimates_do_not_move():
+    for text, expected in (("hello world " * 50, 150), ('{"a":1}' * 100, 700), ("x = foo(bar, baz)\n" * 30, 240)):
+        assert context_budget.estimate_text_tokens(text) == expected, text
