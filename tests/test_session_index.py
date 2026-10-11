@@ -228,6 +228,25 @@ def test_recover_rebuilds_a_file_whose_table_pages_are_damaged(tmp_path):
         recovered.close()
 
 
+def test_recover_rebuilds_a_file_whose_search_index_is_damaged(tmp_path):
+    # Damage inside the FTS5 shadow tables is reported by quick_check as a
+    # row, not raised, and `_open`'s probe never reads those tables.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    connection = sqlite3.connect(path)
+    for number in range(1, 51):
+        connection.execute("INSERT INTO sessions(path,size,mtime_ns,info) VALUES (?,0,0,'{}')", (f"s{number}",))
+        connection.execute("INSERT INTO docs(rowid,text,lines) VALUES (?,?,'[]')", (number, f"hello word{number}"))
+    connection.execute("UPDATE docs_data SET block = zeroblob(length(block)) WHERE id > 10")
+    connection.commit()
+    connection.close()
+    recovered = session_index._recover(path)
+    try:
+        assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    finally:
+        recovered.close()
+
+
 def test_a_failed_rebuild_lock_closes_its_stream(tmp_path):
     lock = session_index._RebuildLock(tmp_path / "index.sqlite")
     opened = []
