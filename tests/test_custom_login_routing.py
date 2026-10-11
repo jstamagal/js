@@ -239,3 +239,38 @@ def test_pinned_gateway_unknown_prefix_passes_through_whole_model_id():
     assert route.model == "unknown-vendor/model-name"
     assert route.base_url == "https://gateway.test/v1"
     assert route.api_key == "sk-omp"
+
+
+@pytest.mark.parametrize("pin", [None, "deepseek"])
+def test_login_routed_prefix_carries_login_even_when_caller_opts_out(pin):
+    # cli._cfg_for_active_model passes use_saved_login=False; a builtin-provider
+    # prefix that routes because of its login must still go to the login's
+    # endpoint, not the provider default with an env key. ALL-CLAIMS.md:437.
+    logins.save_login(Login(provider_id="deepseek", provider_base_url="https://private.test/v1",
+                            provider_api_key="LOGIN-KEY"))
+    route = resolve_model_route(
+        "deepseek/model-x",
+        configured_provider_id=pin,
+        env={"DEEPSEEK_API_KEY": "ENV-KEY"},
+        explicit_model=True,
+        use_saved_login=False,
+    )
+    assert route.provider_id == "deepseek"
+    assert route.base_url == "https://private.test/v1"
+    assert route.api_key == "LOGIN-KEY"
+
+
+def test_same_pin_opt_out_keeps_explicit_base_and_key():
+    logins.save_login(Login(provider_id="deepseek", provider_base_url="https://private.test/v1",
+                            provider_api_key="LOGIN-KEY"))
+    route = resolve_model_route(
+        "deepseek/model-x",
+        configured_provider_id="deepseek",
+        configured_base_url="https://override.test/v1",
+        configured_api_key="OVERRIDE",
+        env={},
+        explicit_model=True,
+        use_saved_login=False,
+    )
+    assert route.base_url == "https://override.test/v1"
+    assert route.api_key == "OVERRIDE"
