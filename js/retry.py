@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import math
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -39,6 +40,10 @@ class Budget:
         )
 
     def too_long(self, wait: float | None) -> bool:
+        # 0 means "honour any wait", but not one that never ends: an infinite
+        # or NaN Retry-After would sleep the turn forever.
+        if wait is not None and not math.isfinite(wait):
+            return True
         return wait is not None and 0 < self.max_wait < wait
 
 

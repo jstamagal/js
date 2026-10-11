@@ -758,3 +758,19 @@ def test_resilience_knobs_refuse_negative_values(key):
     value, error = settings.coerce_value(spec, "-1")
     assert value is None and error
     assert settings.coerce_value(spec, "0") == (0, None)
+
+
+# --- an endless Retry-After (ALL-CLAIMS.md:429) -------------------------------
+
+from js import retry as _retry  # noqa: E402
+
+
+@pytest.mark.parametrize("wait", [float("inf"), float("nan")])
+def test_an_endless_retry_after_is_too_long_even_with_no_limit(wait):
+    assert _retry.Budget(attempts=3, max_wait=0).too_long(wait)
+    assert _retry.Budget(attempts=3, max_wait=120).too_long(wait)
+
+
+def test_a_finite_wait_is_still_honoured_with_no_limit():
+    assert not _retry.Budget(attempts=3, max_wait=0).too_long(3600.0)
+    assert not _retry.Budget(attempts=3, max_wait=0).too_long(None)
