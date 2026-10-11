@@ -655,12 +655,15 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     try:
         lock = logins.hold_login_lock()
         lock.__enter__()
-    except logins.LoginStoreBusyError:
-        # Could not take the lock in time: use the file if someone else
-        # refreshed meanwhile; never post an unlocked refresh.
+    except (logins.LoginStoreBusyError, OSError) as exc:
+        # Could not take the lock in time, or the store dir is not ours to
+        # open (EACCES): use the file or a fresh overlay if either is
+        # usable; never post an unlocked refresh.
         current = _stored_login(login)
         if current is not None and not login_needs_refresh(current):
             return current
+        if isinstance(exc, OSError):
+            raise RuntimeError(f"{logins.lock_path()} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh") from exc
         raise
     try:
         current, needed, stored = _adopt_or_refresh_decision(login)
@@ -745,12 +748,15 @@ async def _locked_refresh(login: Login, *, persist: bool, client: httpx.AsyncCli
             if persist and stored:
                 save_refreshed_login(refreshed, derived_from=current)
             return refreshed
-    except logins.LoginStoreBusyError:
-        # Could not take the lock in time: use the file if someone else
-        # refreshed meanwhile; never post an unlocked refresh.
+    except (logins.LoginStoreBusyError, OSError) as exc:
+        # Could not take the lock in time, or the store dir is not ours to
+        # open: use the file or a fresh overlay if either is usable; never
+        # post an unlocked refresh.
         current = _stored_login(login)
         if current is not None and not login_needs_refresh(current):
             return current
+        if isinstance(exc, OSError):
+            raise RuntimeError(f"{logins.lock_path()} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh") from exc
         raise
 
 

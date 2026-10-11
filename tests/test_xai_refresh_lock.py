@@ -15,6 +15,7 @@ import sys
 import textwrap
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -199,3 +200,56 @@ def test_stored_endpoint_off_x_ai_is_refused_before_the_credential_is_posted(sto
 def test_unparseable_stored_expiry_reads_as_expired():
     login = logins.Login(provider_id=PROVIDER, provider_api_key="A", xai_refresh_token="R1", xai_token_expires=float("nan"))
     assert xai_auth.login_needs_refresh(login) is True
+
+
+def _child_code_alias(store: Path, token_url: str, provider_id: str) -> str:
+    return textwrap.dedent(
+        f"""
+        import sys, time
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+        from pathlib import Path
+        from js import logins, xai_auth
+        logins.set_config_dir(Path({str(store)!r}))
+        xai_auth._validate_endpoint = lambda raw, field: {token_url!r}
+        stale = logins.load_logins()[{provider_id!r}]
+        go = float(sys.argv[1])
+        time.sleep(max(0.0, go - time.time()))
+        print(xai_auth.ensure_fresh_login(stale).xai_refresh_token)
+        """
+    )
+
+
+def test_login_stored_under_a_non_canonical_id_round_trips(server, store):
+    # effie #1119 / ruhondo #1123: the saver must key by the CALLER's
+    # normalized provider id, never the xai-oauth constant; a login stored
+    # under 'xai' refreshed 6 times at once -> 1 POST and a save.
+    from js import providers
+
+    alias = "xai"
+    normalized = providers.normalize_provider_id(alias) or alias
+    logins.save_login(replace(_stale_login(), provider_id=alias))
+    assert normalized in logins.load_logins()
+    go = time.time() + 0.6
+    procs = [
+        subprocess.Popen([sys.executable, "-c", _child_code_alias(store, server.url, normalized), str(go)], stdout=subprocess.PIPE, text=True)
+        for _ in range(6)
+    ]
+    outputs = [proc.communicate(timeout=60)[0].strip() for proc in procs]
+    assert all(proc.returncode == 0 for proc in procs)
+    assert outputs == ["R2"] * 6
+    assert server.posted == ["R1"]
+    assert logins.load_logins()[normalized].xai_refresh_token == "R2"
+
+
+def test_inaccessible_store_dir_is_unknown_not_a_logout(server, store):
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    memory = xai_auth.apply_refreshed_token(stale, xai_auth.XaiToken(access="A-R2", refresh="R2", expires_at=time.time() + 3600, token_endpoint=""))
+    logins.note_memory_login(memory, derived_from=stale)
+    os.chmod(store, 0o000)
+    try:
+        assert logins.store_unreadable() is True
+        assert xai_auth.ensure_fresh_login(stale).xai_refresh_token == "R2"
+        assert server.posted == []
+    finally:
+        os.chmod(store, 0o755)

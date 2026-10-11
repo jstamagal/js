@@ -564,19 +564,28 @@ def _parse_store(ident: tuple | None, data: dict[str, Any]) -> _Store:
 
 
 def _file_ident(path: Path) -> tuple | None:
+    """(path, dev, ino, size, mtime_ns) or None when the file is absent.
+    Any other OSError (EACCES on the parent, say) propagates: unreadable is
+    not the same as missing."""
     try:
         info = os.stat(path)
-    except OSError:
+    except FileNotFoundError:
         return None
     return (path, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
 
 def _read_store() -> _Store:
     """Parse logins.toml now, bypassing the identity cache, and cache the
-    result. An empty store when the file is missing or unparseable."""
+    result. An empty store when the file is missing; an UNREADABLE store
+    (nothing known, not "removed") when it exists but cannot be read or
+    parsed (maggie #1045/#1110)."""
     global _loaded
     path = _logins_path()
-    ident = _file_ident(path)
+    try:
+        ident = _file_ident(path)
+    except OSError:
+        _loaded = _UNREADABLE_STORE
+        return _loaded
     if ident is None:
         _loaded = _EMPTY_STORE
         return _loaded
@@ -592,7 +601,10 @@ def _read_store() -> _Store:
 
 def _current_store() -> _Store:
     """The cached parse while the file is unchanged, else a fresh one."""
-    ident = _file_ident(_logins_path())
+    try:
+        ident = _file_ident(_logins_path())
+    except OSError:
+        return _read_store()
     if ident is None:
         return _read_store()
     if _loaded.ident == ident:

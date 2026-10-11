@@ -343,9 +343,10 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
     """
     from . import logins as logins_module
 
+    provider_id = logins_module._normalize_provider_id(derived_from.provider_id)
     try:
         with logins_module.hold_login_lock():
-            stored = logins_module.load_logins_fresh().get(XAI_PROVIDER_ID)
+            stored = logins_module.load_logins_fresh().get(provider_id)
             if stored is None or stored.xai_refresh_token not in (
                 derived_from.xai_refresh_token,
                 refreshed.xai_refresh_token,
@@ -430,12 +431,15 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
     try:
         lock = logins_module.hold_login_lock()
         lock.__enter__()
-    except logins_module.LoginStoreBusyError:
-        # Could not take the lock in time: use the file if someone else
-        # refreshed meanwhile; never post an unlocked refresh.
+    except (logins_module.LoginStoreBusyError, OSError) as exc:
+        # Could not take the lock in time, or the store dir is not ours to
+        # open (EACCES): use the file or a fresh overlay if either is
+        # usable; never post an unlocked refresh.
         current = _stored_login(login)
         if current is not None and not login_needs_refresh(current):
             return current
+        if isinstance(exc, OSError):
+            raise RuntimeError(f"{logins_module.lock_path()} cannot be opened ({exc}); fix it before the xAI login can refresh") from exc
         raise
     try:
         current = _stored_login(login)

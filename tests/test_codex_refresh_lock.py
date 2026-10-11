@@ -387,6 +387,24 @@ def test_unreadable_store_uses_a_fresh_overlay_and_never_posts_on_a_stale_one(se
     assert server.posted == []
 
 
+def test_inaccessible_store_dir_is_unknown_not_a_logout(server, store):
+    # ruhondo #1112 / maggie #1110: EACCES on the parent is UNREADABLE, not
+    # missing: the overlay survives, nothing is posted.
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    fresh_memory = codex_auth.apply_refreshed_token(stale, codex_auth.CodexToken(access=_jwt(), refresh="R2", expires_at=time.time() + 3600, account_id="acct_1"))
+    logins.note_memory_login(fresh_memory, derived_from=stale)
+    os.chmod(store, 0o000)
+    try:
+        assert logins.store_unreadable() is True
+        assert logins.get_login(PROVIDER).codex_refresh_token == "R2"
+        assert logins._overlay_key(PROVIDER) in logins._overlay
+        assert codex_auth.ensure_fresh_login(stale).codex_refresh_token == "R2"
+        assert server.posted == []
+    finally:
+        os.chmod(store, 0o755)
+
+
 def test_same_base_save_persists_the_overlay_tokens(server, store):
     # ruhondo #1040 / doc #1041: a local save that keeps the base refresh
     # token (a headers edit) heals the memory-only rotation into the file.
