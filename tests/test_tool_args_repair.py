@@ -84,3 +84,12 @@ def test_coerce_does_not_mutate_the_schema():
     coerce_to_schema('{"A": "b"}', schema)
     coerce_to_schema('{"A": "b"}', schema)
     assert schema == snapshot
+
+
+def test_nested_anyof_string_branch_keeps_the_string():
+    """A string valid under a NESTED anyOf branch is not coerced (shinda #871)."""
+    from js.tool_args import coerce_to_schema
+
+    schema = {"anyOf": [{"anyOf": [{"type": "string"}, {"type": "object"}]}, {"type": "array"}]}
+    assert coerce_to_schema("[1]", schema) == "[1]"
+    assert coerce_to_schema('{"a": 1}', schema) == '{"a": 1}'  # string branch: string is valid
