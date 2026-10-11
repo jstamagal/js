@@ -212,3 +212,33 @@ def test_paste_key_setting_takes_key_names_and_refuses_others():
     assert value is None and error
     assert settings.default_value("ui.paste_image_key") == "c-v"
     assert settings.default_value("ui.paste_image_command") is None
+
+
+@pytest.mark.parametrize("command", ["wl-paste '", "   "])
+def test_paste_command_setting_refuses_unsplittable_or_empty(command):
+    spec = settings.SPEC_BY_KEY["ui.paste_image_command"]
+
+    value, error = settings.coerce_value(spec, command)
+    assert value is None and error
+    assert settings.coerce_value(spec, "wl-paste --type image/png") == ("wl-paste --type image/png", None)
+
+
+@pytest.mark.parametrize("command", ["wl-paste '", "   "])
+def test_bad_configured_command_is_one_error_not_a_crash(command):
+    # Config files and env skip coerce_value, so read_image must catch it too.
+    live = {"ui": {"paste_image_command": command}}
+    with pytest.raises(clipimage.ClipboardError) as err:
+        clipimage.read_image(live, env={})
+    assert err.value.message is msgs.CLIPBOARD_READ_FAILED
+    assert "ui.paste_image_command" in str(err.value)
+
+
+def test_placeholder_takes_plain_bounded_numbers_only():
+    token = clipimage.keep(_PNG)
+    assert token == "[image #1]"
+
+    assert clipimage.lookup("[image #01]") is None
+    assert clipimage.lookup("[image #\u0661]") is None
+    assert clipimage.lookup("[image #" + "1" * 5000 + "]") is None
+    assert clipimage.placeholders("[image #" + "1" * 5000 + "] [image #1]") == ["[image #1]"]
+    assert clipimage.placeholders("[image #01] and [image #1]") == ["[image #1]"]

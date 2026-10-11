@@ -22,6 +22,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -610,6 +611,14 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if not is_key_name(text):
             return None, msgs.EXPECTED_KEY.text(value=text)
         return " ".join(text.split()), None
+    if spec.key == "ui.paste_image_command":
+        try:
+            words = shlex.split(text)
+        except ValueError as exc:
+            return None, f"expected a shell-quoted command: {exc}"
+        if not words:
+            return None, "expected a command"
+        return text, None
     if spec.key == "provider.base_url" and text:
         if not text.startswith(("http://", "https://")):
             return None, msgs.EXPECTED_URL.text(value=text)
