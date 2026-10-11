@@ -196,12 +196,10 @@ def session_in_flight(session_file: Path) -> bool | None:
     opens = raw.get("opens")
     if not isinstance(opens, list):
         return None
-    return any(
-        isinstance(item, dict)
-        and isinstance(item.get("pid"), int)
-        and _pid_alive(item["pid"], item.get("process_start"))
-        for item in opens
-    )
+    # A row this version cannot read is not evidence the opener is dead.
+    if not all(isinstance(item, dict) and type(item.get("pid")) is int for item in opens):
+        return None
+    return any(_pid_alive(item["pid"], item.get("process_start")) for item in opens)
 
 
 def _append_record(session_file: Path, record: dict[str, Any]) -> None:

@@ -215,7 +215,11 @@ def test_no_state_file_is_idle_and_inspecting_creates_no_lock(session):
     assert not _sidecars(session)[1].exists()
 
 
-@pytest.mark.parametrize("data", [b"{", b"\xff", b"null", b"[]", b'{"version":999,"opens":[]}'])
+@pytest.mark.parametrize("data", [
+    b"{", b"\xff", b"null", b"[]", b'{"version":999,"opens":[]}',
+    b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}',
+    b'{"version":1,"opens":[{"pid":true}]}', b'{"version":1}',
+])
 def test_unparseable_state_is_unknown(session, data):
     state, lock = _sidecars(session)
     state.write_bytes(data)
@@ -260,3 +264,9 @@ def test_an_unsearchable_parent_is_unknown_not_missing(session):
 def test_home_refuses_to_move_a_journal_it_cannot_prove_idle(session, monkeypatch, answer, refused):
     monkeypatch.setattr(C, "session_in_flight", lambda _path: answer)
     assert home._in_use(session) is refused
+
+
+@pytest.mark.parametrize("data", [b'{"version":1,"opens":[]}', b'{"version":1,"opens":[{"pid":999999999}]}'])
+def test_well_formed_state_with_no_live_opener_is_idle(session, data):
+    _sidecars(session)[0].write_bytes(data)
+    assert session_in_flight(session) is False
