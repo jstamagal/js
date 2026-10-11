@@ -1,5 +1,8 @@
-"""JSONL conversation persistence. Lock-protected, fsync-after-write,
-version-tagged. Loader ignores records it doesn't understand.
+"""JSONL conversation persistence, version-tagged. The loader skips records
+it cannot read (not JSON, not a dict, a message that is not a dict, bytes
+that are not UTF-8) and treats a history-rewriting mark whose payload no
+writer produces as inert; the file itself is never rewritten. Locking and
+fsync live in `js.session_store.append`.
 
 Every record carries an `id` and a `parent` (`js.session_store.append`); replay
 reads the file in order and does not use them. An assistant message record
@@ -42,13 +45,19 @@ class Record:
     @classmethod
     def from_dict(cls, d: dict) -> Record | None:
         kind = d.get("kind")
-        if kind not in {"message", "mark"}:
+        if not isinstance(kind, str) or kind not in {"message", "mark"}:
             return None
+        try:
+            ts = float(d["ts"]) if isinstance(d.get("ts"), (int, float)) and not isinstance(d["ts"], bool) else None
+        except OverflowError:
+            ts = None
+        if ts is None or ts != ts or ts in (float("inf"), float("-inf")):
+            ts = time.time()
         return cls(
             kind=kind,
-            ts=float(d.get("ts", time.time())),
+            ts=ts,
             version=SCHEMA_VERSION,
-            message=d.get("message"),
+            message=d.get("message") if isinstance(d.get("message"), dict) else None,
             marker=d.get("marker"),
             stamp=d.get("stamp") if isinstance(d.get("stamp"), dict) else None,
         )
@@ -66,7 +75,7 @@ def _migrate_record(d: dict) -> dict | None:
     records from other writers, each versioning itself independently, and their
     counters are not comparable to this one.
     """
-    if d.get("kind") not in {"message", "mark"}:
+    if not isinstance(d, dict) or not isinstance(d.get("kind"), str) or d["kind"] not in {"message", "mark"}:
         return None
     if d.get("version") == SCHEMA_VERSION:
         return d
@@ -76,10 +85,18 @@ def _migrate_record(d: dict) -> dict | None:
 def _open_locked(path: Path, mode: str):
     """Open with appropriate fcntl lock for the mode. Caller must close."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    f = open(path, mode)
+    # Text reads replace bytes that are not UTF-8 (a torn multibyte char from
+    # a crashed writer) instead of raising on every later read of the file.
+    f = open(path, mode) if "b" in mode else open(path, mode, encoding="utf-8", errors="replace")
     lock = fcntl.LOCK_EX if "a" in mode or "w" in mode else fcntl.LOCK_SH
     fcntl.flock(f.fileno(), lock)
     return f
+
+
+def _call_id(call: object) -> str | None:
+    """A tool call's id when it is a usable one (a non-empty string)."""
+    cid = call.get("id") if isinstance(call, dict) else None
+    return cid if isinstance(cid, str) and cid else None
 
 
 def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
@@ -100,18 +117,18 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
         healed.append(msg)
         i += 1
         calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
-        if not calls:
+        if not calls or not isinstance(calls, list):
             continue
-        expected = {call.get("id") for call in calls}
+        expected = {_call_id(call) for call in calls}
         answered: set[str] = set()
         while i < len(messages) and messages[i].get("role") == "tool":
             cid = messages[i].get("tool_call_id")
-            if cid in expected and cid not in answered:
+            if isinstance(cid, str) and cid in expected and cid not in answered:
                 answered.add(cid)
                 healed.append(messages[i])
             i += 1
         for call in calls:
-            cid = call.get("id")
+            cid = _call_id(call)
             if cid and cid not in answered:
                 healed.append({
                     "role": "tool",
@@ -322,33 +339,73 @@ class _Reappends:
 def _tool_call_ids(message: dict) -> list[str]:
     if message.get("role") != "assistant":
         return []
-    return [call["id"] for call in message.get("tool_calls") or () if isinstance(call, dict) and call.get("id")]
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return []
+    return [cid for cid in (_call_id(call) for call in calls) if cid]
 
 
 def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None) -> tuple[list[dict], int]:
     """The replayed history and the number of records skipped for their version.
     ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read.
-    A file whose message records repeat a tool-call id is read again undoing
-    the runs the old writer appended twice (`_Reappends`)."""
-    messages, skipped_versions, repeats = _replay_records(memory_file, stamps, undo_reappends=False)
-    if repeats:
+
+    An epoch is the stretch of records between two marks that rewrite the
+    history (session_reset, rollback_to:, compaction:). An epoch whose message
+    records repeat a tool-call id (one already in the history the epoch started
+    from, or one earlier in the epoch) was written by the old writer that
+    appended runs twice; only such epochs are read again undoing those runs
+    (`_Reappends`). A clean epoch, before or after one, replays as written."""
+    flagged: frozenset[int] = frozenset()
+    for _pass in range(4):
         if stamps is not None:
             stamps.clear()
-        messages, skipped_versions, _repeats = _replay_records(memory_file, stamps, undo_reappends=True)
+        messages, skipped_versions, found = _replay_records(memory_file, stamps, undo_epochs=flagged)
+        # Repairing an epoch changes what the next one starts from, so read
+        # again until the epochs that need repair stop changing.
+        if found <= flagged:
+            break
+        flagged = flagged | found
     return messages, skipped_versions
 
 
+def _compaction_keep_from(data: dict) -> int | None:
+    """Where a compaction mark's kept tail starts, before clamping to the
+    healed history; a mark without `keep_from` keeps no tail. None when it is
+    not a whole number (null, a string, a float): such a mark is inert, so no
+    guess ever cuts real history."""
+    if "keep_from" not in data:
+        return 1 << 62
+    keep_from = data["keep_from"]
+    if isinstance(keep_from, bool) or not isinstance(keep_from, int):
+        return None
+    return keep_from
+
+
 def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None, *,
-                    undo_reappends: bool) -> tuple[list[dict], int, bool]:
-    """The replayed history, the records skipped for their version, and
-    whether two message records carry the same tool-call id."""
+                    undo_epochs: frozenset[int]) -> tuple[list[dict], int, frozenset[int]]:
+    """The replayed history, the records skipped for their version, and the
+    epochs whose message records repeat a tool-call id. Runs the old writer
+    appended twice are undone in ``undo_epochs`` only."""
     if not memory_file.exists():
-        return [], 0, False
+        return [], 0, frozenset()
     messages: list[dict] = []
-    undo = _Reappends(messages) if undo_reappends else None
+    undo = _Reappends(messages)
+    epoch = 0
+    undoing = epoch in undo_epochs
     call_ids: set[str] = set()
-    repeats = False
+    repeated: set[int] = set()
     skipped_versions = 0
+
+    def next_epoch() -> None:
+        nonlocal epoch, undoing
+        epoch += 1
+        undoing = epoch in undo_epochs
+        # Seed from the history that survived the mark: a tool call kept by
+        # a compaction and appended again is still a repeat.
+        call_ids.clear()
+        for message in messages:
+            call_ids.update(_tool_call_ids(message))
+
     with _open_locked(memory_file, "r") as f:
         for line in f:
             line = line.strip()
@@ -363,7 +420,8 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                 if (
                     isinstance(raw, dict)
                     and "version" in raw
-                    and raw.get("kind") in {"message", "mark"}
+                    and isinstance(raw.get("kind"), str)
+                    and raw["kind"] in {"message", "mark"}
                 ):
                     skipped_versions += 1
                 continue
@@ -371,51 +429,59 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
             if rec is None:
                 continue
             if rec.kind == "mark":
-                if undo is not None:
+                if undoing:
                     undo.finish()
-                if rec.marker == "session_reset":
+                marker = rec.marker if isinstance(rec.marker, str) else None
+                if marker == "session_reset":
                     messages.clear()
-                elif rec.marker and rec.marker.startswith("rollback_to:"):
+                    next_epoch()
+                elif marker and marker.startswith("rollback_to:"):
                     try:
-                        keep = max(0, int(rec.marker.split(":", 1)[1]))
+                        keep = max(0, int(marker.split(":", 1)[1]))
                     except ValueError:
-                        continue
-                    # The index rides in POST-heal (live) space — the caller cut
-                    # `state["messages"][:keep]` against a healed list — so heal
-                    # first, else a synthetic tool result inserted on reload shifts
-                    # every later offset and the mark truncates the wrong message.
-                    messages[:] = _heal_orphaned_tool_calls(messages)
-                    del messages[keep:]
-                elif rec.marker:
-                    data = _parse_compaction_marker(rec.marker)
-                    if data is not None:
+                        keep = None
+                    if keep is not None:
+                        # The index rides in POST-heal (live) space — the caller cut
+                        # `state["messages"][:keep]` against a healed list — so heal
+                        # first, else a synthetic tool result inserted on reload shifts
+                        # every later offset and the mark truncates the wrong message.
                         messages[:] = _heal_orphaned_tool_calls(messages)
-                        keep_from = int(data.get("keep_from", len(messages)))
+                        del messages[keep:]
+                        next_epoch()
+                elif marker:
+                    data = _parse_compaction_marker(marker)
+                    keep_from = _compaction_keep_from(data) if data is not None else None
+                    if keep_from is not None:
+                        # keep_from counts in post-heal space, like rollback_to.
+                        messages[:] = _heal_orphaned_tool_calls(messages)
                         keep_from = max(0, min(keep_from, len(messages)))
                         rehydrated = data.get("rehydrated")
+                        rehydrated = rehydrated if isinstance(rehydrated, dict) else None
                         tail = messages[keep_from:]
                         drop_signed_reasoning(tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
                                        *([rehydrated] if rehydrated else []), *tail]
-                if undo is not None:
-                    undo.reset()
+                        next_epoch()
+                undo.reset()
                 continue
             if rec.kind != "message" or rec.message is None:
                 continue
-            if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
+            role = rec.message.get("role")
+            if isinstance(role, str) and role in {"user", "assistant", "tool", "system"}:
                 for call_id in _tool_call_ids(rec.message):
-                    repeats = repeats or call_id in call_ids
+                    if call_id in call_ids:
+                        repeated.add(epoch)
                     call_ids.add(call_id)
-                if undo is not None:
+                if undoing:
                     undo.append(rec.message)
                 else:
                     messages.append(rec.message)
                 stamp = _reply_stamp(rec.message, rec.stamp)
                 if stamps is not None and stamp is not None:
                     stamps[id(rec.message)] = (rec.message, stamp)
-    if undo is not None:
+    if undoing:
         undo.finish()
-    return _heal_orphaned_tool_calls(messages), skipped_versions, repeats
+    return _heal_orphaned_tool_calls(messages), skipped_versions, frozenset(repeated)
 
 
 def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
