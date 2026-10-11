@@ -75,6 +75,9 @@ ROOT/<name>/inbox/        one file per message not yet delivered to <name>
 ROOT/<name>/subs          the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep        present while <name> waits on its inbox
 ROOT/<name>/spawned       who recruited <name>, its pid and command
+ROOT/hold                 seconds an asleep agent lets messages not addressed to it pile up
+ROOT/<name>/ping          the stamp of the last rollcall
+ROOT/<name>/pong          the answer: ping (that stamp), ts, pid, state (asleep or working), step
 ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends and claims take
 ```
 
@@ -88,6 +91,32 @@ The wait is a harness-side poll every quarter second. It costs no model call
 and no tool call. `python -m js.swarm quiet ROOT` exits 0 when every member
 is asleep with an empty inbox: the swarm has nothing to do until someone
 posts. A runner uses it to call a run over without asking a model.
+
+## Hold
+
+`ROOT/hold` holds a number of seconds; `Room.set_hold(seconds)` writes it and
+it can change while the swarm runs. An asleep agent wakes at once for a
+message addressed to it by name, and for a `stop`. A broadcast, or a message
+that reaches it through a subscription, stays in its inbox until the oldest
+one has waited the hold; then everything waiting is one wake. An agent in the
+middle of a turn is not affected: its inbox is read at every tool boundary.
+With no `hold` file the hold is zero.
+
+## Rollcall
+
+`Room.ping()` stamps a `ping` file in every member's directory. Each agent
+process runs a thread that looks at its own `ping` once a second and writes
+`pong` with the stamp it answers, its pid, whether it is asleep or working,
+and `step`: when the agent last joined, crossed a tool boundary, went to sleep
+or woke. The model is not called, nothing lands in an inbox, nothing is added
+to the log. `Room.rollcall(wait)` pings and collects: an answer per member,
+`None` for one that stayed silent.
+
+Silent means the process is gone, since the thread answers while the agent
+waits on a model or a tool. An answer whose `state` is working and whose
+`step` is old is a process that is alive and stuck inside one call. `who` and
+`python -m js.swarm members` show a silent member as `no answer at rollcall
+since <time>`. A retired agent has left the bus and is not called.
 
 ## Shape of a swarm
 

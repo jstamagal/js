@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -47,6 +48,31 @@ def test_a_message_waits_for_an_agent_that_has_not_joined_yet(tmp_path):
     room = swarm.Room(tmp_path / "bus")
     room.send("runner", "late", "opener")
     assert [m.body for m in room.join("late").drain()] == ["opener"]
+
+
+def test_a_rollcall_is_answered_by_the_process_and_touches_no_inbox_or_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    answers = agent.room.rollcall(wait=5)
+    assert answers["a"]["pid"] == os.getpid() and answers["a"]["state"] == "working"
+    assert not agent.inbox.pending() and not agent.room.log.exists()
+
+
+def test_a_member_with_no_process_is_silent_at_rollcall_and_who_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    monkeypatch.setattr(swarm, "ROLLCALL_WAIT_S", 0.0)
+    here = swarm.Agent(tmp_path / "bus" / "here")
+    here.room.join("gone")
+    assert here.room.rollcall(wait=0.5)["gone"] is None
+    lines = dict(line.split(" ", 1) for line in swarm.roster(here.room).splitlines())
+    assert "no answer" in lines["gone"] and "no answer" not in lines["here"]
+
+
+def test_a_retired_agent_is_not_called_at_rollcall(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.retire("done")
+    assert agent.room.rollcall(wait=0.1) == {}
 
 
 def test_drain_hands_each_message_over_once_in_seq_order(tmp_path):
@@ -183,6 +209,31 @@ def test_a_burst_is_one_wake(tmp_path):
 
     threading.Timer(0.1, burst).start()
     assert [m.body for m in agent.sleep()] == ["one", "two"]
+
+
+def test_on_a_bus_with_a_hold_broadcasts_pile_up_into_one_wake_and_a_message_by_name_wakes_at_once(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.room.set_hold(1.0)
+    agent.room.send("b", "*", "one")
+    threading.Timer(0.4, agent.room.send, ("b", "*", "two")).start()
+    started = time.monotonic()
+    assert [m.body for m in agent.sleep()] == ["one", "two"]
+    assert time.monotonic() - started >= 1.0
+    agent.room.send("b", "*", "three")
+    agent.room.send("b", "a", "for you")
+    started = time.monotonic()
+    assert [m.body for m in agent.sleep()] == ["three", "for you"]
+    assert time.monotonic() - started < 0.9
+
+
+def test_a_second_wake_me_leaves_the_pending_alarm_where_it_was(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path)
+    context.swarm = agent
+    swarm._wake_me(300, context=context)
+    alarm = agent.alarm
+    swarm._wake_me(600, context=context)
+    assert agent.alarm == alarm
 
 
 def test_wake_me_wakes_the_agent_with_a_tick_when_nothing_lands(tmp_path):
