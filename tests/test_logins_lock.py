@@ -119,6 +119,93 @@ def test_lock_is_reentrant_so_save_login_works_under_a_held_lock(store):
     assert set(logins.load_logins()) == {"a", "b"}
 
 
+def test_two_tasks_on_one_loop_are_serialized(store):
+    # maggie #713: tasks share the loop's thread; a thread-local depth let
+    # task B walk in under task A's flock. Ownership is per task.
+    async def scenario():
+        order: list[str] = []
+        a_in = asyncio.Event()
+        a_may_leave = asyncio.Event()
+
+        async def task_a():
+            async with logins.ahold_login_lock():
+                order.append("a-in")
+                a_in.set()
+                await a_may_leave.wait()
+                order.append("a-out")
+
+        async def task_b():
+            await a_in.wait()
+            async with logins.ahold_login_lock(timeout_s=5):
+                order.append("b-in")
+
+        ta = asyncio.create_task(task_a())
+        tb = asyncio.create_task(task_b())
+        await a_in.wait()
+        await asyncio.sleep(0.2)
+        assert order == ["a-in"]  # b is still waiting
+        a_may_leave.set()
+        await asyncio.gather(ta, tb)
+        assert order == ["a-in", "a-out", "b-in"]
+
+    asyncio.run(scenario())
+
+
+def test_same_task_reenters_and_sync_save_inside_async_holder_works(store):
+    async def scenario():
+        async with logins.ahold_login_lock():
+            async with logins.ahold_login_lock():
+                logins.save_login(logins.Login(provider_id="a", provider_api_key="k"))
+        return set(logins.load_logins())
+
+    assert asyncio.run(scenario()) == {"a"}
+
+
+def test_child_task_does_not_inherit_the_parent_s_ownership(store):
+    async def scenario():
+        async with logins.ahold_login_lock():
+            child = asyncio.create_task(logins.ahold_login_lock(timeout_s=0.3).__aenter__())
+            with pytest.raises(logins.LoginStoreBusyError):
+                await child
+
+    asyncio.run(scenario())
+
+
+def test_lock_held_on_store_a_is_not_a_lock_on_store_b(tmp_path: Path):
+    store_a, store_b = tmp_path / "a", tmp_path / "b"
+    store_b.mkdir()
+    try:
+        logins.set_config_dir(store_a)
+        with logins.hold_login_lock():
+            logins.set_config_dir(store_b)
+            proc = _hold_in_subprocess(logins.lock_path(), 2.0)
+            try:
+                with pytest.raises(logins.LoginStoreBusyError):
+                    with logins.hold_login_lock(timeout_s=0.3):
+                        pass
+            finally:
+                proc.kill()
+                proc.wait()
+            logins.set_config_dir(store_a)
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
+
+
+def test_overlay_is_scoped_to_the_store(tmp_path: Path):
+    store_a, store_b = tmp_path / "a", tmp_path / "b"
+    try:
+        logins.set_config_dir(store_a)
+        logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="RA1", xai_token_expires=100.0))
+        logins.note_memory_login(logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="RA2", xai_token_expires=999.0))
+        logins.set_config_dir(store_b)
+        logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="B1", xai_refresh_token="RB1", xai_token_expires=1.0))
+        assert logins.get_login("xai-oauth").xai_refresh_token == "RB1"
+        logins.set_config_dir(store_a)
+        assert logins.get_login("xai-oauth").xai_refresh_token == "RA2"
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
+
+
 def _concurrent_savers(store: Path, n: int) -> None:
     code = textwrap.dedent(
         f"""

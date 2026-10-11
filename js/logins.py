@@ -95,6 +95,61 @@ def _try_flock(fd: int) -> bool:
     return True
 
 
+class _Owner:
+    """Who holds a store's lock in this process, for re-entrancy.
+
+    Identity is the running asyncio task when there is one, else the
+    thread. A ``threading.local`` depth would be wrong on an event loop:
+    every task shares the loop's thread, so task B would see task A's
+    depth and walk in under A's flock (maggie #713). One record per store
+    path: a lock held on store A is not a lock on store B after a
+    config-dir switch (maggie #736).
+    """
+
+    def __init__(self) -> None:
+        self.guard = threading.Lock()
+        self.holders: dict[Path, tuple[tuple[str, int], int]] = {}
+
+
+_owner = _Owner()
+
+
+def _identity() -> tuple[str, int]:
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
+    if task is not None:
+        return ("task", id(task))
+    return ("thread", threading.get_ident())
+
+
+def _reenter(store: Path) -> bool:
+    """Bump the depth if the caller already holds this store's lock."""
+    with _owner.guard:
+        held = _owner.holders.get(store)
+        if held is not None and held[0] == _identity():
+            _owner.holders[store] = (held[0], held[1] + 1)
+            return True
+    return False
+
+
+def _become_owner(store: Path) -> None:
+    with _owner.guard:
+        _owner.holders[store] = (_identity(), 1)
+
+
+def _leave(store: Path) -> None:
+    with _owner.guard:
+        held = _owner.holders.get(store)
+        if held is None:
+            return
+        if held[1] > 1:
+            _owner.holders[store] = (held[0], held[1] - 1)
+        else:
+            del _owner.holders[store]
+
+
 @contextlib.contextmanager
 def hold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> Iterator[None]:
     """Hold the cross-process store lock for the block (sync callers).
@@ -102,27 +157,29 @@ def hold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> Iterator[None]:
     Non-blocking flock in a sleep loop, never a blocking flock: a blocking
     flock has no timeout, and the sync callers (login_cli, routing) must
     not hang forever behind a stuck holder. Raises LoginStoreBusyError on
-    timeout. Re-entrant per thread, so save_login inside a held lock works.
+    timeout. Re-entrant for the same task/thread, so save_login inside a
+    held lock works; a different task or thread waits for the flock, which
+    excludes separate open-file-descriptions within one process too.
     """
-    if _lock_depth.held:
-        _lock_depth.held += 1
+    if _reenter(lock_path()):
         try:
             yield
         finally:
-            _lock_depth.held -= 1
+            _leave(lock_path())
         return
+    store = lock_path()
     fd = _open_lock_fd()
     try:
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
-                raise LoginStoreBusyError(f"{lock_path()} held by another process for {timeout_s:g}s")
+                raise LoginStoreBusyError(f"{store} held by another process for {timeout_s:g}s")
             time.sleep(_LOCK_POLL_S)
-        _lock_depth.held = 1
+        _become_owner(store)
         try:
             yield
         finally:
-            _lock_depth.held = 0
+            _leave(store)
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
@@ -139,35 +196,28 @@ async def ahold_login_lock(timeout_s: float = _LOCK_TIMEOUT_S) -> AsyncIterator[
     a thread that later acquires and holds the lock with nobody to release
     it.
     """
-    if _lock_depth.held:
-        _lock_depth.held += 1
+    if _reenter(lock_path()):
         try:
             yield
         finally:
-            _lock_depth.held -= 1
+            _leave(lock_path())
         return
+    store = lock_path()
     fd = _open_lock_fd()
     try:
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
-                raise LoginStoreBusyError(f"{lock_path()} held by another process for {timeout_s:g}s")
+                raise LoginStoreBusyError(f"{store} held by another process for {timeout_s:g}s")
             await asyncio.sleep(_LOCK_POLL_S)
-        _lock_depth.held = 1
+        _become_owner(store)
         try:
             yield
         finally:
-            _lock_depth.held = 0
+            _leave(store)
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
-
-
-class _LockDepth(threading.local):
-    held = 0
-
-
-_lock_depth = _LockDepth()
 
 # One asyncio.Lock per provider per event loop: coalesces concurrent
 # refreshes inside one process before any of them touches the file lock.
@@ -189,20 +239,26 @@ def refresh_lock(provider_id: str) -> asyncio.Lock:
 
 # Logins whose refreshed token could not be written to disk, kept for the
 # life of this process so the next read uses the rotated token instead of
-# re-posting the burned one (bakari #207). get_login() merges it in.
-_overlay: dict[str, Login] = {}
+# re-posting the burned one (bakari #207). get_login() merges it in. Keyed
+# by store path as well, so a config-dir switch never sees another store's
+# memory (shinda #729).
+_overlay: dict[tuple[Path, str], Login] = {}
 _overlay_guard = threading.Lock()
+
+
+def _overlay_key(provider_id: str) -> tuple[Path, str]:
+    return (_logins_path(), _normalize_provider_id(provider_id))
 
 
 def note_memory_login(login: Login) -> None:
     """Remember a refreshed login that did not make it to disk."""
     with _overlay_guard:
-        _overlay[_normalize_provider_id(login.provider_id)] = login
+        _overlay[_overlay_key(login.provider_id)] = login
 
 
 def forget_memory_login(provider_id: str) -> None:
     with _overlay_guard:
-        _overlay.pop(_normalize_provider_id(provider_id), None)
+        _overlay.pop(_overlay_key(provider_id), None)
 
 
 def _expiry(login: Login) -> float:
@@ -220,7 +276,7 @@ def get_login(provider_id: str) -> Login | None:
     normalized = _normalize_provider_id(provider_id)
     stored = load_logins().get(normalized)
     with _overlay_guard:
-        memory = _overlay.get(normalized)
+        memory = _overlay.get(_overlay_key(normalized))
     if memory is None:
         return stored
     if stored is None:
