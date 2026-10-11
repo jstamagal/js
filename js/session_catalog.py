@@ -184,8 +184,8 @@ def session_in_flight(session_file: Path) -> bool | None:
     are pruned by the next acquire. Each caller chooses what None means: a
     listing shows the session as not live; anything destructive (moving the
     journal, tagging it) must treat it as live."""
-    state_path, _ = _sidecar_paths(Path(session_file).resolve(strict=False))
     try:
+        state_path, _ = _sidecar_paths(Path(session_file).resolve(strict=False))
         raw = json.loads(state_path.read_bytes().decode("utf-8"))
     except FileNotFoundError:
         return False
@@ -197,7 +197,12 @@ def session_in_flight(session_file: Path) -> bool | None:
     if not isinstance(opens, list):
         return None
     # A row this version cannot read is not evidence the opener is dead.
-    if not all(isinstance(item, dict) and type(item.get("pid")) is int for item in opens):
+    if not all(
+        isinstance(item, dict)
+        and type(item.get("pid")) is int and item["pid"] > 0
+        and (item.get("process_start") is None or isinstance(item["process_start"], str))
+        for item in opens
+    ):
         return None
     return any(_pid_alive(item["pid"], item.get("process_start")) for item in opens)
 

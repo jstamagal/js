@@ -219,6 +219,8 @@ def test_no_state_file_is_idle_and_inspecting_creates_no_lock(session):
     b"{", b"\xff", b"null", b"[]", b'{"version":999,"opens":[]}',
     b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}',
     b'{"version":1,"opens":[{"pid":true}]}', b'{"version":1}',
+    b'{"version":1,"opens":[{"pid":0}]}', b'{"version":1,"opens":[{"pid":-3}]}',
+    b'{"version":1,"opens":[{"pid":999999999,"process_start":7}]}',
 ])
 def test_unparseable_state_is_unknown(session, data):
     state, lock = _sidecars(session)
@@ -270,3 +272,24 @@ def test_home_refuses_to_move_a_journal_it_cannot_prove_idle(session, monkeypatc
 def test_well_formed_state_with_no_live_opener_is_idle(session, data):
     _sidecars(session)[0].write_bytes(data)
     assert session_in_flight(session) is False
+
+
+@pytest.mark.parametrize("data", [b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}'])
+def test_home_refuses_a_journal_whose_state_rows_are_unreadable(session, data):
+    _sidecars(session)[0].write_bytes(data)
+    assert home._in_use(session) is True
+
+
+def test_a_symlink_loop_is_unknown_not_a_crash(tmp_path):
+    loop = tmp_path / "loop.jsonl"
+    loop.symlink_to(loop)
+    # resolve() sits inside the guarded read; on this Python it returns the
+    # path, which has no state file.
+    assert session_in_flight(loop) is False
+
+
+def test_a_live_pid_with_a_malformed_start_is_unknown(session):
+    _sidecars(session)[0].write_text(json.dumps(
+        {"version": 1, "opens": [{"pid": os.getpid(), "process_start": 42}]}))
+    assert session_in_flight(session) is None
+    assert home._in_use(session) is True
