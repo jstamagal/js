@@ -255,12 +255,29 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
 
 
 def _glob_match(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
-    """Match path components against pattern components; ``**`` spans any number."""
-    if not pattern:
-        return not parts
-    if pattern[0] == "**":
-        return any(_glob_match(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
-    return bool(parts) and fnmatchcase(parts[0], pattern[0]) and _glob_match(parts[1:], pattern[1:])
+    """Match path components against pattern components; ``**`` spans any number.
+
+    Dynamic programming over (parts index, pattern index): ``**`` may consume
+    any number of components, so naive recursion is exponential in repeated
+    ``**``; the memo keeps every (i, j) pair to one evaluation.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def match(i: int, j: int) -> bool:
+        key = (i, j)
+        hit = memo.get(key)
+        if hit is not None:
+            return hit
+        if j == len(pattern):
+            result = i == len(parts)
+        elif pattern[j] == "**":
+            result = any(match(k, j + 1) for k in range(i, len(parts) + 1))
+        else:
+            result = i < len(parts) and fnmatchcase(parts[i], pattern[j]) and match(i + 1, j + 1)
+        memo[key] = result
+        return result
+
+    return match(0, 0)
 
 
 def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
