@@ -319,14 +319,24 @@ def _open_locked(session_file: Path, mode: str, **open_kw):
     replaced the file between our open and our lock leaves us locked on the
     unlinked old inode; a write there is lost. Reopen and relock until the
     descriptor is the named file."""
-    for _ in range(3):
-        stream = open(session_file, mode, **open_kw)
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        opened = os.fstat(stream.fileno())
-        named = os.stat(session_file)
-        if (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
-            return stream
+    attempt_mode = mode
+    for attempt in range(3):
+        stream = open(session_file, attempt_mode, **open_kw)
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            opened = os.fstat(stream.fileno())
+            named = os.stat(session_file)
+            if (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
+                if "a" in mode and attempt_mode != mode:
+                    # The retry lost O_APPEND (r+b); a write would land at the
+                    # front of the file. Seek to the end instead.
+                    stream.seek(0, os.SEEK_END)
+                return stream
+        except BaseException:
+            stream.close()
+            raise
         stream.close()
+        attempt_mode = mode.replace("a", "r")
     raise OSError(errno.ESTALE, "session file kept being replaced", str(session_file))
 
 
