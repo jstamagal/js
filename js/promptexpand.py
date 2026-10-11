@@ -263,12 +263,16 @@ def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
     path = Path(os.path.expanduser(body.strip()))
     try:
         return path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+    except OSError:
         # A missing/unreadable file embeds nothing rather than aborting the
         # whole prompt, so optional box-info embeds never brick startup.
-        # ValueError: a non-UTF-8 file raises UnicodeDecodeError (a ValueError
-        # subclass), not OSError; same policy, embeds nothing.
         return ""
+    except ValueError as exc:
+        # A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not
+        # OSError. Do not embed nothing silently: surface the unreadable
+        # include through the standard directive-failure warn, or a path
+        # typo hides as an empty embed.
+        raise PromptExpansionError(f"unreadable as text: {path} ({exc})") from None
 
 
 # ---- code subsystems (gated) ----

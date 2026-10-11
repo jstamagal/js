@@ -451,9 +451,12 @@ def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     import sys
     path = tmp_path / "bin.dat"
     path.write_bytes(b"\xff\xfe\x00binary\xff")
+    # warns and keeps the directive literal (on_error=warn default)
     out = expand_prompt(f"!{{file {path}}}", allow_code=True)
-    assert out == ""
-    # the directive after a broken one still runs
-    text = f"!{{file {path}}} and !{{env PATH:0:0}}"
-    out2 = expand_prompt(text, allow_code=True)
-    assert "and" in out2
+    assert out == f"!{{file {path}}}"
+    # on_error=raise propagates
+    with pytest.raises(PromptExpansionError):
+        expand_prompt(f"!{{file {path}}}", allow_code=True, on_error="raise")
+    # a directive after the broken one still runs (warn path, not silent "")
+    out2 = expand_prompt(f"!{{file {path}}} and !{{env AFTER}}", allow_code=True, env={"AFTER": "SURVIVED"})
+    assert out2.endswith(" and SURVIVED"), repr(out2)
