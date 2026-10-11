@@ -358,3 +358,31 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     log_path = cli._transcript_log_path(cfg, cfg.settings)
     assert log_path is not None
     assert THOUGHT not in log_path.read_text()
+
+
+# --- a broken stderr (ALL-CLAIMS.md:414) -------------------------------------
+
+from js.reasoning_display import StderrReasoning  # noqa: E402
+
+
+class _Broken(io.StringIO):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+        self.writes = 0
+
+    def write(self, text):
+        self.writes += 1
+        raise self.error
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError(32, "Broken pipe"), ValueError("I/O operation on closed file")])
+def test_a_broken_stderr_stops_reasoning_and_never_raises(error):
+    stream = _Broken(error)
+    view = StderrReasoning(3, stream)
+    view.append("thinking")
+    view.append("more")
+    view.answer_started()
+    view.finish(tokens=5)
+    assert view.level == 0
+    assert stream.writes == 1
