@@ -80,8 +80,18 @@ def test_a_rerun_asks_only_for_the_keys_still_missing():
 
 def test_a_closed_terminal_stops_the_questions():
     ask = _answers(None)
-    assert install.ask_keys({}, paths.global_env_file(), ask) == []
+    with pytest.raises(install.Cancelled):
+        install.ask_keys({}, paths.global_env_file(), ask)
     assert len(ask.asked) == 1
+
+
+def test_ctrl_c_at_a_key_prompt_ends_the_install_without_the_model_question(monkeypatch):
+    """One Ctrl-C stops `just install`; it used to fall through to ask_model."""
+    monkeypatch.setattr(install.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(install.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(install, "_asker", lambda _read: _answers(None))
+    monkeypatch.setattr(install, "ask_model", lambda *a, **k: pytest.fail("asked for a model after Ctrl-C"))
+    assert install.main([], environ={}) == 130
 
 
 def test_a_key_joins_an_existing_env_file_and_tightens_its_mode():
@@ -137,6 +147,19 @@ def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
 
     assert chosen == "mimo/mimo-v3"
     assert len(ask.asked) == 2 and ask.asked[0] != ask.asked[1]
+
+
+def test_adding_the_default_models_provider_ends_the_question():
+    """After `a` logs into the default model's own provider the default routes,
+    so there is nothing left to pick."""
+    _write_jsrc("set model.id deepseek/deepseek-v4-flash\n")
+    ask = _answers("a")
+
+    chosen = install.ask_model({}, ask, pick=pytest.fail,
+                               add_provider=lambda: _login("deepseek", ["deepseek-v4-flash"]))
+
+    assert chosen is None
+    assert len(ask.asked) == 1
 
 
 def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():

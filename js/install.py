@@ -69,14 +69,19 @@ def save_key(env_file: Path, name: str, value: str) -> None:
         handle.write(f"{name}={_env_value(value)}\n")
 
 
+class Cancelled(Exception):
+    """The operator pressed Ctrl-C or closed the terminal at a prompt."""
+
+
 def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask) -> list[str]:
     """Ask for each missing key and save the answers. An empty answer skips a
-    key; None, the terminal closing, stops asking. Returns the names saved."""
+    key; None, the terminal closing or Ctrl-C, raises Cancelled so the install
+    stops instead of going on to the next question. Returns the names saved."""
     saved: list[str] = []
     for name, use in missing_keys(environ, env_file):
         answer = ask(msgs.INSTALL_ASK_KEY.text(name=name, use=use))
         if answer is None:
-            break
+            raise Cancelled
         value = answer.strip()
         if not value:
             continue
@@ -142,6 +147,10 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
             return None
         if choice == "a":
             add_provider()
+            # The new login may be the default model's provider: then the
+            # default routes and there is nothing left to pick.
+            if default_model(environ)[1]:
+                return None
         elif choice == "p" and saved:
             selected = pick()
             if selected:
@@ -187,7 +196,10 @@ def main(argv: list[str] | None = None, environ: MutableMapping[str, str] | None
         if not routes:
             _say_unrouted(model_id)
         return 0
-    ask_keys(env, env_file, _asker(getpass))
+    try:
+        ask_keys(env, env_file, _asker(getpass))
+    except Cancelled:
+        return 130
     ask_model(env, _asker(input), pick=_pick, add_provider=_add_provider)
     return 0
 
