@@ -250,11 +250,23 @@ class TurnBudget:
 
     def _clear(self, check: _Check) -> bool:
         """Clear old tool-result bodies; True when that brought the request
-        under budget."""
-        cleared, chars = compaction.clear_for_budget(
-            self._convo.messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
-            flight_data=check.flight_data, over_budget=check.over_budget,
-        )
+        under budget. A failure (the clearing record or the history write hits
+        a full or read-only disk) is a skipped step like a failed summary, not
+        a dead turn: the history is put back as it was, a warning shows, and
+        the next step runs."""
+        messages = self._convo.messages
+        before = list(messages)
+        try:
+            cleared, chars = compaction.clear_for_budget(
+                messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
+                flight_data=check.flight_data, over_budget=check.over_budget,
+            )
+        except Exception as exc:  # noqa: BLE001 - an optional step never kills the turn
+            messages[:] = before  # microcompact edits in place; keep memory and disk alike
+            msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._telemetry.event("context_clear_failed", phase=check.phase,
+                                  error=f"{type(exc).__name__}: {exc}")
+            return False
         if not cleared:
             return False
         check.reclaimed += chars
