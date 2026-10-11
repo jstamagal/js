@@ -62,6 +62,37 @@ def _classify_failure(proc: subprocess.CompletedProcess) -> str:
     return "git-failed"
 
 
+# Every caller here parses git output, so operator config that reshapes it is
+# overridden on the command line, which outranks config files and
+# GIT_CONFIG_PARAMETERS. color.diff/color.status are more specific than
+# color.ui and win over it, so all three are pinned. diff.noprefix,
+# diff.mnemonicPrefix and diff.relative change the `a/` `b/` headers that
+# `git apply` needs; suppressBlankEmpty drops the space on blank context lines.
+# --literal-pathspecs: a path operand is a file name, never a glob or `:(magic)`,
+# so `stage '*.txt' all` cannot stage other files.
+_GIT_OVERRIDES = (
+    "-c", "color.ui=false",
+    "-c", "color.diff=false",
+    "-c", "color.status=false",
+    "-c", "diff.noprefix=false",
+    "-c", "diff.mnemonicPrefix=false",
+    "-c", "diff.relative=false",
+    "-c", "diff.suppressBlankEmpty=false",
+    "--literal-pathspecs",
+)
+
+# Per-call diff flags for the diffs this helper parses and re-applies. External
+# diff drivers and textconv filters print text `git apply` cannot take back.
+_DIFF_FLAGS = (
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-relative",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
+
+
 def _git(
     *args: str,
     check: bool = True,
@@ -71,14 +102,13 @@ def _git(
     workdir = _repo_path(repo)
     try:
         proc = subprocess.run(
-            # -c color.ui=false: every caller here parses plumbing output, and
-            # an operator with color.ui=always (or GIT_CONFIG_PARAMETERS
-            # carrying it) gets ANSI-wrapped lines that no longer start with
-            # "@@" or a status code. An explicit -c outranks both config and
-            # GIT_CONFIG_PARAMETERS, so parsing sees plain text regardless.
-            ["git", "-c", "color.ui=false", "-C", str(workdir), *args],
+            ["git", *_GIT_OVERRIDES, "-C", str(workdir), *args],
             capture_output=True,
-            text=True,
+            # surrogateescape both ways: a latin-1 file's diff decodes without
+            # error and a patch built from it goes back to `git apply` as the
+            # same bytes.
+            encoding="utf-8",
+            errors="surrogateescape",
             input=stdin,
             check=False,
         )
@@ -103,22 +133,67 @@ def _git_failure_message(exc: GitCommandError) -> str:
     return msgs.GIT_FAILED.text(repo=exc.repo, argv=" ".join(exc.argv), detail=detail)
 
 
+def _printable(text: str) -> str:
+    """Text safe for a strict UTF-8 stdout: undecodable bytes become U+FFFD."""
+    try:
+        return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+
+
+def _print(text: str) -> None:
+    print(_printable(text))
+
+
 def _out(message: msgs.Message, **fields) -> None:
-    print(message.text(**fields))
+    _print(message.text(**fields))
 
 
 def _err(message: msgs.Message, **fields) -> None:
     print(message.text(**fields), file=sys.stderr)
 
 
-def _porcelain(repo: str | Path | None = None) -> list[tuple[str, str]]:
-    """[(XY, path), ...] from ``git status --porcelain``."""
-    out = _git("status", "--porcelain", repo=repo).stdout
-    rows = []
-    for line in out.splitlines():
-        if not line:
+@dataclass(frozen=True, slots=True)
+class StatusRow:
+    """One ``git status`` entry. ``orig`` is the source path of a rename or copy."""
+
+    xy: str
+    path: str
+    orig: str | None = None
+
+    def shown(self) -> str:
+        return f"{self.orig} -> {self.path}" if self.orig else self.path
+
+
+def _toplevel(repo: str | Path | None = None) -> Path:
+    """The work tree root. Status paths are root-relative, so every git call
+    that takes them back runs from here, whatever directory ``-C`` named."""
+    top = _git("rev-parse", "--show-toplevel", repo=repo).stdout.rstrip("\n")
+    return Path(top) if top else _repo_path(repo)
+
+
+def _porcelain(repo: str | Path | None = None) -> list[StatusRow]:
+    """Rows from ``git status --porcelain=v1 -z -uall``.
+
+    ``-z`` gives raw, unquoted, root-relative paths and puts a rename's source
+    in its own field; ``-uall`` lists the files inside untracked directories
+    instead of ``newdir/``.
+    """
+    out = _git("status", "--porcelain=v1", "-z", "-uall", repo=repo).stdout
+    fields = out.split("\0")
+    rows: list[StatusRow] = []
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
             continue
-        rows.append((line[:2], line[3:]))
+        xy, path = entry[:2], entry[3:]
+        orig = None
+        if "R" in xy or "C" in xy:
+            orig = fields[i] if i < len(fields) else None
+            i += 1
+        rows.append(StatusRow(xy, path, orig))
     return rows
 
 
@@ -151,23 +226,30 @@ def _branch_name(repo: str | Path | None = None) -> str:
     return symbolic.stdout.strip() or msgs.SURVEY_NO_COMMITS.text()
 
 
-def _tracked_paths(rows: list[tuple[str, str]]) -> list[str]:
-    paths: list[str] = []
+def _tracked_rows(rows: list[StatusRow]) -> list[StatusRow]:
+    tracked: list[StatusRow] = []
     seen: set[str] = set()
-    for xy, path in rows:
-        if xy == "??" or path in seen:
+    for row in rows:
+        if row.xy == "??" or row.path in seen:
             continue
-        seen.add(path)
-        paths.append(path)
-    return paths
+        seen.add(row.path)
+        tracked.append(row)
+    return tracked
 
 
-def _print_diff_section(repo: Path, paths: list[str], *, cached: bool) -> None:
+def _diff_args(path: str, *, cached: bool, orig: str | None = None) -> tuple[str, ...]:
+    head = ("diff", "--cached", *_DIFF_FLAGS) if cached else ("diff", *_DIFF_FLAGS)
+    # A staged rename shows as a rename only when both ends are in the pathspec.
+    paths = (path, orig) if cached and orig else (path,)
+    return (*head, "--", *paths)
+
+
+def _print_diff_section(repo: Path, rows: list[StatusRow], *, cached: bool) -> None:
     _out(msgs.SURVEY_STAGED if cached else msgs.SURVEY_UNSTAGED)
     any_diff = False
-    for path in paths:
-        args = ("diff", "--cached", "--", path) if cached else ("diff", "--", path)
-        diff = _git(*args, repo=repo).stdout
+    for row in rows:
+        path = row.path
+        diff = _git(*_diff_args(path, cached=cached, orig=row.orig), repo=repo).stdout
         if not diff.strip():
             continue
         any_diff = True
@@ -177,14 +259,14 @@ def _print_diff_section(repo: Path, paths: list[str], *, cached: bool) -> None:
             _out(msgs.SURVEY_NO_TEXT_HUNKS)
         for i, h in enumerate(hunks, 1):
             _out(msgs.SURVEY_HUNK, index=i, header=h.splitlines()[0])
-            print(h.rstrip("\n"))
+            _print(h.rstrip("\n"))
     if not any_diff:
         _out(msgs.SURVEY_NONE)
 
 
 def cmd_survey(repo: str | Path | None = None) -> int:
-    repo_path = _repo_path(repo)
     try:
+        repo_path = _toplevel(repo)
         branch = _branch_name(repo_path)
         rows = _porcelain(repo_path)
     except GitCommandError as exc:
@@ -196,13 +278,13 @@ def cmd_survey(repo: str | Path | None = None) -> int:
 
     _out(msgs.SURVEY_STATUS)
     if rows:
-        for xy, path in rows:
-            _out(msgs.SURVEY_STATUS_ROW, xy=xy, path=path)
+        for row in rows:
+            _out(msgs.SURVEY_STATUS_ROW, xy=row.xy, path=row.shown())
     else:
         _out(msgs.SURVEY_CLEAN)
 
-    tracked = _tracked_paths(rows)
-    untracked = [p for xy, p in rows if xy == "??"]
+    tracked = _tracked_rows(rows)
+    untracked = [row.path for row in rows if row.xy == "??"]
 
     try:
         _print_diff_section(repo_path, tracked, cached=True)
@@ -220,7 +302,7 @@ def cmd_survey(repo: str | Path | None = None) -> int:
     _out(msgs.SURVEY_LOG)
     log = _git("log", "--oneline", "-8", check=False, repo=repo_path)
     if log.returncode == 0 and log.stdout.strip():
-        print(log.stdout.rstrip("\n"))
+        _print(log.stdout.rstrip("\n"))
     else:
         _out(msgs.SURVEY_NO_HISTORY)
     return 0
@@ -245,9 +327,9 @@ def _wanted_hunks(spec: str) -> list[int] | None:
 
 
 def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
-    repo_path = _repo_path(repo)
     try:
-        rows = dict((p, xy) for xy, p in _porcelain(repo_path))
+        repo_path = _toplevel(repo)
+        rows = {row.path: row.xy for row in _porcelain(repo_path)}
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 2 if exc.kind == "not-a-repo" else 1
@@ -272,7 +354,7 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
         return 2
 
     try:
-        diff = _git("diff", "--", path, repo=repo_path).stdout
+        diff = _git(*_diff_args(path, cached=False), repo=repo_path).stdout
     except GitCommandError as exc:
         print(_git_failure_message(exc), file=sys.stderr)
         return 1
@@ -287,7 +369,9 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
 
     patch = header + "".join(hunks[n - 1] for n in want)
     try:
-        _git("apply", "--cached", "--recount", stdin=patch, repo=repo_path)
+        # --whitespace=nowarn: apply.whitespace=error in config would refuse a
+        # hunk the operator wrote; staging must not judge content.
+        _git("apply", "--cached", "--recount", "--whitespace=nowarn", stdin=patch, repo=repo_path)
     except GitCommandError as exc:
         detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_APPLY_FAILED.text()
         _err(msgs.STAGE_APPLY_FAILED, detail=detail, path=path)
