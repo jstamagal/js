@@ -63,3 +63,15 @@ def test_clean_typed_result_is_passed_through_as_is():
 
     result = ToolResult.text("fine")
     assert runtime._cap_result(result, 10_000, 0) is result
+
+
+def test_surrogate_dict_keys_never_merge_into_other_keys():
+    from js.toolkit.core import ToolResult
+
+    value = {"\udcff": "FIRST", "?": "SECOND", "\ud800": "THIRD", "\\udcff": "FOURTH"}
+    out = runtime._cap_result(ToolResult([{"type": "structured", "value": value}]), 10_000, 0)
+    fixed = out.blocks[0]["value"]
+    assert sorted(fixed.values()) == ["FIRST", "FOURTH", "SECOND", "THIRD"]
+    assert fixed["?"] == "SECOND" and fixed["\\udcff"] == "FOURTH"
+    for key in fixed:
+        key.encode("utf-8")

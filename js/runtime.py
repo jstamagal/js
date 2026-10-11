@@ -665,12 +665,29 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     return ToolResult.text(cap_text(result.dehydrated() + marker, budget, marker))
 
 
+def _well_formed_key(key: Any, taken: set) -> Any:
+    """A dict key made encodable without merging it into another key: a lone
+    surrogate is spelled `\\udcff`, and a clash with a key already present
+    gets `~` appended until it is unique."""
+    if not isinstance(key, str) or well_formed(key) is key:
+        return key
+    fixed = key.encode("utf-8", "backslashreplace").decode("utf-8")
+    while fixed in taken:
+        fixed += "~"
+    return fixed
+
+
 def _well_formed_value(value: Any) -> Any:
     """``value`` with every string in it made strictly UTF-8 encodable."""
     if isinstance(value, str):
         return well_formed(value)
     if isinstance(value, dict):
-        return {_well_formed_value(k): _well_formed_value(v) for k, v in value.items()}
+        clean_keys = {k for k in value if not isinstance(k, str) or well_formed(k) is k}
+        out: dict = {}
+        for k, v in value.items():
+            nk = _well_formed_key(k, clean_keys | out.keys())
+            out[nk] = _well_formed_value(v)
+        return out
     if isinstance(value, (list, tuple)):
         return type(value)(_well_formed_value(v) for v in value)
     return value
