@@ -21,7 +21,6 @@ import js.session_store as ss
 
 builtins_open = builtins.open
 
-import js.session_store as ss
 
 
 def test_append_record_survives_link_file_replace(tmp_path):
@@ -112,13 +111,11 @@ def test_two_link_files_do_not_lose_a_record(tmp_path):
 
 
 def patch_object_flock(side_effect):
-    from unittest.mock import patch
 
     return patch.object(ss.fcntl, "flock", side_effect=side_effect)
 
 
 def patch_object_replace(side_effect):
-    from unittest.mock import patch
 
     return patch.object(ss.os, "replace", side_effect=side_effect)
 
@@ -149,7 +146,7 @@ def test_open_locked_closes_the_stream_when_stat_fails(tmp_path, monkeypatch):
             # frame's stream local) alive across the check below
             return exc
         return None
-    retained = [call()]
+    _retained = [call()]
     monkeypatch.setattr(ss.os, "stat", real_stat)
     gc.collect()
 

@@ -68,7 +68,7 @@ def test_clean_typed_result_is_passed_through_as_is():
 def test_surrogate_dict_keys_never_merge_into_other_keys():
     from js.toolkit.core import ToolResult
 
-    value = {"\udcff": "FIRST", "?": "SECOND", "\ud800": "THIRD", "\\udcff": "FOURTH"}
+    value = {"\udcff": "FIRST", "?": "SECOND", "\ud800": "THIRD", "\\udcff": "FOURTH"}  # noqa: F601 - two different lone surrogates; ruff compares them as equal
     out = runtime._cap_result(ToolResult([{"type": "structured", "value": value}]), 10_000, 0)
     fixed = out.blocks[0]["value"]
     assert sorted(fixed.values()) == ["FIRST", "FOURTH", "SECOND", "THIRD"]

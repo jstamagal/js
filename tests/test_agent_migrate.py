@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from js import persona
+from js import agent_migration
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "migrate_agents.py"
 _spec = importlib.util.spec_from_file_location("migrate_agents", _SCRIPT)
@@ -158,8 +159,6 @@ def test_an_existing_agent_yaml_loses_only_its_dead_entries(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "grep" in out and "sem_search" in out
 
-
-from js import agent_migration
 
 
 def _keep_all(_entry):

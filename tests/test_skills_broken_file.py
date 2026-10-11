@@ -8,7 +8,6 @@ directory raises OSError and stops the whole session from starting.
 from pathlib import Path
 import os
 
-import pytest
 
 from js.skills import discover_skills
 

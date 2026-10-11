@@ -448,7 +448,6 @@ def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
 def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     """A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not OSError;
     embeds nothing either way (ALL-CLAIMS:379)."""
-    import sys
     path = tmp_path / "bin.dat"
     path.write_bytes(b"\xff\xfe\x00binary\xff")
     # warns and keeps the directive literal (on_error=warn default)
