@@ -133,3 +133,40 @@ def test_non_table_top_level_value_is_quarantined(store):
     logins.save_login(logins.Login(provider_id="other", provider_api_key="k2"))
     data = tomllib.loads((store / "logins.toml").read_text(encoding="utf-8"))
     assert data["stray"] == 1
+
+
+def test_quarantine_does_not_outlive_a_deleted_file(store):
+    # maggie #625: load a bad section, delete the file, save a new login —
+    # the deleted bad section must not come back from a cache.
+    (store / "logins.toml").write_text("[bad]\nprovider_id = 5\n", encoding="utf-8")
+    logins.load_logins()
+    (store / "logins.toml").unlink()
+    logins.save_login(logins.Login(provider_id="new", provider_api_key="k"))
+    data = tomllib.loads((store / "logins.toml").read_text(encoding="utf-8"))
+    assert set(data) == {"new"}
+
+
+def test_quarantine_does_not_leak_into_another_store(tmp_path: Path):
+    # maggie #619 / mikeno #627: a config-dir switch must not carry A's
+    # quarantined section or A's unknown fields into B.
+    store_a, store_b = tmp_path / "a", tmp_path / "b"
+    store_a.mkdir()
+    (store_a / "logins.toml").write_text(
+        "[bad]\nprovider_id = 5\n[good]\nprovider_id = \"good\"\nprovider_api_key = \"k\"\nfuture = 1\n",
+        encoding="utf-8",
+    )
+    try:
+        logins.set_config_dir(store_a)
+        assert list(logins.load_logins()) == ["good"]
+        logins.set_config_dir(store_b)
+        assert logins.load_logins() == {}
+        logins.save_login(logins.Login(provider_id="good", provider_api_key="k2"))
+        logins.save_login(logins.Login(provider_id="new", provider_api_key="k"))
+        data = tomllib.loads((store_b / "logins.toml").read_text(encoding="utf-8"))
+        assert set(data) == {"good", "new"}
+        assert data["good"] == {"provider_id": "good", "provider_api_key": "k2"}
+        # And A is untouched.
+        data_a = tomllib.loads((store_a / "logins.toml").read_text(encoding="utf-8"))
+        assert data_a["bad"] == {"provider_id": 5} and data_a["good"]["future"] == 1
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
