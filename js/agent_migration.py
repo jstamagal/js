@@ -283,7 +283,7 @@ def plan(agent_dir: Path, keep: Keep, *, _beside_manifest: bool = False) -> tupl
 def _plan_both(agent_dir: Path, old: Path, keep: Keep) -> tuple[Result, Path | None, str | None]:
     """agent.yaml and an old manifest side by side. When the old one converts to
     exactly the settings agent.yaml already holds, an earlier run stopped half
-    way: finish it (agent.yaml is rewritten with its own text, the old manifest
+    way: finish it (agent.yaml is left byte for byte as it is, the old manifest
     goes or keeps only its body). Anything else is for a person to merge."""
     both = Result(agent_dir, "skip", msgs.AGENT_MIGRATE_BOTH.text(file=old.name)), None, None
     result, legacy, new_body = plan(agent_dir, keep, _beside_manifest=True)
@@ -296,8 +296,9 @@ def _plan_both(agent_dir: Path, old: Path, keep: Keep) -> tuple[Result, Path | N
         return both
     if not same:
         return both
+    # manifest_text "" tells _apply not to write agent.yaml.
     return Result(agent_dir, "migrate", msgs.AGENT_MIGRATE_CONVERTED.text(file=old.name),
-                  current_text, result.dropped), old, new_body
+                  "", result.dropped), old, new_body
 
 
 def migrate_agent_dir(agent_dir: Path, *, apply: bool = False, keep: Keep | None = None) -> Result:
@@ -320,13 +321,14 @@ def migrate_agent_dir(agent_dir: Path, *, apply: bool = False, keep: Keep | None
         return Result(agent_dir, "error", _one_line(exc))
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Replace `path` with `text` whole: a unique temp file beside it, then os.replace."""
+def _write_atomic(path: Path, data: str | bytes) -> None:
+    """Replace `path` with `data` whole: a unique temp file beside it, then
+    os.replace. Text is written as UTF-8 with no newline translation."""
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".migrating", dir=path.parent)
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data if isinstance(data, bytes) else data.encode("utf-8"))
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
@@ -341,9 +343,11 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
     """
     manifest = agent_dir / persona.AGENT_MANIFEST
     old_text = old.read_text(encoding="utf-8")
-    # A finished-half-way run already left agent.yaml (see _plan_both): undoing
-    # puts that text back instead of removing the file.
-    before = manifest.read_text(encoding="utf-8") if manifest.exists() else None
+    if not result.manifest_text:
+        # Finishing a half-done run: agent.yaml already holds these settings
+        # and is the user's file now; only the old manifest changes.
+        return _finish_old(result, old, new_body, undo=lambda: None)
+    before = manifest.read_bytes() if manifest.exists() else None
 
     def undo_manifest() -> None:
         if before is None:
@@ -362,13 +366,18 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_RESTORED.text(file=old.name, error=_one_line(exc)))
     if result.action != "migrate":
         return result
+    return _finish_old(result, old, new_body, undo=undo_manifest)
+
+
+def _finish_old(result: Result, old: Path, new_body: str | None, *, undo: Callable[[], None]) -> Result:
+    """Remove the old manifest, or rewrite a frontmatter file to its body alone."""
     try:
         if new_body is not None and new_body.strip():
             _write_atomic(old, new_body.rstrip() + "\n")
         else:
             old.unlink()
     except OSError:
-        undo_manifest()
+        undo()
         raise
     return result
 

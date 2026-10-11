@@ -298,3 +298,13 @@ def test_mcp_globs_and_project_agents_survive_a_partial_registry(tmp_path, monke
     result = agent_migration.migrate_agent_dir(agent, apply=True, keep=keep)
     assert result.dropped == ["future_agent:eager"]
     assert (agent / "agent.yaml").read_text(encoding="utf-8") == text.replace("  - future_agent:eager\n", "")
+
+
+def test_finishing_both_never_rewrites_the_existing_agent_yaml(tmp_path):
+    """neema #705: the user's agent.yaml (CRLF, comments) stays byte for byte."""
+    yaml_bytes = b"# mine\r\ntools:\r\n  - read:eager\r\n"
+    agent = _agent(tmp_path, "both", {"00-tools.yaml": "tools: [read]\n"})
+    (agent / "agent.yaml").write_bytes(yaml_bytes)
+    assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "migrate"
+    assert (agent / "agent.yaml").read_bytes() == yaml_bytes
+    assert not (agent / "00-tools.yaml").exists()
