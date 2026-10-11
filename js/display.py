@@ -288,10 +288,12 @@ class Display:
         value = clean(self._source)
         starts = _block_starts(value)
         if len(starts) > 1:
-            lines = value.splitlines(keepends=True)
+            # markdown-it numbers lines by "\n" only; splitlines() would also
+            # split on U+2028/U+2029, which clean() keeps, and cut mid-block.
+            lines = value.split("\n")
             cut = starts[-1]
-            self._commit("".join(lines[:cut]))
-            value = "".join(lines[cut:])
+            self._commit("\n".join(lines[:cut]) + "\n")
+            value = "\n".join(lines[cut:])
             self._source = value
         if value.strip():
             separator = "\n" if self._committed_any else ""
@@ -557,6 +559,7 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
         return ""
     width = width or terminal_width()
     output = tool_output(name, result)
+    name = clean(name)  # the model names the tool; every byte shown passes clean()
     head = CHROME_ERROR if output.is_error or output.exit_code else CHROME
     if level == 1:
         room = width - len(TOOL_MARKER) - len(metrics_line(name, output)) - 3
