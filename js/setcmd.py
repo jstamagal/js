@@ -213,6 +213,10 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     if spec is None:
         prefix_spec = _s.parent_spec(key)
+        if prefix_spec is not None and prefix_spec.type != "map":
+            # Children of a registered non-map knob are not a valid unset target
+            # (apply_set rejects them for the same reason).
+            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
         if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
             return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     missing = object()
@@ -227,8 +231,15 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
         key = spec.key
         display = render_value(spec, None if after is missing else after)
     else:
-        display = "<unset>" if after is missing else str(after)
-    entry = msgs.SETTING_ALREADY_UNSET if before is missing else msgs.SETTING_VALUE
+        prefix_spec = _s.parent_spec(key)
+        secret = prefix_spec is not None and prefix_spec.secret
+        if after is missing:
+            display = "<unset>"
+        elif secret:
+            display = "<set>"
+        else:
+            display = str(after)
+    entry = msgs.SETTING_VALUE if changed else msgs.SETTING_ALREADY_UNSET
     return CommandResult(
         handled=True,
         changed=changed,
