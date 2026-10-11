@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from . import session_store
+from .text_bytes import well_formed
 
 USER = "you"
 ASSISTANT = "ape"
@@ -50,6 +51,19 @@ _INDENT = " " * 12
 _EXIT = re.compile(r"^exit=(-?\d+)$", re.MULTILINE)
 _ARG_WIDTH = 200
 _CACHED_FILES = 64
+
+
+def _timestamp(value: Any) -> float | None:
+    """``value`` as a record time, or None when it is not one a clock can
+    show: not a number, a bool, NaN or infinite, or out of datetime's range
+    (milliseconds by mistake, 1e20). One bad record must not poison the file."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        datetime.fromtimestamp(value)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return value
 
 
 def _clock(ts: float | None) -> str:
@@ -105,7 +119,7 @@ def _call_line(arguments: Any) -> str:
 
 def _outcome(content: Any) -> str:
     text = _content_text(content)
-    size = f"{len(text.encode('utf-8'))}B"
+    size = f"{len(text.encode('utf-8', 'replace'))}B"
     code = _EXIT.search("\n".join(text.split("\n", 6)[:6]))
     if code is not None:
         return f"exit {code.group(1)}, {size}"
@@ -215,12 +229,10 @@ class _Transcript:
             # Written after the session ends, so its time is not the session's.
             self.tagging = record
             return
-        ts = record.get("ts")
-        if isinstance(ts, (int, float)):
+        ts = _timestamp(record.get("ts"))
+        if ts is not None:
             self.first_ts = ts if self.first_ts is None else min(self.first_ts, ts)
             self.last_ts = ts if self.last_ts is None else max(self.last_ts, ts)
-        else:
-            ts = None
         kind = record.get("kind")
         if kind == "session_metadata":
             self._metadata(record)
@@ -239,8 +251,8 @@ class _Transcript:
             self._identify(record)
 
     def _metadata(self, record: dict) -> None:
-        if self.started_ts is None and isinstance(record.get("ts"), (int, float)):
-            self.started_ts = record["ts"]
+        if self.started_ts is None:
+            self.started_ts = _timestamp(record.get("ts"))
         if isinstance(record.get("agent"), str):
             self.last_agent = record["agent"]
             if self.agent is None:
@@ -305,8 +317,13 @@ class _Transcript:
             return
         compaction = memory._parse_compaction_marker(marker)
         if compaction is not None:
+            keep_from = compaction.get("keep_from", len(self.replay))
+            if isinstance(keep_from, bool) or not isinstance(keep_from, int):
+                # A destructive mark with a payload no writer produces (null, a
+                # string, a float) is inert: guessing would cut real history.
+                return
             self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
-            keep_from = max(0, min(int(compaction.get("keep_from", len(self.replay))), len(self.replay)))
+            keep_from = max(0, min(keep_from, len(self.replay)))
             synthetic = [{"role": "user"}] * (2 if compaction.get("rehydrated") else 1)
             self.replay[:] = [*synthetic, *self.replay[keep_from:]]
 
@@ -486,9 +503,14 @@ _parsed: OrderedDict[str, _Parsed] = OrderedDict()
 def _write(path: Path, text: str) -> None:
     staging = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
-        staging.write_text(text, encoding="utf-8")
+        # A lone surrogate (surrogateescape tool output, half an emoji pair)
+        # is written as `?`; strict encoding raised out of refresh() and into
+        # every later append on the session.
+        staging.write_bytes(text.encode("utf-8", "replace"))
         os.replace(staging, path)
     except OSError:
+        pass
+    finally:
         try:
             staging.unlink()
         except OSError:
@@ -517,7 +539,8 @@ def refresh(session_file: Path) -> None:
         except OSError:
             return
         end = data.rfind(b"\n") + 1
-        for line in data[:end].decode("utf-8", errors="replace").splitlines():
+        # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
+        for line in data[:end].decode("utf-8", errors="replace").split("\n"):
             _feed_line(parsed.transcript, line)
         parsed.offset += end
         _parsed[key] = parsed
@@ -533,10 +556,22 @@ def _index(session_file: Path, transcript: _Transcript, *, size: int, mtime_ns: 
     from . import session_index
 
     try:
-        session_index.store(session_file, transcript.summary(), transcript.search_lines(),
-                            size=size, mtime_ns=mtime_ns)
+        session_index.store(session_file, _well_formed(transcript.summary()),
+                            _well_formed(transcript.search_lines()), size=size, mtime_ns=mtime_ns)
     except (OSError, sqlite3.Error):
         pass
+
+
+def _well_formed(value: Any) -> Any:
+    """``value`` with each lone surrogate in its strings replaced by `?`, so
+    sqlite's strict UTF-8 binding takes it."""
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        return {key: _well_formed(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_well_formed(item) for item in value)
+    return value
 
 
 def forget(session_file: Path) -> None:
