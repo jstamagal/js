@@ -473,7 +473,8 @@ def login_device(*, open_browser: bool = True) -> Login:
                 json={"device_auth_id": device_auth_id, "user_code": user_code},
                 headers={"Content-Type": "application/json"},
             )
-            if poll_response.status_code in {403, 404}:
+            pending, poll_interval = _device_poll_pending(poll_response, poll_interval)
+            if pending:
                 continue
             if poll_response.status_code >= 400:
                 raise RuntimeError(
@@ -490,6 +491,55 @@ def login_device(*, open_browser: bool = True) -> Login:
                 )
             return login_from_token(exchange_code_for_token(code, verifier, DEVICE_REDIRECT_URI))
     raise RuntimeError("OpenAI Codex device authorization timed out")
+
+
+_DEVICE_SLOW_DOWN_STEP_S = 5.0
+
+
+def _device_poll_pending(response: httpx.Response, poll_interval: float) -> tuple[bool, float]:
+    """Whether a device-token poll says "not yet", and the interval to use next.
+
+    403/404 are how the endpoint says pending today. A 429, or an RFC 8628
+    ``slow_down``, also means keep waiting, with the interval stretched by
+    5s (RFC 8628 §3.5): neither is a failure of the login in progress
+    (ALL-CLAIMS codex_auth.py:86). ``Retry-After`` is honoured when sent.
+    """
+    status = response.status_code
+    error = _error_code(response)
+    if error == "slow_down" or status == 429:
+        retry_after = _retry_after_seconds(response)
+        slower = max(poll_interval + _DEVICE_SLOW_DOWN_STEP_S, retry_after or 0.0)
+        return True, slower
+    if status in {403, 404} or error == "authorization_pending":
+        return True, poll_interval
+    return False, poll_interval
+
+
+def _error_code(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, str):
+        return error
+    if isinstance(error, dict):
+        code = error.get("code")
+        return code if isinstance(code, str) else None
+    return None
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    return seconds if seconds == seconds and 0 <= seconds < 3600 else None
 
 
 def login_from_token(token: CodexToken) -> Login:
