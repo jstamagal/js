@@ -723,3 +723,61 @@ def test_top_level_cli_dispatches_models_edit_from_console_argv(monkeypatch):
 
     assert cli.main() == 0
     assert captured == {"args": ["models-edit", "deepseek"]}
+
+
+def test_readd_with_new_shape_uses_the_new_sdk(monkeypatch, tmp_path: Path):
+    """Re-adding a saved custom provider under a new shape: the freshly picked
+    sdk wins over the saved one, same order as the shape (ALL-CLAIMS :366)."""
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(
+        provider_id="mybox", provider_api_key="sk", provider_base_url="http://box.test/v1",
+        sdk_provider_id="openai", shape_provider_id="openai-completions",
+    ))
+
+    def scripted_input(prompt, *, default=None, secret=False):
+        return default if default is not None else ""
+
+    monkeypatch.setattr(login_cli, "_input", scripted_input)
+    try:
+        provider = providers.provider_for_login("anthropic-custom")
+        login = login_cli._collect_api_login("mybox", "anthropic", provider, shape_provider_id="anthropic-custom")
+        assert login is not None
+        assert login.shape_provider_id == "anthropic-custom"
+        assert login.sdk_provider_id == "anthropic"
+    finally:
+        _reset_logins()
+
+
+def test_login_without_a_terminal_fails_with_one_clear_error(monkeypatch, capsys):
+    """Every picker needs stdin and stdout to be a terminal; without one `js
+    --login` exits 2 with a message instead of a curses traceback."""
+    import curses
+
+    class Stream:
+        def __init__(self, tty):
+            self.tty = tty
+
+        def isatty(self):
+            return self.tty
+
+        def write(self, _text):
+            return 0
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(curses, "wrapper", lambda *a, **k: (_ for _ in ()).throw(AssertionError("curses ran")))
+    for stdin_tty, stdout_tty in ((False, True), (True, False)):
+        monkeypatch.setattr(sys, "stdin", Stream(stdin_tty))
+        monkeypatch.setattr(sys, "stdout", Stream(stdout_tty))
+        assert login_cli.main([]) == 2
+        err = capsys.readouterr().err
+        assert "interactive terminal" in err and "Traceback" not in err
+        assert login_cli._select_models_to_cache("p", ["m1", "m2"]) == ["m1", "m2"]
+        for picker in (login_cli._select_provider, login_cli._select_api_shape):
+            try:
+                picker()
+            except login_cli.NoTerminalError:
+                pass
+            else:
+                raise AssertionError(f"{picker.__name__} did not refuse")

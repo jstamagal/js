@@ -212,15 +212,31 @@ def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
         )
     assert "model_id" not in captured
 
-    # An explicit base URL is a deliberate endpoint choice: the gateway path stands.
+    # An explicit base URL is a deliberate endpoint choice: it is honoured as an
+    # OpenAI-compatible endpoint with the given key, never the SDK gateway.
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw-decoy")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-decoy")
     result = model_client.resolve_model(
         "deepseek/deepseek-v4-flash",
         provider_id=None,
-        provider_base_url="http://gateway.test/v1",
-        provider_api_key=None,
+        provider_base_url="http://127.0.0.1:9/v1",
+        provider_api_key="sk-explicit",
+        provider_headers={"X-Test": "1"},
     )
-    assert captured["model_id"] == "deepseek/deepseek-v4-flash"
-    assert result.id == "fake-id"
+    assert "model_id" not in captured
+    assert result.id == "deepseek/deepseek-v4-flash"
+    assert result.provider.base_url == "http://127.0.0.1:9/v1"
+    assert result.provider.api_key == "sk-explicit"
+    assert result.provider.headers.get("X-Test") == "1"
+    assert "gateway" not in type(result.provider).__name__.lower()
+    assert isinstance(result.provider.protocol_override, model_client._ReasoningContentProtocol)
+
+    # No key given: keyless local endpoint, never the env decoy.
+    keyless = model_client.resolve_model(
+        "local-model", provider_id=None, provider_base_url="http://127.0.0.1:9/v1", provider_api_key=None,
+    )
+    assert keyless.provider.base_url == "http://127.0.0.1:9/v1"
+    assert keyless.provider.api_key == ""
 
 
 def test_stream_model_maps_missing_api_key_typeerror(monkeypatch):

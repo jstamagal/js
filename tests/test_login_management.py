@@ -35,6 +35,9 @@ class Screen:
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path)
     monkeypatch.setattr(curses, "curs_set", lambda _: None)
+    # Pickers refuse without a terminal; these tests drive them through a fake
+    # curses screen, so they stand in for one.
+    monkeypatch.setattr(login_cli, "_interactive", lambda: True)
 
 
 def test_provider_search_returns_original_index():

@@ -234,7 +234,7 @@ def _select_models_to_cache(
     """
     if not models:
         return models
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not _interactive():
         return models
     dialects = _dialect_map(provider_id) if annotate_dialects else {}
     cache = load_model_cache()
@@ -255,6 +255,27 @@ def _select_models_to_cache(
         if model_id and model_id not in selected:
             selected.append(model_id)
     return selected
+
+
+def _interactive() -> bool:
+    """curses needs a terminal on both ends; a piped stdin or stdout makes
+    `curses.wrapper` die with `nocbreak() returned ERR`."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+class NoTerminalError(RuntimeError):
+    """A picker was needed but stdin/stdout is not a terminal."""
+
+
+def _menu(*args, **kwargs):
+    """`curses.wrapper` for a picker; NoTerminalError instead of a curses crash
+    when there is no terminal."""
+    if not _interactive():
+        raise NoTerminalError("needs an interactive terminal (stdin and stdout must be a TTY)")
+    return curses.wrapper(*args, **kwargs)
 
 
 def _login_provider_rows() -> list[tuple[str, str, str]]:
@@ -290,7 +311,7 @@ def _select_provider() -> str | None:
     rows = _login_provider_rows()
     items = [msgs.LOGIN_ADD_CUSTOM.text(), *[f"{pid:<28} {name} [{source}]" for pid, name, source in rows]]
     sys.stdout.flush()
-    idx = curses.wrapper(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text())
+    idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text())
     if idx is None:
         return None
     if idx == 0:
@@ -301,7 +322,7 @@ def _select_provider() -> str | None:
 def _select_api_shape() -> tuple[str, str] | None:
     items = [f"{pid}  {desc}" for pid, _sdk, desc in _API_SHAPES]
     sys.stdout.flush()
-    idx = curses.wrapper(_curses_menu, items, msgs.LOGIN_PICK_SHAPE.text())
+    idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_SHAPE.text())
     if idx is None:
         return None
     pid, sdk, _desc = _API_SHAPES[idx]
@@ -363,7 +384,9 @@ def _collect_api_login(
     # Never auto-take an env key: the operator may keep decoys there, or want a
     # different one. Env keys are OFFERED below, never silently used.
     api_key = (existing.provider_api_key if existing else None) or provider.default_api_key
-    effective_sdk = (existing.sdk_provider_id if existing and existing.sdk_provider_id else None) or sdk_provider_id or provider.effective_sdk_provider_id
+    # The sdk the operator just picked wins over the saved one, the same order
+    # as effective_shape below; otherwise a re-added shape keeps the old transport.
+    effective_sdk = sdk_provider_id or (existing.sdk_provider_id if existing and existing.sdk_provider_id else None) or provider.effective_sdk_provider_id
     effective_shape = (
         shape_provider_id
         or (existing.shape_provider_id if existing and existing.shape_provider_id else None)
@@ -613,7 +636,7 @@ def _manage_providers() -> int:
         items.extend(_provider_details(saved[pid], len(cached.get(pid, [])))[0] for pid in ids)
         items.append(msgs.LOGIN_ADD_REGISTRY.text())
         details = [[], *[_provider_details(saved[pid], len(cached.get(pid, []))) for pid in ids], []]
-        choice = curses.wrapper(_curses_menu, items, msgs.LOGIN_MANAGE_PROVIDERS.text(), details=details)
+        choice = _menu(_curses_menu, items, msgs.LOGIN_MANAGE_PROVIDERS.text(), details=details)
         if choice is None:
             return 0
         if choice == 0 or choice == len(items) - 1:
@@ -636,7 +659,7 @@ def _manage_models(login: Login) -> None:
         actions = [msgs.LOGIN_MODELS_SELECT.text(), msgs.LOGIN_MODELS_ADD.text(),
                    msgs.LOGIN_MODELS_REFETCH.text(), msgs.LOGIN_BACK.text()]
         title = msgs.LOGIN_MODELS_TITLE.text(provider=login.provider_id, count=len(cached))
-        choice = curses.wrapper(_curses_menu, actions, f"{title}  {status}")
+        choice = _menu(_curses_menu, actions, f"{title}  {status}")
         status = ""
         if choice is None or choice == 3:
             return
@@ -667,8 +690,8 @@ def _manage_saved_provider(provider_id: str) -> None:
         details = _provider_details(login, len(load_model_cache().get(provider_id, [])))
         actions = [msgs.LOGIN_UPDATE.text(), msgs.LOGIN_MODELS.text(), msgs.LOGIN_BACK.text(),
                    msgs.LOGIN_REMOVE.text()]
-        choice = curses.wrapper(_curses_menu, actions, msgs.LOGIN_MANAGE_ONE.text(provider=provider_id),
-                                details=[details] * len(actions))
+        choice = _menu(_curses_menu, actions, msgs.LOGIN_MANAGE_ONE.text(provider=provider_id),
+                       details=[details] * len(actions))
         if choice is None or choice == 2:
             return
         if choice == 0:
@@ -780,6 +803,14 @@ def _run_logout(provider_id: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except NoTerminalError as exc:
+        msgs.warn(msgs.LOGIN_FAILED, error=exc)
+        return 2
+
+
+def _main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
         return _run_login(None)
