@@ -67,17 +67,18 @@ def choice(*allowed: str) -> Callable[[Any], Any]:
 
 
 def names(raw: Any) -> Any:
-    """A list of non-empty strings, as a tuple."""
+    """A list of non-empty strings, as a tuple, each stripped: ` PATH ` would
+    match no environment variable."""
     if isinstance(raw, (list, tuple)) and all(isinstance(item, str) and item.strip() for item in raw):
-        return tuple(raw)
+        return tuple(item.strip() for item in raw)
     return INVALID
 
 
 def paths(raw: Any) -> Any:
-    """A list of path strings, as a tuple; null is no paths."""
+    """A list of non-empty path strings, as a tuple; null is no paths."""
     if raw is None:
         return ()
-    if isinstance(raw, (list, tuple)) and all(isinstance(item, str) for item in raw):
+    if isinstance(raw, (list, tuple)) and all(isinstance(item, str) and item.strip() for item in raw):
         return tuple(raw)
     return INVALID
 
@@ -149,6 +150,20 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
 _MISSING = object()
 
 
+def _in_range(row: TurnSetting, value: Any) -> Any:
+    """``value``, or INVALID when `set` would refuse it for this knob (a
+    negative or zero where the knob needs more): one range rule, the one
+    settings.coerce_value keeps, for values that skipped it (a JSON store,
+    an agent.yaml)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return value
+    spec = _settings.SPEC_BY_KEY.get(row.key)
+    if spec is None or spec.type != "int":
+        return value
+    _value, error = _settings.coerce_value(spec, str(value))
+    return INVALID if error else value
+
+
 def project(settings: dict | None, fallback: object | None = None) -> dict[str, Any]:
     """attr -> effective value for every row, read from ``settings``. A value
     the store does not hold, or holds in a form the row cannot read, is
@@ -157,9 +172,11 @@ def project(settings: dict | None, fallback: object | None = None) -> dict[str, 
     values: dict[str, Any] = {}
     for row in TURN_SETTINGS:
         raw = _settings.get_dotted(store, tuple(row.key.split(".")), _MISSING)
-        value = INVALID if raw is _MISSING else row.read(raw)
+        value = INVALID if raw is _MISSING else _in_range(row, row.read(raw))
         if value is INVALID:
-            value = getattr(fallback, row.attr) if fallback is not None else row.default()
+            value = getattr(fallback, row.attr, _MISSING) if fallback is not None else _MISSING
+            if value is _MISSING:
+                value = row.default()
         values[row.attr] = value
     return values
 

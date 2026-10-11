@@ -67,3 +67,33 @@ def test_shell_row_shrinks_when_fs_search_is_absent():
     text_without = render_tool_name_sections(shell.description, without_fs, tool="shell")
     assert "fs_search" in text_with
     assert "fs_search" not in text_without
+
+
+# --- the command line (ALL-CLAIMS.md:618,621) ---------------------------------
+
+import pytest  # noqa: E402
+
+from js import tooldiag  # noqa: E402
+
+
+@pytest.mark.parametrize("surface", ["shell:lazy", "read:eager,shell"])
+def test_noun_modifier_surfaces_are_taken_as_typed(surface, capsys):
+    assert tooldiag.main(["--surface", surface]) == 0
+    assert "shell" in capsys.readouterr().out
+
+
+def test_a_bad_modifier_is_one_error_not_a_traceback(capsys):
+    assert tooldiag.main(["--surface", "shell:sideways"]) == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err and captured.out == ""
+
+
+@pytest.mark.parametrize("surface", [",", " , ", "", " ", "\t"])
+def test_a_surface_naming_nothing_is_refused_not_the_full_table(surface, capsys):
+    assert tooldiag.main(["--surface", surface]) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_no_surface_flag_still_prints_the_full_table(capsys):
+    assert tooldiag.main([]) == 0
+    assert "TOTAL" in capsys.readouterr().out

@@ -134,3 +134,40 @@ def test_config_and_context_declare_the_rows_as_fields():
     assert {row.attr for row in TURN_SETTINGS if row.on_context} <= context_fields
     assert issubclass(Config, turn_settings.ConfigSettings)
     assert issubclass(ToolContext, turn_settings.ContextSettings)
+
+
+# --- the store's values get set's range rules (ALL-CLAIMS.md:639-643) ---------
+
+
+@pytest.mark.parametrize("key, raw", [
+    ("limits.subagent_max_workers", 0),
+    ("tools.terminal_cols", -1),
+    ("lsp.timeout_s", "0"),
+    ("limits.max_tool_calls_per_message", "-2"),
+])
+def test_a_value_set_would_refuse_falls_back_to_the_default(key, raw):
+    group, name = key.split(".")
+    row = next(row for row in TURN_SETTINGS if row.key == key)
+    assert project({group: {name: raw}})[row.attr] == row.default()
+
+
+def test_a_valid_store_value_still_wins():
+    assert project({"limits": {"max_read_lines": "7"}})["max_read_lines"] == 7
+    # max_parallel_tools keeps its clamp to one, as before.
+    assert project({"runtime": {"max_parallel_tools": "0"}})["max_parallel_tools"] == 1
+
+
+def test_shell_env_allow_names_are_stripped():
+    assert project({"limits": {"shell_env_allow": [" PATH ", "HOME"]}})["shell_env_allow"] == ("PATH", "HOME")
+
+
+def test_an_empty_jail_bind_entry_is_refused():
+    assert turn_settings.paths([""]) is INVALID
+    assert turn_settings.paths(["  "]) is INVALID
+    assert turn_settings.paths(["/a", "/b:ro"]) == ("/a", "/b:ro")
+
+
+def test_a_partial_fallback_takes_the_default_for_what_it_lacks():
+    values = project({"limits": {"max_read_lines": "x"}}, fallback=SimpleNamespace())
+    row = next(row for row in TURN_SETTINGS if row.attr == "max_read_lines")
+    assert values["max_read_lines"] == row.default()

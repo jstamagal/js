@@ -176,8 +176,19 @@ def describe_failure(exc: BaseException) -> str:
     for err in chain:
         if isinstance(err, (httpx2.ConnectError, ConnectionError)):
             host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return _failure(msgs.NET_CONNECT_FAILED, f"{host} {err}".strip())
-    return f"{C.BR_RED}{type(exc).__name__}{C.BR_YELLOW}: {exc}"
+            return _failure(msgs.NET_CONNECT_FAILED, f"{host} {_one_line(err)}".strip())
+    return f"{C.BR_RED}{type(exc).__name__}{C.BR_YELLOW}: {_one_line(exc)}"
+
+
+_DETAIL_WIDTH = 160
+
+
+def _one_line(err: BaseException) -> str:
+    """``err`` as one capped line: a provider error often carries a
+    multi-line JSON body, and the failure is one banner line. Whitespace runs,
+    newlines included, become one space, so a JSON body still reads."""
+    line = " ".join(str(err).split())
+    return line if len(line) <= _DETAIL_WIDTH else line[:_DETAIL_WIDTH - 1] + "…"
 
 
 def _failure(kind: msgs.Message, detail: str) -> str:
