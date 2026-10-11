@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -148,14 +149,20 @@ def _drive(proc: subprocess.Popen, stdin_bytes: bytes, *, timeout: float, cap: i
 
 
 def event_json(call: events.HandlerCall) -> str:
-    """The event a handler answers, as the JSON object its command reads."""
-    return json.dumps({"event": call.emission.event, **call.emission.payload},
+    """The event a handler answers, as the JSON object its command reads. The
+    real event name wins over a payload key of the same name."""
+    return json.dumps({**call.emission.payload, "event": call.emission.event},
                       ensure_ascii=False, default=str)
 
 
+_CLOSING_TAG = re.compile(r"</\s*js-reminder\s*>", re.IGNORECASE)
+
+
 def reminder(stdout: str) -> str | None:
-    """The js-reminder carrying ``stdout``; None for blank output."""
-    text = stdout.strip()
+    """The js-reminder carrying ``stdout``; None for blank output. A closing
+    tag inside the output is defused, so third-party text cannot end the frame
+    early and read as a plain user message."""
+    text = _CLOSING_TAG.sub("<\\/js-reminder>", stdout.strip())
     return f"<js-reminder>{text}</js-reminder>" if text else None
 
 
