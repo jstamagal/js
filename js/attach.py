@@ -19,6 +19,15 @@ from .config import Config
 from .toolkit.fs import _detect_visual_mime
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
+# A name without a suffix, so image detection goes by the magic bytes alone and
+# a text file named `fake.png` is not sent as `image/png`.
+_DETECT_NAME = Path("attachment")
+
+
+def _image_mime(header: bytes) -> str | None:
+    """The image mime type ``header`` starts with; None when it is no image."""
+    mime = _detect_visual_mime(_DETECT_NAME, header)
+    return mime if mime and mime.startswith("image/") else None
 
 
 class AttachmentError(ValueError):
@@ -117,7 +126,8 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     spans: list[tuple[int, int]] = []
     for text, start, end in tokens:
         if text.startswith("@") and text.strip("@"):
-            attachments.append(text[1:])
+            if text[1:] not in attachments:
+                attachments.append(text[1:])
             spans.append((start, end))
 
     prompt = line
@@ -209,16 +219,21 @@ def _prepare_attachment(
     except OSError as exc:
         raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
 
-    mime = _detect_visual_mime(path, header)
-    if mime and mime.startswith("image/"):
-        if stat.st_size > getattr(cfg, "max_file_bytes", stat.st_size):
+    mime = _image_mime(header)
+    if mime:
+        limit = cfg.max_file_bytes
+        if stat.st_size > limit:
             raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=stat.st_size, limit=cfg.max_file_bytes))
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=stat.st_size, limit=limit))
         try:
-            data = path.read_bytes()
+            with path.open("rb") as fh:
+                data = fh.read(limit + 1)
         except OSError as exc:
             raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
-        return _prepare_image(str(path), mime, stat.st_size, data, cfg)
+        if len(data) > limit:  # the file grew after the stat
+            raise AttachmentError(
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=len(data), limit=limit))
+        return _prepare_image(str(path), mime, len(data), data, cfg)
 
     cap = _text_cap(cfg)
     try:
@@ -238,9 +253,9 @@ def _prepare_bytes(
     total_size: int | None = None,
 ) -> _PreparedAttachment:
     size = len(data) if total_size is None else total_size
-    mime = _detect_visual_mime(path, data[:16])
-    if mime and mime.startswith("image/"):
-        if size > getattr(cfg, "max_file_bytes", size):
+    mime = _image_mime(data[:16])
+    if mime:
+        if size > cfg.max_file_bytes:
             raise AttachmentError(
                 msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=display_path, size=size, limit=cfg.max_file_bytes))
         return _prepare_image(display_path, mime, size, data, cfg)
@@ -296,7 +311,7 @@ def _strip_incomplete_utf8_tail(data: bytes) -> bytes:
 
 
 def _looks_text(data: bytes) -> bool:
-    if b"\x00" in data[:4096]:
+    if b"\x00" in data:
         return False
     try:
         _strip_incomplete_utf8_tail(data).decode("utf-8")
