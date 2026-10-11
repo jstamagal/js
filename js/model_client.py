@@ -1093,6 +1093,59 @@ async def stream_model_async(
         if friendly is not None:
             raise friendly from exc
         raise
+    # The provider owns an HTTP client from here on; every exit below, including
+    # a failure while the request is still being assembled, must close it.
+    try:
+        return await _stream_with_model(
+            model,
+            model_id=model_id,
+            provider_id=provider_id,
+            provider_base_url=provider_base_url,
+            messages=messages,
+            tools=tools,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            on_text=on_text,
+            on_reasoning=on_reasoning,
+            trace_request=trace_request,
+            trace_sink=trace_sink,
+            trace_request_schemas=trace_request_schemas,
+            trace_request_from=trace_request_from,
+            sampling=sampling,
+            provider_extra=provider_extra,
+            thinking_budget=thinking_budget,
+            cache_key=cache_key,
+            stream_idle_seconds=stream_idle_seconds,
+        )
+    finally:
+        try:
+            await model.provider.aclose()
+        except Exception:
+            pass
+
+
+async def _stream_with_model(
+    model: ai.Model,
+    *,
+    model_id: str,
+    provider_id: str | None,
+    provider_base_url: str | None,
+    messages: list[ai.messages.Message],
+    tools: list[ai.types.tools.Tool] | None,
+    max_output_tokens: int | None,
+    reasoning_effort: str | None,
+    on_text: Callable[[str], None],
+    on_reasoning: Callable[[str], None] | None,
+    trace_request: bool,
+    trace_sink: Any,
+    trace_request_schemas: bool,
+    trace_request_from: int,
+    sampling: Sampling | None,
+    provider_extra: dict[str, Any] | None,
+    thinking_budget: int | None,
+    cache_key: str | None,
+    stream_idle_seconds: float | None,
+) -> ModelStreamResult:
     # Per-provider params: this is the canonical place to encode quirks. We build
     # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
     # field to the provider's wire shape, so js no longer hand-routes sampling
@@ -1316,10 +1369,6 @@ async def stream_model_async(
         _idle_seconds.reset(idle_token)
         _reasoning_sink.reset(reasoning_token)
         stream_transport.reset_call(net_token)
-        try:
-            await model.provider.aclose()
-        except Exception:
-            pass
 
 
 # The loop's own teardown protocol, not anybody's failure. `shutdown_asyncgens`
