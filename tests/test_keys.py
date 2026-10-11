@@ -220,3 +220,11 @@ def test_trailing_comment_is_dropped_even_after_a_lone_quote_key():
         keymap, error = keys.apply_line(keys.default_keymap(), f"bind {quote} redraw  # c")
         assert error is None, (quote, error)
         assert (quote,) in keymap["redraw"]
+
+
+def test_a_first_word_hash_is_still_the_hash_key():
+    keymap, error = keys.apply_line(keys.default_keymap(), "bind # redraw")
+    assert error is None and ("#",) in keymap["redraw"]
+    bound = keymap
+    keymap, error = keys.apply_line(bound, "unbind #")
+    assert error is None and ("#",) not in keymap["redraw"]

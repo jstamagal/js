@@ -17,7 +17,6 @@ one `path:line: error` line and skipped; the rest of the file still applies.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -128,9 +127,14 @@ def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
     if parsed is None:
         return keymap, None
     verb, arg = parsed
-    # Words are split on whitespace and never quoted, so a ` #` starts the
-    # trailing comment wherever it is; a key that is a lone quote stays a key.
-    words = re.split(r"\s#", f" {arg}", maxsplit=1)[0].split()
+    # Words are split on whitespace and never quoted, so a `#` word after at
+    # least one other word starts the trailing comment; a key that is a lone
+    # quote stays a key, and a first word `#` is the # key.
+    words = arg.split()
+    for index, word in enumerate(words[1:], start=1):
+        if word.startswith("#"):
+            words = words[:index]
+            break
     if verb == "bind":
         if len(words) < 2:
             return keymap, msgs.KEYS_BIND_USAGE.text()
