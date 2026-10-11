@@ -237,12 +237,23 @@ def resolve_model(
     """
     if provider_id is None:
         # No js provider resolved. An explicit base URL is a deliberate endpoint
-        # choice, so honor it (the SDK-default gateway path). With neither a
-        # provider nor a base URL, riding the SDK's own env keys (AI_GATEWAY_API_KEY,
-        # OPENAI_API_KEY, ...) is exactly the env-farming the login gate forbids:
-        # fail with the same actionable not-logged-in message instead.
+        # choice: honor it as an anonymous OpenAI-compatible endpoint with the
+        # given key, on chat completions like every custom base. `ai.get_model`
+        # takes neither a base URL nor a key and would route a bare id to the
+        # Vercel gateway. A missing key goes out as "" (keyless local server),
+        # never as the SDK's env key. With neither a provider nor a base URL,
+        # riding the SDK's own env keys (AI_GATEWAY_API_KEY, OPENAI_API_KEY, ...)
+        # is exactly the env-farming the login gate forbids: fail with the same
+        # actionable not-logged-in message instead.
         if provider_base_url:
-            return ai.get_model(model_id)
+            provider = ai.get_provider(
+                "openai",
+                base_url=provider_base_url,
+                api_key=provider_api_key or "",
+                headers=dict(provider_headers) if provider_headers else None,
+                protocol=_ReasoningContentProtocol(),
+            )
+            return ai.Model(id=model_id, provider=provider)
         raise routing.ProviderNotLoggedInError(routing.unconfigured_model_message(model_id))
 
     provider_def = providers.get_provider(provider_id)
