@@ -26,6 +26,7 @@ records keep their ids, so the parent's message it split at is named by id.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -312,6 +313,33 @@ def _linked(record: dict, record_id: str, parent: str | None) -> dict:
     return {"id": record_id, "parent": parent, **{k: v for k, v in record.items() if k not in ("id", "parent")}}
 
 
+def _open_locked(session_file: Path, mode: str, **open_kw):
+    """Open `session_file`, take the exclusive lock, and make sure the
+    descriptor still names the file the path names. A `link_file` that
+    replaced the file between our open and our lock leaves us locked on the
+    unlinked old inode; a write there is lost. Reopen and relock until the
+    descriptor is the named file."""
+    attempt_mode = mode
+    for attempt in range(3):
+        stream = open(session_file, attempt_mode, **open_kw)
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            opened = os.fstat(stream.fileno())
+            named = os.stat(session_file)
+            if (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
+                if "a" in mode and attempt_mode != mode:
+                    # The retry lost O_APPEND (r+b); a write would land at the
+                    # front of the file. Seek to the end instead.
+                    stream.seek(0, os.SEEK_END)
+                return stream
+        except BaseException:
+            stream.close()
+            raise
+        stream.close()
+        attempt_mode = mode.replace("a", "r")
+    raise OSError(errno.ESTALE, "session file kept being replaced", str(session_file))
+
+
 def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     """Append `record` to `session_file` under an exclusive lock, with a fresh
     id and its parent, and fsync. Returns the record as written. A record for
@@ -321,9 +349,8 @@ def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
         return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
     key = str(session_file.resolve(strict=False))
-    with open(session_file, "a+b") as stream:
+    with _open_locked(session_file, "a+b") as stream:
         fd = stream.fileno()
-        fcntl.flock(fd, fcntl.LOCK_EX)
         with _chains_lock:
             chain, torn = _chain(key, fd)
             linked = _linked(record, new_id(chain.taken), chain.leaf)
@@ -379,8 +406,7 @@ def link_file(session_file: Path) -> int:
     has none, keeping its modification time. Returns how many records were
     given one; with none to give, the file is left untouched."""
     session_file = Path(session_file)
-    with open(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+    with _open_locked(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
         info = os.fstat(stream.fileno())
         lines, given = link_lines(stream.read().splitlines(keepends=True))
         if not given:
