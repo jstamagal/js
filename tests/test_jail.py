@@ -175,6 +175,24 @@ def test_the_host_tmp_on_path_does_not_replace_the_private_tmp(jailed):
     assert [src for src, dst in binds if dst == "/tmp"] == [str(jail.active().tmp)]
 
 
+def test_a_path_directory_inside_the_jail_dir_stays_writable(jailed, monkeypatch):
+    """DIR sits in a hidden tree (the test HOME); its own .venv/bin on PATH is
+    not bound back read-only by argv (covered by DIR's rw bind), so the file
+    tools must not call it read-only either (ALL-CLAIMS jail.py MED)."""
+    active = jail.active()
+    bin_dir = active.root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "tool").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin")
+    if not any(jail._under(bin_dir.resolve(), h) for h in jail.hidden_roots()):
+        pytest.skip("the jail dir is not inside a hidden tree here")
+
+    argv = active.argv(["true"], env_path=os.environ["PATH"])
+    ro = [argv[i + 1] for i, arg in enumerate(argv) if arg in {"--ro-bind", "--ro-bind-try"}]
+    assert str(bin_dir.resolve()) not in ro
+    assert active.confine(bin_dir / "tool", write=True) == (bin_dir / "tool").resolve()
+
+
 def test_a_path_directory_under_the_host_tmp_is_bound_back_read_only(jailed, tmp_path_factory, monkeypatch):
     # tmp_path is the test HOME, a hidden tree; the venv sits outside it.
     venv = tmp_path_factory.mktemp("venv").resolve()

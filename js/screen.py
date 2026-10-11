@@ -487,9 +487,10 @@ class InputEditor:
     def insert(self, text: str) -> None:
         self._buffer.insert_text(text)
 
-    async def run(self, argv: list[str]) -> None:
-        """Run a program on the real terminal, the screen suspended until it exits."""
-        await run_in_terminal(lambda: subprocess.call(argv), in_executor=True)
+    async def run(self, argv: list[str]) -> int:
+        """Run a program on the real terminal, the screen suspended until it
+        exits; its exit status."""
+        return await run_in_terminal(lambda: subprocess.call(argv), in_executor=True)
 
 
 @dataclass(frozen=True)

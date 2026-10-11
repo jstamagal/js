@@ -27,8 +27,8 @@ class FakeEditor:
         self.sent.append(self.text)
         self.text = ""
 
-    async def run(self, argv: list[str]) -> None:
-        subprocess.run(argv, check=False)
+    async def run(self, argv: list[str]) -> int:
+        return subprocess.run(argv, check=False).returncode
 
 
 def _run(line: str, editor: FakeEditor, dispatched: list[str] | None = None, commands=("set", "quit")):
@@ -177,3 +177,38 @@ def test_bare_n_opens_the_notes_file_in_the_editor(tmp_path, monkeypatch):
     assert notes.endswith("typed in the notes buffer\n")
     assert editor.text == "the message"
     assert editor.sent == []
+
+
+@pytest.mark.parametrize("line,expected", [("q!", "/quit"), ("w!", None), ("e!", None)])
+def test_force_forms_do_what_the_plain_verb_does(tmp_path, monkeypatch, line, expected):
+    editor = FakeEditor("text")
+    dispatched: list[str] = []
+    said: list = []
+    monkeypatch.setattr(exline.msgs, "say", lambda message, **fields: said.append(message))
+    if line == "e!":
+        _program(tmp_path, "fakeed", "p.write_text('edited')")
+        monkeypatch.setattr(exline, "editor_argv", lambda: ["fakeed"])
+    _run(line, editor, dispatched)
+    assert exline.msgs.EX_UNKNOWN not in said
+    if expected:
+        assert dispatched == [expected]
+    if line == "w!":
+        assert (paths.notes_dir() / exline.BUFFER_FILE).read_text(encoding="utf-8").strip() == "text"
+    if line == "e!":
+        assert editor.text == "edited"
+
+
+def test_wq_writes_then_sends(tmp_path):
+    editor = FakeEditor("final")
+    target = tmp_path / "out.txt"
+    _run(f"wq {target}", editor)
+    assert target.read_text(encoding="utf-8").strip() == "final"
+    assert editor.sent == ["final"]
+
+
+def test_an_editor_that_exits_nonzero_leaves_the_buffer_alone(tmp_path, monkeypatch):
+    """vim's :cq aborts the edit; the half-edited file must not replace the buffer."""
+    _program(tmp_path, "abortive", "p.write_text('half edited')\nsys.exit(1)")
+    editor = FakeEditor("original")
+    _run("abortive", editor)
+    assert editor.text == "original"
