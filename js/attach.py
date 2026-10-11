@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import mimetypes
 import os
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,13 +61,20 @@ def with_note(bundle: UserMessageBundle, note: str) -> UserMessageBundle:
     )
 
 
-def _scan_tokens(line: str) -> list[tuple[str, int, int]]:
+_DOUBLE_QUOTE_ESCAPES = '\\"$`\n'
+
+
+def _scan_tokens(line: str, *, quotes_everywhere: bool = True) -> list[tuple[str, int, int]]:
     """Split `line` into shell-word tokens, each returned as (unquoted_text, start,
     end) spanning the token's raw location in `line`. Mirrors shlex.split's posix
-    quote handling closely enough that a quote may be embedded mid-token (e.g.
-    @"a b.png"), but — unlike shlex — never raises: an unterminated quote just
-    runs to end of string. Only called once shlex.split has already accepted the
-    line, so quotes are known to be balanced and this matches its result."""
+    quote and backslash handling (so @"a b.png" and @a\\ b.png both name
+    `a b.png`), but never raises.
+
+    With `quotes_everywhere` false (the line has an unbalanced quote, as prose
+    like "isn't" does), only a token starting with `@` gets quote and escape
+    handling; every other token is a plain run of non-space, so a prose
+    apostrophe cannot swallow the rest of the line. An `@` token whose own quote
+    is left open is then also taken as plain text."""
     tokens: list[tuple[str, int, int]] = []
     i, n = 0, len(line)
     while i < n:
@@ -77,24 +83,58 @@ def _scan_tokens(line: str) -> list[tuple[str, int, int]]:
         if i >= n:
             break
         start = i
-        buf: list[str] = []
-        while i < n and not line[i].isspace():
-            ch = line[i]
-            if ch in "'\"":
+        if not quotes_everywhere and line[i] != "@":
+            while i < n and not line[i].isspace():
                 i += 1
-                q_start = i
-                end_quote = line.find(ch, i)
-                if end_quote == -1:
-                    buf.append(line[q_start:n])
-                    i = n
-                else:
-                    buf.append(line[q_start:end_quote])
-                    i = end_quote + 1
+            tokens.append((line[start:i], start, i))
+            continue
+        word = _scan_word(line, start)
+        if word is None:  # open quote inside an @token; only when not quotes_everywhere
+            while i < n and not line[i].isspace():
+                i += 1
+            tokens.append((line[start:i], start, i))
+            continue
+        text, i = word
+        tokens.append((text, start, i))
+    return tokens
+
+
+def _scan_word(line: str, i: int) -> tuple[str, int] | None:
+    """One posix shell word starting at `i`: (unquoted text, end). None when a
+    quote opened in the word is never closed."""
+    n = len(line)
+    buf: list[str] = []
+    while i < n and not line[i].isspace():
+        ch = line[i]
+        if ch == "\\":
+            if i + 1 < n:
+                buf.append(line[i + 1])
+                i += 2
             else:
                 buf.append(ch)
                 i += 1
-        tokens.append(("".join(buf), start, i))
-    return tokens
+        elif ch == "'":
+            end_quote = line.find("'", i + 1)
+            if end_quote == -1:
+                return None
+            buf.append(line[i + 1:end_quote])
+            i = end_quote + 1
+        elif ch == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                if line[i] == "\\" and i + 1 < n and line[i + 1] in _DOUBLE_QUOTE_ESCAPES:
+                    buf.append(line[i + 1])
+                    i += 2
+                else:
+                    buf.append(line[i])
+                    i += 1
+            if i >= n:
+                return None
+            i += 1
+        else:
+            buf.append(ch)
+            i += 1
+    return "".join(buf), i
 
 
 def split_repl_attachments(line: str) -> tuple[str, list[str]]:
@@ -111,14 +151,14 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     text so the model can tell which image the words refer to.
 
     An unbalanced quote (an apostrophe in ordinary prose like "isn't") makes
-    shlex raise; that alone must never drop an attachment, so this falls back
-    to a plain whitespace split for token/span extraction in that case.
+    shlex raise; that alone must never drop or mangle an attachment, so then
+    only the @tokens get quote handling and the rest splits on whitespace.
     """
 
     try:
         shlex.split(line)
     except ValueError:
-        tokens = [(m.group(), m.start(), m.end()) for m in re.finditer(r"\S+", line)]
+        tokens = _scan_tokens(line, quotes_everywhere=False)
     else:
         tokens = _scan_tokens(line)
 
