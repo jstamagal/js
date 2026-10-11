@@ -88,7 +88,12 @@ def test_a_bad_modifier_is_one_error_not_a_traceback(capsys):
     assert "Traceback" not in captured.err and captured.out == ""
 
 
-@pytest.mark.parametrize("surface", [",", " , "])
+@pytest.mark.parametrize("surface", [",", " , ", "", " ", "\t"])
 def test_a_surface_naming_nothing_is_refused_not_the_full_table(surface, capsys):
     assert tooldiag.main(["--surface", surface]) == 1
     assert capsys.readouterr().out == ""
+
+
+def test_no_surface_flag_still_prints_the_full_table(capsys):
+    assert tooldiag.main([]) == 0
+    assert "TOTAL" in capsys.readouterr().out

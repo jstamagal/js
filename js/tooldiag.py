@@ -77,12 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.text())
     parser.add_argument(
         "--surface",
-        default="",
+        default=None,
         help=msgs.OPT_TOOLDIAG_SURFACE.text(),
     )
     args = parser.parse_args(argv)
-    names = parse_surface(args.surface)
-    if args.surface.strip() and not names:
+    names = parse_surface(args.surface or "")
+    if args.surface is not None and not names:
         # `--surface ,` named nothing; the full table would answer another question.
         msgs.warn(msgs.TOOLDIAG_NO_TOOLS)
         return 1
