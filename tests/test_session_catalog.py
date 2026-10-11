@@ -221,6 +221,7 @@ def test_no_state_file_is_idle_and_inspecting_creates_no_lock(session):
     b'{"version":1,"opens":[{"pid":true}]}', b'{"version":1}',
     b'{"version":1,"opens":[{"pid":0}]}', b'{"version":1,"opens":[{"pid":-3}]}',
     b'{"version":1,"opens":[{"pid":999999999,"process_start":7}]}',
+    b'{"version":1,"opens":[{"pid":1' + b'0' * 100 + b'}]}',
 ])
 def test_unparseable_state_is_unknown(session, data):
     state, lock = _sidecars(session)

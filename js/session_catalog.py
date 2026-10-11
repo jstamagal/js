@@ -204,7 +204,10 @@ def session_in_flight(session_file: Path) -> bool | None:
         for item in opens
     ):
         return None
-    return any(_pid_alive(item["pid"], item.get("process_start")) for item in opens)
+    try:
+        return any(_pid_alive(item["pid"], item.get("process_start")) for item in opens)
+    except (OverflowError, ValueError):
+        return None  # a pid no kernel call can take proves nothing
 
 
 def _append_record(session_file: Path, record: dict[str, Any]) -> None:
