@@ -48,3 +48,49 @@ def test_unreadable_skill_md_is_skipped(tmp_path):
     finally:
         os.chmod(bad, 0o644)
     assert [r.name for r in catalog.skills] == ["ok"]
+
+
+def test_glob_match_is_bounded_on_hostile_patterns(monkeypatch):
+    """A path skill glob with many ``**`` segments must stay cheap.
+
+    ALL-CLAIMS skills.py MED: naive recursion over every split point per
+    ``**`` took 6.2 s for one matches_path against a hostile SKILL.md. The
+    memo bounds work to (len(parts) + 1) * (len(pattern) + 1) states.
+    """
+    import js.skills as skills
+    from js.skills import _glob_match
+
+    calls = {"n": 0}
+    real = skills.fnmatchcase
+
+    def counted(value, pattern):
+        calls["n"] += 1
+        return real(value, pattern)
+
+    monkeypatch.setattr(skills, "fnmatchcase", counted)
+
+    alternating = tuple(x for _ in range(10) for x in ("**", "a")) + ("z",)
+    assert _glob_match(("a",) * 18, alternating) is False
+    bound = (18 + 1) * (len(alternating) + 1)
+    assert calls["n"] <= bound, (calls["n"], bound)
+
+    calls["n"] = 0
+    adjacent = ("**",) * 12 + ("z",)
+    assert _glob_match(("a",) * 14, adjacent) is False
+    assert calls["n"] <= (14 + 1) * (len(adjacent) + 1), calls["n"]
+
+
+def test_glob_match_semantics_unchanged():
+    from js.skills import _glob_match
+
+    assert _glob_match(("a", "b", "c"), ("**", "c"))
+    assert _glob_match(("a", "b", "c"), ("**", "b", "**"))
+    assert _glob_match(("a", "b", "c"), ("a", "**"))
+    assert _glob_match(("a", "b", "c"), ("**",))
+    assert _glob_match((), ("**",))
+    assert not _glob_match(("a",), ())
+    # one pattern component per path component: ('x', '?', 'y') needs three.
+    assert _glob_match(("x", "q", "y"), ("x", "?", "y"))
+    assert not _glob_match(("x", "y"), ("x", "?", "y"))
+    assert _glob_match(("a", "a", "a"), ("**", "a", "**", "a", "**"))
+    assert not _glob_match(("a", "b"), ("**", "a", "a"))
