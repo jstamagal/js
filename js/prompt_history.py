@@ -67,9 +67,11 @@ def _entry(record: object) -> Entry | None:
 
 def read_entries(path: Path, limit: int | None = None) -> list[Entry]:
     """The entries in ``path``, oldest first; only the newest ``limit`` when
-    it is given. A line that is not an entry is skipped."""
+    it is given. A line that is not an entry is skipped. Records split on
+    "\n" only: older writers left U+2028/U+2029/U+0085 raw inside a record,
+    and str.splitlines() would cut it there."""
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
     except FileNotFoundError:
         return []
     entries: list[Entry] = []
@@ -103,7 +105,11 @@ def browse_order(entries: Iterable[Entry], cwd: str, *, cwd_first: bool) -> list
 
 
 def _line(entry: Entry) -> bytes:
-    return (json.dumps(asdict(entry), ensure_ascii=False) + "\n").encode("utf-8")
+    # One record, one physical line for every line tool: the separators
+    # splitlines() honours besides \n go in as JSON escapes.
+    text = json.dumps(asdict(entry), ensure_ascii=False)
+    text = text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").replace("\x85", "\\u0085")
+    return (text + "\n").encode("utf-8")
 
 
 def append_entry(path: Path, entry: Entry) -> None:

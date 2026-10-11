@@ -48,6 +48,28 @@ def test_a_blank_prompt_is_not_stored(tmp_path):
     assert not path.exists()
 
 
+_SEPARATORS = ["a\u2028b", "c\u2029d", "e\x85f", "ok"]
+
+
+def test_unicode_line_separators_survive_the_round_trip(tmp_path):
+    # ALL-CLAIMS.md:392: 4 written, 1 read back.
+    path = tmp_path / "history.jsonl"
+    _write(path, *[(float(i), "/p", text) for i, text in enumerate(_SEPARATORS)])
+
+    assert [entry.text for entry in ph.read_entries(path)] == _SEPARATORS
+    raw = path.read_text(encoding="utf-8")
+    assert len(raw.splitlines()) == len(raw.split("\n")) - 1 == 4
+
+
+def test_records_an_older_writer_left_with_raw_separators_are_read(tmp_path):
+    path = tmp_path / "history.jsonl"
+    lines = [json.dumps({"ts": float(i), "cwd": "/p", "session": "s", "agent": "a", "text": text},
+                        ensure_ascii=False) for i, text in enumerate(_SEPARATORS)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert [entry.text for entry in ph.read_entries(path)] == _SEPARATORS
+
+
 def test_every_session_appends_to_the_same_file(tmp_path):
     path = tmp_path / "history.jsonl"
     _history(path, session="one", agent="a").store_string("first")
