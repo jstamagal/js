@@ -1,7 +1,7 @@
 """Context compaction — one module owns the "history is too big" decision and the deed.
 
 Three triggers funnel through here so they can never drift on what "full"
-means: the REPL between-turn trigger (``maybe_auto_compact``), the in-turn
+means: the REPL between-turn trigger (``maybe_auto_compact_async``), the in-turn
 budget check (the runtime measures, then calls ``compact_now``), and the
 overflow recovery escalation (``recover_overflow``). The summarize pipeline
 exists only as an async core; ``compact_now_sync`` is one ``asyncio.run``, so
@@ -58,6 +58,8 @@ def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
 
 
 def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
+    """A boolean knob. Garbage reads as the default, and a default that is not
+    a bool itself (a bad jsrc value) reads as False, so the result is a bool."""
     default = _fallback(key, default)
     value = get(cfg, key, default)
     if isinstance(value, bool):
@@ -68,7 +70,7 @@ def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
-    return default
+    return default if isinstance(default, bool) else False
 
 
 def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
@@ -242,6 +244,10 @@ MAX_OVERFLOW_ROUNDS = 3
 MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
 
 
+# Tool results shorter than this are not worth clearing.
+_MICROCOMPACT_MIN_CHARS = 400
+
+
 # Tool results are the bulk of a long session and the cheapest thing to drop:
 # the assistant's own reasoning about them survives in its messages, and the
 # file can always be read again. Clearing them needs no model call, so unlike a
@@ -250,7 +256,7 @@ def microcompact(
     messages: list[dict],
     *,
     keep_recent: int = 20,
-    min_chars: int = 400,
+    min_chars: int = _MICROCOMPACT_MIN_CHARS,
 ) -> tuple[int, int]:
     """Blank the bodies of old tool results in place.
 
@@ -315,7 +321,7 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
         if old != new and old.get("role") == "tool"
     ]
     flight.record("cleared_results", results=changed, cleared=cleared,
-                  reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=400)
+                  reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=_MICROCOMPACT_MIN_CHARS)
     if cleared:
         stamp = _stamp(flight.cfg)
         M.persist_messages(flight.cfg.session_file, before, stamp=stamp)
