@@ -113,28 +113,34 @@ def discover(project_dir: Path) -> dict[str, PromptCommand]:
 
 
 def split_args(text: str) -> list[str]:
-    """Words of ``text``; single or double quotes group a run with spaces.
+    """Words of ``text``; single or double quotes group a run with spaces, and
+    quoted and unquoted pieces with no space between join into one word
+    (``"a b"suffix`` is ``a bsuffix``, ``"a""b"`` is ``ab``).
 
-    A quote opens a group only at the start of a word, so an apostrophe inside
-    one ("don't") is an ordinary character. A group left open at the end of
-    the line is taken literally, quote included, instead of swallowing the
-    rest of the line."""
+    A quote opens a group only at the start of a word or right after a closed
+    group, so an apostrophe inside a word ("don't") is an ordinary character.
+    A quote with no closer is taken literally instead of swallowing the rest of
+    the line."""
     args: list[str] = []
     i, n = 0, len(text)
     while i < n:
         if text[i].isspace():
             i += 1
             continue
-        quote = text[i] if text[i] in ("'", '"') else None
-        end = text.find(quote, i + 1) if quote is not None else -1
-        if quote is not None and end != -1:
-            args.append(text[i + 1:end])
-            i = end + 1
-            continue
-        start = i
+        word: list[str] = []
+        can_quote = True  # at word start, or right after a closed group
         while i < n and not text[i].isspace():
-            i += 1
-        args.append(text[start:i])
+            char = text[i]
+            end = text.find(char, i + 1) if can_quote and char in ("'", '"') else -1
+            if end != -1:
+                word.append(text[i + 1:end])
+                i = end + 1
+                can_quote = True
+            else:
+                word.append(char)
+                i += 1
+                can_quote = False
+        args.append("".join(word))
     return args
 
 
@@ -177,5 +183,8 @@ def expand(line: str, commands: dict[str, PromptCommand]) -> str | None:
     command = commands.get(words[0]) if words else None
     if command is None:
         return None
-    raw = stripped[1:][len(words[0]):].strip() if words else ""
+    # The argument text as typed: only the one separator after the name goes,
+    # so a pasted first line keeps its indentation.
+    rest = stripped[1:][len(words[0]):] if words else ""
+    raw = rest[1:] if rest[:1].isspace() else rest
     return substitute(command.body, split_args(raw), raw=raw).strip()

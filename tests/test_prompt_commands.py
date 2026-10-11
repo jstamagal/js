@@ -216,3 +216,16 @@ def test_all_arguments_keep_line_breaks_and_indentation():
 
 def test_double_dollar_is_a_literal_dollar():
     assert pc.substitute("awk '{print $$1}' costs $$5.00 for $1", ["X"]) == "awk '{print $1}' costs $5.00 for X"
+
+
+def test_adjacent_quoted_and_unquoted_pieces_join_into_one_word():
+    assert pc.split_args('"a b"suffix tail') == ["a bsuffix", "tail"]
+    assert pc.split_args('"a""b" tail') == ["ab", "tail"]
+    assert pc.split_args("pre'x y' z") == ["pre'x", "y'", "z"]
+
+
+def test_raw_arguments_keep_the_first_line_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("r.md"), description="", body="Code:\n$@")}
+    assert pc.expand("/review     def f():\n    return 1", commands) == "Code:\n    def f():\n    return 1"
