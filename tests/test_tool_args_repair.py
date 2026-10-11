@@ -58,3 +58,16 @@ def test_oneof_scalar_union_and_non_json_unchanged():
     assert coerce_to_schema("15", {"oneOf": [{"type": "integer"}, {"type": "object"}]}) == 15
     assert coerce_to_schema("not json", {"anyOf": [{"type": "object"}, {"type": "array"}]}) == "not json"
     assert coerce_to_schema("x", {"$ref": "#/x"}) == "x"
+
+
+def test_recursion_depth_spam_is_safe():
+    """A model spamming brackets must not kill the stream handler
+    (ALL-CLAIMS tool_args MED: RecursionError escaped every guard)."""
+    from js.tool_args import is_json_object, canonical_tool_args, sdk_safe_tool_args
+
+    raw = "[" * 200000
+    assert is_json_object(raw) is False
+    assert canonical_tool_args(raw) == raw
+    assert sdk_safe_tool_args(raw) == "{}"
+    raw_dict = "{" * 200000
+    assert sdk_safe_tool_args(raw_dict) == "{}"

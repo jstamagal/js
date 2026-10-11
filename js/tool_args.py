@@ -85,7 +85,7 @@ def repair_jsonish(raw: str) -> dict:
             if not isinstance(parsed, dict):
                 raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
             return parsed
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, RecursionError) as exc:
             last_error = exc
     raise ValueError(str(last_error) if last_error else "could not parse arguments")
 
@@ -157,7 +157,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
                 continue
             try:
                 parsed = json.loads(value)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, RecursionError):
                 break
             if isinstance(parsed, expected):
                 value = parsed
@@ -182,7 +182,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
 def is_json_object(raw: str) -> bool:
     try:
         return isinstance(json.loads(raw), dict)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return False
 
 
@@ -199,7 +199,7 @@ def canonical_tool_args(raw: str) -> str:
         return raw
     try:
         return compact_json(repair_jsonish(raw))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return raw
 
 
