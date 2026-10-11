@@ -171,6 +171,21 @@ def test_strip_ansi_keeps_plain_control_characters():
     assert transcript.strip_ansi("a\tb\r\nc") == "a\tb\r\nc"
 
 
+def test_strip_ansi_drops_lone_esc_and_c1_openers():
+    for raw in ("a\x1b", "a\x9d0;PWNED", "a\x90qpayload", "a\x9b2J"):
+        assert "\x1b" not in transcript.strip_ansi(raw)
+        assert not any("\x80" <= ch <= "\x9f" for ch in transcript.strip_ansi(raw)), repr(raw)
+
+
+def test_escape_split_across_writes_does_not_rejoin_in_the_file(tmp_path):
+    path = tmp_path / "t.log"
+    sink = transcript.open_transcript_sink([path])
+    sink.write_plain("a\x1b")
+    sink.write_plain("[2Jb\n")
+    sink.close()
+    assert "\x1b" not in path.read_text(encoding="utf-8")
+
+
 def test_transcript_file_gets_no_osc(tmp_path):
     path = tmp_path / "t.log"
     sink = transcript.open_transcript_sink([path])
