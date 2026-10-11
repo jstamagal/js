@@ -33,7 +33,7 @@ class Editor(Protocol):
 
     def submit(self) -> Awaitable[None]: ...
 
-    def run(self, argv: list[str]) -> Awaitable[None]: ...
+    def run(self, argv: list[str]) -> Awaitable[int | None]: ...
 
 
 def editor_argv() -> list[str]:
@@ -58,8 +58,9 @@ async def edit_buffer(editor: Editor, argv: list[str], path: Path | None = None)
             fh.write(editor.text)
         path = Path(fh.name)
     try:
-        await editor.run([*argv, str(path)])
-        if path.is_file():
+        status = await editor.run([*argv, str(path)])
+        # A nonzero exit (vim's :cq) means abort: keep the buffer as it was.
+        if status in (None, 0) and path.is_file():
             editor.text = path.read_text(encoding="utf-8").removesuffix("\n")
     finally:
         if temp:
@@ -76,8 +77,17 @@ async def run_ex(
     """Run one ex line. ``dispatch`` takes a `/command` line for the table."""
     verb, _, arg = line.strip().removeprefix("/").partition(" ")
     arg = arg.strip()
+    # vi's force forms (`:q!`, `:w!`, `:e!`) do what the plain verb does here,
+    # and `:wq` writes then sends, like `:x`.
+    if verb in {"q!", "w!", "e!", "x!", "wq!"}:
+        verb = verb[:-1]
     try:
-        if verb == "w":
+        if verb == "wq":
+            path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(editor.text + "\n", encoding="utf-8")
+            await editor.submit()
+        elif verb == "w":
             path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(editor.text + "\n", encoding="utf-8")
