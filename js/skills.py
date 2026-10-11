@@ -307,7 +307,7 @@ def discover_skills(
             for path in _skill_paths(root):
                 try:
                     record = _index_skill(path, source)
-                except ValueError as exc:
+                except (ValueError, OSError) as exc:
                     _warn_once(msgs.SKILL_SKIPPED.text(path=path, error=exc))
                     continue
                 key = record.metadata.name.casefold()
