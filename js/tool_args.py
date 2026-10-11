@@ -8,25 +8,77 @@ import re
 from .toolkit.core import compact_json
 
 
-_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+def _strip_commas_outside_strings(text: str) -> str:
+    """Drop `,` that sit outside any string, directly before `}` or `]`.
+
+    One scan tracking whether the cursor is inside a string and whether the
+    previous backslash escaped the current character, so a `, }` that is part
+    of a string VALUE is never touched.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(text)
+    for index, char in enumerate(text):
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < length and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            if lookahead < length and text[lookahead] in "}]":
+                continue  # drop the comma and its trailing whitespace
+            out.append(char)
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _close_object(text: str) -> str | None:
+    """`{"a": 1,` with one missing closing brace, else None."""
+    stripped = text.strip()
+    if stripped.startswith("{") and not stripped.endswith("}"):
+        return stripped + "}"
+    return None
 
 
 def repair_jsonish(raw: str) -> dict:
     """Best-effort repair for common model-emitted argument JSON."""
     if not raw:
         return {}
-    candidates = [raw, raw.strip()]
     stripped = raw.strip()
+    candidates = [raw, stripped]
     if stripped.startswith('"') and stripped.endswith('"'):
         try:
             decoded = json.loads(stripped)
             if isinstance(decoded, str):
-                candidates.append(decoded)
+                # Unwrap BEFORE scanning: the encoded form hides its commas
+                # behind escapes, so stripping must run on the decoded text.
+                candidates.extend([decoded, decoded.strip()])
         except json.JSONDecodeError:
             pass
-    candidates.extend(_TRAILING_COMMA_RE.sub(r"\1", item) for item in list(candidates))
-    if stripped and stripped.startswith("{") and not stripped.endswith("}"):
-        candidates.append(stripped + "}")
+    # Structure-only comma strip on every candidate, and the closing brace
+    # both before and after the strip, so `{"a": 1,` and `{"a": 1,}` both mend.
+    for item in list(candidates):
+        closed = _close_object(item)
+        if closed is not None:
+            candidates.append(closed)
+    candidates.extend(_strip_commas_outside_strings(item) for item in list(candidates))
+    for item in list(candidates):
+        closed = _close_object(item)
+        if closed is not None:
+            candidates.append(closed)
     last_error: Exception | None = None
     for candidate in candidates:
         try:
