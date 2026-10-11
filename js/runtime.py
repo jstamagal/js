@@ -29,7 +29,7 @@ from . import context_budget
 from . import display
 from . import jail as _jail
 from . import messages as msgs
-from .text_bytes import byte_size, byte_prefix, cap_text
+from .text_bytes import byte_size, byte_prefix, cap_text, well_formed
 from . import model_metadata
 from . import paths
 from . import providers
@@ -683,6 +683,9 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
         return result
     if not isinstance(result, str):
         return result
+    # A lone surrogate (surrogateescape read, json.loads) would crash whichever
+    # strict encode meets it next; it reaches the model as `?`.
+    result = well_formed(result)
     if inline_cap is None:
         # Read from the active context rather than threading a fifth argument
         # through four dispatch signatures; subagent contexts inherit it.
@@ -722,7 +725,8 @@ def spill_oversized_result(
             # Two parallel calls can spill the same text; neither may see the
             # other's half-written file.
             partial = target_dir / f".result-{digest}.{threading.get_ident()}.tmp"
-            partial.write_bytes(result.encode("utf-8"))
+            # "replace" as byte_size counts, so the notice's offsets match the file.
+            partial.write_bytes(result.encode("utf-8", "replace"))
             os.replace(partial, path)
     except OSError:
         return result  # cannot spill -> the byte cap downstream still applies
