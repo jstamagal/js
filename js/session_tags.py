@@ -303,7 +303,9 @@ def sweep(options: Options) -> int:
             for summary in waiting:
                 path = Path(summary["path"])
                 tried.add(summary["path"])
-                if session_catalog.session_in_flight(path):
+                # None (state unreadable) counts as open: never tag a session
+                # that may still be written.
+                if session_catalog.session_in_flight(path) is not False:
                     continue
                 try:
                     tag_session(path, tags, options)
