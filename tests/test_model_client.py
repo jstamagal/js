@@ -659,3 +659,32 @@ def test_history_messages_can_be_roundtripped():
     serialized = [m.model_dump() for m in out]
     rebuilt = [ai.types.messages.Message.model_validate(dump) for dump in serialized]
     assert rebuilt == out
+
+
+@pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "_build_inference_params", "stream_transport.begin_call"])
+def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
+    """The provider owns an HTTP client from resolve_model on; a failure while
+    the request is assembled must still close it (ALL-CLAIMS model_client MED)."""
+    import asyncio
+    from types import SimpleNamespace
+
+    class Provider:
+        closed = False
+
+        async def aclose(self):
+            Provider.closed = True
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("forced setup failure")
+
+    monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: SimpleNamespace(provider=Provider()))
+    owner_name, _, attr = target.rpartition(".")
+    owner = getattr(model_client, owner_name) if owner_name else model_client
+    monkeypatch.setattr(owner, attr, fail)
+    with pytest.raises(ValueError, match="forced setup failure"):
+        asyncio.run(model_client.stream_model_async(
+            model_id="claude-opus-4", provider_id="anthropic", provider_base_url=None,
+            provider_api_key="test", messages=[], tools=None, max_output_tokens=4096,
+            reasoning_effort="high", on_text=lambda _text: None,
+        ))
+    assert Provider.closed
