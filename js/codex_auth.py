@@ -557,15 +557,18 @@ async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | Non
     return apply_refreshed_token(login, token)
 
 
-def save_refreshed_login(refreshed: Login, *, derived_from: Login | None = None) -> bool:
+def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
     """Persist a refreshed login; True when it reached the file.
 
-    Compare-and-save under the store lock: when ``derived_from`` is given,
-    the write happens only while the file still carries the refresh token
-    that was spent to obtain ``refreshed``. Any other token on disk is
-    another process's newer rotation (or a new ``--login``); writing over
-    it would store a burned token and force a re-login for everyone
-    (mikeno #731 ACT 4), so the stale save is dropped instead.
+    Compare-and-save under the store lock: the write happens only while the
+    file still carries the refresh token of ``derived_from`` (the login
+    whose token was spent to obtain ``refreshed``), or none at all. Any
+    other token on disk is another process's newer rotation (or a new
+    ``--login``); writing over it would store a burned token and force a
+    re-login for everyone (mikeno #731 ACT 4), so the stale save is
+    dropped instead. ``derived_from`` is required for that reason (ruhondo
+    #966): a rotation writer that cannot say what it rotated from cannot
+    be allowed to write.
 
     A background token refresh must not crash an in-flight turn just
     because logins.toml is unwritable/corrupt: the caller already has the
@@ -578,14 +581,16 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login | None = None)
 
     try:
         with logins.hold_login_lock():
-            if derived_from is not None:
-                stored = logins.load_logins_fresh().get(logins._normalize_provider_id(refreshed.provider_id))
-                if stored is not None and stored.codex_refresh_token not in (
-                    None,
-                    derived_from.codex_refresh_token,
-                    refreshed.codex_refresh_token,
-                ):
-                    return False  # someone rotated past us; their token stands
+            stored = logins.load_logins_fresh().get(logins._normalize_provider_id(refreshed.provider_id))
+            if stored is None or stored.codex_refresh_token not in (
+                derived_from.codex_refresh_token,
+                refreshed.codex_refresh_token,
+            ):
+                # Removed (a --logout), replaced by a key login, or rotated
+                # past us by another process: the store's state stands, and
+                # nothing of ours is kept, not even in memory (doc #983).
+                msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error="login changed underneath the refresh")
+                return False
             logins.save_login(refreshed)
     except (logins.LoginsCorruptError, logins.LoginStoreBusyError, OSError) as exc:
         logins.note_memory_login(refreshed, derived_from=derived_from)
@@ -600,22 +605,36 @@ def relogin_error(detail: object) -> RuntimeError:
     )
 
 
-def _stored_login(login: Login) -> Login:
-    """The freshest copy of ``login``: the file re-read now, the in-memory
-    overlay, or ``login`` itself when the store has nothing."""
+def _stored_login(login: Login) -> Login | None:
+    """The freshest copy of ``login``: the file re-read now plus the
+    in-memory overlay; None when the store holds no such login."""
     from . import logins
 
     logins.load_logins_fresh()
-    current = logins.get_login(login.provider_id)
-    return current if current is not None else login
+    return logins.get_login(login.provider_id)
 
 
-def _adopt_or_refresh_decision(login: Login) -> tuple[Login, bool]:
-    """Under the store lock: (login to use, whether a POST is still needed)."""
+def _adopt_or_refresh_decision(login: Login) -> tuple[Login, bool, bool]:
+    """Under the store lock: (login to use, POST still needed, stored).
+
+    ``stored`` False means the store holds no entry for this provider: the
+    caller's login is standalone (unsaved, e.g. a login being tested) or was
+    removed meanwhile. A standalone refresh may run, but is never persisted:
+    writing it would resurrect a ``--logout`` (maggie #955). An unreadable
+    store (corrupt TOML) is unknown, not missing: a fresh overlay is used
+    with no POST, otherwise the refresh is refused so nothing gets burned
+    for a token that could not be saved (ruhondo #1049).
+    """
+    from . import logins
+
     current = _stored_login(login)
-    if not login_needs_refresh(current):
-        return current, False
-    return current, True
+    if current is None:
+        if logins.store_unreadable():
+            raise RuntimeError(f"{logins.login_path()} cannot be read; fix it before the OpenAI Codex login can refresh")
+        return login, login_needs_refresh(login), False
+    if logins.store_unreadable() and login_needs_refresh(current):
+        raise RuntimeError(f"{logins.login_path()} cannot be read; fix it before the OpenAI Codex login can refresh")
+    return current, login_needs_refresh(current), True
 
 
 def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
@@ -640,16 +659,16 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
         # Could not take the lock in time: use the file if someone else
         # refreshed meanwhile; never post an unlocked refresh.
         current = _stored_login(login)
-        if not login_needs_refresh(current):
+        if current is not None and not login_needs_refresh(current):
             return current
         raise
     try:
-        current, needed = _adopt_or_refresh_decision(login)
+        current, needed, stored = _adopt_or_refresh_decision(login)
         if not needed:
             return current
         token = _refresh_or_relogin(current)
         refreshed = apply_refreshed_token(current, token)
-        if persist:
+        if persist and stored:
             save_refreshed_login(refreshed, derived_from=current)
         return refreshed
     finally:
@@ -667,7 +686,7 @@ def _refresh_or_relogin(current: Login) -> CodexToken:
         # truth: a different token there is another process's winner, adopt
         # it; the same token means nobody has a newer one -> re-login.
         stored = _stored_login(current)
-        if stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
+        if stored is not None and stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
             if not login_needs_refresh(stored):
                 return _token_from_login(stored)
             return refresh_token(stored.codex_refresh_token, previous=_token_from_login(stored))
@@ -718,19 +737,19 @@ async def _locked_refresh(login: Login, *, persist: bool, client: httpx.AsyncCli
 
     try:
         async with logins.ahold_login_lock():
-            current, needed = _adopt_or_refresh_decision(login)
+            current, needed, stored = _adopt_or_refresh_decision(login)
             if not needed:
                 return current
             token = await asyncio.wait_for(_refresh_or_relogin_async(current, client=client), _POST_TIMEOUT_S)
             refreshed = apply_refreshed_token(current, token)
-            if persist:
+            if persist and stored:
                 save_refreshed_login(refreshed, derived_from=current)
             return refreshed
     except logins.LoginStoreBusyError:
         # Could not take the lock in time: use the file if someone else
         # refreshed meanwhile; never post an unlocked refresh.
         current = _stored_login(login)
-        if not login_needs_refresh(current):
+        if current is not None and not login_needs_refresh(current):
             return current
         raise
 
@@ -745,7 +764,7 @@ async def _refresh_or_relogin_async(current: Login, *, client: httpx.AsyncClient
         if not _is_rejected_grant(exc):
             raise
         stored = _stored_login(current)
-        if stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
+        if stored is not None and stored.codex_refresh_token and stored.codex_refresh_token != current.codex_refresh_token:
             if not login_needs_refresh(stored):
                 return _token_from_login(stored)
             return await refresh_token_async(

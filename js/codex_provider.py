@@ -7,6 +7,7 @@ Codex model listing, Responses-style streaming, and function tool calls.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import functools
 import json
@@ -15,7 +16,6 @@ import platform
 import re
 import shutil
 import subprocess
-import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -517,6 +517,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         self._account_id = resolved_account_id
         self._login = login
         self._owns_client = client is None
+        self._refresh_guard = asyncio.Lock()
         self._set_client(client or httpx.AsyncClient(timeout=None))
 
     @classmethod
@@ -535,29 +536,62 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             await self.client.aclose()
 
     async def _ensure_access(self) -> tuple[str, str]:
-        if self._refresh_token and (self._expires_at is None or time.time() >= float(self._expires_at) - 60.0):
-            previous = codex_auth.CodexToken(
-                access=self._access_token,
-                refresh=self._refresh_token,
-                expires_at=float(self._expires_at) if self._expires_at is not None else 0.0,
-                account_id=self._account_id,
-                email=self._login.codex_email if self._login is not None else None,
-            )
-            token = await codex_auth.refresh_token_async(self._refresh_token, client=self.client, previous=previous)
-            self._access_token = token.access
-            self._refresh_token = token.refresh
-            self._expires_at = token.expires_at
-            self._account_id = token.account_id or _account_id_from_token(token.access)
+        """The access token and account id, refreshed first if about to expire.
+
+        The refresh itself lives in codex_auth.ensure_fresh_login_async: one
+        POST per expired refresh token system-wide, under the store lock.
+        This provider used to keep its own copy (ALL-CLAIMS codex_provider
+        .py:94-95), which posted the refresh token it was built with no
+        matter what another process or coroutine had already rotated.
+
+        A provider built from a bare token (no stored login) never reads or
+        writes the store: its calls coalesce on the per-provider lock below
+        and the first one's result is what the rest see (maggie #1035).
+        """
+        if not self._refresh_token:
+            return self._access_token, self._account_id
+        if not codex_auth.login_needs_refresh(self._current_login()):
+            return self._access_token, self._account_id
+        async with self._refresh_guard:
+            current = self._current_login()
+            if not codex_auth.login_needs_refresh(current):
+                return self._access_token, self._account_id  # a sibling call just did it
             if self._login is not None:
-                # apply_refreshed_token() rotates only the token-derived fields
-                # onto the EXISTING login — replace()ing login_from_token(token)
-                # here used to rebuild a bare Login and silently reset
-                # provider_headers (and any other field) to empty on every
-                # ~hourly refresh.
-                refreshed = codex_auth.apply_refreshed_token(self._login, token)
-                codex_auth.save_refreshed_login(refreshed)
+                refreshed = await codex_auth.ensure_fresh_login_async(current, persist=True, client=self.client)
+            else:
+                refreshed = await codex_auth.refreshed_login_async(current, client=self.client)
+            self._access_token = refreshed.provider_api_key or ""
+            self._refresh_token = refreshed.codex_refresh_token
+            self._expires_at = refreshed.codex_token_expires
+            self._account_id = refreshed.codex_account_id or _account_id_from_token(self._access_token)
+            if self._login is not None:
                 self._login = refreshed
         return self._access_token, self._account_id
+
+    def _current_login(self) -> Login:
+        """This provider's credentials as a Login, for the shared refresh path."""
+        if self._login is not None:
+            return codex_auth.apply_refreshed_token(
+                self._login,
+                codex_auth.CodexToken(
+                    access=self._access_token,
+                    refresh=self._refresh_token or "",
+                    expires_at=float(self._expires_at) if self._expires_at is not None else 0.0,
+                    account_id=self._account_id,
+                    email=self._login.codex_email,
+                ),
+            )
+        from .logins import Login
+
+        return Login(
+            provider_id=codex_auth.CODEX_PROVIDER_ID,
+            sdk_provider_id=codex_auth.CODEX_PROVIDER_ID,
+            provider_base_url=self.base_url,
+            provider_api_key=self._access_token,
+            codex_refresh_token=self._refresh_token,
+            codex_token_expires=self._expires_at,
+            codex_account_id=self._account_id,
+        )
 
     async def list_models(self) -> list[str]:
         access, account_id = await self._ensure_access()

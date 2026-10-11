@@ -292,28 +292,22 @@ def get_login(provider_id: str) -> Login | None:
     once (ruhondo #829/#835, doc #838).
     """
     normalized = _normalize_provider_id(provider_id)
-    stored = load_logins().get(normalized)
+    store = _current_store()
+    stored = store.logins.get(normalized)
     with _overlay_guard:
         entry = _overlay.get(_overlay_key(normalized))
     if entry is None:
         return stored
     base, memory = entry
+    if stored is None and store.unreadable:
+        # The file cannot be read right now (corrupt, mid-repair): that says
+        # nothing about the login, so the rotated token stays the answer
+        # instead of being mistaken for a logout (maggie #1045).
+        return memory
     if stored is None or _refresh_token_of(stored) != base:
         forget_memory_login(normalized)
         return stored
-    if memory.codex_refresh_token:
-        return replace(
-            stored,
-            provider_api_key=memory.provider_api_key,
-            codex_refresh_token=memory.codex_refresh_token,
-            codex_token_expires=memory.codex_token_expires,
-        )
-    return replace(
-        stored,
-        provider_api_key=memory.provider_api_key,
-        xai_refresh_token=memory.xai_refresh_token,
-        xai_token_expires=memory.xai_token_expires,
-    )
+    return _with_overlay_tokens(stored, memory)
 
 
 @dataclass
@@ -529,9 +523,13 @@ class _Store:
     logins: dict[str, Login]
     quarantined: dict[str, Any]
     extra_fields: dict[str, dict[str, Any]]
+    # True when the file exists but could not be parsed: nothing is known
+    # about any login, which is not the same as "the login was removed".
+    unreadable: bool = False
 
 
 _EMPTY_STORE = _Store(None, {}, {}, {})
+_UNREADABLE_STORE = _Store(None, {}, {}, {}, unreadable=True)
 
 
 def _parse_store(ident: tuple | None, data: dict[str, Any]) -> _Store:
@@ -586,7 +584,7 @@ def _read_store() -> _Store:
         with path.open("rb") as f:
             data = tomllib.load(f)
     except Exception:  # noqa: BLE001
-        _loaded = _EMPTY_STORE
+        _loaded = _UNREADABLE_STORE
         return _loaded
     _loaded = _parse_store(ident, data)
     return _loaded
@@ -610,6 +608,11 @@ def load_logins_fresh() -> dict[str, Login]:
     say whether the token was already rotated.
     """
     return dict(_read_store().logins)
+
+
+def store_unreadable() -> bool:
+    """Whether the last parse found logins.toml present but unparseable."""
+    return _current_store().unreadable
 
 
 def load_logins() -> dict[str, Login]:
@@ -656,10 +659,21 @@ def save_login(login: Login) -> None:
     (a Codex refresh and an xAI refresh, say) cannot drop each other's
     change. Raises LoginsCorruptError instead of proceeding if the existing
     file fails to parse (see _refuse_if_corrupt).
+
+    A save that keeps the refresh token an in-memory overlay was derived
+    from (a headers edit, say) carries the overlay's rotated tokens into
+    the file: the store is writable right now, so the memory-only state
+    heals instead of being discarded, which would re-post a burned token
+    on the next turn (ruhondo #1040, doc #1041). A save with any other
+    refresh token is a new login and drops the overlay.
     """
     _ensure_config_dir()
     canonical_id = providers.normalize_provider_id(login.provider_id) or login.provider_id
     login = replace(login, provider_id=canonical_id)
+    with _overlay_guard:
+        entry = _overlay.get(_overlay_key(canonical_id))
+    if entry is not None and entry[0] is not None and _refresh_token_of(login) == entry[0]:
+        login = _with_overlay_tokens(login, entry[1])
     with hold_login_lock():
         _refuse_if_corrupt()
         store = _read_store()
@@ -667,6 +681,23 @@ def save_login(login: Login) -> None:
         loaded[canonical_id] = login
         _write_logins_toml(_serialize(store, loaded))
     forget_memory_login(canonical_id)
+
+
+def _with_overlay_tokens(stored: Login, memory: Login) -> Login:
+    """``stored`` with the token fields (access, refresh, expiry) of ``memory``."""
+    if memory.codex_refresh_token:
+        return replace(
+            stored,
+            provider_api_key=memory.provider_api_key,
+            codex_refresh_token=memory.codex_refresh_token,
+            codex_token_expires=memory.codex_token_expires,
+        )
+    return replace(
+        stored,
+        provider_api_key=memory.provider_api_key,
+        xai_refresh_token=memory.xai_refresh_token,
+        xai_token_expires=memory.xai_token_expires,
+    )
 
 
 def _normalize_provider_id(provider_id: str) -> str:

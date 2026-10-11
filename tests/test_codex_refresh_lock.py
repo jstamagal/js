@@ -17,6 +17,7 @@ import sys
 import textwrap
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -295,3 +296,105 @@ def test_callback_server_ignores_a_hit_with_the_wrong_state(monkeypatch):
 
 def test_callback_handler_has_an_idle_timeout():
     assert codex_auth._CallbackHandler.timeout == 5
+
+
+def test_logout_during_a_refresh_is_not_resurrected(server, store, capsys):
+    # kito #987 / maggie #990 / effie #982: the stored entry is gone (a
+    # --logout) by the time the rotation would be saved -> no disk save, no
+    # overlay, one warning. The in-flight call may still use its token.
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    logins.remove_login(PROVIDER)
+    refreshed = codex_auth.apply_refreshed_token(stale, codex_auth.CodexToken(access=_jwt(), refresh="R2", expires_at=time.time() + 3600, account_id="acct_1"))
+    assert codex_auth.save_refreshed_login(refreshed, derived_from=stale) is False
+    assert PROVIDER not in logins.load_logins()
+    assert logins.get_login(PROVIDER) is None
+    assert "login changed underneath" in capsys.readouterr().err
+    # Same through ensure_fresh_login: a login the store does not hold refreshes
+    # for this call only and persists nothing (mikeno probe_codex_logout_race).
+    assert codex_auth.ensure_fresh_login(stale).codex_refresh_token == "R2"
+    assert PROVIDER not in logins.load_logins()
+
+
+def test_key_login_replacing_the_oauth_login_is_not_overwritten(server, store):
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    logins.save_login(logins.Login(provider_id=PROVIDER, provider_api_key="sk-key"))  # replaced by a key login
+    refreshed = codex_auth.apply_refreshed_token(stale, codex_auth.CodexToken(access=_jwt(), refresh="R2", expires_at=time.time() + 3600, account_id="acct_1"))
+    assert codex_auth.save_refreshed_login(refreshed, derived_from=stale) is False
+    assert logins.load_logins()[PROVIDER].provider_api_key == "sk-key"
+
+
+def test_provider_ensure_access_goes_through_the_shared_locked_refresh(server, store):
+    # ALL-CLAIMS codex_provider.py:94-95: the provider had its own refresh
+    # copy. Now two providers built from the same stale login post once.
+    from js import codex_provider
+
+    logins.save_login(_stale_login())
+    first = codex_provider.OpenAICodexProvider.from_login(_stale_login())
+    second = codex_provider.OpenAICodexProvider.from_login(_stale_login())
+
+    async def scenario():
+        try:
+            a, b = await asyncio.gather(first._ensure_access(), second._ensure_access())
+            return a, b
+        finally:
+            await first.aclose()
+            await second.aclose()
+
+    (access_a, account_a), (access_b, account_b) = asyncio.run(scenario())
+    assert access_a == access_b and account_a == account_b == "acct_1"
+    assert server.posted == ["R1"]
+    assert logins.load_logins()[PROVIDER].codex_refresh_token == "R2"
+    assert logins.load_logins()[PROVIDER].provider_headers == {"x-custom": "1"}
+
+
+def test_standalone_provider_without_a_stored_login_coalesces_and_never_touches_the_store(server, store):
+    # maggie #1035: a provider built from a bare token (no login) must not
+    # adopt an unrelated stored login, must not write, and its concurrent
+    # calls must post once.
+    from js import codex_provider
+
+    logins.save_login(logins.Login(provider_id=PROVIDER, provider_api_key="sk-unrelated"))
+    provider = codex_provider.OpenAICodexProvider(access_token=_jwt(), refresh_token="R1", expires_at=0.0, account_id="acct_1")
+
+    async def scenario():
+        try:
+            return await asyncio.gather(*(provider._ensure_access() for _ in range(6)))
+        finally:
+            await provider.aclose()
+
+    results = asyncio.run(scenario())
+    assert len({r[0] for r in results}) == 1
+    assert server.posted == ["R1"]
+    assert logins.load_logins()[PROVIDER].provider_api_key == "sk-unrelated"  # untouched
+
+
+def test_unreadable_store_uses_a_fresh_overlay_and_never_posts_on_a_stale_one(server, store, capsys):
+    # ruhondo #1049 / maggie #1045: a corrupt logins.toml is UNKNOWN, not a logout.
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    fresh_memory = codex_auth.apply_refreshed_token(stale, codex_auth.CodexToken(access=_jwt(), refresh="R2", expires_at=time.time() + 3600, account_id="acct_1"))
+    logins.note_memory_login(fresh_memory, derived_from=stale)
+    (store / "logins.toml").write_bytes(b"not toml {{{")
+    assert logins.get_login(PROVIDER).codex_refresh_token == "R2"
+    assert codex_auth.ensure_fresh_login(stale).codex_refresh_token == "R2"
+    assert server.posted == []
+    # Stale overlay (or none) + unreadable store -> refuse, nothing burned.
+    logins.forget_memory_login(PROVIDER)
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        codex_auth.ensure_fresh_login(stale)
+    assert server.posted == []
+
+
+def test_same_base_save_persists_the_overlay_tokens(server, store):
+    # ruhondo #1040 / doc #1041: a local save that keeps the base refresh
+    # token (a headers edit) heals the memory-only rotation into the file.
+    stale = _stale_login("R1")
+    logins.save_login(stale)
+    memory = codex_auth.apply_refreshed_token(stale, codex_auth.CodexToken(access=_jwt(), refresh="R2", expires_at=time.time() + 3600, account_id="acct_1"))
+    logins.note_memory_login(memory, derived_from=stale)
+    logins.save_login(replace(stale, provider_headers={"x-custom": "new"}))
+    on_disk = logins.load_logins()[PROVIDER]
+    assert (on_disk.codex_refresh_token, on_disk.provider_headers) == ("R2", {"x-custom": "new"})
+    assert logins._overlay_key(PROVIDER) not in logins._overlay
