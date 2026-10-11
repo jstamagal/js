@@ -123,7 +123,12 @@ def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
     if legacy is not None:
         raise ValueError(f"{legacy} is no longer read; {_MIGRATE_HINT}")
     for path in md_files:
-        if _is_zero_file(path) and not _is_message_file(path) and path.read_text(encoding="utf-8").startswith("---"):
+        if (
+            _is_zero_file(path)
+            and not _is_message_file(path)
+            and not _is_benchmark_file(path)  # load_benchmarks reads its frontmatter
+            and path.read_text(encoding="utf-8").startswith("---")
+        ):
             raise ValueError(f"frontmatter in {path} is no longer read; {_MIGRATE_HINT}")
 
 
@@ -255,6 +260,25 @@ def _has_manifest(prompts_dir: Path) -> bool:
     return (prompts_dir / AGENT_MANIFEST).is_file() or _find_yaml_zero_file(prompts_dir) is not None
 
 
+def _has_persona_text(prompts_dir: Path) -> bool:
+    """Whether a prompt dir holds system-prompt text: a .md that is neither a
+    benchmark turn nor a seed message file."""
+    return any(
+        not _is_benchmark_file(path) and not _is_message_file(path) for path in prompts_dir.glob("*.md")
+    )
+
+
+def _find_persona_dir(agent_id: str, *roots: Path) -> Path | None:
+    """Highest-priority root whose agent_id dir supplies the system prompt: it
+    has persona text, or a manifest (an agent.yaml with no prompt files means an
+    empty system prompt on purpose)."""
+    for root in roots:
+        candidate = root / agent_id
+        if candidate.is_dir() and (_has_manifest(candidate) or _has_persona_text(candidate)):
+            return candidate
+    return None
+
+
 def _find_manifest_dir(agent_id: str, *roots: Path) -> Path | None:
     """Highest-priority root (in the order given) whose agent_id dir actually
     carries a manifest. Used to fall back past a winning prompt dir that
@@ -278,13 +302,20 @@ def load_agent_prompt_spec(
     prompt_dir = _most_specific_prompt_dir(agent_id, repo_prompts_root, global_agents_root, project_agents_root)
     spec = load_prompt_spec(prompt_dir)
     if not _has_manifest(prompt_dir):
-        # This dir won on prompt text alone (e.g. a project override that only
-        # tweaks wording) and carries no manifest of its own — fall back to the
-        # nearest lower layer's agent.yaml rather than silently booting with
-        # zero tools and default model/sampling.
-        manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
-        if manifest_dir is not None and manifest_dir != prompt_dir:
-            spec = replace(_with_system(load_prompt_spec(manifest_dir), spec.system), exchanges=spec.exchanges)
+        # This dir won without a manifest: it may tweak only the wording, or
+        # only carry seed messages or benchmark turns. Its seed exchanges stay
+        # (and --bench reads its benchmarks), but the model, tools and sampling
+        # come from the nearest layer with an agent.yaml, and the system prompt
+        # from the nearest layer that has one, so a seed-only or bench-only
+        # override never boots the agent with an empty system prompt.
+        roots = (project_agents_root, global_agents_root, repo_prompts_root)
+        system = spec.system
+        persona_dir = _find_persona_dir(agent_id, *roots)
+        if persona_dir is not None and persona_dir != prompt_dir:
+            system = load_prompt_spec(persona_dir).system
+        manifest_dir = _find_manifest_dir(agent_id, *roots)
+        base = load_prompt_spec(manifest_dir) if manifest_dir is not None and manifest_dir != prompt_dir else spec
+        spec = replace(_with_system(base, system), exchanges=spec.exchanges)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
