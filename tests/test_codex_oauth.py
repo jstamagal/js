@@ -932,3 +932,35 @@ def test_list_models_maps_non_json_and_transport_failures():
         asyncio.run(_provider_with_client(Client(httpx.ConnectError("refused"))).list_models())
     with pytest.raises(ai.ProviderTimeoutError):
         asyncio.run(_provider_with_client(Client(httpx.ReadTimeout("slow"))).list_models())
+
+
+def test_a_half_streamed_tool_call_never_reaches_the_caller(monkeypatch):
+    """maggie #1153: through the real assembler (model_client._stream_async),
+    a tool call cut by EOF raises before any ModelStreamResult exists, so
+    nothing is dispatched."""
+    import contextlib
+    import types as _types
+
+    from js import model_client
+
+    events = [
+        {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
+        {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "/etc/pass'},
+    ]
+
+    @contextlib.asynccontextmanager
+    async def fake_open(**_kwargs):
+        provider = _provider_with_client(_SSEClient(events))
+        yield ai.models.Stream(provider.stream(
+            ai.Model(id="gpt-5.5", provider=provider), [ai.user_message("hi")], tools=None, params=None))
+
+    monkeypatch.setattr(model_client, "_open_stream", fake_open)
+    model = _types.SimpleNamespace(id="gpt-5.5", provider=_types.SimpleNamespace(name="stub"))
+    results = []
+
+    async def run():
+        results.append(await model_client._stream_async(model, [], None, None, on_text=lambda _s: None))
+
+    with pytest.raises(ai.ProviderResponseError):
+        asyncio.run(run())
+    assert results == []
