@@ -175,3 +175,26 @@ def test_debug_log_keeps_the_committed_answer_but_not_the_redraws():
     # Cursor movement for the live region stays on the terminal.
     assert "\x1b[J" in terminal.getvalue()
     assert "\x1b[J" not in log.text
+
+
+def test_line_separator_in_a_paragraph_does_not_cut_the_block():
+    """U+2028 survives clean(); markdown-it numbers lines by \\n only, so the
+    commit must slice by \\n too or a block is cut in the middle."""
+    live = RecordingLive()
+    text = "First para has\u2028a line separator\u2028in it.\n\nSecond para.\n\nThird.\n"
+    _stream(text, display.Display(lambda _text: None, live=live, refresh_s=0), size=3)
+    commits = [ANSI.sub("", t) for kind, t in live.events if kind == "commit"]
+    holding = [t for t in commits if "First para" in t]
+    assert len(holding) == 1
+    assert "in it." in holding[0]
+    plain = "".join(commits)
+    for words in ("Second para.", "Third."):
+        assert plain.count(words) == 1
+
+
+def test_tool_result_name_is_cleaned_at_every_level():
+    evil = "evil\x1b]0;PWNED\x07\x1b[2J"
+    for level in (1, 2, 3):
+        out = display.render_tool_result(evil, "ok", level, width=80)
+        assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
+        assert "evil" in out

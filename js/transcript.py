@@ -15,12 +15,23 @@ from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
+from . import display as _display
 
-_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# What survives the escape patterns: a lone or unterminated ESC (an escape split
+# across writes, or cut off) and the C1 controls, 8-bit openers included.
+_RESIDUAL = re.compile(r"[\x1b\x80-\x9f]")
 
 
 def strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    """``text`` without terminal escapes: OSC/DCS/SOS/PM/APC strings, CSI and
+    two-byte escapes, the same set `display.clean` removes, then any ESC or C1
+    control left over, so no write (even one split mid-escape) puts an escape
+    into the log. Other control bytes stay, so the log keeps carriage returns
+    and tabs as they were shown."""
+    text = _display._STRING_SEQ.sub("", text)
+    text = _display._CSI.sub("", text)
+    text = _display._ESC.sub("", text)
+    return _RESIDUAL.sub("", text)
 
 
 class TranscriptLogSink:
