@@ -379,3 +379,45 @@ def test_stage_path_is_literal_not_a_pathspec_glob(repo):
     assert commit_helper.main(["stage", "*.txt", "all"]) == 0
     names = _git(repo, "diff", "--cached", "--name-only", "-z").stdout.split("\0")
     assert "*.txt" in names and "other.txt" not in names
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\r", "\r\n", "x\ry"])
+def test_repo_root_with_control_chars_stays_that_repo(tmp_path, suffix):
+    """A root named `repo\\n` must not resolve to its sibling `repo` (tuck #375)."""
+    roots = [tmp_path / "repo", tmp_path / f"repo{suffix}"]
+    for root in roots:
+        root.mkdir()
+        _git(root, "init", "-q", "-b", "main")
+        _git(root, "config", "user.email", "t@t")
+        _git(root, "config", "user.name", "t")
+        (root / "f.txt").write_text("a\n")
+        _git(root, "add", "f.txt")
+        _git(root, "commit", "-qm", "b")
+        (root / "f.txt").write_text("b\n")
+    sibling, target = roots
+    assert commit_helper.main(["-C", str(target), "stage", "f.txt", "all"]) == 0
+    assert _git(target, "diff", "--cached", "--name-only").stdout == "f.txt\n"
+    assert _git(sibling, "diff", "--cached", "--name-only").stdout == ""
+
+
+def test_crlf_file_partially_stages_byte_exact(repo):
+    path = repo / "dos.txt"
+    path.write_bytes(b"".join(b"line%d\r\n" % i for i in range(1, 31)))
+    _git(repo, "add", "dos.txt")
+    _git(repo, "commit", "-qm", "dos")
+    data = path.read_bytes().replace(b"line2\r\n", b"line2_X\r\n").replace(b"line28\r\n", b"line28_X\r\n")
+    path.write_bytes(data)
+    assert commit_helper.main(["stage", "dos.txt", "1"]) == 0
+    blob = subprocess.run(["git", "-C", str(repo), "show", ":dos.txt"], capture_output=True, check=True).stdout
+    assert b"line2_X\r\n" in blob and b"line28_X" not in blob
+
+
+def test_line_separator_inside_a_changed_line_is_not_a_hunk_boundary(repo):
+    path = repo / "f.txt"
+    lines = [f"line{i}" for i in range(1, 31)]
+    lines[1] = "old\u2028@@ inner"
+    lines[27] = "line28_X"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert commit_helper.main(["stage", "f.txt", "1"]) == 0
+    staged = _staged(repo)
+    assert "old\u2028@@ inner" in staged and "line28_X" not in staged

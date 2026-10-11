@@ -163,19 +163,59 @@ _CONTEXT_OVERFLOW_NEEDLES = (
     # above, so overflow recovery never fired on llama.cpp at all.
     "context size",
     "exceed_context_size",
+    # Gemini: "The input token count (N) exceeds the maximum number of tokens
+    # allowed (M)".
+    "exceeds the maximum number of tokens",
 )
+
+# A rate limit is never an overflow, whatever its text says: OpenAI's TPM limit
+# reads "Request too large for <model> ... on tokens per min (TPM)" and would
+# match the "request too large" needle. Recovering a rate limit by clearing
+# tool results and summarizing destroys context for nothing.
+_RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded", "rate_limit_error", "rate_limited"})
+_RATE_LIMIT_NEEDLES = ("rate limit", "rate_limit", "tokens per min", "requests per min")
+# HTTP 413 named in a message that came without a status (SDK text like
+# "Error code: 413 - ..."). A bare substring test also hit request ids
+# (req_84133), token counts and ports.
+_STATUS_413_RE = re.compile(r"\b(?:error code|status(?: code)?|http)[:\s]+413\b")
+
+
+def _status_code(exc: BaseException) -> int | None:
+    context = getattr(exc, "http_context", None)
+    status = getattr(context, "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_error_fields(exc: BaseException) -> dict[str, Any]:
+    return {
+        "code": getattr(exc, "code", None),
+        "type": getattr(exc, "type", None),
+        "status_code": _status_code(exc),
+        "body": getattr(exc, "body", None),
+    }
 
 
 def is_context_overflow_error(exc: BaseException) -> bool:
     if not isinstance(exc, ai.ProviderAPIError):
         return False
-    fields: list[str] = [str(exc)]
-    for attr in ("code", "error_type", "status_code", "body"):
-        value = getattr(exc, attr, None)
-        if value is not None:
-            fields.append(str(value))
-    haystack = " ".join(fields).lower()
-    if "413" in haystack:
+    fields = _provider_error_fields(exc)
+    status = fields["status_code"]
+    code = str(fields["code"] or "").lower()
+    if status == 429 or isinstance(exc, ai.ProviderRateLimitError) or code in _RATE_LIMIT_CODES:
+        return False
+    if status == 413 or isinstance(exc, ai.ProviderRequestTooLargeError):
+        return True
+    haystack = " ".join(
+        [str(exc), *(str(value) for value in fields.values() if value is not None)]
+    ).lower()
+    if any(needle in haystack for needle in _RATE_LIMIT_NEEDLES):
+        return False
+    if _STATUS_413_RE.search(haystack):
         return True
     return any(needle in haystack for needle in _CONTEXT_OVERFLOW_NEEDLES)
 
@@ -293,8 +333,7 @@ def recover_overflow(
         messages, cfg=cfg, system=system,
         trigger={"phase": "overflow_recovery", "round": round_,
                  "error": f"{type(error).__name__}: {error}",
-                 "provider_error": {key: getattr(error, key, None)
-                                    for key in ("code", "error_type", "status_code", "body")}},
+                 "provider_error": _provider_error_fields(error)},
         flight_data=flight_data,
     )
     try:

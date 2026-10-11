@@ -101,19 +101,24 @@ def _git(
 ) -> subprocess.CompletedProcess:
     workdir = _repo_path(repo)
     try:
-        proc = subprocess.run(
+        # Bytes in, bytes out, decoded here: text mode would translate
+        # newlines (CRLF content and CR in paths lost). surrogateescape both
+        # ways, so a latin-1 file's hunk goes back to `git apply` as the same
+        # bytes.
+        raw = subprocess.run(
             ["git", *_GIT_OVERRIDES, "-C", str(workdir), *args],
             capture_output=True,
-            # surrogateescape both ways: a latin-1 file's diff decodes without
-            # error and a patch built from it goes back to `git apply` as the
-            # same bytes.
-            encoding="utf-8",
-            errors="surrogateescape",
-            input=stdin,
+            input=None if stdin is None else stdin.encode("utf-8", "surrogateescape"),
             check=False,
         )
     except FileNotFoundError as exc:
         raise GitCommandError(tuple(args), workdir, 127, "", "git executable not found", "git-failed") from exc
+    proc = subprocess.CompletedProcess(
+        raw.args,
+        raw.returncode,
+        raw.stdout.decode("utf-8", "surrogateescape"),
+        raw.stderr.decode("utf-8", "surrogateescape"),
+    )
     if check and proc.returncode != 0:
         raise GitCommandError(
             tuple(args),
@@ -168,7 +173,8 @@ class StatusRow:
 def _toplevel(repo: str | Path | None = None) -> Path:
     """The work tree root. Status paths are root-relative, so every git call
     that takes them back runs from here, whatever directory ``-C`` named."""
-    top = _git("rev-parse", "--show-toplevel", repo=repo).stdout.rstrip("\n")
+    # Exactly one trailing LF is git's delimiter; anything else is the name.
+    top = _git("rev-parse", "--show-toplevel", repo=repo).stdout.removesuffix("\n")
     return Path(top) if top else _repo_path(repo)
 
 
@@ -199,7 +205,11 @@ def _porcelain(repo: str | Path | None = None) -> list[StatusRow]:
 
 def _split_hunks(diff_text: str) -> tuple[str, list[str]]:
     """Return (file header, [hunk, ...]) for a single-file diff. Hunk = one @@ block."""
-    lines = diff_text.splitlines(keepends=True)
+    # Split on LF only: splitlines() also breaks on CR, U+2028, \x0c and
+    # friends inside a changed line, and a fragment starting "@@" would
+    # become a fake hunk.
+    lines = diff_text.split("\n")
+    lines = [ln + "\n" for ln in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
     header, hunks, cur = [], [], None
     for ln in lines:
         if ln.startswith("@@"):
@@ -258,7 +268,7 @@ def _print_diff_section(repo: Path, rows: list[StatusRow], *, cached: bool) -> N
         if not hunks:
             _out(msgs.SURVEY_NO_TEXT_HUNKS)
         for i, h in enumerate(hunks, 1):
-            _out(msgs.SURVEY_HUNK, index=i, header=h.splitlines()[0])
+            _out(msgs.SURVEY_HUNK, index=i, header=h.split("\n", 1)[0])
             _print(h.rstrip("\n"))
     if not any_diff:
         _out(msgs.SURVEY_NONE)
