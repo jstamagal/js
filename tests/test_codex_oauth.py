@@ -847,3 +847,88 @@ def test_stream_errors_keep_their_message_and_code_so_retry_can_see_them(event, 
     assert caught.value.message == message
     assert caught.value.code == "server_error"
     assert caught.value.is_retryable is True
+
+
+def test_a_stream_that_ends_without_a_terminal_event_raises_retryable():
+    """ALL-CLAIMS codex_provider.py:97 (doc #372, ruhondo #378): a broken pipe
+    used to end as a clean StreamEnd, so a cut answer or a half tool call
+    passed as finished."""
+    with pytest.raises(ai.ProviderResponseError) as caught:
+        _drain([
+            {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
+            {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "a'},
+        ])
+    assert caught.value.is_retryable is True
+
+
+def test_the_owned_client_bounds_silence_not_total_time():
+    """ALL-CLAIMS codex_provider.py:96: httpx.AsyncClient(timeout=None) let a
+    stalled connection hang the turn forever."""
+    provider = codex_provider.OpenAICodexProvider(access_token=_fake_jwt(), account_id="acct_123")
+    try:
+        timeout = provider.client.timeout
+        assert timeout.read == codex_provider._READ_GAP_S and timeout.connect is not None
+    finally:
+        asyncio.run(provider.aclose())
+
+
+def test_a_silent_server_times_out_as_a_retryable_provider_error(monkeypatch):
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    held = []
+
+    def accept_and_stall():
+        conn, _ = listener.accept()
+        held.append(conn)                       # read the request, never answer
+
+    threading.Thread(target=accept_and_stall, daemon=True).start()
+    monkeypatch.setattr(codex_provider, "_CLIENT_TIMEOUT", httpx.Timeout(1.0, read=0.3))
+    provider = codex_provider.OpenAICodexProvider(
+        access_token=_fake_jwt(), account_id="acct_123",
+        base_url=f"http://127.0.0.1:{listener.getsockname()[1]}")
+
+    async def run():
+        try:
+            async for _ in provider.stream(ai.Model(id="gpt-5.5", provider=provider),
+                                           [ai.user_message("hi")], tools=None, params=None):
+                pass
+        finally:
+            await provider.aclose()
+
+    with pytest.raises(ai.ProviderTimeoutError) as caught:
+        asyncio.run(asyncio.wait_for(run(), 10))
+    assert caught.value.is_retryable is True
+    listener.close()
+
+
+def test_list_models_maps_non_json_and_transport_failures():
+    """ALL-CLAIMS codex_provider.py:99: a 200 non-JSON body raised a raw
+    JSONDecodeError; transport errors were not mapped."""
+    class NotJson:
+        status_code = 200
+
+        def json(self):
+            raise json.JSONDecodeError("x", "<html>", 0)
+
+    class Client:
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        async def get(self, *a, **k):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+        async def aclose(self):
+            return None
+
+    with pytest.raises(ai.ProviderResponseError):
+        asyncio.run(_provider_with_client(Client(NotJson())).list_models())
+    with pytest.raises(ai.ProviderConnectionError):
+        asyncio.run(_provider_with_client(Client(httpx.ConnectError("refused"))).list_models())
+    with pytest.raises(ai.ProviderTimeoutError):
+        asyncio.run(_provider_with_client(Client(httpx.ReadTimeout("slow"))).list_models())

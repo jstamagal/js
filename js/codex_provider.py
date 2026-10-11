@@ -485,6 +485,14 @@ async def _build_body_async(
     return body
 
 
+# The owned client's timeouts. `read` is the longest silence between two
+# chunks, not a total: SSE deltas and keepalives reset it, so a long reasoning
+# turn streams on, while a stalled connection fails in two minutes instead of
+# hanging the turn forever (it was timeout=None).
+_READ_GAP_S = 120.0
+_CLIENT_TIMEOUT = httpx.Timeout(connect=15.0, read=_READ_GAP_S, write=30.0, pool=15.0)
+
+
 @dataclass
 class _ToolCall:
     """One function call being streamed: what has been sent for it so far."""
@@ -543,7 +551,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         self._login = login
         self._owns_client = client is None
         self._refresh_guard = asyncio.Lock()
-        self._set_client(client or httpx.AsyncClient(timeout=None))
+        # An injected client keeps the caller's own timeouts.
+        self._set_client(client or httpx.AsyncClient(timeout=_CLIENT_TIMEOUT))
 
     @classmethod
     def from_login(cls, login: Login) -> OpenAICodexProvider:
@@ -624,16 +633,27 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         headers = _codex_headers(access, account_id, stream=False)
         errors: list[str] = []
         for path in _MODEL_PATHS:
-            response = await self.client.get(
-                f"{base}{path}",
-                params={"client_version": _client_version()},
-                headers=headers,
-            )
+            try:
+                response = await self.client.get(
+                    f"{base}{path}",
+                    params={"client_version": await asyncio.to_thread(_client_version)},
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                raise ai.ProviderTimeoutError(
+                    "OpenAI Codex model list timed out", provider=_PROVIDER, is_retryable=True) from exc
+            except httpx.TransportError as exc:
+                raise ai.ProviderConnectionError(
+                    f"OpenAI Codex connection failed: {exc}", provider=_PROVIDER, is_retryable=True) from exc
             if response.status_code >= 400:
                 summary, _code, _type = _error_message(_response_body(response), "")
                 errors.append(f"{path}: HTTP {response.status_code}{(': ' + summary[:200]) if summary else ''}")
                 continue
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:
+                errors.append(f"{path}: response was not JSON")
+                continue
             if not isinstance(payload, dict):
                 errors.append(f"{path}: response was not a JSON object")
                 continue
@@ -878,14 +898,18 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             error_type=error_type,
                             is_retryable=code in {"model_error", "server_error", "internal_error"},
                         )
-                for ev in close_reasoning():
-                    yield ev
-                if text_open:
-                    yield ai.events.TextEnd(block_id="text")
-                for call in tool_order:
-                    for ev in end_tool(call, None):
-                        yield ev
-                yield ai.events.StreamEnd(usage=terminal_usage)
+                # The body ended without response.completed/done/incomplete:
+                # the connection broke. Ending cleanly would pass a cut answer
+                # or a half-streamed tool call off as finished, and a call
+                # marked "incomplete" still reaches _dispatch unless every
+                # consumer checks the flag (doc #372, ruhondo #378). Raise a
+                # retryable error instead; a server-stated response.incomplete
+                # above stays data.
+                raise ai.ProviderResponseError(
+                    "OpenAI Codex stream ended without a terminal event",
+                    provider=_PROVIDER,
+                    is_retryable=True,
+                )
         except httpx.TimeoutException as exc:
             raise ai.ProviderTimeoutError("OpenAI Codex request timed out", provider=_PROVIDER, is_retryable=True) from exc
         except httpx.TransportError as exc:
