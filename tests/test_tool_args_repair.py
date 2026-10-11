@@ -14,7 +14,6 @@ def test_inner_comma_bracket_inside_string_survives():
 
 def test_outer_trailing_commas_still_stripped():
     assert repair_jsonish('{"a": 1, }') == {"a": 1}
-    assert repair_jsonish('[1, 2, ]') if False else True  # list shape: canonical only handles objects
     assert repair_jsonish('{"a": [1, 2, ], }') == {"a": [1, 2]}
 
 
@@ -29,3 +28,33 @@ def test_valid_json_is_byte_identical():
 
 def test_escaped_quotes_and_backslashes_survive():
     assert repair_jsonish(r'{"c": "a\"b, }", }') == {"c": 'a\"b, }'}
+
+
+def test_anyof_object_branch_coerces_stringified_object():
+    """fetch's headers is anyOf[object, array] (ALL-CLAIMS tool_args MED)."""
+    from js.tool_args import coerce_to_schema
+
+    schema = {"anyOf": [{"type": "object"}, {"type": "array"}]}
+    assert coerce_to_schema('{"A": "b"}', schema) == {"A": "b"}
+
+
+def test_anyof_array_branch_coerces_stringified_array():
+    from js.tool_args import coerce_to_schema
+
+    schema = {"anyOf": [{"type": "array"}, {"type": "null"}]}
+    assert coerce_to_schema("[1, 2]", schema) == [1, 2]
+
+
+def test_anyof_with_string_branch_keeps_the_string():
+    from js.tool_args import coerce_to_schema
+
+    schema = {"anyOf": [{"type": "string"}, {"type": "object"}]}
+    assert coerce_to_schema('{"A": "b"}', schema) == '{"A": "b"}'
+
+
+def test_oneof_scalar_union_and_non_json_unchanged():
+    from js.tool_args import coerce_to_schema
+
+    assert coerce_to_schema("15", {"oneOf": [{"type": "integer"}, {"type": "object"}]}) == 15
+    assert coerce_to_schema("not json", {"anyOf": [{"type": "object"}, {"type": "array"}]}) == "not json"
+    assert coerce_to_schema("x", {"$ref": "#/x"}) == "x"

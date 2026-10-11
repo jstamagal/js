@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 
 from .toolkit.core import compact_json
 
@@ -136,6 +135,21 @@ def coerce_to_schema(value: object, schema: object) -> object:
         return value
     declared = schema.get("type")
     types = declared if isinstance(declared, list) else [declared]
+    # `anyOf`/`oneOf` branches count as declared types: a stringified object
+    # under anyOf[object, array] would otherwise stay a string and fail the
+    # very validation this coercion exists to pass. A branch that declares
+    # string means the string is already valid - leave it alone. `$ref` is
+    # left unresolved (no resolver lives in this file).
+    for combiner in ("anyOf", "oneOf"):
+        branches = schema.get(combiner)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict):
+                    branch_type = branch.get("type")
+                    if isinstance(branch_type, list):
+                        types.extend(branch_type)
+                    elif branch_type is not None:
+                        types.append(branch_type)
     if isinstance(value, str) and "string" not in types:
         for name in types:
             expected = _JSON_CONTAINERS.get(name)
