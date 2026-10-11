@@ -287,3 +287,27 @@ def test_routed_catalog_prefers_issuer_limits(monkeypatch):
     result = model_metadata.lookup_limits("omni/gpt-5.6-sol", "cpa")
     assert result.provider_id == "openai"
     assert result.context_window == 1050000
+
+
+def test_a_pinned_latest_id_takes_its_own_catalog_row(monkeypatch):
+    """ALL-CLAIMS:328: the exact provider lookup was skipped for every `-latest`
+    id, so openai's real gpt-5.2-chat-latest (128k) fell through to routing."""
+    from types import SimpleNamespace
+
+    seen = []
+
+    def by_id(key):
+        seen.append(key)
+        if key == "openai:gpt-5.2-chat-latest":
+            return SimpleNamespace(provider_id="openai", id="gpt-5.2-chat-latest",
+                                   limits=SimpleNamespace(context=128000, output=16384, input=None))
+        return None
+
+    rows = (model_metadata._ModelRow("abacus", "gpt-5.2-chat-latest", 400000, 32000, None,
+                                     "gpt-5.2-chat-latest", "2026-01-01"),)
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", by_id)
+    model_metadata.lookup_limits.cache_clear()
+    result = model_metadata.lookup_limits("gpt-5.2-chat-latest", "openai")
+    assert (result.provider_id, result.context_window) == ("openai", 128000)
+    assert "openai:gpt-5.2-chat-latest" in seen

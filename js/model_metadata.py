@@ -563,7 +563,9 @@ def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits 
     model_id, provider_id = _normalize_request(model_id, provider_id)
     candidates = _provider_candidates(provider_id)
 
-    for candidate in (() if "-latest" in model_id.lower() else candidates):
+    # A provider-pinned exact id answers first, `-latest` ids included: OpenAI
+    # ships real ids like gpt-5.2-chat-latest with their own limits.
+    for candidate in candidates:
         model = modelsdotdev.get_model_by_id(f"{candidate}:{model_id}")
         if model is not None:
             limits = getattr(model, "limits", None)
