@@ -627,7 +627,8 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
     if count <= 0 or not starts:
         return ""
     tail = messages[starts[-min(count, len(starts))]:]
-    results = {message.get("tool_call_id"): message for message in tail if message.get("role") == "tool"}
+    results = {message.get("tool_call_id"): message for message in tail
+               if message.get("role") == "tool" and message.get("tool_call_id")}
     out: list[str] = []
     for message in tail:
         role = message.get("role")

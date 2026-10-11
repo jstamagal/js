@@ -198,3 +198,14 @@ def test_tool_result_name_is_cleaned_at_every_level():
         out = display.render_tool_result(evil, "ok", level, width=80)
         assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
         assert "evil" in out
+
+
+def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one():
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": None, "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}}]},
+        {"role": "tool", "tool_call_id": None, "content": "ORPHAN_RESULT"},
+    ]
+    out = display.render_exchanges(messages, 1, width=80, level=3, preview=12, markdown=False)
+    assert "ORPHAN_RESULT" not in out
