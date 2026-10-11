@@ -230,10 +230,14 @@ class Jail:
 
     def _areas(self, setting: object) -> list[Bind]:
         """Every tree a file tool may reach, as the host sees it."""
+        explicit = [Bind(self.root, True), *self.binds(setting)]
         areas = [Bind(self.root, True), Bind(self.private, True)]
         areas += [Bind(_real(b.path), b.rw) for b in self.binds(setting)]
         areas.append(Bind(_real(paths.tool_results_dir()), False))
-        areas += [Bind(p, False) for p in self._path_dirs(os.environ.get("PATH", ""))]
+        # A PATH directory inside DIR or a bind is not bound back read-only by
+        # `argv` (its `covered` check), so it keeps that bind's access here too.
+        areas += [Bind(p, False) for p in self._path_dirs(os.environ.get("PATH", ""))
+                  if not any(_under(p, _real(b.path)) for b in explicit)]
         return areas
 
     def _path_dirs(self, path_value: str) -> list[Path]:
