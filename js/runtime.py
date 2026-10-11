@@ -1880,18 +1880,21 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
-        # turn_start is emitted unconditionally and every normal/handled exit
-        # already emitted turn_end; only cancellation (CancelledError /
-        # KeyboardInterrupt — BaseException, not Exception) reaches here
-        # unbalanced, so pair turn_start with a turn_end before propagating.
+        # turn_start is emitted unconditionally, so every exit pairs it with
+        # exactly one turn_end: cancellation (CancelledError /
+        # KeyboardInterrupt) ends "cancelled", an unexpected Exception ends
+        # "error", and an exit that already ended the turn adds nothing.
         # Either way the answer streamed so far is finished where it stands:
         # left open, the next reply would take over its place on the screen.
         sink.close()
         if not isinstance(_turn_exc, Exception):
             sink.commit_partial(messages)
-            events.end("cancelled")
+            if not events.ended:
+                events.end("cancelled")
         else:
             stream_transport.report_held_failure()
+            if not events.ended:
+                events.end("error", error=f"{type(_turn_exc).__name__}: {_turn_exc}")
         raise
     finally:
         sink.close_reasoning()

@@ -104,6 +104,56 @@ def test_turn_end_cancelled_emitted_on_cancel(tmp_path, monkeypatch):
     assert ends == ["cancelled"]  # exactly one, balancing turn_start
 
 
+def test_turn_end_error_emitted_on_unexpected_exception(tmp_path, monkeypatch):
+    # ALL-CLAIMS.md:451: an Exception escaping the turn (a provider bug, a
+    # crash in a safety net) left turn_start unpaired.
+    rec = _Recorder()
+
+    async def boom(self, **kwargs):
+        raise RuntimeError("unexpected fixture bug")
+
+    monkeypatch.setattr(turn_call.ModelCaller, "call", boom)
+    cfg = _cfg(tmp_path)
+
+    with pytest.raises(RuntimeError, match="unexpected fixture bug"):
+        asyncio.run(runtime.run_turn_async(
+            cfg, "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(debug_log=None),
+            tool_registry=build_default_registry(prompts_root=None),
+            tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True, event_hooks=rec,
+        ))
+
+    ends = [p for e, p in rec.events if e == "turn_end"]
+    assert [p["reason"] for p in ends] == ["error"]
+    assert "unexpected fixture bug" in ends[0]["error"]
+
+
+def test_exception_after_turn_end_adds_no_second_end(tmp_path, monkeypatch):
+    rec = _Recorder()
+    real_end = runtime.TurnEvents.end
+
+    def end_then_fail(self, reason, **extra):
+        real_end(self, reason, **extra)
+        raise RuntimeError("hook blew up after end")
+
+    monkeypatch.setattr(runtime.TurnEvents, "end", end_then_fail)
+
+    async def ok(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(turn_call.ModelCaller, "call", ok)
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.run_turn_async(
+            _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(debug_log=None),
+            tool_registry=build_default_registry(prompts_root=None),
+            tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True, event_hooks=rec,
+        ))
+    assert len([e for e, _ in rec.events if e == "turn_end"]) == 1
+
+
 # --------------------------------------------------------------------------
 # retry closes the partial text stream
 # --------------------------------------------------------------------------
