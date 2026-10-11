@@ -16,6 +16,7 @@ unreadable one is built again from the sessions.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sqlite3
@@ -32,30 +33,50 @@ _MARK_CLOSE = "\x02"
 _TOKENIZER = "porter unicode61 remove_diacritics 2"
 
 _lock = threading.RLock()
-# This process's open connection: (pid, index path, connection).
-_current: tuple[int, str, sqlite3.Connection] | None = None
+# This process's open connection: (pid, index path, connection, (st_dev,
+# st_ino) of the file it opened).
+_current: tuple[int, str, sqlite3.Connection, tuple[int, int] | None] | None = None
 
 
 def db_path() -> Path:
     return paths.cache_root() / "sessions.sqlite"
 
 
+def _is_corrupt(exc: sqlite3.Error) -> bool:
+    """Whether `exc` says the file is damaged or not a database. Only that
+    makes the index worth deleting; a busy or locked database is another
+    process at work and passes."""
+    code = (getattr(exc, "sqlite_errorcode", None) or 0) & 0xFF
+    return code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
+
+
+def _identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
 def _create(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        f"""
-        DROP TABLE IF EXISTS sessions;
-        DROP TABLE IF EXISTS docs;
-        CREATE TABLE sessions (
-            id INTEGER PRIMARY KEY,
-            path TEXT UNIQUE NOT NULL,
-            size INTEGER NOT NULL,
-            mtime_ns INTEGER NOT NULL,
-            info TEXT NOT NULL
-        );
-        CREATE VIRTUAL TABLE docs USING fts5(text, lines UNINDEXED, tokenize='{_TOKENIZER}');
-        PRAGMA user_version = {_SCHEMA};
-        """
-    )
+    # Processes that open a missing index together all read user_version 0.
+    # The first to take the write lock builds the tables; the others read the
+    # version again under the lock and leave them alone.
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA:
+            connection.execute("DROP TABLE IF EXISTS sessions")
+            connection.execute("DROP TABLE IF EXISTS docs")
+            connection.execute(
+                "CREATE TABLE sessions (id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, "
+                "size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, info TEXT NOT NULL)")
+            connection.execute(
+                f"CREATE VIRTUAL TABLE docs USING fts5(text, lines UNINDEXED, tokenize='{_TOKENIZER}')")
+            connection.execute(f"PRAGMA user_version = {_SCHEMA}")
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
 
 
 def _open(path: Path) -> sqlite3.Connection:
@@ -77,34 +98,80 @@ def _remove(path: Path) -> None:
         Path(f"{path}{suffix}").unlink(missing_ok=True)
 
 
+class _RebuildLock:
+    """Cross-process lock held while the index file is deleted and built
+    again. It lives on a sidecar file that is never deleted, so every
+    process locks the same inode."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = Path(f"{path}.rebuild.lock")
+        self._stream = None
+
+    def __enter__(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = open(self._path, "a+b")  # noqa: SIM115 - closed in __exit__
+        fcntl.flock(self._stream.fileno(), fcntl.LOCK_EX)
+
+    def __exit__(self, *exc_info) -> None:
+        self._stream.close()
+
+
+def _recover(path: Path, seen: tuple[int, int] | None) -> sqlite3.Connection:
+    """A connection to the index after the file `seen` names failed as
+    corrupt. Another process may have rebuilt it in the meantime: under the
+    rebuild lock, a path that now names another file is opened as it is, and
+    only the file that failed, or one that fails again under the lock, is
+    deleted and built again."""
+    with _RebuildLock(path):
+        now = _identity(path)
+        if now is not None and now != seen:
+            try:
+                return _open(path)
+            except sqlite3.DatabaseError as exc:
+                if not _is_corrupt(exc):
+                    raise
+        _remove(path)
+        return _open(path)
+
+
+def _drop_current() -> None:
+    global _current
+    if _current is not None and _current[0] == os.getpid():
+        _current[2].close()
+    _current = None
+
+
 def _connection() -> sqlite3.Connection:
-    """This process's connection to the index, created or rebuilt as needed."""
+    """This process's connection to the index, created or rebuilt as needed.
+    A cached connection is used only while the path still names the file it
+    opened; after a rebuild elsewhere it would write into the deleted file."""
     global _current
     path = db_path()
     key = (os.getpid(), str(path))
-    if _current is not None and _current[:2] == key and path.exists():
-        return _current[2]
-    if _current is not None and _current[0] == key[0]:
-        _current[2].close()
-    _current = None
+    if _current is not None and _current[:2] == key:
+        opened = _current[3]
+        if opened is not None and _identity(path) == opened:
+            return _current[2]
+    _drop_current()
+    seen = _identity(path)
     try:
         connection = _open(path)
-    except sqlite3.DatabaseError:
-        # Unreadable: it is derived, so it is built again.
-        _remove(path)
-        connection = _open(path)
-    _current = (*key, connection)
+    except sqlite3.DatabaseError as exc:
+        if not _is_corrupt(exc):
+            raise
+        # Damaged: it is derived, so it is built again.
+        connection = _recover(path, seen)
+    _current = (*key, connection, _identity(path))
     return connection
 
 
 def reset() -> None:
     """Close and delete the index; the next use builds it again."""
-    global _current
     with _lock:
-        if _current is not None and _current[0] == os.getpid():
-            _current[2].close()
-        _current = None
-        _remove(db_path())
+        _drop_current()
+        path = db_path()
+        with _RebuildLock(path):
+            _remove(path)
 
 
 def _file_key(session_file: Path) -> str:
@@ -176,11 +243,17 @@ def catalog(root: Path | None = None) -> list[dict[str, Any]]:
     """Every session under `root` (the sessions folder by default), each as its
     stored summary plus `path` and `mtime`. A file whose size or mtime differs
     from what is stored is parsed and stored again first; an entry whose file
-    is gone is dropped. An index that turns out unreadable is built again."""
+    is gone is dropped. An index that turns out damaged is built again; a
+    locked one raises."""
     try:
         return _catalog(root)
-    except sqlite3.DatabaseError:
-        reset()
+    except sqlite3.DatabaseError as exc:
+        if not _is_corrupt(exc):
+            raise
+        with _lock:
+            seen = _current[3] if _current is not None else None
+            _drop_current()
+            _recover(db_path(), seen).close()
         return _catalog(root)
 
 
@@ -277,8 +350,10 @@ def search(expression: str, root: Path | None = None) -> dict[str, float]:
                 "SELECT sessions.path, bm25(docs) FROM docs JOIN sessions ON sessions.id = docs.rowid "
                 "WHERE docs MATCH ? AND substr(sessions.path, 1, ?) = ?",
                 (expression, len(prefix), prefix)).fetchall()
-        except sqlite3.OperationalError:
-            return {}
+        except sqlite3.OperationalError as exc:
+            if exc.sqlite_errorcode != sqlite3.SQLITE_ERROR:
+                raise
+            return {}  # an expression FTS5 cannot parse matches nothing
     return {path: score for path, score in rows}
 
 
@@ -298,7 +373,9 @@ def matching_lines(expression: str, scores: dict[str, float]) -> dict[str, Hit]:
                     f"SELECT sessions.path, highlight(docs, 0, ?, ?), docs.lines FROM docs "
                     f"JOIN sessions ON sessions.id = docs.rowid WHERE docs MATCH ? AND sessions.path IN ({marks})",
                     (_MARK_OPEN, _MARK_CLOSE, expression, *chunk)).fetchall()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
+                if exc.sqlite_errorcode != sqlite3.SQLITE_ERROR:
+                    raise
                 return hits
             for path, highlighted, meta_text in rows:
                 try:
