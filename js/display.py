@@ -87,6 +87,7 @@ CHROME_BODY = "\033[97;48;2;48;48;48m"
 CHROME_ERROR = "\033[1;91;48;2;48;48;48m"
 CHROME_STDERR = "\033[93;48;2;48;48;48m"
 STDERR = "\033[93m"
+ERROR_TEXT = "\033[91m"
 CODE_THEME = "ansi_dark"
 
 # The two voices of a conversation. The user's line sits behind the input
@@ -409,6 +410,7 @@ class ToolOutput:
     lines: list[tuple[str, bool]]  # (text, is_stderr)
     exit_code: int | None = None
     is_error: bool = False
+    tries: tuple[int, int] | None = None  # (left, allowed) of a failed call
 
     @property
     def text(self) -> str:
@@ -424,11 +426,21 @@ def result_text(result: Any) -> tuple[str, bool]:
     return text, text.lstrip().startswith("ERROR")
 
 
+# The count `runtime.ToolErrorTracker` appends to a failed result for the model.
+_RETRY_NOTE = re.compile(r"\s*<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>\s*$")
+
+
 def tool_output(name: str, result: Any) -> ToolOutput:
     """Parse a result for display. A finished shell result loses its
-    `shell=… exit=… --- stdout ---` envelope; exit is kept apart."""
+    `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
+    call's retry note leaves the text and becomes `tries`."""
     text, is_error = result_text(result)
     text = clean(text)
+    tries: tuple[int, int] | None = None
+    note = _RETRY_NOTE.search(text)
+    if note is not None:
+        tries = (int(note.group(1)), int(note.group(2)))
+        text = text[:note.start()]
     if name == "shell":
         header = _SHELL_HEADER.match(text)
         if header is not None:
@@ -446,7 +458,8 @@ def tool_output(name: str, result: Any) -> ToolOutput:
                 lines.pop()
             return ToolOutput(lines, exit_code=exit_code or None, is_error=is_error)
     body = text.rstrip("\n")
-    return ToolOutput([(line, False) for line in body.split("\n")] if body else [], is_error=is_error)
+    return ToolOutput([(line, False) for line in body.split("\n")] if body else [],
+                      is_error=is_error, tries=tries)
 
 
 def _byte_len(text: str) -> int:
@@ -454,10 +467,13 @@ def _byte_len(text: str) -> int:
 
 
 def metrics_line(name: str, output: ToolOutput, *, shown: ToolOutput | None = None) -> str:
-    """`{tool}: [exit N ]{shown/}{bytes}B {shown/}{lines}L`, plain text."""
+    """`{tool}: [failed, L of N tries left ][exit N ]{shown/}{bytes}B {shown/}{lines}L`,
+    plain text."""
     total_bytes = _byte_len(output.text)
     total_lines = len(output.lines)
     exit_part = f"exit {output.exit_code} " if output.exit_code else ""
+    if output.tries is not None:
+        exit_part = f"failed, {output.tries[0]} of {output.tries[1]} tries left {exit_part}"
     if shown is None:
         return f"{name}: {exit_part}{total_bytes}B {total_lines}L"
     return (
@@ -626,8 +642,9 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
         clip = max(20, width - 1)
         kept = [(line[:clip], err) for line, err in output.lines[:preview]]
         shown = ToolOutput(kept, exit_code=output.exit_code, is_error=output.is_error)
+        body = CHROME_ERROR if output.is_error else CHROME_BODY
         for line, err in kept:
-            out.append(f"{CHROME_STDERR if err else CHROME_BODY}{line}{C.RESET}\n")
+            out.append(f"{CHROME_STDERR if err else body}{line}{C.RESET}\n")
         if shown.text != output.text:
             out.append("...\n")
             out.append(f"{head}{metrics_line(name, output, shown=shown)}{C.RESET}\n")
@@ -639,7 +656,8 @@ def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
         out.extend(f"{line}{C.RESET}\n" for line in highlighted)
     else:
         for line, err in output.lines:
-            out.append(f"{STDERR}{line}{C.RESET}\n" if err else f"{line}\n")
+            colour = STDERR if err else ERROR_TEXT if output.is_error else ""
+            out.append(f"{colour}{line}{C.RESET}\n" if colour else f"{line}\n")
     out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
     return "".join(out)
 

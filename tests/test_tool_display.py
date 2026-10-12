@@ -231,3 +231,13 @@ def test_concurrent_task_exchanges_print_whole_at_level_two(capsys):
     for start, end in zip(headers, headers[1:] + [len(lines)], strict=True):
         prompt = "slow" if "slow" in lines[start] else "fast"
         assert f"result-for-{prompt}" in lines[start + 1:end]
+
+
+def test_a_failed_call_shows_the_error_without_the_retry_note_for_the_model():
+    result = runtime.ToolErrorTracker().record("write", "ERROR: You must read the file first.\n")
+
+    for level in (1, 2, 3):
+        shown = display.render_tool_result("write", result, level, width=80)
+        assert "<retry>" not in shown
+        assert "attempts_left" not in shown
+    assert "You must read the file first." in display.render_tool_result("write", result, 3, width=80)
