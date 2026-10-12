@@ -311,7 +311,7 @@ the file with line numbers, a `patch` as a coloured diff with line numbers. On
 the REPL screen the header shows `●` while the call runs and is redrawn with
 `✓` or `✗` when it ends. Calls that run at the same time, such as parallel
 `task` calls, print each exchange whole when it finishes. The colours are the
-`theme.*` settings (`/set theme.accent #4aa5ff`). In a saved transcript every
+`theme.*` settings (`/set theme.accent #1fb4ff`). In a saved transcript every
 exchange header starts with `>`, so `grep '] > shell'` finds every shell call
 made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
 output, tool arguments and model text are stripped of escape sequences and
