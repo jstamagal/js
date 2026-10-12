@@ -3,6 +3,7 @@ and output that is not a terminal is plain text."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 
@@ -67,6 +68,20 @@ def test_three_fenced_blocks_each_render_highlighted_once_and_are_never_redrawn(
     plain = ANSI.sub("", "".join(commits))
     for words in ("Here are three snippets.", "Then the second.", "Done."):
         assert words in plain
+
+
+def test_text_the_throttle_held_back_is_drawn_when_no_more_text_comes():
+    live = RecordingLive()
+
+    async def stream_then_go_quiet() -> None:
+        sink = display.Display(lambda _text: None, live=live, refresh_s=0.02)
+        sink.chunk("text", "swarm-pick unt")
+        sink.chunk("text", "ouched.")
+        await asyncio.sleep(0.2)
+
+    asyncio.run(stream_then_go_quiet())
+
+    assert "swarm-pick untouched." in ANSI.sub("", live.events[-1][1])
 
 
 def test_not_a_terminal_writes_plain_bytes_as_they_arrive():

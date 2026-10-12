@@ -15,6 +15,7 @@ and the result with its metrics line.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -234,6 +235,8 @@ class Display:
     `chunk(field, text)` feeds it and `finish()` ends it. With a live surface it
     renders Markdown: each finished top-level block is rendered and committed
     once; the last block stays live until the next block starts or `finish()`.
+    Redraws are at most one per `refresh_s`; text that arrives between two is
+    drawn when the interval ends, whether or not more text follows.
     Without one it writes `clean(text)` as it arrives, no cursor movement.
     """
 
@@ -254,6 +257,7 @@ class Display:
         self._last_char = "\n"
         self._wrote = False
         self._refreshed = 0.0
+        self._trailing: asyncio.TimerHandle | None = None
         self._committed_any = False
 
     @classmethod
@@ -294,10 +298,32 @@ class Display:
                 self._flush()
             return
         self._source += text
-        now = time.monotonic()
-        if now - self._refreshed >= self.refresh_s:
+        wait = self._refreshed + self.refresh_s - time.monotonic()
+        if wait <= 0:
+            self._cancel_trailing()
             self._refresh()
-            self._refreshed = now
+            self._refreshed = time.monotonic()
+        elif self._trailing is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._trailing = loop.call_later(wait, self._draw_held_back)
+
+    def _draw_held_back(self) -> None:
+        """Draw the text the last redraw did not include. The model may go on
+        to stream a tool call for minutes with no further text chunk. Commits
+        nothing: a finished block is committed from `chunk` or `finish`, which
+        the caller has wrapped."""
+        self._trailing = None
+        if self.live is not None:
+            self._draw_live(clean(self._source))
+            self._refreshed = time.monotonic()
+
+    def _cancel_trailing(self) -> None:
+        if self._trailing is not None:
+            self._trailing.cancel()
+            self._trailing = None
 
     def _commit(self, source: str) -> None:
         assert self.live is not None
@@ -319,12 +345,17 @@ class Display:
             self._commit("\n".join(lines[:cut]) + "\n")
             value = "\n".join(lines[cut:])
             self._source = value
+        self._draw_live(value)
+
+    def _draw_live(self, value: str) -> None:
+        assert self.live is not None
         if value.strip():
             separator = "\n" if self._committed_any else ""
             self.live.update(separator + render_markdown(value, self.live.width()))
 
     def finish(self) -> None:
         """Commit whatever is open and end the stream on a fresh line."""
+        self._cancel_trailing()
         if self.live is not None:
             value = clean(self._source)
             if value.strip():
