@@ -763,9 +763,9 @@ def _hidden(count: int) -> str:
 
 def render_tool_call(name: str, args: dict | None, level: int, *, preview: int = 12,
                      width: int | None = None, malformed: bool = False,
-                     settings: Any = None) -> str:
+                     settings: Any = None, mark: str = MARK) -> str:
     """The call half of an exchange at `ui.tools` 2 and 3: a blank line, the
-    header, then the tool's program in a panel when it runs past one line, or
+    header behind `mark`, then the tool's program in a panel when it runs past one line, or
     a `write`'s file as a numbered view (both capped at `preview` lines at
     level 2). Empty below level 2: level 1 shows only the result's line."""
     if level < 2:
@@ -773,7 +773,7 @@ def render_tool_call(name: str, args: dict | None, level: int, *, preview: int =
     block = _Block(width or terminal_width(), theme(settings))
     args = args if isinstance(args, dict) else {}
     block.blank()
-    block.header(MARK, name, args, malformed=malformed)
+    block.header(mark, name, args, malformed=malformed)
     body = args.get(_BODY_ARG.get(name, ""))
     if isinstance(body, str) and body.strip():
         lines = clean(body).rstrip("\n").split("\n")

@@ -300,6 +300,22 @@ class Scrollback:
             self._spans.remove(self._answer)
         self._answer = None
 
+    def exchange_open(self, rendered: str) -> AnswerSpan:
+        """Show `rendered` at the tail as a block `exchange_close` can replace
+        after later text has been appended."""
+        self.flush()
+        span = AnswerSpan(len(self.buffer.text))
+        span.text = rendered
+        self._render_span(span, new_text=True)
+        return span
+
+    def exchange_close(self, span: AnswerSpan, rendered: str) -> None:
+        """Replace an open exchange with its final text, where it stands."""
+        span.text = rendered
+        self._render_span(span)
+        if span in self._spans:
+            self._spans.remove(span)
+
     def _render_span(self, block: ReasoningBlock | AnswerSpan, *, new_text: bool = False) -> None:
         self.flush()
         doc = self.buffer.document
@@ -433,6 +449,33 @@ class ScreenLive:
 
     def commit(self, rendered: str) -> None:
         self._loop.call_soon_threadsafe(self._apply, "answer_commit", rendered)
+
+
+class ScreenExchange:
+    """One tool exchange on the scrollback: its header is drawn when the call
+    starts and the whole exchange replaces it when the call ends. Calls are
+    queued on the loop in the same order as ordinary stdout writes."""
+
+    def __init__(self, loop, scrollback: Scrollback, app: Application) -> None:
+        self._loop, self._scrollback, self._app = loop, scrollback, app
+        self._span: AnswerSpan | None = None
+
+    def _open(self, rendered: str) -> None:
+        self._span = self._scrollback.exchange_open(rendered)
+        self._app.invalidate()
+
+    def _close(self, rendered: str) -> None:
+        if self._span is None:
+            self._scrollback.append(rendered)
+        else:
+            self._scrollback.exchange_close(self._span, rendered)
+        self._app.invalidate()
+
+    def open(self, rendered: str) -> None:
+        self._loop.call_soon_threadsafe(self._open, rendered)
+
+    def close(self, rendered: str) -> None:
+        self._loop.call_soon_threadsafe(self._close, rendered)
 
 
 class _ScreenStdout:

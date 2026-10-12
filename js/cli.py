@@ -3668,12 +3668,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     )
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
+    previous_exchange_factory = telemetry.exchange_factory
     telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
     telemetry.display_factory = lambda markdown: display_mod.Display(
         sys.stdout.write,
         live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
         flush=sys.stdout.flush,
     )
+    telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
     ticker = loop.create_task(screen.tick(app, sup.turn_active))
     try:
         with screen.capture_stdio(loop, scrollback, app):
@@ -3699,6 +3701,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         ticker.cancel()
         telemetry.reasoning_factory = previous_reasoning_factory
         telemetry.display_factory = previous_display_factory
+        telemetry.exchange_factory = previous_exchange_factory
         supervisor.set_current(None)
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):

@@ -210,7 +210,7 @@ def test_line_separator_in_a_paragraph_does_not_cut_the_block():
 def test_tool_result_name_is_cleaned_at_every_level():
     evil = "evil\x1b]0;PWNED\x07\x1b[2J"
     for level in (1, 2, 3):
-        out = display.render_tool_result(evil, "ok", level, width=80)
+        out = display.render_tool_call(evil, {}, level, width=80) + display.render_tool_result(evil, "ok", level, width=80)
         assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
         assert "evil" in out
 

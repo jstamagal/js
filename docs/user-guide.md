@@ -300,16 +300,20 @@ A line typed while a turn runs is handled by `runtime.steer`:
 - `one`: each line is its own turn, in order.
 
 Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
-one line per exchange, `> read js/display.py: 4054B 292L`, with the exit status
-when a shell command exits nonzero. The line names the call by its key argument,
-shortened to fit: a path, a search pattern, the first line of a command, a URL; `2` shows the call with its command highlighted, the
-first `ui.tools_preview_lines` lines of the result, `...` when there is more,
-and a `read: 1024/4054B 24/292L` line saying what was shown out of the whole;
-`3` shows the call and the whole result, with the text of a `read` source file
-highlighted. Calls that run at the same time, such as parallel `task` calls,
-print each exchange whole when it finishes. Each exchange the screen shows has
-one `>` line, so `grep '] > shell'` over a saved transcript finds every shell
-call made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
+one line per exchange: a mark (`✓` finished, `✗` failed), the tool name, the
+call's key argument shortened to fit (a path, a search pattern, the first line
+of a command, a URL), and the result's line count and size, or the exit status
+when a shell command exits nonzero. `2` shows a header with the same mark and
+name and the other arguments dimmed, then the first `ui.tools_preview_lines`
+lines of the result and how many are hidden; `3` shows the whole result. Output
+sits in a panel with its own background; a `read` and a `write` are shown as
+the file with line numbers, a `patch` as a coloured diff with line numbers. On
+the REPL screen the header shows `●` while the call runs and is redrawn with
+`✓` or `✗` when it ends. Calls that run at the same time, such as parallel
+`task` calls, print each exchange whole when it finishes. The colours are the
+`theme.*` settings (`/set theme.accent #4aa5ff`). In a saved transcript every
+exchange header starts with `>`, so `grep '] > shell'` finds every shell call
+made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
 output, tool arguments and model text are stripped of escape sequences and
 control bytes before the terminal sees them.
 

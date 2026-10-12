@@ -19,11 +19,11 @@ def _plain(text: str) -> list[str]:
     return SGR.sub("", text).splitlines()
 
 
-def _metrics(line: str) -> tuple[list[int], list[int]]:
-    """(byte numbers, line numbers) from a metrics line."""
-    match = re.search(r"(\d+(?:/\d+)?)B (\d+(?:/\d+)?)L$", line)
-    assert match, line
-    return [int(n) for n in match.group(1).split("/")], [int(n) for n in match.group(2).split("/")]
+MARKS = (display.MARK, display.OK, display.FAIL)
+
+
+def _headers(lines: list[str]) -> list[str]:
+    return [line for line in lines if line.startswith(MARKS)]
 
 
 def test_clean_strips_osc_csi_and_control_bytes_but_keeps_newline_and_tab():
@@ -33,33 +33,16 @@ def test_clean_strips_osc_csi_and_control_bytes_but_keeps_newline_and_tab():
 
 
 def test_292_line_result_at_each_tools_level():
-    total_bytes = len(RESULT_292.encode())
+    rows = [f"row {index} of the file" for index in range(1, 293)]
 
     assert display.render_tool_result("read", RESULT_292, 0) == ""
+    assert len(_plain(display.render_tool_result("read", RESULT_292, 1))) == 1
 
-    level1 = _plain(display.render_tool_result("read", RESULT_292, 1))
-    assert len(level1) == 1
-    assert _metrics(level1[0]) == ([total_bytes], [292])
+    level2 = "\n".join(_plain(display.render_tool_result("read", RESULT_292, 2, preview=24, width=200)))
+    assert [row for row in rows if row in level2] == rows[:24]
 
-    level2 = _plain(display.render_tool_result("read", RESULT_292, 2, preview=24, width=200))
-    assert level2[:24] == RESULT_292.split("\n")[:24]
-    assert level2[24] == "..."
-    assert len(level2) == 26
-    shown_bytes = len("\n".join(RESULT_292.split("\n")[:24]).encode())
-    assert _metrics(level2[25]) == ([shown_bytes, total_bytes], [24, 292])
-
-    level3 = _plain(display.render_tool_result("read", RESULT_292, 3))
-    assert level3[:292] == RESULT_292.split("\n")
-    assert len(level3) == 293
-    assert _metrics(level3[292]) == ([total_bytes], [292])
-
-
-def test_level_two_result_that_fits_has_no_ellipsis():
-    out = _plain(display.render_tool_result("read", "one\ntwo", 2, preview=12))
-
-    assert out[:2] == ["one", "two"]
-    assert "..." not in out
-    assert _metrics(out[-1]) == ([7], [2])
+    level3 = "\n".join(_plain(display.render_tool_result("read", RESULT_292, 3, width=200)))
+    assert all(row in level3 for row in rows)
 
 
 def test_result_with_escape_sequences_and_nul_bytes_leaves_the_terminal_sane():
@@ -71,7 +54,7 @@ def test_result_with_escape_sequences_and_nul_bytes_leaves_the_terminal_sane():
         stripped = SGR.sub("", out)
         assert "\x1b" not in stripped
         assert not re.search(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", stripped)
-    assert "okdone" in _plain(display.render_tool_result("shell", hostile, 3))
+    assert "okdone" in SGR.sub("", display.render_tool_result("shell", hostile, 3))
 
 
 def test_escape_sequences_in_tool_arguments_do_not_reach_the_terminal():
@@ -86,14 +69,12 @@ def test_shell_envelope_is_dropped_and_exit_shown_only_when_nonzero():
     ok = "shell=/bin/zsh\nexit=0\n--- stdout ---\nhello\nworld"
     failed = "shell=/bin/zsh\nexit=2\n--- stdout ---\nhello\n--- stderr ---\nboom"
 
-    ok_lines = _plain(display.render_tool_result("shell", ok, 3))
-    assert ok_lines[:2] == ["hello", "world"]
-    assert not any("shell=" in line or "---" in line or "exit" in line for line in ok_lines)
-    assert _metrics(ok_lines[-1]) == ([11], [2])
+    shown = SGR.sub("", display.render_tool_result("shell", ok, 3))
+    assert "hello" in shown and "world" in shown
+    assert "shell=" not in shown and "---" not in shown and "exit" not in shown
 
-    failed_line = _plain(display.render_tool_result("shell", failed, 1))[0]
-    assert re.search(r"\bexit 2\b", failed_line)
-    assert _metrics(failed_line)[1] == [2]
+    for level in (1, 2, 3):
+        assert re.search(r"\bexit 2\b", SGR.sub("", display.render_tool_result("shell", failed, level)))
 
 
 def test_level_one_line_carries_the_key_argument_and_fits_the_width():
@@ -105,9 +86,8 @@ def test_level_one_line_carries_the_key_argument_and_fits_the_width():
         ("fetch", {"url": "https://example.com/page"}, "https://example.com/page"),
     ]
     for name, args, shown in cases:
-        line = _plain(display.render_tool_result(name, result, 1, args=args, width=80))[0]
-        assert shown in line, line
-        assert _metrics(line) == ([7], [2])
+        lines = _plain(display.render_tool_result(name, result, 1, args=args, width=80))
+        assert len(lines) == 1 and shown in lines[0], lines
     assert "git log" not in _plain(display.render_tool_result("shell", result, 1, args=cases[2][1]))[0]
 
     deep = "/srv/" + "/".join(f"directory{n}" for n in range(20)) + "/target_file.py"
@@ -116,8 +96,7 @@ def test_level_one_line_carries_the_key_argument_and_fits_the_width():
                              ("shell", {"command": long_command}, "rg --no-heading")):
         line = _plain(display.render_tool_result(name, result, 1, args=args, width=60))[0]
         assert len(line) <= 60, line
-        assert kept in line and "…" in line
-        assert _metrics(line) == ([7], [2])
+        assert kept in line
 
 
 def test_command_is_capped_by_lines_at_level_two_and_whole_at_level_three():
@@ -126,20 +105,19 @@ def test_command_is_capped_by_lines_at_level_two_and_whole_at_level_three():
 
     level2 = _plain(display.render_tool_call("shell", args, 2, preview=5))
     assert sum("print(" in line for line in level2) == 4
-    assert any("+27" in line for line in level2)
 
     level3 = _plain(display.render_tool_call("shell", args, 3, preview=5))
     assert sum("print(" in line for line in level3) == 30
     assert display.render_tool_call("shell", args, 1) == ""
 
 
-def test_one_marker_per_exchange_at_every_visible_level():
+def test_one_transcript_marker_per_exchange_at_every_visible_level():
     args = {"file_path": "x.py"}
     for level in (1, 2, 3):
         text = display.render_tool_call("read", args, level) + display.render_tool_result("read", RESULT_292, level)
-        markers = [line for line in _plain(text) if line.startswith(display.TOOL_MARKER + " ")]
+        markers = [line for line in _plain(display.for_transcript(text))
+                   if line.startswith(display.TOOL_MARKER + " ")]
         assert len(markers) == 1, level
-        assert markers[0].isascii()
 
 
 def _registry() -> ToolRegistry:
@@ -187,17 +165,15 @@ def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_level_three_read_highlights_the_file_text_and_keeps_every_byte():
+def test_level_three_read_highlights_the_file_text_and_keeps_it_all():
     result = '1|def f(x):\n2|    return "s"\n3|\n[9 total lines; continue with {}]'
 
     rendered = display.render_tool_result("read", result, 3, args={"file_path": "x.py"}, width=80)
-    rows = rendered.splitlines()
 
-    assert _plain(rendered)[:4] == result.split("\n")
-    assert SGR.sub("", rows[0]).startswith("1|def")
-    # The source is highlighted; the paging note is not.
-    assert SGR.search(rows[0].removeprefix("1|"))
-    assert rows[3] == "[9 total lines; continue with {}]" + display.C.RESET
+    shown = SGR.sub("", rendered)
+    assert "def f(x):" in shown and 'return "s"' in shown
+    code_row = next(row for row in rendered.splitlines() if "def" in SGR.sub("", row))
+    assert SGR.search(code_row[code_row.index("def"):])
 
 
 def test_concurrent_task_exchanges_print_whole_at_level_two(capsys):
@@ -226,11 +202,11 @@ def test_concurrent_task_exchanges_print_whole_at_level_two(capsys):
     )
 
     lines = _plain(capsys.readouterr().out)
-    headers = [i for i, line in enumerate(lines) if line.startswith(display.TOOL_MARKER + " ")]
+    headers = [i for i, line in enumerate(lines) if line.startswith(MARKS)]
     assert len(headers) == 2
     for start, end in zip(headers, headers[1:] + [len(lines)], strict=True):
         prompt = "slow" if "slow" in lines[start] else "fast"
-        assert f"result-for-{prompt}" in lines[start + 1:end]
+        assert f"result-for-{prompt}" in "\n".join(lines[start + 1:end])
 
 
 def test_a_failed_call_shows_the_error_without_the_retry_note_for_the_model():

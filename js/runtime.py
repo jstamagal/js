@@ -298,6 +298,10 @@ class Telemetry:
     # Builds the answer Display for a screen that owns the terminal; None means
     # a Display over sys.stdout.
     display_factory: Callable[[bool], display.Display] | None = None
+    # Builds the holder of one tool exchange on a screen that can redraw what
+    # it has shown: `open(text)` when the call starts, `close(text)` when it
+    # ends. None means the exchange is written to sys.stdout as it happens.
+    exchange_factory: Callable[[], Any] | None = None
 
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
@@ -527,35 +531,59 @@ def _show_trace(telemetry: Telemetry, text: str) -> None:
         with mute() if callable(mute) else contextlib.nullcontext():
             sys.stdout.write(text)
             sys.stdout.flush()
-        write_plain = getattr(sink, "write_plain", None)
-        if callable(write_plain):
-            write_plain(display.for_transcript(text))
+        _write_transcript(telemetry, text)
+
+
+def _write_transcript(telemetry: Telemetry, text: str) -> None:
+    write_plain = getattr(getattr(telemetry, "transcript_log", None), "write_plain", None)
+    if callable(write_plain):
+        write_plain(display.for_transcript(text))
 
 
 def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
-                args: dict | None, *, malformed: bool = False) -> None:
+                args: dict | None, *, malformed: bool = False) -> Any:
+    """Print the call half of an exchange. On a screen that can redraw
+    (`Telemetry.exchange_factory`) the header is opened there and returned, for
+    `_trace_result` to close with the mark of how the call ended."""
     settings = _tool_settings(tool_context)
-    _show_trace(telemetry, display.render_tool_call(
+    text = display.render_tool_call(
         name, args, display.tools_level(settings),
         preview=display.preview_lines(settings), malformed=malformed, settings=settings,
-    ))
+    )
+    factory = getattr(telemetry, "exchange_factory", None)
+    if not text or factory is None:
+        _show_trace(telemetry, text)
+        return None
+    exchange = factory()
+    with _OUTPUT_LOCK:
+        exchange.open(text)
+        _write_transcript(telemetry, text)
+    return exchange
 
 
 def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
-                  *, args: dict | None = None, with_call: bool = False, malformed: bool = False) -> None:
+                  *, args: dict | None = None, with_call: bool = False, malformed: bool = False,
+                  exchange: Any = None) -> None:
     """Print the result half of an exchange. `with_call` prints the call header
-    in the same write, so exchanges that finish concurrently stay whole."""
+    in the same write, so exchanges that finish concurrently stay whole. A
+    header drawn with the result carries the finished mark; `exchange`, the
+    header `_trace_call` opened, is redrawn with it."""
     settings = _tool_settings(tool_context)
     level = display.tools_level(settings)
     preview = display.preview_lines(settings)
-    call = (
-        display.render_tool_call(name, args, level, preview=preview, malformed=malformed,
-                                 settings=settings)
-        if with_call else ""
-    )
-    _show_trace(telemetry, call + display.render_tool_result(
-        name, result, level, preview=preview, args=args, settings=settings,
-    ))
+    shown = display.render_tool_result(name, result, level, preview=preview, args=args, settings=settings)
+    call = ""
+    if with_call or exchange is not None:
+        call = display.render_tool_call(
+            name, args, level, preview=preview, malformed=malformed, settings=settings,
+            mark=display.FAIL if display.tool_output(name, result).failed else display.OK,
+        )
+    if exchange is None:
+        _show_trace(telemetry, call + shown)
+        return
+    with _OUTPUT_LOCK:
+        exchange.close(call + shown)
+        _write_transcript(telemetry, shown)
 
 
 def _repair_jsonish(raw: str) -> dict:
@@ -912,17 +940,18 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     the call runs; concurrent calls use it so their exchanges do not interleave.
     `call_id` is the model's id for the call; read coverage is recorded under it."""
     call_id = call_id or f"dispatch-{next(_ANONYMOUS_CALLS)}"
+    opened = None
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
         if trace and not trace_together:
-            _trace_call(telemetry, tool_context, name, None, malformed=True)
+            opened = _trace_call(telemetry, tool_context, name, None, malformed=True)
         telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {name}: {e}"
         if error_tracker is not None:
             result = error_tracker.record(name, result)
         if trace:
-            _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True)
+            _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True, exchange=opened)
         return {}, result
 
     active_registry = registry or T.STOCK_REGISTRY
@@ -930,13 +959,13 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
     if trace and not trace_together:
-        _trace_call(telemetry, context, trace_name, args)
+        opened = _trace_call(telemetry, context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, context, trace_name, capped, args=args, with_call=trace_together)
+            _trace_result(telemetry, context, trace_name, capped, args=args, with_call=trace_together, exchange=opened)
         return args, capped
 
     started = time.time()
@@ -955,7 +984,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     capped = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     if trace:
-        _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together)
+        _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together, exchange=opened)
     return args, capped
 
 
@@ -1148,28 +1177,29 @@ async def _dispatch_fan_out_async(
     from a threaded one to the caller."""
     from .toolkit import meta
 
+    opened = None
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as e:
         if trace and not trace_together:
-            _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
+            opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
         result = f"ERROR: could not parse arguments for {pc.name}: {e}"
         recorded = error_tracker.record(pc.name, result)
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded, with_call=trace_together, malformed=True)
+            _trace_result(telemetry, tool_context, pc.name, recorded, with_call=trace_together, malformed=True, exchange=opened)
         return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
     trace_name = tool.name if tool is not None else pc.name
     if trace and not trace_together:
-        _trace_call(telemetry, tool_context, trace_name, args)
+        opened = _trace_call(telemetry, tool_context, trace_name, args)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, with_call=trace_together)
+            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, with_call=trace_together, exchange=opened)
         return pc, args, recorded
 
     started = time.time()
@@ -1183,7 +1213,7 @@ async def _dispatch_fan_out_async(
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together)
+        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together, exchange=opened)
     return pc, args, recorded
 
 
@@ -1191,6 +1221,7 @@ async def _dispatch_async_tool(
     pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
     error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
 ) -> tuple[_PendingToolCall, dict, Any]:
+    opened = None
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
@@ -1205,7 +1236,7 @@ async def _dispatch_async_tool(
             _trace_result(telemetry, tool_context, pc.name, result, args=args, with_call=True)
         return pc, args, result
     if trace:
-        _trace_call(telemetry, tool_context, tool.name, args)
+        opened = _trace_call(telemetry, tool_context, tool.name, args)
     started = time.time()
     try:
         with call_scope(pc.id), registry_scope(
@@ -1223,7 +1254,7 @@ async def _dispatch_async_tool(
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, result, args=args)
+        _trace_result(telemetry, tool_context, tool.name, result, args=args, exchange=opened)
     return pc, args, result
 
 

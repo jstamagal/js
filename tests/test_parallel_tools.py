@@ -298,7 +298,7 @@ def test_parallel_exchanges_print_whole(capsys, tmp_path):
 
     assert probe.most > 1
     out = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in capsys.readouterr().out.splitlines()]
-    headers = [i for i, line in enumerate(out) if line.startswith(display.TOOL_MARKER + " ")]
+    headers = [i for i, line in enumerate(out) if line.startswith((display.MARK, display.OK, display.FAIL))]
     assert len(headers) == 4
     for start, end in zip(headers, [*headers[1:], len(out)], strict=True):
         label = re.search(r'"label":\s*"(\w)"', out[start]) or re.search(r"\b([abcd])\b", out[start])
@@ -325,7 +325,7 @@ def test_parallel_reads_at_ui_tools_one_each_name_their_file(capsys, tmp_path):
     _dispatch(calls, registry, context, trace=True)
 
     out = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in capsys.readouterr().out.splitlines()]
-    traces = [line for line in out if line.startswith(display.TOOL_MARKER + " ")]
+    traces = [line for line in out if line.startswith((display.MARK, display.OK, display.FAIL))]
     assert len(traces) == 4
     assert len(set(traces)) == 4
     for path in paths:
