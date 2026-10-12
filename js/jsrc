@@ -24,6 +24,8 @@ set ui.status_bg #00007f
 set ui.status_fg #ffffff
 set ui.tools 1
 set ui.tools_preview_lines 12
+set ui.tools_quiet ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+set ui.shell_quiet ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
 set theme.accent #1fb4ff
 set theme.ok #00c555
 set theme.error #ff8aa7

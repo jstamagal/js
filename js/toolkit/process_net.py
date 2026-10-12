@@ -176,6 +176,20 @@ def _blocking_on(context: ToolContext | None, job: _ShellJob):
                 _BLOCKING.pop(key, None)
 
 
+def live_tail(context: Any, command: Any, lines: int) -> tuple[list[str], float] | None:
+    """The last ``lines`` lines a shell call on ``context`` has printed so far
+    and how long it has run; None when no call running ``command`` is blocked
+    there or it has printed nothing."""
+    with _JOBS_LOCK:
+        jobs = [job for job in _BLOCKING.get(id(context), ()) if job.command == command]
+    if not jobs:
+        return None
+    process = jobs[-1].process
+    text = b"".join(process.stream(name).snapshot()[0][-8192:] for name in ("stdout", "stderr"))
+    shown = [line for line in text.decode("utf-8", errors="replace").splitlines() if line.strip()]
+    return (shown[-lines:], process.elapsed()) if shown else None
+
+
 def interrupt_inflight(context: Any) -> int:
     """Kill the commands a shell call on ``context`` is blocked waiting on.
 

@@ -118,6 +118,7 @@ REPL commands:
 /set model.reasoning_effort high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
 /set ui.tools 3                show every tool call and its whole result
+/set ui.tools 1                fold reads and searches, show diffs, running commands and failures
 /set compact.auto off
 /on turn_start set compact.auto off
 /turns
@@ -299,23 +300,33 @@ A line typed while a turn runs is handled by `runtime.steer`:
 - `batch`: the lines wait for the turn to end and then go in as ONE message.
 - `one`: each line is its own turn, in order.
 
-Tool exchanges follow `ui.tools`. `0` shows nothing; `1` (the default) shows
-one line per exchange: a mark (`✓` finished, `✗` failed), the tool name, the
-call's key argument shortened to fit (a path, a search pattern, the first line
-of a command, a URL), and the result's line count and size, or the exit status
-when a shell command exits nonzero. `2` shows a header with the same mark and
-name and the other arguments dimmed, then the first `ui.tools_preview_lines`
-lines of the result and how many are hidden; `3` shows the whole result. Output
-sits in a panel with its own background; a `read` and a `write` are shown as
-the file with line numbers, a `patch` as a coloured diff with line numbers. On
-the REPL screen the header shows `●` while the call runs and is redrawn with
-`✓` or `✗` when it ends. Calls that run at the same time, such as parallel
-`task` calls, print each exchange whole when it finishes. The colours are the
-`theme.*` settings (`/set theme.accent #1fb4ff`). In a saved transcript every
-exchange header starts with `>`, so `grep '] > shell'` finds every shell call
-made at `ui.tools` 1 or higher (the `]` keeps `<USER>` lines out). Tool
-output, tool arguments and model text are stripped of escape sequences and
-control bytes before the terminal sees them.
+Tool exchanges follow `ui.tools`. Each one sits behind a bar down its left
+edge, amber while the call runs, green when it finished, red when it failed,
+with a mark (`…`, `✓`, `✗`), the tool name on a coloured chip, and the call's
+key argument (a path, a search pattern, the first line of a command, a URL).
+
+- `0` shows nothing.
+- `1` (the default) shows what matters. Quiet calls are one row, and a run of
+  them folds into one row per tool: `read 6 files`, with the file names beside
+  it. The quiet tools are `ui.tools_quiet`; a shell command is quiet when every
+  command in it is in `ui.shell_quiet` and it redirects nothing (`ls -la`,
+  `git status | head`). Any other shell command shows the last lines of its
+  output while it runs, once it has run for a second, and becomes one row with
+  its last line when it ends. A `patch` shows its diff, a `send` the message
+  sent, any other tool its result, each cut at `ui.tools_preview_lines` lines.
+  A failed call shows its error.
+- `2` shows every call on its own with its program and the first
+  `ui.tools_preview_lines` lines of the result.
+- `3` shows every call with its whole result.
+
+On the REPL screen an exchange is redrawn in place as it changes. Elsewhere a
+call is printed once, when it finishes, and a run of quiet calls when the run
+ends. The colours are the `theme.*` settings (`/set theme.accent #1fb4ff`). In
+a saved transcript every call is recorded on its own and its header starts
+with `>`, so `grep '] > shell'` finds every shell call made at `ui.tools` 1 or
+higher (the `]` keeps `<USER>` lines out). Tool output, tool arguments and
+model text are stripped of escape sequences and control bytes before the
+terminal sees them.
 
 Assistant Markdown is rendered on a terminal: each finished block (paragraph,
 list, fenced code) is highlighted once and stays put; only the block still

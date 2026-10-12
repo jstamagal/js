@@ -1505,7 +1505,9 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _trace_lines(capsys) -> list[str]:
-    return [ANSI_RE.sub("", line) for line in capsys.readouterr().out.splitlines()]
+    """What was printed, without colour or the exchange rail."""
+    return [ANSI_RE.sub("", line).removeprefix(display.RAIL).removeprefix(" ")
+            for line in capsys.readouterr().out.splitlines()]
 
 
 def _trace_registry():
@@ -1550,12 +1552,10 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
         runtime.ToolErrorTracker(), registry, _tools_context(1),
     )
 
-    lines = _trace_lines(capsys)
-    # ui.tools 1: one line per exchange.
-    assert len(lines) == 2
-    assert lines == _marker_lines(lines)
-    assert "big" in lines[0] and "200" in lines[0]
-    assert "boom" in lines[1]
+    markers = _marker_lines(_trace_lines(capsys))
+    assert len(markers) == 2
+    assert markers[0].startswith(display.OK) and "big" in markers[0]
+    assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
 
 
 def test_trace_at_level_two_shows_the_first_lines_then_shown_over_total(capsys):

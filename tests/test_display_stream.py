@@ -210,7 +210,8 @@ def test_line_separator_in_a_paragraph_does_not_cut_the_block():
 def test_tool_result_name_is_cleaned_at_every_level():
     evil = "evil\x1b]0;PWNED\x07\x1b[2J"
     for level in (1, 2, 3):
-        out = display.render_tool_call(evil, {}, level, width=80) + display.render_tool_result(evil, "ok", level, width=80)
+        out = (display.render_exchange(evil, {}, None, level=level, width=80)
+               + display.render_exchange(evil, {}, "ok", level=level, width=80))
         assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
         assert "evil" in out
 
@@ -249,3 +250,18 @@ def test_clean_is_linear_on_unterminated_string_openers(monkeypatch):
     for _ in range(20000):
         sample = "".join(random.choice(alpha) for _ in range(random.randint(0, 10)))
         assert display._strip_string_sequences(sample) == display._STRING_SEQ.sub("", sample), repr(sample)
+
+
+def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
+    scrollback = screen.Scrollback()
+    scrollback.append("before\n")
+    span = scrollback.exchange_open("running\n")
+    scrollback.append("after\n")
+
+    scrollback.exchange_update(span, "running\nits output\n")
+    scrollback.flush()
+    assert scrollback.buffer.text == "before\nrunning\nits output\nafter\n"
+
+    scrollback.exchange_close(span, "finished\n")
+    scrollback.flush()
+    assert scrollback.buffer.text == "before\nfinished\nafter\n"

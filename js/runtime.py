@@ -302,6 +302,11 @@ class Telemetry:
     # it has shown: `open(text)` when the call starts, `close(text)` when it
     # ends. None means the exchange is written to sys.stdout as it happens.
     exchange_factory: Callable[[], Any] | None = None
+    # The turn's `ToolTrace`, made on its first traced call.
+    tool_trace: Any = None
+
+    def settle_tools(self) -> None:
+        settle_tool_trace(self)
 
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
@@ -519,71 +524,234 @@ def _tool_settings(tool_context: ToolContext | None) -> Any:
     return getattr(getattr(context, "config", None), "settings", None)
 
 
-def _show_trace(telemetry: Telemetry, text: str) -> None:
-    """Put one piece of a tool exchange on the screen and in the visible transcript."""
-    if not text:
-        return
-    sink = getattr(telemetry, "transcript_log", None)
-    mute = getattr(sink, "mute_tee", None)
-    # Parallel read-only calls trace from their own threads; one exchange
-    # reaches the screen and the transcript whole.
-    with _OUTPUT_LOCK:
-        with mute() if callable(mute) else contextlib.nullcontext():
-            sys.stdout.write(text)
-            sys.stdout.flush()
-        _write_transcript(telemetry, text)
-
-
 def _write_transcript(telemetry: Telemetry, text: str) -> None:
     write_plain = getattr(getattr(telemetry, "transcript_log", None), "write_plain", None)
     if callable(write_plain):
         write_plain(display.for_transcript(text))
 
 
+def _print_trace(telemetry: Telemetry, text: str) -> None:
+    """Write `text` to stdout with the transcript tee muted. Caller holds `_OUTPUT_LOCK`."""
+    if not text:
+        return
+    sink = getattr(telemetry, "transcript_log", None)
+    mute = getattr(sink, "mute_tee", None)
+    with mute() if callable(mute) else contextlib.nullcontext():
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+
+# Seconds between redraws of a running command's output, and how long a
+# command runs before its output is shown at all.
+_LIVE_TICK_S = 0.5
+_LIVE_AFTER_S = 1.0
+
+
+def _elapsed_text(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole}s" if whole < 60 else f"{whole // 60}m {whole % 60:02d}s"
+
+
+@dataclass
+class _Fold:
+    """The quiet calls of one tool in the current run, shown as one row."""
+
+    name: str
+    gap: bool
+    calls: list[dict | None] = field(default_factory=list)
+    running: int = 0
+    exchange: Any = None
+
+
+@dataclass
+class _OpenCall:
+    """A call `_trace_call` has shown and `_trace_result` will finish."""
+
+    name: str
+    args: dict | None
+    malformed: bool = False
+    fold: _Fold | None = None
+    exchange: Any = None
+    done: threading.Event = field(default_factory=threading.Event)
+
+
+class ToolTrace:
+    """What one turn shows of its tool calls.
+
+    At `ui.tools` 1 the quiet calls between two things that are not quiet are
+    a run: each tool's calls in it share one row. On a screen that can redraw
+    (`Telemetry.exchange_factory`) a row is drawn when its first call starts
+    and redrawn as calls join it; on plain stdout the run is written when it
+    ends. Every finished call is written to the transcript on its own."""
+
+    def __init__(self, telemetry: Telemetry) -> None:
+        self._telemetry = telemetry
+        self._folds: dict[str, _Fold] = {}
+        self._held: list[str] = []  # failed quiet calls of a run not yet written
+
+    def _factory(self) -> Callable[[], Any] | None:
+        return getattr(self._telemetry, "exchange_factory", None)
+
+    def _fold_text(self, fold: _Fold, settings: Any) -> str:
+        if not fold.calls:
+            return ""
+        return display.render_fold(fold.name, fold.calls, running=fold.running, gap=fold.gap,
+                                   settings=settings)
+
+    def _draw(self, fold: _Fold, settings: Any) -> None:
+        factory = self._factory()
+        if factory is None:
+            return
+        text = self._fold_text(fold, settings)
+        if fold.exchange is None:
+            fold.exchange = factory()
+            fold.exchange.open(text)
+        else:
+            fold.exchange.update(text)
+
+    def settle(self, settings: Any = None) -> None:
+        """End the run: the next quiet call starts a new row. Caller holds `_OUTPUT_LOCK`."""
+        folds, held = self._folds, self._held
+        self._folds, self._held = {}, []
+        if self._factory() is not None:
+            for fold in folds.values():
+                if fold.exchange is not None and not fold.running:
+                    fold.exchange.close(self._fold_text(fold, settings))
+            return
+        _print_trace(self._telemetry, "".join(
+            [self._fold_text(fold, settings) for fold in folds.values()] + held))
+
+    def call(self, tool_context: ToolContext | None, name: str, args: dict | None,
+             malformed: bool) -> _OpenCall | None:
+        settings = _tool_settings(tool_context)
+        level = display.tools_level(settings)
+        if level <= 0:
+            return None
+        opened = _OpenCall(name, args, malformed)
+        with _OUTPUT_LOCK:
+            if level == 1 and not malformed and display.call_kind(name, args, settings) == "quiet":
+                fold = self._folds.get(name)
+                if fold is None:
+                    fold = self._folds[name] = _Fold(name, gap=not self._folds)
+                fold.calls.append(args)
+                fold.running += 1
+                opened.fold = fold
+                self._draw(fold, settings)
+                return opened
+            self.settle(settings)
+            factory = self._factory()
+            if factory is not None:
+                opened.exchange = factory()
+                opened.exchange.open(display.render_exchange(
+                    name, args, None, level=level, preview=display.preview_lines(settings),
+                    malformed=malformed, settings=settings))
+        if opened.exchange is not None and name == "shell":
+            threading.Thread(target=self._follow, args=(opened, tool_context, level),
+                             name="js-live-output", daemon=True).start()
+        return opened
+
+    def _follow(self, opened: _OpenCall, tool_context: ToolContext | None, level: int) -> None:
+        """Redraw a running command with the tail of its output until it ends."""
+        from .toolkit import process_net
+
+        command = (opened.args or {}).get("command")
+        if opened.done.wait(_LIVE_AFTER_S):
+            return
+        while not opened.done.wait(_LIVE_TICK_S):
+            tail = process_net.live_tail(tool_context, command, display.LIVE_LINES)
+            if tail is None:
+                continue
+            lines, seconds = tail
+            settings = _tool_settings(tool_context)
+            with _OUTPUT_LOCK:
+                if opened.done.is_set():
+                    return
+                opened.exchange.update(display.render_exchange(
+                    opened.name, opened.args, None, level=level,
+                    preview=display.preview_lines(settings), settings=settings,
+                    live=lines, elapsed=_elapsed_text(seconds)))
+
+    def result(self, tool_context: ToolContext | None, name: str, result: Any, *,
+               args: dict | None, malformed: bool, opened: _OpenCall | None) -> None:
+        settings = _tool_settings(tool_context)
+        level = display.tools_level(settings)
+        if level <= 0:
+            return
+        finished = display.render_exchange(
+            name, args, result, level=level, preview=display.preview_lines(settings),
+            malformed=malformed, settings=settings)
+        with _OUTPUT_LOCK:
+            if opened is not None:
+                opened.done.set()
+            _write_transcript(self._telemetry, finished)
+            fold = opened.fold if opened is not None else None
+            quiet = level == 1 and not malformed and display.call_kind(name, args, settings) == "quiet"
+            failed = display.tool_output(name, result).failed
+            if fold is None and quiet and not failed:
+                fold = self._folds.get(name)
+                if fold is None:
+                    fold = self._folds[name] = _Fold(name, gap=not self._folds)
+                fold.calls.append(args)
+                self._draw(fold, settings)
+                return
+            if fold is not None:
+                fold.running -= 1
+                if failed:
+                    fold.calls.remove(args)
+                self._draw(fold, settings)
+                if not failed:
+                    return
+            if fold is not None or (quiet and failed):
+                # A failed quiet call stands on its own row, inside the run.
+                tight = display.render_exchange(
+                    name, args, result, level=level, preview=display.preview_lines(settings),
+                    malformed=malformed, settings=settings, gap=not self._folds)
+                factory = self._factory()
+                if factory is None:
+                    self._held.append(tight)
+                else:
+                    row = factory()
+                    row.open(tight)
+                    row.close(tight)
+                return
+            if opened is not None and opened.exchange is not None:
+                opened.exchange.close(finished)
+                return
+            self.settle(settings)
+            _print_trace(self._telemetry, finished)
+
+
+def _tool_trace(telemetry: Telemetry) -> ToolTrace:
+    trace = getattr(telemetry, "tool_trace", None)
+    if trace is None:
+        trace = ToolTrace(telemetry)
+        with contextlib.suppress(AttributeError):
+            telemetry.tool_trace = trace
+    return trace
+
+
+def settle_tool_trace(telemetry: Telemetry) -> None:
+    """End the run of quiet tool calls: called before anything else is shown
+    and when the turn ends."""
+    trace = getattr(telemetry, "tool_trace", None)
+    if trace is not None:
+        with _OUTPUT_LOCK:
+            trace.settle()
+
+
 def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
                 args: dict | None, *, malformed: bool = False) -> Any:
-    """Print the call half of an exchange. On a screen that can redraw
-    (`Telemetry.exchange_factory`) the header is opened there and returned, for
-    `_trace_result` to close with the mark of how the call ended."""
-    settings = _tool_settings(tool_context)
-    text = display.render_tool_call(
-        name, args, display.tools_level(settings),
-        preview=display.preview_lines(settings), malformed=malformed, settings=settings,
-    )
-    factory = getattr(telemetry, "exchange_factory", None)
-    if not text or factory is None:
-        _show_trace(telemetry, text)
-        return None
-    exchange = factory()
-    with _OUTPUT_LOCK:
-        exchange.open(text)
-        _write_transcript(telemetry, text)
-    return exchange
+    """Show a call that is starting; returns what `_trace_result` finishes."""
+    return _tool_trace(telemetry).call(tool_context, name, args, malformed)
 
 
 def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
-                  *, args: dict | None = None, with_call: bool = False, malformed: bool = False,
+                  *, args: dict | None = None, malformed: bool = False,
                   exchange: Any = None) -> None:
-    """Print the result half of an exchange. `with_call` prints the call header
-    in the same write, so exchanges that finish concurrently stay whole. A
-    header drawn with the result carries the finished mark; `exchange`, the
-    header `_trace_call` opened, is redrawn with it."""
-    settings = _tool_settings(tool_context)
-    level = display.tools_level(settings)
-    preview = display.preview_lines(settings)
-    shown = display.render_tool_result(name, result, level, preview=preview, args=args, settings=settings)
-    call = ""
-    if with_call or exchange is not None:
-        call = display.render_tool_call(
-            name, args, level, preview=preview, malformed=malformed, settings=settings,
-            mark=display.FAIL if display.tool_output(name, result).failed else display.OK,
-        )
-    if exchange is None:
-        _show_trace(telemetry, call + shown)
-        return
-    with _OUTPUT_LOCK:
-        exchange.close(call + shown)
-        _write_transcript(telemetry, shown)
+    """Show a finished call. `exchange` is what `_trace_call` returned for it;
+    without one the call is shown whole now."""
+    _tool_trace(telemetry).result(tool_context, name, result, args=args, malformed=malformed,
+                                  opened=exchange)
 
 
 def _repair_jsonish(raw: str) -> dict:
@@ -922,7 +1090,7 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
             telemetry.event("tool_exception", tool=name, via="kernel", error=failure,
                             latency_ms=latency_ms)
         if trace:
-            _trace_result(telemetry, context, name, result, args=args, with_call=True)
+            _trace_result(telemetry, context, name, result, args=args)
 
     return observe
 
@@ -951,7 +1119,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         if error_tracker is not None:
             result = error_tracker.record(name, result)
         if trace:
-            _trace_result(telemetry, tool_context, name, result, with_call=trace_together, malformed=True, exchange=opened)
+            _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened)
         return {}, result
 
     active_registry = registry or T.STOCK_REGISTRY
@@ -965,7 +1133,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, context, trace_name, capped, args=args, with_call=trace_together, exchange=opened)
+            _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened)
         return args, capped
 
     started = time.time()
@@ -984,7 +1152,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     capped = _cap_result(result, cap_bytes)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     if trace:
-        _trace_result(telemetry, context, tool.name, capped, args=args, with_call=trace_together, exchange=opened)
+        _trace_result(telemetry, context, tool.name, capped, args=args, exchange=opened)
     return args, capped
 
 
@@ -1077,7 +1245,7 @@ def _dispatch_tool_calls(
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded, args=args, with_call=True)
+            _trace_result(telemetry, tool_context, pc.name, recorded, args=args)
         records[idx] = (args, recorded)
         if progress is not None:
             progress.record(pc, args, recorded)
@@ -1187,7 +1355,7 @@ async def _dispatch_fan_out_async(
         result = f"ERROR: could not parse arguments for {pc.name}: {e}"
         recorded = error_tracker.record(pc.name, result)
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded, with_call=trace_together, malformed=True, exchange=opened)
+            _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened)
         return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
@@ -1199,7 +1367,7 @@ async def _dispatch_fan_out_async(
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes)
         if trace:
-            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, with_call=trace_together, exchange=opened)
+            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened)
         return pc, args, recorded
 
     started = time.time()
@@ -1213,7 +1381,7 @@ async def _dispatch_fan_out_async(
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, with_call=trace_together, exchange=opened)
+        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, exchange=opened)
     return pc, args, recorded
 
 
@@ -1227,13 +1395,13 @@ async def _dispatch_async_tool(
     except ValueError as exc:
         result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, result, with_call=True, malformed=True)
+            _trace_result(telemetry, tool_context, pc.name, result, malformed=True)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
         result = registry.unavailable_error(pc.name)
         if trace:
-            _trace_result(telemetry, tool_context, pc.name, result, args=args, with_call=True)
+            _trace_result(telemetry, tool_context, pc.name, result, args=args)
         return pc, args, result
     if trace:
         opened = _trace_call(telemetry, tool_context, tool.name, args)
@@ -1932,6 +2100,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         raise
     finally:
         sink.close_reasoning()
+        settle_tool_trace(telemetry)
+        telemetry.tool_trace = None
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         turn_status.reset()

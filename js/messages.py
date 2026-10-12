@@ -960,6 +960,9 @@ STATUS_CACHE = Message("cache {pct}%")
 
 TOOL_ARGS_UNPARSED = Message("<arguments are not a JSON object>")
 TOOL_MORE_LINES = Message("… {count} lines hidden")
+TOOL_TRIES_LEFT = Message("{left} of {allowed} tries left")
+TOOL_NO_OUTPUT = Message("no output")
+TOOL_RUNNING = Message("running {elapsed}")
 
 # --- The kernel panel --------------------------------------------------------
 

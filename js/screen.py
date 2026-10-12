@@ -309,6 +309,11 @@ class Scrollback:
         self._render_span(span, new_text=True)
         return span
 
+    def exchange_update(self, span: AnswerSpan, rendered: str) -> None:
+        """Redraw an open exchange where it stands; it stays open."""
+        span.text = rendered
+        self._render_span(span)
+
     def exchange_close(self, span: AnswerSpan, rendered: str) -> None:
         """Replace an open exchange with its final text, where it stands."""
         span.text = rendered
@@ -452,9 +457,10 @@ class ScreenLive:
 
 
 class ScreenExchange:
-    """One tool exchange on the scrollback: its header is drawn when the call
-    starts and the whole exchange replaces it when the call ends. Calls are
-    queued on the loop in the same order as ordinary stdout writes."""
+    """One tool exchange on the scrollback: drawn when the call starts,
+    redrawn in place while it runs, and replaced by the finished exchange when
+    it ends. Calls are queued on the loop in the same order as ordinary stdout
+    writes."""
 
     def __init__(self, loop, scrollback: Scrollback, app: Application) -> None:
         self._loop, self._scrollback, self._app = loop, scrollback, app
@@ -471,8 +477,16 @@ class ScreenExchange:
             self._scrollback.exchange_close(self._span, rendered)
         self._app.invalidate()
 
+    def _update(self, rendered: str) -> None:
+        if self._span is not None:
+            self._scrollback.exchange_update(self._span, rendered)
+            self._app.invalidate()
+
     def open(self, rendered: str) -> None:
         self._loop.call_soon_threadsafe(self._open, rendered)
+
+    def update(self, rendered: str) -> None:
+        self._loop.call_soon_threadsafe(self._update, rendered)
 
     def close(self, rendered: str) -> None:
         self._loop.call_soon_threadsafe(self._close, rendered)

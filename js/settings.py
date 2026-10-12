@@ -139,11 +139,16 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.status_fg", "str",
                 "Status bar foreground, #rrggbb."),
     SettingSpec("ui.tools", "int",
-                "Tool exchange display: 0 nothing, 1 one metrics line per exchange, "
-                "2 the call plus the first ui.tools_preview_lines result lines and "
-                "shown/total metrics, 3 the call plus the whole result."),
+                "Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into "
+                "one row per tool, a command shows its output while it runs and one row "
+                "after, a patch shows its diff, a failure its error; 2 every call with "
+                "the first ui.tools_preview_lines result lines; 3 every call whole."),
+    SettingSpec("ui.tools_quiet", "json",
+                "Tools whose calls ui.tools 1 shows as one row and folds: a JSON list of tool names."),
+    SettingSpec("ui.shell_quiet", "json",
+                "Shell commands ui.tools 1 treats as quiet, by first word or first two: a JSON list."),
     SettingSpec("ui.tools_preview_lines", "int",
-                "Lines of a tool's command and of its result shown at ui.tools 2."),
+                "Lines of a result, a diff or a program shown before the rest is hidden at ui.tools 1 and 2."),
     SettingSpec("ui.markdown", "bool",
                 "Render assistant Markdown on a terminal: finished blocks are "
                 "highlighted once, the open block stays live. Off writes the text "
@@ -701,7 +706,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
-        if spec.key == "limits.shell_env_allow":
+        if spec.key in {"limits.shell_env_allow", "ui.tools_quiet", "ui.shell_quiet"}:
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value
             ):

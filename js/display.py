@@ -113,7 +113,7 @@ def _setting(settings: Any, key: str) -> Any:
 
 
 def tools_level(settings: Any) -> int:
-    """`ui.tools` from live settings: 0 nothing, 1 metrics, 2 preview, 3 whole."""
+    """`ui.tools` from live settings: 0 nothing, 1 what matters, 2 preview, 3 whole."""
     level = _setting(settings, "ui.tools")
     return level if isinstance(level, int) and level in range(4) else _settings.default_value("ui.tools")
 
@@ -399,6 +399,10 @@ _BODY_ARG: dict[str, str] = {
 _UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
     "patch": ("old_string", "new_string", "edits"),
     "read": ("range",),
+    "shell": ("description",),
+    "send": ("text",),
+    "post_task": ("body",),
+    "finish_task": ("result",),
 }
 _ARG_VALUE_CHARS = 40
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
@@ -413,12 +417,17 @@ _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 # Screen marks of an exchange. `MARK` opens a call that has not finished;
 # a finished one is `OK` or `FAIL`.
-MARK = "●"
+MARK = "…"
 OK = "✓"
 FAIL = "✗"
-_HEADER_MARK = re.compile(rf"^((?:\x1b\[[0-9;]*m)*)[{MARK}{OK}{FAIL}] ", re.M)
-# Columns a body sits in from the left edge, and a panel's inner padding.
-_INDENT = 2
+# The bar down the left edge of an exchange, in the colour of how it stands.
+RAIL = "▌"
+_RAIL = 2
+_SGR = re.compile(r"\x1b\[[0-9;]*m")
+_RAILED = re.compile(rf"^{RAIL} ?", re.M)
+_HEADER_MARK = re.compile(rf"^[{MARK}{OK}{FAIL}] +", re.M)  # the mark and the chip's padding
+# Columns a body sits in from the rail, and a panel's inner padding.
+_INDENT = 1
 _PAD = 1
 
 
@@ -443,9 +452,10 @@ def theme(settings: Any = None) -> Theme:
 
 
 def for_transcript(rendered: str) -> str:
-    """`rendered` as the transcript log records it: every exchange header
-    opens with `TOOL_MARKER`, whatever mark the screen drew."""
-    return _HEADER_MARK.sub(rf"\g<1>{TOOL_MARKER} ", rendered)
+    """`rendered` as the transcript log records it: plain text without the
+    rail, every exchange header opening with `TOOL_MARKER` whatever mark the
+    screen drew."""
+    return _HEADER_MARK.sub(f"{TOOL_MARKER} ", _RAILED.sub("", _SGR.sub("", rendered)))
 
 
 @dataclass
@@ -561,6 +571,18 @@ _KEY_ARGS: dict[str, tuple[str, ...]] = {
     "toolbox": ("source",),
     "fetch": ("url",),
     "browse": ("url",),
+    "exa_search": ("query",),
+    "serper_search": ("query",),
+    "tavily_search": ("query",),
+    "docs_search": ("topic",),
+    "tool_discovery": ("query",),
+    "skill": ("name",),
+    "send": ("to",),
+    "claim": ("key",),
+    "release": ("key",),
+    "plan": ("plan_name",),
+    "post_task": ("title",),
+    "task": ("agent_id",),
 }
 _PATH_ARGS = ("file_path", "path")
 _KEY_ARG_MIN = 16
@@ -681,79 +703,88 @@ _MEASURE = Console(file=io.StringIO(), width=200)
 
 
 class _Block:
-    """The rows of one exchange, drawn at `width`."""
+    """The rows of one exchange, drawn at `width` behind a rail in the colour
+    of `state`: running, finished or failed."""
 
-    def __init__(self, width: int, colours: Theme) -> None:
+    def __init__(self, width: int, colours: Theme, state: str = MARK) -> None:
         self.width = max(width, 24)
+        self.inner = self.width - _RAIL
         self.theme = colours
-        self.rows: list[Text] = []
+        self.state = state
+        self.rows: list[Text | None] = []
+
+    def colour(self) -> str:
+        return {MARK: self.theme.warn, OK: self.theme.ok, FAIL: self.theme.error}[self.state]
 
     def blank(self) -> None:
-        self.rows.append(Text(""))
+        """A row with no rail: the gap before an exchange."""
+        self.rows.append(None)
 
-    def header(self, mark: str, name: str, args: dict | None, *, malformed: bool = False,
+    def header(self, name: str, args: dict | None, *, malformed: bool = False,
+               about: str | None = None, rest: str | None = None,
                tail: str = "", tail_style: str = "") -> None:
-        """`mark name key-argument other-arguments[  tail]` on one row."""
+        """`mark [name] key-argument  other-arguments[  tail]` on one row: the
+        name on an accent chip. `about` and `rest` replace what the arguments
+        would give."""
         th = self.theme
         args = args if isinstance(args, dict) else {}
-        colour = {MARK: th.accent, OK: th.ok, FAIL: th.error}[mark]
-        row = Text.assemble((f"{mark} ", colour), (clean(name), f"bold {th.accent}"))
-        room = self.width - row.cell_len - (len(tail) + 2 if tail else 0)
+        row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
+                            (f" {clean(name)} ", f"bold black on {th.accent}"))
+        if len(tail) > self.inner // 2:
+            tail = tail[:self.inner // 2 - 1] + "…"
+        reserve = len(tail) + 2 if tail else 0
         if malformed:
             row.append(" " + msgs.TOOL_ARGS_UNPARSED.text(), th.error)
-        about = key_argument(name, args, max(room - 1, _KEY_ARG_MIN))
+        if about is None:
+            about = key_argument(name, args, max(self.inner - row.cell_len - reserve - 1, _KEY_ARG_MIN))
         if about:
-            row.append(" " + about)
-        rest = _other_arguments(name, args)
+            row.append(" " + about, "bold")
+        if rest is None:
+            rest = _other_arguments(name, args)
         if rest:
-            row.append(" " + rest, th.dim)
-        limit = self.width - (len(tail) + 2 if tail else 0)
-        row.truncate(max(limit, 8), overflow="ellipsis")
+            row.append("  " + rest, th.dim)
+        row.truncate(max(self.inner - reserve, 8), overflow="ellipsis")
         if tail:
             row.append("  " + tail, tail_style or th.dim)
-            row.truncate(self.width, overflow="ellipsis")
+            row.truncate(self.inner, overflow="ellipsis")
         self.rows.append(row)
+
+    def _panel_row(self, piece: Text) -> None:
+        row = Text(" " * _PAD, style=f"{self.theme.panel_text} on {self.theme.panel}")
+        row.append_text(piece)
+        row.pad_right(self.inner - _INDENT - row.cell_len)
+        self.rows.append(Text(" " * _INDENT) + row)
 
     def panel(self, lines: list[Text], *, wrap: bool) -> None:
         """`lines` on the panel background, padded to one width."""
-        inner = self.width - _INDENT - 2 * _PAD
-        style = f"{self.theme.panel_text} on {self.theme.panel}"
+        room = self.inner - _INDENT - 2 * _PAD
         for line in lines:
-            for piece in _fit(line, inner, wrap):
-                row = Text(" " * _PAD, style=style)
-                row.append_text(piece)
-                row.pad_right(self.width - _INDENT - row.cell_len)
-                row.stylize(f"on {self.theme.panel}")
-                self.rows.append(Text(" " * _INDENT) + row)
+            for piece in _fit(line, room, wrap):
+                self._panel_row(piece)
 
     def numbered(self, lines: list[tuple[str, Text]], *, wrap: bool) -> None:
-        """`(number, text)` rows as a file view: dim right-aligned numbers,
-        the text beside them, a folded row continuing under its text."""
+        """`(number, text)` rows as a file view on the panel: dim
+        right-aligned numbers, the text beside them, a folded row continuing
+        under its text."""
         gutter = max((len(number) for number, _ in lines), default=1)
-        room = self.width - _INDENT - _PAD - gutter - 2
+        room = self.inner - _INDENT - 2 * _PAD - gutter - 2
         for number, text in lines:
             for index, piece in enumerate(_fit(text, room, wrap)):
                 label = number.rjust(gutter) if index == 0 else " " * gutter
-                self.rows.append(Text.assemble(" " * (_INDENT + _PAD), (label, self.theme.dim), "  ", piece))
+                self._panel_row(Text.assemble((label, self.theme.dim), "  ", piece))
 
     def note(self, text: str, style: str = "") -> None:
         row = Text(" " * (_INDENT + _PAD) + text, style or self.theme.dim)
-        row.truncate(self.width, overflow="ellipsis")
-        self.rows.append(row)
-
-    def footer(self, mark: str, text: str) -> None:
-        colour = self.theme.ok if mark == OK else self.theme.error
-        row = Text.assemble(" " * (_INDENT + _PAD), (f"{mark} ", colour),
-                            (text, self.theme.error if mark == FAIL else self.theme.dim))
-        row.truncate(self.width, overflow="ellipsis")
+        row.truncate(self.inner, overflow="ellipsis")
         self.rows.append(row)
 
     def render(self) -> str:
         if not self.rows:
             return ""
         console = _render_console(self.width)
+        rail = Text.assemble((RAIL + " ", self.colour()))
         for row in self.rows:
-            console.print(row, soft_wrap=True)
+            console.print(Text("") if row is None else rail + row, soft_wrap=True)
         return console.file.getvalue()  # type: ignore[attr-defined]
 
 
@@ -761,34 +792,100 @@ def _hidden(count: int) -> str:
     return msgs.TOOL_MORE_LINES.text(count=count)
 
 
-def render_tool_call(name: str, args: dict | None, level: int, *, preview: int = 12,
-                     width: int | None = None, malformed: bool = False,
-                     settings: Any = None, mark: str = MARK) -> str:
-    """The call half of an exchange at `ui.tools` 2 and 3: a blank line, the
-    header behind `mark`, then the tool's program in a panel when it runs past one line, or
-    a `write`'s file as a numbered view (both capped at `preview` lines at
-    level 2). Empty below level 2: level 1 shows only the result's line."""
-    if level < 2:
-        return ""
-    block = _Block(width or terminal_width(), theme(settings))
+def _names(settings: Any, key: str) -> frozenset[str]:
+    value = _setting(settings, key)
+    return frozenset(str(item) for item in value) if isinstance(value, (list, tuple)) else frozenset()
+
+
+_SHELL_JOIN = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
+
+
+def _looks_around(command: Any, settings: Any) -> bool:
+    """A shell command made only of `ui.shell_quiet` commands, writing nowhere."""
+    if not isinstance(command, str) or not command.strip() or "\n" in command.strip() or ">" in command:
+        return False
+    quiet = _names(settings, "ui.shell_quiet")
+    for part in _SHELL_JOIN.split(command.strip()):
+        words = part.split()
+        if not words or (words[0] not in quiet and " ".join(words[:2]) not in quiet):
+            return False
+    return True
+
+
+def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
+    """What `ui.tools` 1 shows of a call.
+
+    quiet    one row, and a run of them folds into one row per tool
+    command  its output while it runs, one row once it ends
+    diff     the change it made
+    loud     its result
+    """
     args = args if isinstance(args, dict) else {}
-    block.blank()
-    block.header(mark, name, args, malformed=malformed)
-    body = args.get(_BODY_ARG.get(name, ""))
-    if isinstance(body, str) and body.strip():
-        lines = clean(body).rstrip("\n").split("\n")
-        if name == "write" or len(lines) > 1:
-            hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
-            lines = lines[:len(lines) - hidden]
-            code = _highlight(lines, _lexer(name, args, "\n".join(lines)))
-            block.blank()
-            if name == "write":
-                block.numbered([(str(n), text) for n, text in enumerate(code, 1)], wrap=level == 3)
-                if hidden:
-                    block.note(_hidden(hidden))
-            else:
-                block.panel(code + ([Text(_hidden(hidden), block.theme.dim)] if hidden else []),
-                            wrap=level == 3)
+    if name in _names(settings, "ui.tools_quiet"):
+        return "quiet"
+    if name == "shell":
+        return "quiet" if _looks_around(args.get("command"), settings) else "command"
+    if name in ("kernel", "terminal_session", "toolbox"):
+        return "command"
+    if name in ("patch", "write", "notebook_edit"):
+        return "diff"
+    return "loud"
+
+
+# What a fold row counts, singular and plural; a tool not named counts calls.
+_FOLD_NOUN: dict[str, tuple[str, str]] = {
+    "read": ("file", "files"),
+    "fs_search": ("search", "searches"),
+    "ast_search": ("search", "searches"),
+    "exa_search": ("search", "searches"),
+    "serper_search": ("search", "searches"),
+    "tavily_search": ("search", "searches"),
+    "docs_search": ("search", "searches"),
+    "fetch": ("page", "pages"),
+    "browse": ("page", "pages"),
+    "shell": ("look", "looks"),
+}
+_URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
+
+
+def fold_label(name: str, args: dict | None) -> str:
+    """One call's name on a fold row: a path's last part, a URL's host, a
+    shell command's own name, anything else the head of its key argument."""
+    key = _key_name(name, args)
+    if key is None:
+        return ""
+    text = clean(args[key]).strip().split("\n", 1)[0].strip()  # type: ignore[index]
+    if key in _PATH_ARGS:
+        return os.path.basename(text.rstrip("/")) or text
+    host = _URL_HOST.match(text)
+    if host is not None:
+        return host.group(1)
+    if name == "shell":
+        words = text.split()
+        return " ".join(words[:2]) if words[:1] == ["git"] else (words[0] if words else "")
+    return text if len(text) <= 24 else text[:23] + "…"
+
+
+def render_fold(name: str, calls: list[dict | None], *, running: int = 0, gap: bool = True,
+                width: int | None = None, settings: Any = None) -> str:
+    """Finished quiet calls of one tool as one row: `mark [name] N things
+    label · label · +K`. `running` of them have not returned."""
+    block = _Block(width or terminal_width(), theme(settings), MARK if running else OK)
+    if gap:
+        block.blank()
+    one, many = _FOLD_NOUN.get(name, ("call", "calls"))
+    about = f"{len(calls)} {one if len(calls) == 1 else many}"
+    labels = [label for label in (fold_label(name, args) for args in calls) if label]
+    room = block.inner - len(name) - len(about) - 10
+    shown: list[str] = []
+    for index, label in enumerate(labels):
+        more = len(labels) - index - 1
+        line = " · ".join([*shown, label]) + (f" · +{more}" if more else "")
+        if len(line) > room and shown:
+            shown.append(f"+{len(labels) - index}")
+            break
+        shown.append(label)
+    block.header(name, None, about=about, rest=" · ".join(shown))
     return block.render()
 
 
@@ -839,74 +936,167 @@ def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text
             rows.append((str(old), Text("- " + line[1:], colours.removed)))
             old += 1
         elif line.startswith(" "):
-            rows.append((str(new), Text("  " + line[1:])))
+            rows.append((str(new), Text("  " + line[1:], colours.panel_text)))
             old, new = old + 1, new + 1
     return rows, summary.group(1)
 
 
-def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
-                       width: int | None = None, args: dict | None = None,
-                       settings: Any = None) -> str:
-    """The result half of an exchange.
+# The argument a call's own text is in, shown at `ui.tools` 1 in place of the
+# result, which only acknowledges it.
+_SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task": "result"}
+# Rows of a running command's output kept on screen.
+LIVE_LINES = 6
 
-    1  one row: the finished mark, the call as its header shows it, the metrics
-    2  the first `preview` lines, long ones cut, then what is hidden and the metrics
-    3  every line, long ones folded, then the metrics
 
-    A `read` is a numbered file view, a `patch` a numbered diff, anything else
-    a panel. A result of one line is the footer and has no panel.
+def _last_line(output: ToolOutput) -> str:
+    return next((line.strip() for line, _ in reversed(output.lines) if line.strip()), "")
+
+
+def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> None:
+    """The call's program under its header at `ui.tools` 2 and 3: a `write`'s
+    file as a numbered view, any other body of more than one line as a panel."""
+    body = args.get(_BODY_ARG.get(name, ""))
+    if not isinstance(body, str) or not body.strip():
+        return
+    lines = clean(body).rstrip("\n").split("\n")
+    if name != "write" and len(lines) == 1:
+        return
+    hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
+    lines = lines[:len(lines) - hidden]
+    code = _highlight(lines, _lexer(name, args, "\n".join(lines)))
+    if name == "write":
+        block.numbered([(str(n), text) for n, text in enumerate(code, 1)], wrap=level == 3)
+    else:
+        block.panel(code, wrap=level == 3)
+    if hidden:
+        block.note(_hidden(hidden))
+
+
+def _result_rows(output: ToolOutput, colours: Theme) -> list[Text]:
+    return [Text(line, colours.error if output.is_error else colours.warn if err else colours.panel_text)
+            for line, err in output.lines]
+
+
+def _capped(block: _Block, rows: list[Any], limit: int, draw: Callable[[list[Any]], None]) -> int:
+    """Draw the first `limit` of `rows` and a note of how many are hidden."""
+    draw(rows[:limit])
+    if len(rows) > limit:
+        block.note(_hidden(len(rows) - limit))
+    return min(limit, len(rows))
+
+
+def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, kind: str,
+                    preview: int, malformed: bool) -> None:
+    """A finished exchange at `ui.tools` 1."""
+    colours = block.theme
+    command = kind == "command" or name == "shell"
+    if output.failed:
+        if command:
+            parts = [f"exit {output.exit_code}"] if output.exit_code else []
+            last = _last_line(output)
+            block.header(name, args, malformed=malformed,
+                         tail=" · ".join([*parts, last] if last else parts), tail_style=colours.error)
+            return
+        if kind == "quiet" and len(output.lines) == 1:
+            block.header(name, args, malformed=malformed, tail=output.lines[0][0].strip(),
+                         tail_style=colours.error)
+            return
+        block.header(name, args, malformed=malformed)
+        _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows, wrap=True))
+        if output.tries is not None:
+            block.note(msgs.TOOL_TRIES_LEFT.text(left=output.tries[0], allowed=output.tries[1]), colours.error)
+        return
+    if kind == "quiet":
+        block.header(name, args, malformed=malformed)
+        return
+    if command:
+        block.header(name, args, malformed=malformed, tail=_last_line(output))
+        return
+    diff = _diff_view(output, colours) if name == "patch" else None
+    if diff is not None:
+        rows, lead = diff
+        block.header(name, args, malformed=malformed, tail=lead)
+        _capped(block, rows, preview, lambda shown: block.numbered(shown, wrap=False))
+        return
+    said = args.get(_SAID_ARG.get(name, ""))
+    if isinstance(said, str) and said.strip():
+        block.header(name, args, malformed=malformed, tail=_last_line(output))
+        lines = [Text(line, colours.panel_text) for line in clean(said).strip("\n").split("\n")]
+        _capped(block, lines, preview, lambda rows: block.panel(rows, wrap=True))
+        return
+    if kind == "diff" or len(output.lines) <= 1:
+        block.header(name, args, malformed=malformed, tail=_last_line(output))
+        return
+    block.header(name, args, malformed=malformed)
+    _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows, wrap=False))
+
+
+def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, level: int,
+                   preview: int, malformed: bool) -> None:
+    """A finished exchange at `ui.tools` 2 and 3: the program, the result as
+    a file view, a diff or a panel, and its metrics."""
+    colours = block.theme
+    block.header(name, args, malformed=malformed)
+    _program(block, name, args, level, preview)
+    wrap = level == 3
+    limit = preview if level == 2 else max(len(output.lines), 1)
+    note_style = colours.error if output.failed else ""
+    if not output.lines:
+        block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.text(), note_style)
+        return
+    read = _read_view(output, args) if name == "read" else None
+    diff = _diff_view(output, colours) if name == "patch" else None
+    if read is not None:
+        rows, of = read
+        shown = _capped(block, rows, limit, lambda part: block.numbered(part, wrap=wrap))
+        block.note(metrics(output, shown=shown, lines=len(rows), of=of), note_style)
+    elif diff is not None:
+        rows, lead = diff
+        _capped(block, rows, limit, lambda part: block.numbered(part, wrap=wrap))
+        block.note(lead, note_style)
+    else:
+        shown = _capped(block, _result_rows(output, colours), limit, lambda part: block.panel(part, wrap=wrap))
+        block.note(metrics(output, shown=shown), note_style)
+
+
+def render_exchange(name: str, args: dict | None, result: Any = None, *, level: int,
+                    preview: int = 12, width: int | None = None, malformed: bool = False,
+                    settings: Any = None, live: list[str] | None = None, elapsed: str = "",
+                    gap: bool = True) -> str:
+    """One tool exchange behind its rail. `result` None is a call still
+    running: `live` is the tail of its output so far, `elapsed` how long it
+    has run.
+
+    ui.tools  1  what `call_kind` says of the call: a quiet call is one row,
+                 a command its last line, a patch its diff, anything else its
+                 result; a failure shows its error
+              2  the program and the first `preview` result lines, long ones cut
+              3  the program and every result line, long ones folded
     """
     if level <= 0:
         return ""
     colours = theme(settings)
-    block = _Block(width or terminal_width(), colours)
+    args = args if isinstance(args, dict) else {}
+    if result is None:
+        block = _Block(width or terminal_width(), colours, MARK)
+        if gap:
+            block.blank()
+        block.header(name, args, malformed=malformed,
+                     tail=msgs.TOOL_RUNNING.text(elapsed=elapsed) if elapsed else "")
+        if level >= 2:
+            _program(block, name, args, level, preview)
+        if live:
+            tail = [clean(line) for line in live][-LIVE_LINES:]
+            block.panel([Text(line, colours.panel_text) for line in tail], wrap=False)
+        return block.render()
     output = tool_output(name, result)
-    mark = FAIL if output.failed else OK
-    first = output.lines[0][0] if output.lines else ""
-    one_line = len(output.lines) == 1 and name != "read" and not output.failed
+    block = _Block(width or terminal_width(), colours, FAIL if output.failed else OK)
+    if gap:
+        block.blank()
     if level == 1:
-        tail = first if output.failed and len(output.lines) == 1 else metrics(output)
-        if len(tail) > block.width // 2:
-            tail = tail[:block.width // 2 - 1] + "…"
-        block.header(mark, name, args, tail=tail, tail_style=colours.error if output.failed else "")
-        return block.render()
-    if not output.lines:
-        block.footer(mark, metrics(output) if output.failed else "no output")
-        return block.render()
-    if one_line:
-        block.footer(mark, first)
-        return block.render()
-    wrap = level == 3
-    limit = preview if level == 2 else len(output.lines)
-    read = _read_view(output, args) if name == "read" else None
-    diff = _diff_view(output, colours) if name == "patch" else None
-    block.blank()
-    of: int | None = None
-    lead = ""
-    if read is not None:
-        rows, of = read
-        block.numbered(rows[:limit], wrap=wrap)
-        shown = min(limit, len(rows))
-        hidden = len(rows) - shown
-    elif diff is not None:
-        rows, lead = diff
-        block.numbered(rows[:limit], wrap=wrap)
-        shown = min(limit, len(rows))
-        hidden = len(rows) - shown
+        _finished_brief(block, name, args, output, call_kind(name, args, settings), preview, malformed)
     else:
-        shown = min(limit, len(output.lines))
-        hidden = len(output.lines) - shown
-        body = [Text(line, colours.error if output.is_error else colours.warn if err else "")
-                for line, err in output.lines[:shown]]
-        block.panel(body + ([Text(_hidden(hidden), colours.dim)] if hidden else []), wrap=wrap)
-    if hidden and (read is not None or diff is not None):
-        block.note(_hidden(hidden))
-    if diff is not None:
-        block.footer(mark, lead)
-    elif read is not None:
-        block.footer(mark, metrics(output, shown=shown, lines=len(rows), of=of))
-    else:
-        block.footer(mark, metrics(output, shown=shown))
+        _finished_full(block, name, args, output, level, preview, malformed)
     return block.render()
 
 
@@ -963,12 +1153,9 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
                 out.append(render_markdown(text, width) if markdown else text + "\n")
             for call in message.get("tool_calls") or []:
                 name, args = _call_args(call)
-                out.append(render_tool_call(name, args, level, preview=preview, width=width,
-                                            settings=settings))
                 result = results.get(call.get("id"))
-                if result is not None:
-                    out.append(render_tool_result(
-                        name, _content_text(result.get("content")), level,
-                        preview=preview, width=width, args=args, settings=settings,
-                    ))
+                out.append(render_exchange(
+                    name, args, None if result is None else _content_text(result.get("content")),
+                    level=level, preview=preview, width=width, settings=settings,
+                ))
     return "".join(out)

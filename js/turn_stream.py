@@ -110,6 +110,12 @@ class StreamSink:
         self._text = ""
         self._reasoning.clear()
 
+    def _settle_tools(self) -> None:
+        """Text is about to be shown: the run of quiet tool calls before it ends."""
+        settle = getattr(self._telemetry, "settle_tools", None)
+        if callable(settle):
+            settle()
+
     def reasoning(self, chunk: str) -> None:
         if not chunk:
             return
@@ -118,6 +124,7 @@ class StreamSink:
         if self._suppress or self._reasoning_level == 0:
             return
         if self._thinking is None:
+            self._settle_tools()
             factory = self._telemetry.reasoning_factory
             self._thinking = (
                 factory(self._reasoning_level) if factory is not None
@@ -141,6 +148,7 @@ class StreamSink:
                 write_chunk(chunk)
         with self._muted_transcript_tee():
             if self._answer is None:
+                self._settle_tools()
                 factory = self._telemetry.display_factory
                 self._answer = (
                     factory(self._markdown) if factory is not None
