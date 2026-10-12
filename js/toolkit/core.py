@@ -533,16 +533,16 @@ class ToolContext(_turn_settings.ContextSettings):
                 self.fully_read_paths.add(path)
                 if total_lines:
                     self.read_ranges[path] = [(1, total_lines)]
-                return
-            if start_line is None or end_line is None or end_line < start_line:
+            elif start_line is None or end_line is None or end_line < start_line:
                 window.reads[call_id] = ([], False)
-                return
-            window.reads[call_id] = ([(start_line, end_line)], False)
-            ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
-            self.read_ranges[path] = _merge_line_ranges(ranges)
-            total = self.read_line_totals.get(path)
-            if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
-                self.fully_read_paths.add(path)
+            else:
+                window.reads[call_id] = ([(start_line, end_line)], False)
+                ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
+                self.read_ranges[path] = _merge_line_ranges(ranges)
+                total = self.read_line_totals.get(path)
+                if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
+                    self.fully_read_paths.add(path)
+            self._save_reads()
 
     def _ranges_cover(
         self,
@@ -625,6 +625,59 @@ class ToolContext(_turn_settings.ContextSettings):
                 self.fully_read_paths.add(path)
             else:
                 self.fully_read_paths.discard(path)
+            self._save_reads()
+
+    def _reads_file(self) -> Path | None:
+        return self.snapshot_store / "reads.json" if self.snapshot_store is not None else None
+
+    def _save_reads(self) -> None:
+        """Keep the read coverage beside the session's undo store, so js
+        restarted on the session still knows what the model saw. Caller holds
+        _coverage_lock."""
+        target = self._reads_file()
+        if target is None:
+            return
+        rows = {
+            str(path): {
+                "hash": self.file_hashes[path],
+                "ranges": self.read_ranges.get(path, []),
+                "total": self.read_line_totals.get(path),
+                "whole": path in self.fully_read_paths,
+            }
+            for path in self.read_paths
+            if path in self.file_hashes
+        }
+        try:
+            self._atomic_write(target, json.dumps(rows, separators=(",", ":")).encode("utf-8"))
+        except OSError:
+            pass
+
+    def _load_reads(self) -> None:
+        """Coverage a previous process recorded for this session. A file that
+        changed since stays gated: its hash no longer matches."""
+        target = self._reads_file()
+        try:
+            rows = json.loads(target.read_text(encoding="utf-8")) if target is not None else {}
+        except (OSError, ValueError):
+            return
+        if not isinstance(rows, dict):
+            return
+        with self._coverage_lock:
+            for raw, row in rows.items():
+                try:
+                    path, content_hash = Path(raw), str(row["hash"])
+                    ranges = [(int(start), int(end)) for start, end in row.get("ranges") or []]
+                    total = row.get("total")
+                except (KeyError, TypeError, ValueError):
+                    continue
+                self.read_paths.add(path)
+                self.file_hashes[path] = content_hash
+                if ranges:
+                    self.read_ranges[path] = _merge_line_ranges(ranges)
+                if isinstance(total, int):
+                    self.read_line_totals[path] = total
+                if row.get("whole"):
+                    self.fully_read_paths.add(path)
 
     def record_delivered_read(self, path: Path, raw: str, delivered: str,
                               call_id: str | None = None) -> None:
@@ -669,6 +722,7 @@ class ToolContext(_turn_settings.ContextSettings):
                 self.fully_read_paths.add(path)
             else:
                 self.fully_read_paths.discard(path)
+            self._save_reads()
 
     def settle_reads(self) -> None:
         """Forget which call recorded which read, and record the reads the
@@ -756,6 +810,7 @@ class ToolContext(_turn_settings.ContextSettings):
             self.snapshot_store = store
             if store is not None:
                 self._load_snapshots()
+                self._load_reads()
 
     def _path_snapshot_dir(self, path: Path) -> Path:
         assert self.snapshot_store is not None

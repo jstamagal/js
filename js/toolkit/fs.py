@@ -603,7 +603,7 @@ def _read_call(target: Path, start_line: int, end_line: int | None = None) -> st
 read = fs_read
 
 
-def write(file_path: str | None = None, content: str = "", overwrite: bool = False, context: ToolContext | None = None, path: str | None = None) -> str:
+def write(file_path: str | None = None, content: str = "", overwrite: bool = False, context: ToolContext | None = None, path: str | None = None, expected_hash: str | None = None) -> str:
     assert context is not None
     raw_path = file_path or path
     if not raw_path:
@@ -624,11 +624,19 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = _hash_bytes(current)
-        guard = _changed_since_read(
-            context, target, "overwrite it", current, current_hash, edits_lines=False
-        ) or context.require_read(
-            target, "overwrite it", content_hash=current_hash
-        )
+        if expected_hash:
+            # The hash the model expects is its proof of what it replaces: a
+            # match needs no read, a mismatch names both and writes nothing.
+            guard = None if expected_hash.strip() == current_hash else (
+                f"ERROR: {target} has hash {current_hash}, not the expected {expected_hash.strip()}; "
+                "nothing was written. Read it, then retry."
+            )
+        else:
+            guard = _changed_since_read(
+                context, target, "overwrite it", current, current_hash, edits_lines=False
+            ) or context.require_read(
+                target, "overwrite it", content_hash=current_hash
+            )
         if guard:
             return guard
     try:
@@ -2004,6 +2012,7 @@ def tools() -> tuple[Tool, ...]:
                 "file_path": {"type": "string", "description": "File path to create or overwrite."},
                 "content": {"type": "string", "description": "Complete file content to write."},
                 "overwrite": {"type": "boolean", "default": False, "description": "Required for existing files after reading them first."},
+                "expected_hash": {"type": "string", "description": "The file's current hash, as a read or write result printed it. A match overwrites with no read."},
             },
             required=("file_path", "content"),
         ),

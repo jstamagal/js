@@ -1,9 +1,12 @@
 Create a file, or replace one whole.
 {{#if read}}
 Existing files need `overwrite=true` and a prior `read` of the file; one page is
-enough, the whole file is not needed. If the file changed on disk since that
+enough, the whole file is not needed. A read earlier in this session counts
+after js restarts on it. If the file changed on disk since that
 read, the overwrite is refused; the error names both hashes and shows the diff
 from what you read to what is there now, and a retry after it goes through.
+Passing `expected_hash` (the hash a read or write result printed) replaces the
+read: a match overwrites, a mismatch names both hashes and writes nothing.
 {{/if}}
 {{#unless read}}
 Existing files cannot be overwritten on this surface: that needs a prior read of
