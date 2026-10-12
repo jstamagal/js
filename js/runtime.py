@@ -529,7 +529,7 @@ def _show_trace(telemetry: Telemetry, text: str) -> None:
             sys.stdout.flush()
         write_plain = getattr(sink, "write_plain", None)
         if callable(write_plain):
-            write_plain(text)
+            write_plain(display.for_transcript(text))
 
 
 def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
@@ -537,7 +537,7 @@ def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: st
     settings = _tool_settings(tool_context)
     _show_trace(telemetry, display.render_tool_call(
         name, args, display.tools_level(settings),
-        preview=display.preview_lines(settings), malformed=malformed,
+        preview=display.preview_lines(settings), malformed=malformed, settings=settings,
     ))
 
 
@@ -549,11 +549,12 @@ def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: 
     level = display.tools_level(settings)
     preview = display.preview_lines(settings)
     call = (
-        display.render_tool_call(name, args, level, preview=preview, malformed=malformed)
+        display.render_tool_call(name, args, level, preview=preview, malformed=malformed,
+                                 settings=settings)
         if with_call else ""
     )
     _show_trace(telemetry, call + display.render_tool_result(
-        name, result, level, preview=preview, args=args,
+        name, result, level, preview=preview, args=args, settings=settings,
     ))
 
 

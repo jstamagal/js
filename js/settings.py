@@ -148,6 +148,26 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Render assistant Markdown on a terminal: finished blocks are "
                 "highlighted once, the open block stays live. Off writes the text "
                 "as it arrives. Output that is not a terminal is always plain text."),
+    SettingSpec("theme.accent", "str",
+                "Tool name and the mark of a running call in a tool exchange, #rrggbb."),
+    SettingSpec("theme.ok", "str",
+                "Mark of a finished call in a tool exchange, #rrggbb."),
+    SettingSpec("theme.error", "str",
+                "Mark of a failed call and error text in a tool exchange, #rrggbb."),
+    SettingSpec("theme.warn", "str",
+                "Standard error lines in a tool exchange, #rrggbb."),
+    SettingSpec("theme.dim", "str",
+                "Arguments, line numbers and metrics in a tool exchange, #rrggbb."),
+    SettingSpec("theme.panel", "str",
+                "Background of an output panel in a tool exchange, #rrggbb."),
+    SettingSpec("theme.panel_text", "str",
+                "Text of an output panel in a tool exchange, #rrggbb."),
+    SettingSpec("theme.added", "str",
+                "Added lines of a diff in a tool exchange, #rrggbb."),
+    SettingSpec("theme.removed", "str",
+                "Removed lines of a diff in a tool exchange, #rrggbb."),
+    SettingSpec("theme.code", "str",
+                "Inline code in an answer, drawn on theme.panel, #rrggbb."),
     SettingSpec("ui.resume_exchanges", "int",
                 "Exchanges of a resumed session the REPL shows before its prompt, "
                 "drawn as a turn draws them. 0 shows none."),
@@ -602,7 +622,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if _providers.get_provider(text) is None:
             return None, msgs.UNKNOWN_PROVIDER_ID.text(provider=text)
         return text, None
-    if spec.key in {"ui.status_bg", "ui.status_fg"} and not is_hex_colour(text):
+    if (spec.key in {"ui.status_bg", "ui.status_fg"} or spec.key.startswith("theme.")) and not is_hex_colour(text):
         return None, msgs.EXPECTED_COLOUR.text(value=text)
     if spec.key == "ui.editing_mode":
         if text not in ("emacs", "vi"):

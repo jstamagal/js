@@ -3525,7 +3525,7 @@ def _resume_view(state: dict, width: int) -> str:
     return display_mod.render_exchanges(
         state["messages"], count if isinstance(count, int) else 0, width=width,
         level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
-        markdown=display_mod.markdown_enabled(live),
+        markdown=display_mod.markdown_enabled(live), settings=live,
     )
 
 

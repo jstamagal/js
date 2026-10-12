@@ -24,6 +24,16 @@ set ui.status_bg #00007f
 set ui.status_fg #ffffff
 set ui.tools 1
 set ui.tools_preview_lines 12
+set theme.accent #4aa5ff
+set theme.ok #2fd6a0
+set theme.error #ff5f87
+set theme.warn #e5c07b
+set theme.dim #858392
+set theme.panel #2d2c35
+set theme.panel_text #bfbcc8
+set theme.added #2fd6a0
+set theme.removed #ff5f87
+set theme.code #ff5f87
 set ui.markdown on
 set ui.resume_exchanges 3
 set ui.editing_mode emacs

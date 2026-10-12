@@ -959,7 +959,7 @@ STATUS_CACHE = Message("cache {pct}%")
 # --- Tool exchanges ----------------------------------------------------------
 
 TOOL_ARGS_UNPARSED = Message("<arguments are not a JSON object>")
-TOOL_MORE_LINES = Message("... +{count} lines")
+TOOL_MORE_LINES = Message("… ({count} lines hidden)")
 
 # --- The kernel panel --------------------------------------------------------
 
