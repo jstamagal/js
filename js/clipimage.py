@@ -29,6 +29,8 @@ from .toolkit.fs import _detect_visual_mime
 
 WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")
 X11_COMMAND = ("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
+# Over ssh there is no display; kitty forwards its clipboard through the tty.
+KITTY_COMMAND = ("kitten", "clipboard", "-g", "-m", "image/png", "/dev/stdout")
 READ_TIMEOUT_S = 5.0
 # A name without a suffix, so the paste check takes the mime type from the bytes.
 _DETECT_NAME = Path("clipboard")
@@ -79,7 +81,8 @@ def placeholders(text: str) -> list[str]:
 def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = None) -> list[str] | None:
     """The command that writes the clipboard image to stdout:
     `ui.paste_image_command` when set, else wl-paste under Wayland, else xclip
-    under X11. None when there is no clipboard (no display server)."""
+    under X11, else kitten inside a kitty terminal (ssh). None when there is
+    no clipboard."""
     configured = _settings.knob(settings, "ui.paste_image_command")
     if configured:
         # Raises ValueError on an unbalanced quote; read_image reports it.
@@ -89,7 +92,18 @@ def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = 
         return list(WAYLAND_COMMAND)
     if env.get("DISPLAY"):
         return list(X11_COMMAND)
+    if env.get("TERM") == "xterm-kitty":
+        return list(KITTY_COMMAND)
     return None
+
+
+def uses_terminal(settings: Mapping | None, env: Mapping[str, str] | None = None) -> bool:
+    """True when the clipboard command talks through the tty, so the input
+    app must release it first."""
+    try:
+        return clipboard_command(settings, env) == list(KITTY_COMMAND)
+    except ValueError:
+        return False
 
 
 def read_image(
@@ -148,7 +162,10 @@ def _bindings_for(key: str, get_settings: Callable[[], Mapping | None]) -> KeyBi
         buffer = event.current_buffer
         settings = get_settings()
         try:
-            data = await asyncio.get_running_loop().run_in_executor(None, read_image, settings)
+            if uses_terminal(settings):
+                data = await run_in_terminal(lambda: read_image(settings), in_executor=True)
+            else:
+                data = await asyncio.get_running_loop().run_in_executor(None, read_image, settings)
         except ClipboardError as exc:
             await _say(event.app, exc)
             return

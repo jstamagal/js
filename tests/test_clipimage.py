@@ -102,9 +102,18 @@ def test_wayland_reads_with_wl_paste_and_x11_with_xclip():
 
 def test_no_display_server_means_no_clipboard():
     assert clipimage.clipboard_command({}, {}) is None
+    assert clipimage.clipboard_command({}, {"TERM": "xterm-256color"}) is None
     with pytest.raises(clipimage.ClipboardError) as err:
         clipimage.read_image({}, env={})
     assert err.value.message is msgs.CLIPBOARD_NONE
+
+
+def test_kitty_over_ssh_reads_through_the_terminal():
+    env = {"TERM": "xterm-kitty"}
+    assert clipimage.clipboard_command({}, env) == [
+        "kitten", "clipboard", "-g", "-m", "image/png", "/dev/stdout"]
+    assert clipimage.uses_terminal({}, env)
+    assert not clipimage.uses_terminal({}, {"TERM": "xterm-kitty", "WAYLAND_DISPLAY": "wayland-1"})
 
 
 def test_configured_command_wins_over_the_display(tmp_path):

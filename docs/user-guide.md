@@ -519,7 +519,10 @@ with an `@path` token in your line (quote spaces: `@"my file.png"`).
 In the REPL, **Ctrl-V** pastes the image on the clipboard: `[image #N]` goes in
 the line at the cursor, and the image is sent with the line like an `@path`
 image. js reads it with `wl-paste --type image/png` under Wayland and
-`xclip -selection clipboard -t image/png -o` under X11; `ui.paste_image_command`
+`xclip -selection clipboard -t image/png -o` under X11, and over ssh inside a
+kitty terminal with `kitten clipboard -g -m image/png /dev/stdout`, which asks
+the kitty on your desk for its clipboard (kitty may show a permission prompt;
+see its `clipboard_control`); `ui.paste_image_command`
 names another command that prints the image, and `ui.paste_image_key` moves the
 key (`/set ui.paste_image_key escape v` for Alt-V). With no clipboard, such as
 on the Linux console, the key prints one line and the input line stays as it
