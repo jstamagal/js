@@ -134,6 +134,12 @@ def _claude_version(name: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
+def claude_model(model_name: str) -> bool:
+    """True for a Claude model id, whatever provider prefix it carries."""
+    name = model_name.lower()
+    return "fable" in name or "mythos" in name or _CLAUDE_VERSION.search(name) is not None
+
+
 def anthropic_adaptive(model_name: str) -> bool:
     """True when the model takes adaptive thinking with an effort level."""
     name = model_name.lower()

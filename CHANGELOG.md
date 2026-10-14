@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **A Claude model behind an OpenAI-shaped proxy shows its thinking.** Claude
+  sends no thinking text unless the request asks for it. On the Anthropic wire
+  js asks with `display: summarized`; on the OpenAI wire it asked for nothing,
+  so a Claude turn through CLIProxyAPI showed no reasoning and the session kept
+  none. A Claude model on a non-Anthropic wire now sends
+  `include_reasoning: true`, unless `provider.extra` sets it or effort is off.
+
 - **`~/.js/jsrc` is a commented file again, and `/save` edits it in place.**
   First run writes `js/jsrc.template`: every setting in sections, each with a
   written description, examples and what every level does, all commented out

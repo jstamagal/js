@@ -492,6 +492,24 @@ def test_stream_model_passes_reasoning_none(monkeypatch):
     assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
 
 
+def test_stream_model_asks_for_claude_thinking_on_the_openai_wire(monkeypatch):
+    # Claude hides its thinking unless the request asks for it, so a Claude
+    # model behind an OpenAI-shaped proxy showed and kept no reasoning at all.
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
+    model_client.stream_model(
+        model_id="claude-opus-5-5",
+        provider_id="openai",
+        provider_base_url="http://localhost:8999/v1",
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=64,
+        reasoning_effort=None,
+        on_text=lambda _s: None,
+    )
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "extra_body": {"include_reasoning": True}}
+
+
 def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body(monkeypatch):
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(

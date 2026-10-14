@@ -1251,6 +1251,14 @@ async def _stream_with_model(
     if is_deepseek_wire and reasoning_effort != "none":
         extra_body.setdefault("max_reasoning_tokens", 32_000)
 
+    # Claude omits its thinking text unless the request asks for it. On the
+    # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
+    # behind an OpenAI-shaped proxy (CLIProxyAPI) the ask is include_reasoning,
+    # which the proxy maps onto the same display. Without it a Claude turn shows
+    # no reasoning and the session keeps none to replay.
+    if not is_anthropic_wire and reasoning.claude_model(model_name) and reasoning_effort != "none":
+        extra_body.setdefault("include_reasoning", True)
+
     # Prompt caching. Every turn resends the whole conversation, so the prefix it
     # shares with the previous turn is the bulk of each request, and the three
     # providers in use want three different things:
