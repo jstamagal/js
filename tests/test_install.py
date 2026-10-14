@@ -183,6 +183,17 @@ def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tm
     assert bare.read_text(encoding="utf-8") == "set ui.net 2\nset model.id mimo/mimo-v3\n"
 
 
+def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
+    jsrc = tmp_path / "jsrc"
+    settings.ensure_user_jsrc(jsrc)
+    before = jsrc.read_text(encoding="utf-8").splitlines()
+    settings.write_model_id(jsrc, "mimo/mimo-v3")
+    after = jsrc.read_text(encoding="utf-8").splitlines()
+
+    line = f"#set model.id {settings.default_value('model.id')}"
+    assert after == [("set model.id mimo/mimo-v3" if text == line else text) for text in before]
+
+
 # --- without a terminal -------------------------------------------------------------
 
 

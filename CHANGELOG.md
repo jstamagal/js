@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`~/.js/jsrc` is a commented file again, and `/save` edits it in place.**
+  First run writes `js/jsrc.template`: every setting in sections, each with a
+  written description, examples and what every level does, all commented out
+  at its stock value. `/save` used to replace the whole file with one line per
+  setting and copy the old one to `jsrc.bak`; that wiped every comment the
+  user had and left a backup nobody asked for. It now uncomments the line of
+  each setting not at its stock value (rewriting it when it is already live),
+  comments out a live line set back to stock, appends new `on` and `alias`
+  lines, and leaves every other line alone. No backup is written. Picking a
+  default model in the model picker uncomments `model.id` the same way
+  instead of appending a second line.
+
 - **Provider resolution is read once, not once per model call.** The
   models.dev provider table and `logins.toml` were re-read and re-parsed on
   every routing lookup, several times per request; a third of a tool-using

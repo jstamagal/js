@@ -138,19 +138,31 @@ def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path)
     assert f"{path}:2" in str(raised.value)
 
 
-def test_first_run_writes_a_user_jsrc_with_every_setting_and_leaves_an_existing_one(monkeypatch, tmp_path):
+def test_first_run_writes_the_commented_template_and_leaves_an_existing_jsrc(monkeypatch, tmp_path):
     project = _isolated_home(monkeypatch, tmp_path)
     monkeypatch.chdir(project)
     user = tmp_path / "home" / ".js" / "jsrc"
 
     assert cli.main(["--list"]) == 0
-    written = user.read_text(encoding="utf-8")
-    assert sorted(key.lstrip("-") for key in _set_lines(written)) == sorted(spec.key for spec in settings.REGISTRY)
+    assert user.read_text(encoding="utf-8") == settings.JSRC_TEMPLATE.read_text(encoding="utf-8")
     assert settings.collect_settings(config_paths=[user], env={}) == settings.seed_defaults()
 
     user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
     assert cli.main(["--list"]) == 0
     assert user.read_text(encoding="utf-8") == "set limits.max_read_lines 33\n"
+
+
+def test_the_template_lists_every_setting_once_commented_at_its_stock_value():
+    seen = []
+    for line in settings.JSRC_TEMPLATE.read_text(encoding="utf-8").splitlines():
+        assert not line.strip() or line.startswith("#"), line
+        if line.startswith("#set "):
+            body = line[1:]
+            seen.append(body.split()[1].lstrip("-"))
+            store = settings.seed_defaults()
+            assert setcmd.apply_config_line(store, body, baseline=settings.seed_defaults()).error is None
+            assert store == settings.seed_defaults(), line
+    assert sorted(seen) == sorted(spec.key for spec in settings.REGISTRY)
 
 
 def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
@@ -222,21 +234,37 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     assert reloaded.max_read_lines == 33
 
 
-def test_save_writes_one_line_per_setting_and_reloads_to_the_same_values(tmp_path):
-    live = settings.seed_defaults()
-    setcmd.set_command(live, "-limits.max_read_lines")
-    setcmd.set_command(live, "limits.fetch_timeout_s 77")
+def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path):
     target = tmp_path / "jsrc"
+    settings.ensure_user_jsrc(target)
+    target.write_text(target.read_text(encoding="utf-8") + "# my note\n", encoding="utf-8")
+    before = target.read_text(encoding="utf-8").splitlines()
+    live = settings.seed_defaults()
+    setcmd.set_command(live, "limits.fetch_timeout_s 77")
+    setcmd.set_command(live, "provider.id deepseek")
 
-    count, _backup = settings.save_settings_to_jsrc(target, live, stamp="t")
-    reloaded = settings.collect_settings(config_paths=[target], env={})
-    expected = settings.seed_defaults()
-    expected["limits"]["fetch_timeout_s"] = 77
+    assert settings.save_settings_to_jsrc(target, live) == 2
+    after = target.read_text(encoding="utf-8").splitlines()
+    changed = {before[i]: after[i] for i in range(len(before)) if before[i] != after[i]}
 
-    assert count == len(settings.REGISTRY)
-    assert sorted(key.lstrip("-") for key in _set_lines(target.read_text(encoding="utf-8"))) == sorted(
-        spec.key for spec in settings.REGISTRY)
-    assert reloaded == expected
+    assert len(after) == len(before)
+    assert changed == {
+        f"#set limits.fetch_timeout_s {settings.default_value('limits.fetch_timeout_s')}": "set limits.fetch_timeout_s 77",
+        "#set -provider.id": "set provider.id deepseek",
+    }
+    assert settings.collect_settings(config_paths=[target], env={}) == live
+    assert [path.name for path in tmp_path.glob("jsrc*")] == ["jsrc"]
+
+
+def test_save_comments_out_a_setting_set_back_to_its_stock_value(tmp_path):
+    target = tmp_path / "jsrc"
+    target.write_text("# mine\nset limits.fetch_timeout_s 77\nset ui.net 0\n", encoding="utf-8")
+    live = settings.seed_defaults()
+    setcmd.set_command(live, "ui.net 0")
+
+    assert settings.save_settings_to_jsrc(target, live) == 1
+    assert target.read_text(encoding="utf-8") == "# mine\n#set limits.fetch_timeout_s 77\nset ui.net 0\n"
+    assert settings.save_settings_to_jsrc(target, live) == 0
 
 
 def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):

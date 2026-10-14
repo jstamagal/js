@@ -110,7 +110,7 @@ REPL commands:
 /models [max]                  list available models from the active provider
 /set [key [val]]              list settings, show one, or change one
 /show [key]                   list all current config values or one key
-/save                         rewrite the global jsrc from the live state
+/save                         write your changed settings into the global jsrc
 /load <file>                  run each line of a file as a command (also /source)
 /on [event handler]           list or register event hooks
 /alias [name [command]]       list, show or define a command alias
@@ -216,11 +216,13 @@ Review $1. Focus on ${2:-correctness}; list findings worst first.
 > /review js/cli.py "error paths"
 ```
 
-`/save` replaces the global jsrc with everything the session holds: every
-setting at its live value, `on` handlers, and aliases. On the next start
-the settings layer applies the `set` lines (and a setting's short name, e.g.
-`model X` is `set model X`) under env and `--extra`; the REPL then runs every
-other jsrc line through the command table.
+`/save` writes into the global jsrc, in place: each setting not at its stock
+value gets its line uncommented with your value, a live line for a setting
+back at stock is commented out, and `on` handlers and aliases not yet in the
+file are appended. Every other line stays as it is, and no backup is made. On
+the next start the settings layer applies the `set` lines (and a setting's
+short name, e.g. `model X` is `set model X`) under env and `--extra`; the REPL
+then runs every other jsrc line through the command table.
 
 `/cd DIR` moves the session: js's working directory and the tools' move to
 `DIR`, and the next user message carries one `<js-reminder>` saying the working

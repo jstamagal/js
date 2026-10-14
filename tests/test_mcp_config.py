@@ -123,12 +123,10 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     assert result.error is None
     path = tmp_path / "jsrc"
 
-    count, backup = settings.save_settings_to_jsrc(path, live, stamp="test")
+    settings.save_settings_to_jsrc(path, live)
     saved = path.read_text(encoding="utf-8")
     reloaded = settings.collect_settings(config_paths=[path], env={})
 
-    assert count == len(settings.REGISTRY)
-    assert backup is None
     assert ENV_SECRET in saved and HEADER_SECRET in saved
     assert reloaded["mcp"]["servers"] == _servers()
 

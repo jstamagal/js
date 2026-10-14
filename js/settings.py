@@ -1034,7 +1034,7 @@ def collect_settings(
 
 
 # ---------------------------------------------------------------------------
-# /save — snapshot the live settings back into a jsrc set-script
+# /save — write the changed settings into the user jsrc, in place
 # ---------------------------------------------------------------------------
 
 def _config_line_value(spec: SettingSpec, value: Any) -> str:
@@ -1047,18 +1047,72 @@ def _config_line_value(spec: SettingSpec, value: Any) -> str:
     return str(value)
 
 
-def settings_lines(settings: dict) -> list[str]:
-    """One line per registered setting, in REGISTRY order: `set <key> <value>`
-    for its value in ``settings``, `set -<key>` when it holds none. Secrets are
-    written verbatim."""
-    lines: list[str] = []
-    for spec in REGISTRY:
-        value = get_dotted(settings, spec.path)
-        if value is None or value == "":
-            lines.append(f"set -{spec.key}")
-        else:
-            lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
-    return lines
+def _set_line(spec: SettingSpec, value: Any) -> str:
+    """`set <key> <value>`, or `set -<key>` when ``value`` is empty."""
+    if value is None or value == "":
+        return f"set -{spec.key}"
+    return f"set {spec.key} {_config_line_value(spec, value)}"
+
+
+# The commented user jsrc js writes on first run: every setting at its stock
+# value under a description, all of it commented out.
+JSRC_TEMPLATE = Path(__file__).with_name("jsrc.template")
+
+
+def _jsrc_key(line: str) -> tuple[str | None, bool]:
+    """The setting a jsrc line sets, and whether the line is live. A commented
+    `#set <setting> ...` line names its setting too, as not live; any other
+    comment is prose and names nothing."""
+    from . import setcmd  # lazy: setcmd imports this module
+
+    body = line.strip()
+    live = not body.startswith("#")
+    if not live and not body.startswith("#set "):
+        return None, False
+    parsed = setcmd.split_command(body if live else body[1:])
+    if parsed is None or not setcmd.config_owns(parsed[0]):
+        return None, False
+    verb, arg = parsed
+    name = arg.split(maxsplit=1)[0] if verb == "set" and arg else verb
+    spec = spec_for(name.lstrip("-"))
+    return (spec.key if spec else None), live
+
+
+def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str]) -> int:
+    """Edit the jsrc at ``path`` in place. ``wanted`` maps a setting to the
+    line it should have, or to None to comment its live line out. A setting
+    with a line rewrites its live line, else uncomments its `#set` line, else
+    is appended. ``extra_lines`` not in the file yet are appended. Every other
+    line is left alone. Returns how many lines changed."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    keyed = [_jsrc_key(line) for line in lines]
+    live = {key for key, is_live in keyed if key and is_live}
+    placed: set[str] = set()
+    changed = 0
+    for i, (key, is_live) in enumerate(keyed):
+        if key not in wanted:
+            continue
+        line = wanted[key]
+        if line is None:
+            if is_live:
+                lines[i] = "#" + lines[i]
+                changed += 1
+            continue
+        if key in placed or (not is_live and key in live):
+            continue
+        placed.add(key)
+        if lines[i].strip() != line:
+            lines[i] = line
+            changed += 1
+    tail = [line for key, line in wanted.items() if line is not None and key not in placed]
+    present = {line.strip() for line in lines}
+    tail += [line for line in extra_lines if line.strip() not in present]
+    lines += tail
+    changed += len(tail)
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return changed
 
 
 def save_settings_to_jsrc(
@@ -1066,64 +1120,33 @@ def save_settings_to_jsrc(
     settings: dict,
     *,
     extra_lines: list[str] | None = None,
-    stamp: str | None = None,
-    source: str = "/save",
-) -> tuple[int, Path | None]:
-    """Replace ``path`` with a jsrc script holding every registered setting's
-    value in ``settings``, followed by ``extra_lines`` (other commands to
-    replay, e.g. `on` and `alias` lines).
-
-    An existing file is copied to ``<name>.bak`` beside itself first. Returns
-    ``(line_count, backup_path_or_None)``."""
-    lines = [*settings_lines(settings), *(extra_lines or [])]
-    backup: Path | None = None
-    if path.exists():
-        backup = path.with_name(path.name + ".bak")
-        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    if stamp is None:
-        from datetime import datetime
-
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    header = [
-        f"# js config — written by {source} on {stamp}.",
-        "# Each non-comment line is a command: one `set` line per setting, then",
-        "# handlers and aliases. `set -<key>` leaves a setting unset.",
-        "",
-    ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join([*header, *lines]) + "\n", encoding="utf-8")
-    return len(lines), backup
+) -> int:
+    """Write ``settings`` into the jsrc at ``path``, editing it in place: a
+    setting not at its stock value gets its line (`_write_jsrc_lines`), a
+    setting back at its stock value has its live line commented out.
+    ``extra_lines`` are `on` and `alias` lines. No copy of the file is made.
+    Returns how many lines changed."""
+    wanted: dict[str, str | None] = {}
+    for spec in REGISTRY:
+        value = get_dotted(settings, spec.path)
+        if value == spec.default or (value in (None, "") and spec.default in (None, "")):
+            wanted[spec.key] = None
+        else:
+            wanted[spec.key] = _set_line(spec, value)
+    return _write_jsrc_lines(path, wanted, extra_lines or [])
 
 
 def ensure_user_jsrc(path: Path) -> bool:
-    """Write ``path`` with every setting at its `js/jsrc` value when there is no
-    file there. Returns whether it wrote one."""
+    """Copy `JSRC_TEMPLATE` to ``path`` when there is no file there. Returns
+    whether it wrote one."""
     if path.exists():
         return False
-    save_settings_to_jsrc(path, seed_defaults(), source="js on first run")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(JSRC_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
     return True
 
 
-def _sets_model_id(line: str) -> bool:
-    """Whether a jsrc line is `set model.id ...` or `set -model.id`."""
-    body = line.strip()
-    if not body or body.startswith("#"):
-        return False
-    parts = body.split(maxsplit=2)
-    return len(parts) >= 2 and parts[0].lower() == "set" and parts[1] in ("model.id", "-model.id")
-
-
 def write_model_id(path: Path, model_id: str) -> None:
-    """Make ``model_id`` the `model.id` the jsrc at ``path`` sets: each line
-    that sets or unsets it becomes `set model.id <model_id>`, or one is
-    appended. The rest of the file is left as it is. Raises OSError."""
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
-    replacement = f"set model.id {model_id}\n"
-    new_lines = [replacement if _sets_model_id(line) else line for line in lines]
-    if replacement not in new_lines:
-        if new_lines and not new_lines[-1].endswith("\n"):
-            new_lines[-1] += "\n"
-        new_lines.append(replacement)
-    if new_lines != lines:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(new_lines), encoding="utf-8")
+    """Make ``model_id`` the `model.id` the jsrc at ``path`` sets, in place
+    (`_write_jsrc_lines`). Raises OSError."""
+    _write_jsrc_lines(path, {"model.id": f"set model.id {model_id}"}, [])

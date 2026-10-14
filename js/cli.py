@@ -1601,21 +1601,18 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
 
 
 def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
-    """Replace the global jsrc with everything resident: every setting at its
-    live value, `on` handlers, aliases."""
+    """Write the changed settings, `on` handlers and aliases into the global
+    jsrc, editing it in place."""
     eff = _effective_settings_snapshot(cfg, state)
     hooks = state.get("events")
     extra = setcmd.event_lines(hooks) if hooks is not None else []
     extra += [f"alias {name} {body}" for name, body in (state.get("aliases") or {}).items()]
     path = _paths.global_config_file()
     try:
-        count, backup = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
+        count = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
     except OSError as exc:
         return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
-    if backup is not None:
-        msgs.say(msgs.SAVED_WITH_BACKUP, lines=msgs.plural(count, "line"), path=path, backup=backup.name)
-    else:
-        msgs.say(msgs.SAVED, lines=msgs.plural(count, "line"), path=path)
+    msgs.say(msgs.SAVED, lines=msgs.plural(count, "line"), path=path)
     return None
 
 

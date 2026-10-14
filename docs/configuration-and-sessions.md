@@ -27,13 +27,15 @@ lives. A setting it leaves unset is written `set -<key>`. If `js/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
-When there is no `~/.js/jsrc`, js writes one on startup: one line per registered
-setting at its `js/jsrc` value. From then on that file sets every setting, so a
-number changed in `js/jsrc` does not reach a box that already has one; a setting
-registered after the file was written takes its `js/jsrc` value. `/save`
-replaces the file with every setting at its live value (`set -<key>` for one
-that holds none), then the `on` handlers and aliases, and keeps the old file as
-`jsrc.bak`.
+When there is no `~/.js/jsrc`, js writes one on startup, a copy of
+`js/jsrc.template`: every setting in sections, each described with examples,
+all commented out at its stock value. Nothing in it is live, so a default
+changed in `js/jsrc` still reaches the box. `/save` edits the file in place:
+a setting not at its stock value gets its line uncommented with the live value
+(or appended, when the file has no line for it), a live line for a setting back
+at stock is commented out, and `on` handlers and aliases not in the file yet
+are appended. Every other line is left alone and no backup is made. Picking a
+default model in the model picker writes `model.id` the same way.
 
 `provider.id`, `provider.base_url`, and `provider.api_key` are unset in
 `js/jsrc`. When `provider.id` is set, the provider is constructed explicitly with
@@ -257,7 +259,7 @@ project.
 
 ```text
 ~/.js/
-  jsrc                   # the user layer; js writes it on first run, /save replaces it
+  jsrc                   # the user layer; js writes it on first run, /save edits it in place
   .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
