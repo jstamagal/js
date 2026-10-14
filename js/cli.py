@@ -4182,6 +4182,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.text())
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
                         help=msgs.OPT_IM_A_PUSSY.text())
+    parser.add_argument("-i", "--no-shell-history", dest="no_shell_history", action="store_true",
+                        help=msgs.OPT_NO_SHELL_HISTORY.text())
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
                         help=msgs.OPT_PRINTONLY.text())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
@@ -4369,6 +4371,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # Inline code runs by default now; the opt-out flag turns it off for this
         # run via the same env knob the config layer reads.
         os.environ["JS_ALLOW_INLINE_CODE"] = "0"
+    if args.no_shell_history:
+        # envctx reads this; 0 drops its recent_shell block.
+        os.environ["ENVCTX_HIST"] = "0"
     # Past the machine-consumed introspection early-exits: this is a real run, so
     # surface any missing helper binary once (never crash, never block startup).
     _warn_missing_binaries()

@@ -357,6 +357,7 @@ SHORT_HELP = Message(
     "  -a NAME     Agent profile: ~/.js/agents/NAME\n"
     "  -m MODEL    Provider/model, e.g. openai-codex/gpt-5.6-sol\n"
     "  -r EFFORT   off|minimal|low|medium|high|xhigh|max\n"
+    "  -i          Incognito: keep your shell history out of the prompt.\n"
     "\n"
     "STATE: sessions are saved by default. A driven agent normally wants that.\n"
     "  -s NAME     Create or resume a named session.\n"
@@ -481,6 +482,9 @@ OPT_IM_A_PUSSY = Message(
     "stay as written instead of running. Inline code runs by default. Set runtime.allow_inline_code off or "
     "JS_ALLOW_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
     "always on.")
+OPT_NO_SHELL_HISTORY = Message(
+    "Keep your recent shell commands out of the prompt for this run: envctx skips its recent_shell block. "
+    "Set ENVCTX_HIST=0 in your environment to make that permanent.")
 OPT_PRINTONLY = Message(
     "Dry run: assemble what would be sent and print it instead of calling the model, then exit. "
     "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark "

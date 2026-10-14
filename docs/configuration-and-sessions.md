@@ -195,6 +195,7 @@ js --reasoning off
 js --max-out 64000
 js --extra limits.task_max_depth=3
 js --im-a-pussy
+js -i                  # --no-shell-history
 js --migrate-config
 ```
 
@@ -237,6 +238,10 @@ temporary and is removed after 2 releases.
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
 files -- see [inline-directives.md](inline-directives.md).
+
+`-i` / `--no-shell-history` keeps your recent shell commands out of the system prompt
+for the run: it sets `ENVCTX_HIST=0`, and envctx then prints no
+`recent_shell` block. Export `ENVCTX_HIST=0` to make it permanent.
 
 `--reasoning off` is an explicit override. It disables reasoning even when
 `JS_REASONING` is set.

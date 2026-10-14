@@ -17,7 +17,8 @@
   it expands the prompt.
 
   Rebuilds automatically when this file is newer than the cached binary.
-  Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count.
+  Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count;
+  ENVCTX_HIST=0 leaves shell history out entirely.
 //
 set -e
 _src=$0
@@ -987,16 +988,19 @@ int main(void) {
   }
 
   /* ---- recent shell commands, scrubbed ---- */
-  {
+  /* ENVCTX_HIST=0 drops the whole block */
+  for (int once = 1; once; once = 0) {
     int want = 5;
     const char *hn = getenv("ENVCTX_HIST");
     if (hn) {
       want = atoi(hn);
-      if (want < 1)
-        want = 1;
+      if (want < 0)
+        want = 0;
       if (want > HIST_MAX)
         want = HIST_MAX;
     }
+    if (!want)
+      break;
     build_skiplist();
     struct hist h[HIST_MAX];
     int n = read_history(h, want);

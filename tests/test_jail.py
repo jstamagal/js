@@ -610,3 +610,21 @@ def test_envctx_reports_the_tool_shell_and_the_jail(tmp_path):
     # envctx writes a path under $HOME with ~.
     assert " confined=~/foo" in user_line
     assert any(line.startswith("rule:") and "~/foo" in line for line in out.splitlines())
+
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
+def test_envctx_hist_zero_leaves_shell_history_out(tmp_path):
+    envctx = Path(__file__).resolve().parent.parent / "tools" / "envctx.c"
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bash_history").write_text("echo secret-cmd\n", encoding="utf-8")
+    env = {**os.environ, "HOME": str(home), "SHELL": "/bin/bash", "CC": shutil.which("cc")}
+    env.pop("HISTFILE", None)
+
+    def run(**extra):
+        return subprocess.run(["sh", str(envctx)], env={**env, **extra},
+                              capture_output=True, text=True, timeout=60).stdout
+
+    assert "secret-cmd" in run()
+    out = run(ENVCTX_HIST="0")
+    assert "recent_shell" not in out and "secret-cmd" not in out

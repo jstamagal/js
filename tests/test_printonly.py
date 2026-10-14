@@ -5,6 +5,7 @@ printonly NEVER errors — every path degrades to a warning and still prints.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -127,6 +128,14 @@ def test_printonly_inlines_respect_opt_out(offline_agent, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "code=<!{sh printf ran}>" in out  # opted out: left literal, not run
+
+
+def test_incognito_flag_tells_envctx_to_skip_history(offline_agent, monkeypatch, capsys):
+    monkeypatch.delenv("ENVCTX_HIST", raising=False)
+    rc = cli.main(["-a", "potest", "-i", "--printonly=p"])
+    capsys.readouterr()
+    assert rc == 0
+    assert os.environ["ENVCTX_HIST"] == "0"
 
 
 def test_printonly_tools_json(offline_agent, capsys):
