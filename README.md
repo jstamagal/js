@@ -21,7 +21,7 @@ js --commit
 js --commit /path/to/repo -p "mostly housekeeping"
 ```
 
-Common built-in modes:
+Available built-in modes:
 
 ```bash
 wiki ingest ~/wiki --unit ~/wiki/inbox/source.md
