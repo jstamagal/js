@@ -79,7 +79,12 @@ def _resolve_shell(program: str) -> str | None:
 
 
 def _shell_argv(shell_path: str, command: str) -> list[str]:
-    flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
+    name = Path(shell_path).name
+    flags = ["-o", "pipefail"] if name in _PIPEFAIL_SHELLS else []
+    # zsh aborts a command whose glob matches nothing; models write bash, where
+    # `grep --include=*.log` passes the pattern through, so match bash.
+    if name == "zsh":
+        flags += ["-o", "nonomatch"]
     return [shell_path, *flags, "-c", command]
 
 
