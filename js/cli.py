@@ -2198,11 +2198,26 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
         return False
     with _LIVE_STATE_LOCK:
         handled, error = _run_command(line, state, cfg)
+    if not handled and _is_unknown_command(line):
+        handled, error = True, msgs.UNKNOWN_SLASH_COMMAND.said()
     if isinstance(error, msgs.Said):
         msgs.say_said(error)
     elif error:
         msgs.say(msgs.COMMAND_REFUSED, error=error)
     return handled
+
+
+# A slash word shaped like a command name. Anything else after the `/`
+# (`/usr/bin/python is broken`, `/README.md`, `//text`) is prose for the model.
+_COMMAND_WORD = re.compile(r"/[A-Za-z][A-Za-z0-9_-]*")
+
+
+def _is_unknown_command(line: str) -> bool:
+    """`line` names a command that is not in the table, not an alias and not
+    a markdown command."""
+    word = line.split(maxsplit=1)[0]
+    return (_COMMAND_WORD.fullmatch(word) is not None
+            and prompt_commands.expand(line, prompt_commands.discover(Path.cwd())) is None)
 
 
 def _command_completions(state: dict) -> dict[str, str | None]:

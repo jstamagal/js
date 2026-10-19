@@ -291,6 +291,7 @@ ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
+UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)
 
 # --- /help: what each command does -------------------------------------------
 

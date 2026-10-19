@@ -187,6 +187,14 @@ def test_a_built_in_command_wins_over_a_file_of_the_same_name(repl, capsys):
     assert sent == []
 
 
+def test_an_unknown_slash_command_is_refused_and_a_path_is_still_prose(repl):
+    run, _commands = repl
+
+    sent = run(["/effort", "/usr/bin/python is broken"])
+
+    assert sent == ["/usr/bin/python is broken"]
+
+
 def test_the_blocking_repl_sends_a_collapsed_paste_in_full(repl):
     run, _commands = repl
     text = "\n".join(f"row {i}" for i in range(30))
