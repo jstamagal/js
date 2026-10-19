@@ -450,7 +450,11 @@ async def partial_partition_failure():
         if len(seen) > 2:
             raise overflow()
         if "FACT_6" in seen:
-            raise ai.ProviderAPIError("server unavailable", provider="openai", is_retryable=True)
+            # The fake provider asks for immediate retries; this probe checks
+            # source preservation after exhaustion, not wall-clock backoff.
+            error = ai.ProviderAPIError("server unavailable", provider="openai", is_retryable=True)
+            error.headers = {"retry-after-ms": "0"}
+            raise error
         return result(" ".join(seen))
 
     with patch.object(MC, "stream_model_async", provider):
