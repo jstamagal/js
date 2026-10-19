@@ -108,7 +108,24 @@ class ToolRegistry:
         return replace(
             _registry_from_tools(selected, known_names=known_names),
             lazy=chosen.lazy,
+            unavailable_errors=dict(self.unavailable_errors),
             arg_bans=dict(config.bans),
+        )
+
+    def with_kernel(self, enabled: bool) -> ToolRegistry:
+        """Apply the session feature gate before publishing or discovering tools."""
+        if enabled:
+            return self
+        blocked = {"kernel", "toolbox"}
+        return replace(
+            self,
+            tools=tuple(tool for tool in self.tools if tool.name not in blocked),
+            lazy=self.lazy - blocked,
+            known_names=(self.known_names or frozenset(self.by_name)) | blocked,
+            unavailable_errors={**self.unavailable_errors, **{
+                name: "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel])."
+                for name in blocked
+            }},
         )
 
     def argument_refusal(self, name: str, args: Any) -> str | None:
@@ -239,7 +256,7 @@ class TurnToolSurface:
 
     def _unavailable_errors(self) -> dict[str, str]:
         entries = {item.name: item for item in self.catalog() if item.kind != "skill"}
-        errors = {}
+        errors = dict(self.allowed.unavailable_errors)
         for item in entries.values():
             if item.loadable:
                 errors[item.name] = (

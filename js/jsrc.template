@@ -478,6 +478,10 @@
 #            start and stop
 #set kernel.verbosity normal
 
+# Enable kernel and toolbox after installing the kernel extra:
+#   uv sync --extra kernel
+#set kernel.enabled off
+
 # Most lines shown per part of a kernel result on screen, so one huge
 # output can't scroll everything away. The model still gets all of it.
 #set kernel.render_max_lines 24

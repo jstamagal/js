@@ -11,9 +11,8 @@ From the checkout:
 just install
 ```
 
-It puts `js` and `wiki` on PATH in `~/.local/bin`, fetches js's pinned CLI
-binaries into `tools/bin` and the Chromium build `browser_probe` drives, and
-then asks for what is missing: each key js uses that is set neither in the
+It puts `js` and `wiki` on PATH in `~/.local/bin`, installs only runtime
+base dependencies, and asks for what is missing: each key js uses that is set neither in the
 environment nor in `~/.js/.env` (`TYPESAFE_API_KEY`, `TAVILY_API_KEY`,
 `EXA_API_KEY`, `SERPER_API_KEY`, `CONTEXT7_API_KEY`; an answer is saved to
 `~/.js/.env` at mode 600, Enter skips), and a default model when the configured
@@ -23,14 +22,20 @@ a provider through the login flow, and the pick is saved as `model.id` in
 it asks nothing and names what is missing.
 
 The `js` on PATH is a launcher: on every start it brings this checkout's venv in
-line with `uv.lock` (`uv sync --inexact`, a few milliseconds when nothing
+line with `uv.lock` (`uv sync --no-dev --inexact`, a few milliseconds when nothing
 changed) and runs that venv's js, so a dependency added to the project is there
 the next time js starts. It runs the venv's js directly rather than through
 `uv run`, which would put the venv first on PATH for every shell command the
 model runs. `just uninstall` removes the launcher and the `wiki` symlink.
 
-Playwright does not publish musllinux wheels, so on Alpine and other musl
-systems the `browser` extra is left out; all other js tools remain available.
+Heavy features are explicit extras: `uv sync --no-dev --extra kernel`,
+`--extra vision`, `--extra tags`, or `--extra browser` (combine flags as needed).
+Enable kernel/toolbox with `/set kernel.enabled on`; it defaults off.
+The setting is applied at turn boundaries, like other turn settings.
+Managed CLI binaries are opt-in via `just install-tool-binaries` on supported
+platforms; otherwise tools use PATH. Chromium is separately opt-in via
+`just --set browser-extra '--extra browser' install-browser`.
+Playwright has no Android or musllinux wheels; leave it out on those platforms.
 `python -m js` also runs the CLI.
 
 ## Basic Configuration

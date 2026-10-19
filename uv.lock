@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -552,34 +552,46 @@ wheels = [
 
 [[package]]
 name = "js"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "ai", extra = ["anthropic", "openai"] },
     { name = "anthropic" },
     { name = "httpx" },
     { name = "httpx2" },
-    { name = "ipykernel" },
     { name = "jsonschema" },
-    { name = "jupyter-client" },
     { name = "openai" },
     { name = "pexpect" },
-    { name = "pillow" },
     { name = "prompt-toolkit" },
     { name = "pyte" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "tomli-w" },
-    { name = "typesafe-sdk" },
 ]
 
 [package.optional-dependencies]
 browser = [
+    { name = "pillow" },
     { name = "playwright" },
 ]
+kernel = [
+    { name = "ipykernel" },
+    { name = "jupyter-client" },
+]
+tags = [
+    { name = "typesafe-sdk" },
+]
 test = [
+    { name = "ipykernel" },
+    { name = "jupyter-client" },
+    { name = "pillow" },
+    { name = "playwright" },
     { name = "pytest" },
     { name = "pytest-xdist" },
+    { name = "typesafe-sdk" },
+]
+vision = [
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -593,12 +605,14 @@ requires-dist = [
     { name = "anthropic", specifier = ">=1.5.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.12.0" },
-    { name = "ipykernel", specifier = ">=6.29" },
-    { name = "jsonschema", specifier = "==4.25.1" },
-    { name = "jupyter-client", specifier = ">=8.0" },
+    { name = "ipykernel", marker = "extra == 'kernel'", specifier = ">=6.29" },
+    { name = "js", extras = ["kernel", "vision", "tags", "browser"], marker = "extra == 'test'" },
+    { name = "js", extras = ["vision"], marker = "extra == 'browser'" },
+    { name = "jsonschema", specifier = ">=4.25.1" },
+    { name = "jupyter-client", marker = "extra == 'kernel'", specifier = ">=8.0" },
     { name = "openai", specifier = ">=3.13.0" },
     { name = "pexpect", specifier = ">=4.9.0" },
-    { name = "pillow", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'vision'", specifier = ">=10.0" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.61.0" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pyte", specifier = ">=0.8.2" },
@@ -607,9 +621,9 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "tomli-w", specifier = ">=1.0" },
-    { name = "typesafe-sdk", specifier = ">=0.7.2" },
+    { name = "typesafe-sdk", marker = "extra == 'tags'", specifier = ">=0.7.2" },
 ]
-provides-extras = ["browser", "test"]
+provides-extras = ["kernel", "vision", "tags", "browser", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15,<0.16" }]

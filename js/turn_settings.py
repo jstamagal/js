@@ -118,6 +118,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("user_agent", "tools.user_agent", text, on_context=True),
     TurnSetting("terminal_cols", "tools.terminal_cols", integer, on_context=True),
     TurnSetting("terminal_rows", "tools.terminal_rows", integer, on_context=True),
+    TurnSetting("kernel_enabled", "kernel.enabled", flag, on_context=True),
     TurnSetting("kernel_verbosity", "kernel.verbosity", choice("quiet", "normal", "verbose"), on_context=True),
     TurnSetting("kernel_render_max_lines", "kernel.render_max_lines", integer, on_context=True),
     TurnSetting("kernel_wait_seconds", "kernel.wait_seconds", integer, on_context=True),

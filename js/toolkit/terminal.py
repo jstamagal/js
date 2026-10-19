@@ -350,7 +350,10 @@ def terminal_session(
 
 
 def _draw_screen(screen: Any, path: Path) -> None:
-    from PIL import Image, ImageDraw, ImageFont
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError("terminal_snapshot requires js[vision]; run uv sync --inexact --extra vision") from exc
 
     size = 16
     font = None

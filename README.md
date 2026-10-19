@@ -29,6 +29,31 @@ wiki flow ~/wiki "ingest inbox"
 wiki flow ~/wiki "ingest all inbox units"
 ```
 
+## Optional Features / Slim Install
+
+The default package installs core chat, providers, shell, and filesystem tools.
+From this checkout, `uv sync --no-dev` installs only the base; `just install`
+creates the launcher without downloading Chromium or managed CLI binaries.
+Use system tools from PATH, or explicitly run `just install-tool-binaries` on
+supported platforms. `just sync` is the developer setup and includes test extras.
+
+Install optional features with `uv sync --no-dev --extra kernel`, `--extra vision`,
+`--extra tags`, or `--extra browser` (combine flags to retain multiple extras).
+Package installers can use `js[kernel,vision,tags,browser]` instead of `js`.
+The kernel/toolbox pair is disabled by default: `/set kernel.enabled on` enables
+it after installation; `/set kernel.enabled off` disables both, including in
+subagents on subsequent turns, and `/save` persists the setting. Like other
+turn settings, changing it does not interrupt an already-running turn or cell. `vision` supplies Pillow for terminal snapshots;
+`browser` includes it plus Playwright. Browser binaries are a separate opt-in:
+`just --set browser-extra '--extra browser' install-browser`.
+`tags` enables TypeSafe-based session tagging when configured with a key.
+
+Python 3.12+ is required. A slim install removes Jupyter/ZeroMQ and Pillow,
+not all native extensions: core tool validation needs `jsonschema`/`rpds-py`,
+and the provider SDKs need `pydantic-core` and `jiter`. On Termux/32-bit ARM,
+these may need a local Rust toolchain/build rather than an available wheel.
+`httpx2` remains required by the provider SDKs and transport error handling.
+
 ## Documentation
 
 Start here:

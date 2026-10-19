@@ -63,7 +63,10 @@ def _rgb_pixels(image: Any) -> Any:
 
 
 def _frame_metrics(png: bytes) -> tuple[dict[str, Any], Any]:
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("browser_probe image analysis requires js[browser]; run uv sync --inexact --extra browser") from exc
 
     image = Image.open(io.BytesIO(png)).convert("RGB")
     counts = Counter(

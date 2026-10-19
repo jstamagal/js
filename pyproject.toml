@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "js"
-version = "0.2.2"
+version = "0.2.3"
 description = "Personal terminal LLM harness with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,30 +12,34 @@ dependencies = [
     "openai>=3.13.0",
     "anthropic>=1.5.0",
     "httpx>=0.28.1",
-    # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
-    # not an extra: one box, one user, and a mode that half-installs is a mode
-    # that fails at the worst moment. the tools still degrade to one clear ERROR
-    # naming the package if an env somehow lacks them.
-    "ipykernel>=6.29",
-    "jupyter_client>=8.0",
     "pexpect>=4.9.0",
-    "Pillow>=10.0",
     "prompt_toolkit>=3.0",
     "pyte>=0.8.2",
     "PyYAML>=6.0",
-    # direct import in toolkit/kernel.py.
     "rich>=13.0",
     "tomli_w>=1.0",
-    "jsonschema==4.25.1",
+    # Core tool argument validation; referencing brings native rpds-py.
+    "jsonschema>=4.25.1",
     "httpx2>=2.12.0",
-    "typesafe-sdk>=0.7.2",
 ]
 
 [project.optional-dependencies]
+kernel = [
+    "ipykernel>=6.29",
+    "jupyter_client>=8.0",
+]
+vision = [
+    "Pillow>=10.0",
+]
+tags = [
+    "typesafe-sdk>=0.7.2",
+]
 browser = [
+    "js[vision]",
     "playwright>=1.61.0",
 ]
 test = [
+    "js[kernel,vision,tags,browser]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]

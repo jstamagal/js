@@ -61,10 +61,11 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 MISSING_DEPS = (
     "ERROR: the kernel tool needs the {missing} package{plural}, which "
-    "{verb} not importable in this environment. They are declared in "
-    "pyproject.toml: `just sync` puts them in this checkout's project venv, "
-    "which the `js` that `just install` puts on PATH runs and syncs on every "
-    "start. The kernel cannot run until then; every other tool is unaffected."
+    "{verb} not importable in this environment. Install js[kernel], or run "
+    "`uv sync --inexact --extra kernel` in this checkout. Enable it with "
+    "`/set kernel.enabled on`. The extra is declared in pyproject.toml; "
+    "`just sync` includes it for development, while `just install` creates the launcher. "
+    "Every other tool is unaffected."
 )
 
 # Names IPython and js put in the user namespace themselves (`tools` is the js
@@ -554,6 +555,8 @@ def missing_dependencies() -> str:
 
 def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     """(session, error, started_now). Never raises; a failure comes back as text."""
+    if not getattr(context, "kernel_enabled", False):
+        return None, "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel]).", False
     problem = missing_dependencies()
     if problem:
         return None, problem, False
@@ -993,6 +996,8 @@ def kernel(
 ) -> str:
     if context is None:
         return "ERROR: missing ToolContext"
+    if not context.kernel_enabled:
+        return "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel])."
     code = text_or_default(code)
     limit = _positive_seconds(timeout, 120.0)
     mode = text_or_default(action, "run").strip().lower() or "run"

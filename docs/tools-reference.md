@@ -547,12 +547,13 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-Both need `jupyter_client` and `ipykernel`, which are base dependencies in this
-checkout's project venv: `just sync` installs them, and the `js` that
-`just install` puts on PATH syncs that venv against `uv.lock` on every start.
-Without them the tools return one ERROR naming the missing package
-and the recipe that repairs the env js is running in, instead of a traceback,
-and the rest of js is unaffected.
+Both are gated by `kernel.enabled`, off by default. Install `js[kernel]` or run
+`uv sync --no-dev --extra kernel`, then `/set kernel.enabled on` (and `/save`
+to persist it). `/set kernel.enabled off` removes both from subsequent turns,
+including subagents; it does not interrupt an already-running turn or cell.
+Jupyter's `jupyter_client` and `ipykernel` are optional, not base dependencies.
+Without them enabled tools return an ERROR naming the missing package and
+installation extra instead of a traceback; core js remains usable.
 
 ### `kernel`
 
@@ -611,8 +612,8 @@ Cells run in the interpreter running js, never in a venv of their own: the
 `js` on PATH and `just run` both give cells this checkout's project venv. A
 module installed into some other project's venv is not importable in a cell. To
 add a package to the kernel's environment, read `sys.executable` in a cell and
-install with `uv pip install --python <that path> <package>`; it stays until
-`just sync`, which removes what `uv.lock` does not list.
+install with `uv pip install --python <that path> <package>`; inexact syncs
+preserve it, while an exact `uv sync` removes what `uv.lock` does not list.
 
 Cells run inside a live asyncio loop: `await` works at cell top level,
 `asyncio.run(...)` and `loop.run_until_complete(...)` raise `RuntimeError: This

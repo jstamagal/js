@@ -125,7 +125,9 @@ def _registry_for(cfg) -> object:
     # when the operator has locked subagent model selection it is dropped from both the
     # schema and the description rather than merely ignored.
     flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags)
+    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags).with_kernel(
+        getattr(cfg, "kernel_enabled", False)
+    )
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -1493,7 +1495,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
         _sync_model_from_live_settings(state)
     if _changed_provider_key(keys):
         _sync_provider_from_live_settings(state, keys)
-    if _changed_lock_subagent_model_key(keys):
+    if _changed_lock_subagent_model_key(keys) or "kernel.enabled" in keys:
         _sync_tool_registry_from_live_settings(cfg, state)
     for out in result.lines:
         print(out)

@@ -9,13 +9,13 @@ runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, a
 UV_PROJECT_ENVIRONMENT=/tmp/js-private-venv just sync
 ```
 
-The `browser` extra only installs the Playwright Python package; run
-`just install-browser` to fetch the Chromium build the browser-probe tests
-drive. Without it those tests skip rather than fail.
+The `test` extra includes kernel, vision, tags, and browser Python dependencies.
+Run `just --set browser-extra '--extra browser' install-browser` to fetch the
+Chromium build the browser-probe tests drive. Without it those tests skip.
 
-Playwright does not publish musllinux wheels. On Alpine or another musl system,
-omit `browser`; the browser-probe integration test skips while the rest of the
-suite remains available.
+This full developer extra requires platforms supported by Playwright (not
+Android or musl). Runtime installs do not need test extras; use
+`uv sync --no-dev` for the slim base.
 
 Use a distinct `UV_PROJECT_ENVIRONMENT` for each checkout/audit, including on
 subsequent uv/just commands. Sharing an editable environment lets another

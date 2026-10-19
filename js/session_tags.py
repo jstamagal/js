@@ -208,7 +208,10 @@ def questions(tags: list[Tag]) -> dict[str, dict[str, Any]]:
 
 def judge(state: dict[str, Any], asked: dict[str, dict[str, Any]], *, model: str) -> dict[str, float]:
     """Each question's Noul answer, from one TypeSafe System One request."""
-    from typesafe_sdk import TypeSafeClient
+    try:
+        from typesafe_sdk import TypeSafeClient
+    except ImportError as exc:
+        raise RuntimeError("session tagging requires js[tags]; run uv sync --inexact --extra tags") from exc
 
     with TypeSafeClient(model=model) as client:
         response = client.system_one(state, asked)
@@ -321,7 +324,10 @@ def _ends_sweep(error: BaseException) -> bool:
     """Whether ``error`` would fail every session alike: no connection, a
     refused key, a rate limit, a server fault. Anything else (a payload the
     service rejects, a session file that cannot be read) is that session's."""
-    import typesafe_sdk as ts
+    try:
+        import typesafe_sdk as ts
+    except ImportError:
+        return True
 
     return isinstance(error, (
         ts.TypeSafeAPIConnectionError, ts.TypeSafeAuthenticationError,

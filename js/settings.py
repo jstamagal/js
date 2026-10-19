@@ -316,6 +316,9 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("swarm.slots", "int",
                 "How many agents of an in-process swarm may be mid-turn at once; 0 is no cap."),
     # --- kernel ---
+    SettingSpec("kernel.enabled", "bool",
+                "Enable the persistent Python kernel and toolbox. Requires the kernel extra.",
+                env="JS_KERNEL_ENABLED"),
     SettingSpec("kernel.verbosity", "str",
                 "How much of each kernel/toolbox call is rendered to your terminal. "
                 "quiet: errors and interrupts only. normal: code, output, timing, "

@@ -40,7 +40,7 @@ def ctx(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.setattr(tbmod._paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
-    context = ToolContext(cwd=work)
+    context = ToolContext(cwd=work, kernel_enabled=True)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"
     context.kernel_wait_seconds = 1
@@ -1000,7 +1000,7 @@ def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=Tr
 
 def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
     _offline_kernel(monkeypatch, kmod.CellOutput(stdout="hello\n"), names=["x"])
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
 
     result = kmod.kernel(code="x = 41", context=context)
 
@@ -1011,7 +1011,7 @@ def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
 
 def test_kernel_footer_reports_an_import_only_cell(tmp_path, monkeypatch):
     _offline_kernel(monkeypatch, kmod.CellOutput(), names=["math"])
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
 
     result = kmod.kernel(code="import math", context=context)
 
@@ -1028,7 +1028,7 @@ def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
         names=["f"],
         callables={"f": "f()"},
     )
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
 
     result = kmod.kernel(code="def f(): pass", context=context)
 
@@ -1040,7 +1040,7 @@ def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
 
 def test_kernel_restart_with_empty_code_still_ends_with_the_footer(tmp_path, monkeypatch):
     _offline_kernel(monkeypatch)
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
 
     result = kmod.kernel(restart=True, context=context)
 
@@ -1052,7 +1052,7 @@ def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     session = _offline_kernel(
         monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
     )
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
 
     result = kmod.kernel(code="import os\nos._exit(1)", context=context)
 

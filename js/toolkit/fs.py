@@ -1254,7 +1254,7 @@ def _iter_files(root: Path) -> Iterable[Path]:
                 yield candidate
 
 
-_RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it."
+_RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; install the system binary or run `just install-tool-binaries` on a supported platform."
 _RG_TIMEOUT_S = 120
 # ripgrep's line for a path its walk could not open or read, e.g.
 # "rg: /a/b: IO error for operation on /a/b: Permission denied (os error 13)".
@@ -1262,7 +1262,7 @@ _RG_TIMEOUT_S = 120
 _RG_WALK_ERROR = re.compile(r"^rg: (?P<path>.+?): (?:.*: )?(?P<reason>[^:]+?) \(os error \d+\)$")
 _RG_WALK_ERRORS_SHOWN = 5
 _AST_GREP_MISSING = (
-    "ERROR: ast-grep not found in tools/bin or PATH; run `just install` to provision it."
+    "ERROR: ast-grep not found in tools/bin or PATH; install the system binary or run `just install-tool-binaries` on a supported platform."
 )
 _AST_GREP_TIMEOUT_S = 120
 _AST_GREP_LANGUAGES = (

@@ -13,10 +13,9 @@
 
 set dotenv-load
 
-# Playwright publishes glibc Linux wheels but no musllinux wheels. Keep its
-# browser backend automatic everywhere it is installable without breaking the
-# rest of js on Alpine and other musl systems.
-browser-extra := `if ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
+# Optional browser support is explicit, including on Android and musl systems.
+# Opt in with: just --set browser-extra '--extra browser' install
+browser-extra := ""
 
 # show all recipes (default when `just` is called with no argument)
 default:
@@ -41,15 +40,10 @@ commit:
 
 # ── env / deps ───────────────────────────────────────────────────────────────
 
-# sync the project env from uv.lock, including the test extra. idempotent —
-# run after a fresh clone, after pulling changed deps, or any time the env
-# feels off. Also fetches the Chromium build, since a synced env whose
-# browser_probe cannot launch is not actually synced.
+# Sync development/test dependencies; optional system binaries are explicit.
 # rebuild the env from uv.lock — the real fix for a broken venv.
 sync:
-    uv sync --extra test {{ browser-extra }}
-    just install-browser
-    just install-tool-binaries
+    uv sync --inexact --extra test {{ browser-extra }}
 
 # drop into a shell with the project env active (uv owns the venv).
 shell:
@@ -62,13 +56,13 @@ shell:
 # so a dependency added to the project is there the next time js starts. The
 # launcher execs .venv/bin/js rather than `uv run js` because uv run puts
 # .venv/bin first on PATH and sets VIRTUAL_ENV, and every shell command the
-# model runs would inherit them. Also: the wiki symlink, js's pinned CLI
-# binaries in tools/bin and the Chromium build, the PATH block in ~/.zshrc and
-# ~/.bashrc, then the questions (`python -m js.install`): each key js uses that
+# model runs would inherit them. Also: the wiki symlink and the PATH block
+# in ~/.zshrc and ~/.bashrc, then the questions
+# (`python -m js.install`): each key js uses that
 # is set neither in the environment nor in ~/.js/.env, and a default model when
 # the configured one has no provider to run on.
 #   just install   then   js -p "hi"   from anywhere
-# set js up on this box: launcher, binaries, missing keys and default model.
+# install is slim by default; optional features come from project extras.
 install:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -86,7 +80,7 @@ install:
     launcher="$bin/js"
     marker="# js launcher written by just install"
     # large wheels over a flaky link: retry the transfer before giving up.
-    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --inexact {{ browser-extra }}
+    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --no-dev --inexact {{ browser-extra }}
     # the uv tool install this recipe used to make; its shim sits where the
     # launcher goes.
     if uv tool list 2>/dev/null | grep -q '^js '; then
@@ -102,15 +96,14 @@ install:
     #!/bin/sh
     $marker in $repo.
     # Brings the checkout's venv in line with uv.lock, then runs its js.
-    "$uv_bin" sync --quiet --inexact --project "$repo" {{ browser-extra }} ||
+    "$uv_bin" sync --quiet --no-dev --inexact --project "$repo" {{ browser-extra }} ||
         echo "js launcher: uv sync failed; starting the venv as it stands" >&2
     exec "$repo/.venv/bin/js" "\$@"
     EOF
     chmod 755 "$tmp"
     mv -f "$tmp" "$launcher"
     ln -sf "$repo/tools/wiki" "$bin/wiki"
-    just install-tool-binaries
-    just install-browser
+    # Optional binaries: just install-tool-binaries; browser: just install-browser.
     # put the managed binaries on the operator's PATH too. js itself resolves
     # them by absolute path, but fd/bat/fzf are downloaded for a human and for
     # other agents to call by name, and hunting for them is the whole problem.
@@ -172,13 +165,13 @@ ensure-tools: install-tool-binaries
 # itself is a separate ~114MB download into ~/.cache/ms-playwright. Without it
 # browser_probe fails at runtime with "Executable doesn't exist" even though
 # the import succeeds. Idempotent: re-running with the browser present exits
-# immediately. Skipped on musl, where the extra is not installed at all.
+# immediately. Explicitly opt in to the browser extra before downloading.
 # download the Chromium build browser_probe drives.
 install-browser:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{ browser-extra }}" ]; then
-        echo "musl system: browser extra not installed, skipping chromium download"
+        echo "browser extra not selected; use just --set browser-extra '--extra browser' install-browser"
         exit 0
     fi
     uv run {{ browser-extra }} python -m playwright install chromium
