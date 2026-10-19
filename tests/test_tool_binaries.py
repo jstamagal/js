@@ -195,6 +195,26 @@ def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_pa
         assert (tools / name).read_text() == "owner's native build"
 
 
+def test_termux_install_adopts_native_builds_in_prefix(monkeypatch, tmp_path):
+    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+    prefix_bin = tmp_path / "usr" / "bin"
+    prefix_bin.mkdir(parents=True)
+    pkg = prefix_bin / "pkg"
+    pkg.touch()
+    for name in ("aria2c", "bat", "fd", "fzf", "rg", "ast-grep", "obscura", "obscura-worker"):
+        binary = prefix_bin / name
+        binary.write_text("native")
+        binary.chmod(0o755)
+    tools = tmp_path / "managed"
+    monkeypatch.setattr(tool_binaries.shutil, "which", lambda name: str(pkg) if name == "pkg" else None)
+    monkeypatch.setattr(tool_binaries.subprocess, "run", lambda argv, **kwargs: None)
+
+    tool_binaries.install_all(tools_dir=tools)
+
+    for name in ("ast-grep", "obscura", "obscura-worker"):
+        assert (tools / name).resolve() == prefix_bin / name
+
+
 def test_platform_error_names_missing_assets(monkeypatch) -> None:
     monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "arm64")

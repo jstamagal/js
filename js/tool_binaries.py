@@ -580,7 +580,7 @@ def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
     return str(target)
 
 
-def _provision_termux_tools(tools_dir: Path) -> None:
+def _provision_termux_tools(tools_dir: Path) -> Path:
     """Link package-owned Android executables, resolving outside managed PATH."""
     pkg = shutil.which("pkg")
     if pkg is None:
@@ -604,12 +604,54 @@ def _provision_termux_tools(tools_dir: Path) -> None:
             link = Path(staging) / name
             link.symlink_to(candidate)
             os.replace(link, target)
+    return package_bin
+
+
+# Termux tools with no verified release, keyed by the prefix of their
+# release_plan() message. All executables of a group must be present: obscura
+# spawns obscura-worker from its own directory.
+TERMUX_NATIVE_BUILDS = {"ast-grep": ("ast-grep",), "obscura/obscura-worker": ("obscura", "obscura-worker")}
+
+
+def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: list[str]) -> list[str]:
+    """Accept native builds the owner installed; return what is still missing.
+
+    A build already in ``tools_dir`` is kept as is. One in ``$PREFIX/bin`` is
+    linked into ``tools_dir`` the same way the pkg-provided tools are.
+    """
+    still_missing = []
+    for message in missing:
+        group = next((names for key, names in TERMUX_NATIVE_BUILDS.items()
+                      if message.startswith(f"{key}:")), None)
+        if group is None:
+            still_missing.append(message)
+            continue
+        sources = {}
+        for name in group:
+            managed = tools_dir / name
+            installed = package_bin / name
+            if managed.is_file() and os.access(managed, os.X_OK):
+                sources[name] = None
+            elif installed.is_file() and os.access(installed, os.X_OK):
+                sources[name] = installed
+        if len(sources) < len(group):
+            still_missing.append(message)
+            continue
+        for name, installed in sources.items():
+            if installed is None:
+                continue
+            with tempfile.TemporaryDirectory(prefix=f".{name}-", dir=tools_dir) as staging:
+                link = Path(staging) / name
+                link.symlink_to(installed)
+                os.replace(link, tools_dir / name)
+    return still_missing
 
 
 def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     specs, missing = release_plan()
     if is_termux():
-        _provision_termux_tools(tools_dir)
+        package_bin = _provision_termux_tools(tools_dir)
+        missing = _adopt_termux_native_builds(tools_dir, package_bin, missing)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
         brewed = _provision_aria2_via_brew(tools_dir)
