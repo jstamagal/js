@@ -340,10 +340,7 @@ REPORT:
 !{file ~/.js/custom/sysop.md}
 
 ---
-
 !{file ~/.js/custom/writing.md}
-
----
 
 ## BODY / EMOTION
 
