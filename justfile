@@ -152,13 +152,12 @@ install:
     fi
     "$repo/.venv/bin/python" -m js.install
 
-# Download js's pinned, checksummed subprocess binaries into tools/bin. The
-# managed aria2c performs transfers after urllib bootstraps it.
-# download js's pinned, checksummed CLI binaries into tools/bin.
+# Install CLI binaries into tools/bin: native pkg tools on Termux, otherwise
+# pinned, checksummed downloads bootstrapped by managed aria2c.
 install-tool-binaries:
     uv run {{ browser-extra }} python -m js.tool_binaries
 
-# Provision managed binaries even when system copies exist; never use a package manager.
+# Provision managed binaries, using Termux packages on Android.
 ensure-tools: install-tool-binaries
 
 # The `browser` extra installs the playwright PYTHON package; the browser

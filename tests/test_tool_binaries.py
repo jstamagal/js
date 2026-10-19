@@ -125,6 +125,76 @@ def test_resolve_binary_falls_back_to_path_before_install(tmp_path: Path, monkey
     assert tool_binaries.resolve_binary("rg") == "/path/bin/rg"
 
 
+@pytest.mark.parametrize("environment", [
+    {"TERMUX_VERSION": "0.118.3"},
+    {"PREFIX": "/data/data/com.termux/files/usr"},
+    {"PREFIX": "/data/user/0/com.termux/files/usr"},
+])
+def test_termux_plan_never_selects_desktop_artifacts(monkeypatch, environment):
+    monkeypatch.delenv("TERMUX_VERSION", raising=False)
+    monkeypatch.delenv("PREFIX", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("glibc", "2.40"))
+
+    specs, missing = tool_binaries.release_plan()
+
+    assert specs == []
+    assert any("ast-grep" in item for item in missing)
+    assert any("obscura" in item and "obscura-worker" in item for item in missing)
+
+
+@pytest.mark.parametrize("failure", [None, "pkg", "timeout", "unavailable", "missing"])
+def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_path, failure):
+    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+    prefix_bin = tmp_path / "usr" / "bin"
+    prefix_bin.mkdir(parents=True)
+    pkg = prefix_bin / "pkg"
+    pkg.touch()
+    tools = tmp_path / "managed"
+    tools.mkdir()
+    for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+        binary = prefix_bin / name
+        binary.write_text("native package")
+        binary.chmod(0o755)
+        (tools / name).write_text("stale desktop binary")
+    for name in ("ast-grep", "obscura", "obscura-worker"):
+        (tools / name).write_text("owner's native build")
+    monkeypatch.setattr(tool_binaries.shutil, "which", lambda name: str(pkg) if name == "pkg" and failure != "unavailable" else None)
+    monkeypatch.setattr(tool_binaries.urllib.request, "urlopen",
+                        lambda *_args, **_kwargs: pytest.fail("desktop download"))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] > 0
+        if failure == "pkg":
+            raise tool_binaries.subprocess.CalledProcessError(1, argv)
+        if failure == "timeout":
+            raise tool_binaries.subprocess.TimeoutExpired(argv, 600)
+        if failure == "missing":
+            (prefix_bin / "rg").unlink(missing_ok=True)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "run", run)
+    for _ in range(2):
+        with pytest.raises(tool_binaries.InstallError):
+            tool_binaries.install_all(tools_dir=tools)
+    expected = [str(pkg), "install", "-y", "aria2", "bat", "fd", "fzf", "ripgrep"]
+    assert calls == ([] if failure == "unavailable" else [expected] * 2)
+    if failure is None:
+        for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+            assert (tools / name).is_symlink()
+            assert (tools / name).resolve() == prefix_bin / name
+    else:
+        for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+            assert (tools / name).read_text() == "stale desktop binary"
+    for name in ("ast-grep", "obscura", "obscura-worker"):
+        assert (tools / name).read_text() == "owner's native build"
+
+
 def test_platform_error_names_missing_assets(monkeypatch) -> None:
     monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "arm64")

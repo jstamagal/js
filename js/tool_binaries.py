@@ -500,8 +500,21 @@ def install_download(
     return "installed"
 
 
+def is_termux() -> bool:
+    """Recognize Termux even when Android reports itself as Linux."""
+    prefix = os.environ.get("PREFIX", "").rstrip("/")
+    return bool(os.environ.get("TERMUX_VERSION")) or (
+        prefix.startswith("/data/") and prefix.endswith("/com.termux/files/usr")
+    )
+
+
 def release_plan() -> tuple[list[DownloadTool], list[str]]:
     """Select verified native assets; never substitute a compatibility layer."""
+    if is_termux():
+        return [], [
+            "ast-grep: no verified Termux release; install a native build separately",
+            "obscura/obscura-worker: no verified Termux release; install native builds separately",
+        ]
     system = platform.system()
     machine = platform.machine().lower()
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
@@ -567,8 +580,36 @@ def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
     return str(target)
 
 
+def _provision_termux_tools(tools_dir: Path) -> None:
+    """Link package-owned Android executables, resolving outside managed PATH."""
+    pkg = shutil.which("pkg")
+    if pkg is None:
+        raise InstallError("Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`")
+    packages = {"aria2": "aria2c", "bat": "bat", "fd": "fd", "fzf": "fzf", "ripgrep": "rg"}
+    try:
+        subprocess.run([pkg, "install", "-y", *packages], check=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        raise InstallError(f"Termux: pkg install failed: {exc}; no desktop fallback") from exc
+    package_bin = Path(pkg).resolve().parent
+    candidates = {name: package_bin / name for name in packages.values()}
+    for name, candidate in candidates.items():
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise InstallError(f"Termux: pkg did not provide executable {candidate}; no desktop fallback")
+        if candidate.resolve().is_relative_to(tools_dir.resolve()):
+            raise InstallError(f"Termux: package executable {candidate} resolves to managed tools")
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    for name, candidate in candidates.items():
+        target = tools_dir / name
+        with tempfile.TemporaryDirectory(prefix=f".{name}-", dir=tools_dir) as staging:
+            link = Path(staging) / name
+            link.symlink_to(candidate)
+            os.replace(link, target)
+
+
 def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
     specs, missing = release_plan()
+    if is_termux():
+        _provision_termux_tools(tools_dir)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
         brewed = _provision_aria2_via_brew(tools_dir)
