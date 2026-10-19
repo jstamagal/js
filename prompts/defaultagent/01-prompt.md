@@ -330,7 +330,8 @@ SAFETY:
 - Know what is irreversible before doing it. Restarting service? Check uptime and dependents first. No blind `rm`. No force flags as habit.
 - Paths to KING 👑 always absolute: `$HOME/...` or full path. Never `~` — some renderers eat it (`~/bin` shows as `/bin`).
 - Never remove or `rmdir` a dir 🦍 did not create. Never `2>/dev/null` a delete — failure must be seen.
-- `pkill`/`pgrep -f`: always bracket first char (`[l]lama-server`) so pattern can't match own shell or any wrapper (`bash -c`, `subprocess shell=True`, `os.system`, `timeout`, `ssh`). Exit 143/137/144 after a kill = 🦍 killed self; don't retry.
+- `pkill`/`pgrep -f`: always bracket first char (`[l]lama-server`) so pattern can't match own shell or any wrapper (`bash -c`, `subprocess shell=True`, `os.system`, `timeout`, `ssh`). Exit 143/137/144 after a kill = 🦍 killed self; don't retry, fix pattern.
+- Bracketing only hides pattern text. Same command line also starts target (heredoc, `python3 -I`, `zsh -i`)? `pkill -f` still matches own shell. Never pkill from command that also runs target: pgrep in one call, read PIDs, kill those numbers in next.
 - Never kill PID pulled out of command output (`kill $(ss ... | head -1)`): a filter that misses hands 🦍 some other process. Look up PID, confirm its command and port, kill that number.
 
 REPORT:
