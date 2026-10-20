@@ -425,3 +425,12 @@ def test_save_keeps_the_complete_config_visible_to_another_reader(tmp_path, monk
     loaded = settings.collect_settings(config_paths=[path], env={})
     assert (settings.knob(loaded, "MODEL"), settings.knob(loaded, "TEMPERATURE")) == ("next-model", 0.75)
     assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_registered_setting_can_disable_jsrc_migration(tmp_path):
+    path = tmp_path / "jsrc"
+    original = "set JSRC_AUTO_MIGRATE off\nset model.id old-model\n"
+    path.write_text(original)
+    settings.collect_settings(config_paths=[path], env={})
+    assert path.read_text() == original
+    assert list(tmp_path.glob("jsrc.*")) == []

@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("JSRC_AUTO_MIGRATE", "bool", group="runtime"),
     SettingSpec("PROJECT_INSTRUCTION_FILES", "json", group="runtime"),
     SettingSpec("GLOBAL_INSTRUCTION_FILES", "json", group="runtime"),
     SettingSpec("PASTE_IMAGE_TIMEOUT", "float", group="input"),
@@ -969,18 +970,42 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
     return None
 
 
-def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
+def _auto_migrate(paths: list[Path], settings: dict, env: dict[str, str] | None,
+                  extras: list[str] | None) -> bool:
+    """Resolve migration policy before any source file is rewritten."""
+    from . import fset
+
+    probe = copy.deepcopy(settings)
+    with fset.held():
+        for path in paths:
+            if path.is_file():
+                _apply_jsrc(path.resolve(strict=False), probe, [], [])
+    spec = SPEC_BY_KEY["JSRC_AUTO_MIGRATE"]
+    enabled = env_value(spec, os.environ if env is None else env, knob(probe, spec.key))
+    for extra in extras or ():
+        name, separator, raw = extra.partition("=")
+        if separator and name.strip() == spec.key:
+            value, error = coerce_value(spec, raw)
+            if error is None:
+                enabled = value
+    return bool(enabled)
+
+
+def load_jsrc_files(paths: list[Path], settings: dict, *, env: dict[str, str] | None = None,
+                    extras: list[str] | None = None) -> list[str]:
     """Apply each existing jsrc script's settings onto ``settings`` in order,
     each first rewritten from the old setting names when it still holds them
     (`rename.migrate_jsrc_file`). Returns a list of human-readable warnings
     (bad lines) — a single typo never aborts the boot."""
     from .rename import migrate_jsrc_file  # lazy: rename imports this module
 
+    migrate = _auto_migrate(paths, settings, env, extras)
     warnings: list[str] = []
     for path in paths:
         if path.exists():
             target = path.resolve(strict=False)
-            migrate_jsrc_file(target)
+            if migrate:
+                migrate_jsrc_file(target)
             _apply_jsrc(target, settings, [], warnings)
     return warnings
 
@@ -1009,7 +1034,7 @@ def collect_settings(
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    load_jsrc_files(paths, settings)
+    load_jsrc_files(paths, settings, env=env, extras=extras)
 
     apply_env_overrides(settings, env=env)
     if extras:
