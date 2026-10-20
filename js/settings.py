@@ -139,6 +139,12 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("BROWSE_ALLOW_PRIVATE_NETWORK", "bool", group="tools"),
+    SettingSpec("BROWSE_STEALTH", "bool", group="tools"),
+    SettingSpec("CONTEXT7_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("EXA_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("TAVILY_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("SERPER_API_KEY", "str", secret=True, group="tools"),
     SettingSpec("SHELL_KILL_ON_WAIT", "bool", group="shell"),
     SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
     SettingSpec("SHELL_PIPEFAIL", "bool", group="shell"),

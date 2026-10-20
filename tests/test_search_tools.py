@@ -486,3 +486,15 @@ def test_browse_screenshot_overwrite_can_be_undone(monkeypatch, tmp_path):
     fs.undo(str(target), context=context)
 
     assert target.read_bytes() == original
+
+
+def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    monkeypatch.setenv("SERPER_API_KEY", "legacy-key")
+    calls = _responses(monkeypatch, b'{"organic":[]}')
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SERPER_API_KEY": "configured-key"})))
+    search.serper_search("query", context=context)
+    assert calls[0][0].get_header("X-api-key") == "configured-key"

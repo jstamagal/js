@@ -2,7 +2,7 @@
 
 Four search backends and one reader, kept as separate tools so each agent's
 agent.yaml can name exactly the surface it needs. Every backend
-reads its API key from the environment at call time and fails with a plain
+reads its API key from a setting or the environment at call time and fails with a plain
 ERROR string when the key is missing, so a surface can carry a tool the
 current shell cannot use without breaking registry assembly.
 """
@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .. import paranoid
+from .. import paranoid, settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
@@ -124,8 +124,8 @@ def _json_kind(value: Any) -> str:
     return type(value).__name__
 
 
-def _key(name: str) -> str | None:
-    value = os.environ.get(name, "").strip()
+def _key(name: str, context: ToolContext) -> str | None:
+    value = (getattr(context, name.lower()) or os.environ.get(name, "")).strip()
     return value or None
 
 
@@ -177,7 +177,7 @@ def serper_search(
     query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
-    key = _key("SERPER_API_KEY")
+    key = _key("SERPER_API_KEY", context)
     if key is None:
         return "ERROR: SERPER_API_KEY is not set"
     reply = _http_json(
@@ -219,7 +219,7 @@ def tavily_search(
     query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
-    key = _key("TAVILY_API_KEY")
+    key = _key("TAVILY_API_KEY", context)
     if key is None:
         return "ERROR: TAVILY_API_KEY is not set"
     reply = _http_json(
@@ -261,7 +261,7 @@ def exa_search(
     query = text_or_default(query).strip()
     if not query:
         return "ERROR: query is required"
-    key = _key("EXA_API_KEY")
+    key = _key("EXA_API_KEY", context)
     if key is None:
         return "ERROR: EXA_API_KEY is not set"
     reply = _http_json(
@@ -339,7 +339,7 @@ def docs_search(
     if not library:
         return "ERROR: library is required"
     headers: dict[str, str] = {}
-    key = _key("CONTEXT7_API_KEY")
+    key = _key("CONTEXT7_API_KEY", context)
     if key is not None:
         headers["Authorization"] = f"Bearer {key}"
 
@@ -450,7 +450,7 @@ def _absolutize(markdown: str, base_url: str) -> str:
     return _MD_LINK.sub(_fix, markdown)
 
 
-def _obscura_status(binary: str, url: str, timeout: float) -> int | None:
+def _obscura_status(binary: str, url: str, timeout: float, context: ToolContext | None = None) -> int | None:
     """The HTTP status browse is about to render, asked with the same identity
     that will render it.
 
@@ -478,8 +478,10 @@ def _obscura_status(binary: str, url: str, timeout: float) -> int | None:
     Non-fatal by construction: any failure returns None, the render still
     happens, and the caller reports the status as unknown.
     """
-    argv = [binary, "--stealth"]
-    if _is_private_ip_literal(url):
+    argv = [binary]
+    if _settings.knob_attr(context, "browse_stealth", "BROWSE_STEALTH"):
+        argv.append("--stealth")
+    if _settings.knob_attr(context, "browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK") and _is_private_ip_literal(url):
         argv.append("--allow-private-network")
     argv += ["fetch", "--file", "-", "--timeout", str(max(1, int(timeout)))]
     try:
@@ -528,7 +530,10 @@ def browse(
     # is a coherent browser fingerprint plus TLS impersonation. Overriding its
     # user agent from here would contradict the TLS handshake it presents, which
     # is precisely the mismatch bot detection looks for.
-    argv = [binary, "--stealth", "fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    argv = [binary]
+    if context.browse_stealth:
+        argv.append("--stealth")
+    argv += ["fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
     if dump != "original":
         # obscura's adaptive default can call a page quiescent while a timer is
         # still pending. A fixed window captures common delayed SPA updates and
@@ -543,7 +548,7 @@ def browse(
         shot_path = context.resolve_path(screenshot, write=True)
         shot_path.parent.mkdir(parents=True, exist_ok=True)
         argv += ["--screenshot", str(shot_path)]
-    if _is_private_ip_literal(url):
+    if _settings.knob_attr(context, "browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK") and _is_private_ip_literal(url):
         argv.append("--allow-private-network")
     argv.append(url)
     # Learn the status before rendering. Skipped for a screenshot-only call,
@@ -551,7 +556,7 @@ def browse(
     status = (
         None
         if shot_path is not None
-        else _obscura_status(binary, url, min(10.0, float(process_timeout)))
+        else _obscura_status(binary, url, min(10.0, float(process_timeout)), context)
     )
     try:
         if shot_path is not None:

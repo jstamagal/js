@@ -121,6 +121,12 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK", flag, on_context=True),
+    TurnSetting("browse_stealth", "BROWSE_STEALTH", flag, on_context=True),
+    TurnSetting("context7_api_key", "CONTEXT7_API_KEY", text, on_context=True),
+    TurnSetting("exa_api_key", "EXA_API_KEY", text, on_context=True),
+    TurnSetting("tavily_api_key", "TAVILY_API_KEY", text, on_context=True),
+    TurnSetting("serper_api_key", "SERPER_API_KEY", text, on_context=True),
     TurnSetting("shell_kill_on_wait", "SHELL_KILL_ON_WAIT", flag, on_context=True),
     TurnSetting("shell_managed_path", "SHELL_MANAGED_PATH", flag, on_context=True),
     TurnSetting("shell_pipefail", "SHELL_PIPEFAIL", flag, on_context=True),
