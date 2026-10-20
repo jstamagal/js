@@ -327,6 +327,13 @@ class StdioTransport:
             return "[REDACTED]"
 
 
+class _HTTPPost:
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.sockets: list[socket.socket] = []
+        self.response: Any = None
+
+
 class StreamableHTTPTransport:
     """Current MCP streamable HTTP transport using only the standard library."""
 
@@ -373,6 +380,7 @@ class StreamableHTTPTransport:
         self._closing = threading.Event()
         self._closed = False
         self._pending_socks: dict[int, list[socket.socket]] = {}
+        self._post_local = threading.local()
         self._opener = urllib.request.build_opener(
             _SameOriginRedirectHandler(),
             _SocketTrackingHTTPHandler(self._track_socket),
@@ -408,14 +416,15 @@ class StreamableHTTPTransport:
             ) from None
         is_request = "method" in message and "id" in message
         async with self._send_lock:
+            post = _HTTPPost()
             request_task = asyncio.create_task(
-                asyncio.to_thread(self._post, payload, is_request), name="mcp-http-post"
+                asyncio.to_thread(self._run_post, payload, is_request, post), name="mcp-http-post"
             )
             self._request_tasks.add(request_task)
             try:
                 messages, stream = await asyncio.shield(request_task)
             except asyncio.CancelledError:
-                self._close_active_responses()
+                self._close_active_responses(post)
                 with contextlib.suppress(StreamableHTTPTransportError):
                     _messages, stream = await asyncio.shield(request_task)
                     if stream is not None:
@@ -475,6 +484,15 @@ class StreamableHTTPTransport:
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.close()
+
+    def _run_post(
+        self, payload: bytes, is_request: bool, post: _HTTPPost
+    ) -> tuple[list[dict[str, Any]], Any | None]:
+        self._post_local.current = post
+        try:
+            return self._post(payload, is_request)
+        finally:
+            del self._post_local.current
 
     def _post(
         self, payload: bytes, is_request: bool
@@ -638,10 +656,13 @@ class StreamableHTTPTransport:
             raise StreamableHTTPTransportError(self._diagnostic("request failed")) from None
         reject_response = False
         with self._active_lock:
-            if self._closing.is_set() and not allow_closing:
+            post = getattr(self._post_local, "current", None)
+            if (self._closing.is_set() and not allow_closing) or (post is not None and post.cancelled):
                 reject_response = True
             else:
                 self._active.add(response)
+                if post is not None:
+                    post.response = response
         if reject_response:
             with contextlib.suppress(Exception):
                 response.close()
@@ -787,7 +808,10 @@ class StreamableHTTPTransport:
         handle = socket.socket(fileno=os.dup(sock.fileno()))
         with self._active_lock:
             self._pending_socks.setdefault(threading.get_ident(), []).append(handle)
-            closing = self._closing.is_set()
+            post = getattr(self._post_local, "current", None)
+            if post is not None:
+                post.sockets.append(handle)
+            closing = self._closing.is_set() or (post is not None and post.cancelled)
         if closing:
             with contextlib.suppress(Exception):
                 handle.shutdown(2)
@@ -795,14 +819,22 @@ class StreamableHTTPTransport:
     def _drop_thread_sockets(self) -> None:
         with self._active_lock:
             handles = self._pending_socks.pop(threading.get_ident(), [])
+            post = getattr(self._post_local, "current", None)
+            if post is not None:
+                post.sockets.clear()
         for handle in handles:
             with contextlib.suppress(Exception):
                 handle.close()
 
-    def _close_active_responses(self) -> None:
+    def _close_active_responses(self, post: _HTTPPost | None = None) -> None:
         with self._active_lock:
-            responses = tuple(self._active)
-            handles = [h for items in self._pending_socks.values() for h in items]
+            if post is None:
+                responses = tuple(self._active)
+                handles = [h for items in self._pending_socks.values() for h in items]
+            else:
+                post.cancelled = True
+                responses = () if post.response is None else (post.response,)
+                handles = list(post.sockets)
         # Interrupt connections still connecting, tunneling, in a TLS
         # handshake, or waiting for headers; only their owning thread
         # closes the handles.

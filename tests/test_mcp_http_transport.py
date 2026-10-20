@@ -36,6 +36,7 @@ class State:
         self.post_started = threading.Event()
         self.release_post = threading.Event()
         self.post_finished = threading.Event()
+        self.long_post_followup = False
 
     def record(self, method, headers, body=None):
         with self.lock:
@@ -88,6 +89,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(payload)
                 self.wfile.flush()
+                if self.state.long_post_followup:
+                    self.state.release_post.wait(3)
+                    self.wfile.write(b'data: {"jsonrpc":"2.0","method":"still-streaming"}\n\n')
+                    self.wfile.flush()
                 self.state.stop.wait(3)
             else:
                 self._body(200, "text/event-stream; charset=utf-8", payload, session=True)
@@ -425,6 +430,33 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
 
     with server() as (state, url):
         state.delay_post_headers = True
+        run(scenario(state, url))
+
+
+def test_cancelling_one_post_preserves_another_response_stream():
+    async def scenario(state, url):
+        transport = StreamableHTTPTransport(url)
+        sending = None
+        try:
+            await transport.send(request("test/sse-long"))
+            assert (await asyncio.wait_for(transport.receive(), 1))["id"] == 1
+            state.delay_post_headers = True
+            sending = asyncio.create_task(transport.send(request(request_id=2)))
+            assert await asyncio.to_thread(state.post_started.wait, 1)
+            sending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(sending, 1)
+            state.release_post.set()
+            message = await asyncio.wait_for(transport.receive(), 1)
+            assert message["method"] == "still-streaming"
+        finally:
+            state.release_post.set()
+            if sending is not None:
+                await asyncio.gather(sending, return_exceptions=True)
+            await transport.close()
+
+    with server() as (state, url):
+        state.long_post_followup = True
         run(scenario(state, url))
 
 
