@@ -583,23 +583,24 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     return specs, missing
 
 
-def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
+def _provision_aria2_via_brew(tools_dir: Path, *, run=None) -> str | None:
     """macOS: no verified static release exists, so aria2 comes from Homebrew.
 
     Returns the installed executable path, or None when brew cannot provide it.
     """
+    runner = subprocess.run if run is None else run
     brew = shutil.which("brew")
     if brew is None:
         return None
     candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
         try:
-            subprocess.run([brew, "install", "aria2"], check=True, timeout=600)
+            runner([brew, "install", "aria2"], check=True, timeout=600)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             return None
         candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
-        prefix = subprocess.run([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
+        prefix = runner([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
         brewed = Path(prefix) / "bin" / ARIA2_EXECUTABLE
         candidate = str(brewed) if brewed.is_file() else None
     if candidate is None:
@@ -612,14 +613,15 @@ def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
     return str(target)
 
 
-def _provision_termux_tools(tools_dir: Path) -> Path:
+def _provision_termux_tools(tools_dir: Path, *, run=None) -> Path:
     """Link package-owned Android executables, resolving outside managed PATH."""
+    runner = subprocess.run if run is None else run
     pkg = shutil.which("pkg")
     if pkg is None:
         raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH.format())
     packages = {"aria2": "aria2c", "bat": "bat", "fd": "fd", "fzf": "fzf", "ripgrep": "rg"}
     try:
-        subprocess.run([pkg, "install", "-y", *packages], check=True, timeout=600)
+        runner([pkg, "install", "-y", *packages], check=True, timeout=600)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK.format(exc=exc)) from exc
     package_bin = Path(pkg).resolve().parent
@@ -679,16 +681,20 @@ def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: lis
     return still_missing
 
 
-def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
+def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None,
+                provision_termux=None, downloader=None) -> None:
+    announce = msgs.say if say is None else say
+    brew = _provision_aria2_via_brew if provision_brew is None else provision_brew
+    termux = _provision_termux_tools if provision_termux is None else provision_termux
     specs, missing = release_plan()
     if is_termux():
-        package_bin = _provision_termux_tools(tools_dir)
+        package_bin = termux(tools_dir)
         missing = _adopt_termux_native_builds(tools_dir, package_bin, missing)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
-        brewed = _provision_aria2_via_brew(tools_dir)
+        brewed = brew(tools_dir)
         if brewed is not None:
-            msgs.say(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
+            announce(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
             missing = [m for m in missing if not m.startswith("aria2:")]
         else:
             missing = [m for m in missing if not m.startswith("aria2:")] + [
@@ -708,19 +714,19 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
                 with destination.open("wb") as output:
                     shutil.copyfileobj(response, output)
 
-    msgs.say(msgs.TOOL_DIR, path=tools_dir)
+    announce(msgs.TOOL_DIR, path=tools_dir)
     for spec in specs:
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
             for _member, name, checksum in spec.companions
         ):
-            msgs.say(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
+            announce(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
                      sha=spec.executable_sha256)
             continue
-        msgs.say(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
-        state = install_download(spec, tools_dir=tools_dir, downloader=download)
-        msgs.say(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
+        announce(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
+        state = install_download(spec, tools_dir=tools_dir, downloader=download if downloader is None else downloader)
+        announce(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
                  sha=spec.executable_sha256)
     if missing:
         raise InstallError(msgs.TOOLKIT_INCOMPLETE_PREFIX.format() + "\n".join(missing))

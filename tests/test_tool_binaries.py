@@ -393,3 +393,17 @@ def test_registered_download_policy_reaches_aria2_arguments(tmp_path):
     argv = tool_binaries.aria2_argv("aria2c", "https://example.test/file", tmp_path / "partial", timeout_s=30)
     assert "--split=2" in argv
     assert "--max-tries=1" in argv
+
+
+def test_installer_accepts_provisioning_and_notice_services(monkeypatch, tmp_path, capsys):
+    provisioned, notices = [], []
+    monkeypatch.setattr(tool_binaries, "release_plan", lambda: ([], []))
+    monkeypatch.setattr(tool_binaries, "is_termux", lambda: False)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
+    def provision(path):
+        provisioned.append(path)
+        return "/assembly/aria2c"
+    tool_binaries.install_all(tools_dir=tmp_path, provision_brew=provision,
+                              say=lambda *args, **kwargs: notices.append(args))
+    assert provisioned == [tmp_path] and notices
+    assert capsys.readouterr().out == ""
