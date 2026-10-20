@@ -20,6 +20,7 @@ from typing import Any
 from . import display as _display
 from . import fset
 from . import output
+from . import settings as _settings
 from . import messages as msgs
 from . import toolkit as _toolkit
 
@@ -34,11 +35,12 @@ def strip_ansi(text: str) -> str:
 class TranscriptLogSink:
     """Thread-safe append-only transcript sink.
 
-    Every write swallows IO failures. A failing file disables the whole sink so a
-    bad log path never crashes or slows later turns with repeated errors.
+    Every write swallows IO failures. TRANSCRIPT_DISABLE_ALL_ON_ERROR decides
+    whether a failing file disables the whole sink or only that file.
     """
 
-    def __init__(self, files: list, paths: list[Path]) -> None:
+    def __init__(self, files: list, paths: list[Path], *, settings: dict | None = None) -> None:
+        self.settings = settings
         self._files = files
         self.paths = paths
         self._lock = threading.Lock()
@@ -68,7 +70,7 @@ class TranscriptLogSink:
         return cleaner.flush() if cleaner is not None else ""
 
     def _stamp(self) -> str:
-        return datetime.now().strftime("[%H:%M] ")
+        return datetime.now().strftime(_settings.knob(self.settings, "TRANSCRIPT_TIMESTAMP_FORMAT"))
 
     def _disable_locked(self) -> None:
         for f in self._files:
@@ -81,12 +83,23 @@ class TranscriptLogSink:
     def _write_locked(self, text: str) -> None:
         if not text or not self._files:
             return
-        try:
-            for f in self._files:
+        for f in list(self._files):
+            try:
                 f.write(text)
                 f.flush()
-        except Exception:
+            except Exception:
+                if self._failed_locked(f):
+                    break
+
+    def _failed_locked(self, failed: Any) -> bool:
+        """Disable failed destinations; return whether the whole sink stopped."""
+        if _settings.knob(self.settings, "TRANSCRIPT_DISABLE_ALL_ON_ERROR"):
             self._disable_locked()
+            return True
+        with contextlib.suppress(Exception):
+            failed.close()
+        self._files = [f for f in self._files if f is not failed]
+        return False
 
     def write_plain(self, text: str, *, source: str = "") -> None:
         """Write non-speaker visible text, line-prefixed with a cheap timestamp.
@@ -112,16 +125,16 @@ class TranscriptLogSink:
         self.end_speaker_stream(speaker)
 
     def write_user(self, text: str) -> None:
-        self.write_turn("USER", text)
+        self.write_turn(_settings.knob(self.settings, "TRANSCRIPT_USER_LABEL"), text)
 
     def write_assistant(self, text: str) -> None:
-        self.write_turn("APE", text)
+        self.write_turn(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"), text)
 
     def write_assistant_chunk(self, text: str) -> None:
-        self._write_speaker_chunk("APE", text)
+        self._write_speaker_chunk(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"), text)
 
     def end_assistant_stream(self) -> None:
-        self.end_speaker_stream("APE")
+        self.end_speaker_stream(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"))
 
     def _write_speaker_chunk(self, speaker: str, text: str) -> None:
         if not text:
@@ -130,7 +143,7 @@ class TranscriptLogSink:
             self._speaker_locked(speaker, self._cleaned(speaker, str(text)))
 
     def _speaker_locked(self, speaker: str, clean: str) -> None:
-        prefix = f"<{speaker}> "
+        prefix = _settings.knob(self.settings, "TRANSCRIPT_SPEAKER_FORMAT").replace("{speaker}", speaker)
         at_line_start = self._speaker_at_line_start.get(speaker, True)
         for part in clean.splitlines(keepends=True):
             if at_line_start:
@@ -152,12 +165,12 @@ class TranscriptLogSink:
 
     def flush(self) -> None:
         with self._lock:
-            for f in self._files:
+            for f in list(self._files):
                 try:
                     f.flush()
                 except Exception:
-                    self._disable_locked()
-                    break
+                    if self._failed_locked(f):
+                        break
 
     def isatty(self) -> bool:
         return False

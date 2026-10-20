@@ -81,6 +81,9 @@ branch the audit was made on; they move as the code changes.
 
 7 findings.
 
+- js-2lg.133: transcript speaker labels, prefix and timestamp formats, and
+  failure scope are registered settings with their previous values as defaults.
+  The stdio bridge dispatches log events (js-2lg.85).
 - js-2lg.85: CLI user/final-answer records, transcript capture and debug capture
   dispatch events to their log sinks. Legacy stdio capture remains as an event
   bridge so arbitrary printed diagnostics and one-shot visibility stay identical.

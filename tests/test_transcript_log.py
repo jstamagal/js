@@ -278,3 +278,28 @@ def test_transcript_stdio_capture_emits_text_to_its_sink():
 
     assert captured[0].name == "transcript_plain"
     assert dict(captured[0].fields)["text"] == "raw output\n"
+
+
+def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monkeypatch):
+    import io
+
+    class BadFile:
+        def write(self, text):
+            raise OSError("unwritable")
+
+        def close(self):
+            pass
+
+    cfg = _cfg(tmp_path, tmp_path / "transcripts")
+    cfg.settings["TRANSCRIPT_DISABLE_ALL_ON_ERROR"] = False
+    healthy = io.StringIO()
+    monkeypatch.setattr(cli, "_open_transcript_log_sink",
+                        lambda paths: transcript.TranscriptLogSink([BadFile(), healthy], paths))
+    telemetry = runtime.Telemetry(None)
+    cli._sync_transcript_sink(cfg, cfg.settings, telemetry)
+    sink = telemetry.transcript_log
+    sink.write_plain("first\n")
+    sink.write_plain("second\n")
+
+    assert "first\n" in healthy.getvalue()
+    assert "second\n" in healthy.getvalue()

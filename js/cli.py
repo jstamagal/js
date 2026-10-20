@@ -747,8 +747,11 @@ def _sync_transcript_sink(cfg: Config, live_settings: dict, telemetry: runtime.T
         desired.append(transcript_path)
     old = getattr(telemetry, "transcript_log", None)
     if isinstance(old, transcript_mod.TranscriptLogSink) and old.paths == desired:
+        old.settings = live_settings
         return
     telemetry.transcript_log = _open_transcript_log_sink(desired) if desired else None
+    if isinstance(telemetry.transcript_log, transcript_mod.TranscriptLogSink):
+        telemetry.transcript_log.settings = live_settings
     if isinstance(old, transcript_mod.TranscriptLogSink) and old is not telemetry.transcript_log:
         old.close()
 

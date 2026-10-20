@@ -238,6 +238,11 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("allow_inline_code", "INLINE_CODE", flag),
     TurnSetting("debug_autolog", "REQUEST_LOG", flag),
     TurnSetting("debug_autolog_dir", "REQUEST_LOG_DIR", optional_text),
+    TurnSetting("transcript_user_label", "TRANSCRIPT_USER_LABEL", text),
+    TurnSetting("transcript_assistant_label", "TRANSCRIPT_ASSISTANT_LABEL", text),
+    TurnSetting("transcript_speaker_format", "TRANSCRIPT_SPEAKER_FORMAT", text),
+    TurnSetting("transcript_timestamp_format", "TRANSCRIPT_TIMESTAMP_FORMAT", text),
+    TurnSetting("transcript_disable_all_on_error", "TRANSCRIPT_DISABLE_ALL_ON_ERROR", flag),
     TurnSetting("transcript_log", "TRANSCRIPT_LOG", flag),
     TurnSetting("transcript_log_dir", "TRANSCRIPT_LOG_DIR", optional_text),
 )
