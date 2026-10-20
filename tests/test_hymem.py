@@ -62,3 +62,22 @@ def test_only_memories_jev_judges_helpful_pass_most_helpful_first(monkeypatch, t
     assert hymem.search(cfg, "fix the build", tmp_path) == ["- build fix: pass -j1", "- the build needs -j1"]
     monkeypatch.setattr(hymem, "_relevance", lambda cfg, q, memories: None)
     assert hymem.search(cfg, "fix the build", tmp_path) == ["- gorilla search: chest beats"]
+
+
+def test_a_memory_whose_files_changed_after_it_was_written_says_so(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+    def commit(day):
+        (repo / "fs.py").write_text(day)
+        env = {"PATH": "/usr/bin:/bin", "GIT_COMMITTER_DATE": f"{day}T12:00:00Z", "GIT_AUTHOR_DATE": f"{day}T12:00:00Z"}
+        subprocess.run(["git", "add", "fs.py"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", day],
+                       cwd=repo, check=True, env=env)
+
+    commit("2026-10-01")
+    commit("2026-10-15")
+    root = str(repo.resolve())
+    assert hymem.changed_since(root, ["fs.py", str(repo), "~/nowhere"], "2026-10-10T00:00:00") == (1, ["fs.py"])
+    assert hymem.changed_since(root, [str(repo / "fs.py")], "2026-10-16T00:00:00") == (0, [])

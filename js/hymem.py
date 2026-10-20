@@ -8,8 +8,10 @@ its task; the `memory_search` tool searches them mid-task. A memory is passed
 on only when Jev judges it helps the task (HYMEM_RELEVANCE_MIN), or, without
 Jev, when the server scores it at HYMEM_SCORE_MIN or more. What js itself put
 in front of the model, the memory block and memory_search results, is never
-sent back to be filed. Memories are keyed
-by repository: the main checkout and its worktrees share one set. A server
+sent back to be filed. Each memory carries the date it was written and, when
+the files it names have commits since, how many, so a note that may be stale
+says so. Memories are keyed by repository: the main checkout and its
+worktrees share one set. A server
 that does not answer costs one short timeout: no memories are added, and what
 was not sent is sent by a later run."""
 
@@ -30,6 +32,7 @@ CLIP = 1500                     # chars kept of each user or assistant message s
 TOOL_CLIP = 300                 # chars kept of each tool result: lessons live in the talk, not the output
 SEARCH_TIMEOUT = 8              # seconds a search waits for the server
 ADD_TIMEOUT = 5                 # seconds an add waits; the server only queues it
+PATH_IN_TEXT = re.compile(r"(?<![\w/~.-])(?:[\w.-]+/)*[\w.-]+\.\w{1,8}(?=[\s:`'\"),;]|$)")
 BLOCK = re.compile(r"\n*<workspace_memory\b.*?</workspace_memory>\n*", re.S)
 
 
@@ -87,15 +90,52 @@ def _relevance(cfg, query: str, memories: list[str]) -> list[float] | None:
         return None
 
 
+def changed_since(repo: str, files: list, written: str) -> tuple[int, list[str]]:
+    """(commits, file names) touching ``files`` in ``repo`` after ``written``,
+    an ISO time in UTC as the server stamps it. Directories and paths outside
+    the repository are not counted."""
+    root = Path(repo)
+    paths: list[str] = []
+    for name in dict.fromkeys(files or []):
+        path = Path(str(name)).expanduser()
+        path = (path if path.is_absolute() else root / path).resolve()
+        if path.is_file() and path.is_relative_to(root) and str(path.relative_to(root)) not in paths:
+            paths.append(str(path.relative_to(root)))
+    if not paths or not written:
+        return 0, []
+    since = f"--since={written[:19].replace('T', ' ')} +0000"
+    try:
+        log = subprocess.run(["git", "log", "--format=%h", since, "--", *paths], cwd=root,
+                             capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0, []
+    commits = log.stdout.split() if log.returncode == 0 else []
+    return len(commits), [Path(p).name for p in paths] if commits else []
+
+
+def _dated(repo: str, memory: dict, text: str, written) -> str:
+    """``text`` led by when it was written and, if the files it names, in its
+    record or in its text, changed since, by how much."""
+    if not written:
+        return text
+    files = [*(memory.get("files") or []), *PATH_IN_TEXT.findall(text)]
+    commits, names = changed_since(repo, files, str(written))
+    stale = f"; {', '.join(names[:3])} changed in {commits} commit{'s' * (commits != 1)} since" if commits else ""
+    return f"(written {str(written)[:10]}{stale}) {text}"
+
+
 def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[str]:
     """One line per memory that helps ``query`` in ``cwd``'s repository, most
     helpful first. Raises OSError or ValueError when the server cannot answer."""
     limit = limit or int(_settings.knob_attr(cfg, "hymem_recall_max", "HYMEM_RECALL_MAX") or 8)
     r = _post(cfg, "/search", {"query": query[:2000], "user_id": _user(cfg), "workspace_id": workspace(cwd),
                                "scene": "coding", "limit": limit * 2}, SEARCH_TIMEOUT)
-    found = [(float(e.get("score") or 0), f"{e['task']}: {str(e.get('solution') or '')[:600]}")
+    repo = workspace(cwd)
+    found = [(float(e.get("score") or 0),
+              _dated(repo, e, f"{e['task']}: {str(e.get('solution') or '')[:600]}", e.get("updated_at")))
              for e in r.get("experiences") or [] if e.get("task")]
-    found += [(float(f.get("score") or 0), str(f["statement"])[:400]) for f in r.get("facts") or [] if f.get("statement")]
+    found += [(float(f.get("score") or 0), _dated(repo, f, str(f["statement"])[:400], f.get("created_at")))
+              for f in r.get("facts") or [] if f.get("statement")]
     if not found:
         return []
     judged = _relevance(cfg, query, [text for _, text in found])
