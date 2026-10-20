@@ -323,18 +323,22 @@ def pick_model(
     provider_base_url: str | None = None,
     provider_api_key: str | None = None,
     model: str | None = None,
+    input=None,
+    output=None,
+    picker_factory=None,
 ) -> dict[str, Any] | None:
     """Run the interactive picker and return the selection, or None on cancel.
     See `run_modal` for how it shares the terminal with the REPL."""
-    state = ModelPicker(
+    factory = ModelPicker if picker_factory is None else picker_factory
+    state = factory(
         provider_id=provider_id,
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
         model=model,
     )
     app = state.application(
-        input=create_input(sys.__stdin__),
-        output=create_output(sys.__stdout__),
+        input=create_input(sys.__stdin__) if input is None else input,
+        output=create_output(sys.__stdout__) if output is None else output,
     )
     return run_modal(app)
 

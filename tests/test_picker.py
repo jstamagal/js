@@ -209,3 +209,15 @@ def test_provider_registry_shapes_for_picker_shortcuts():
     assert providers.provider_for_login("llama.cpp").default_base_url == "http://127.0.0.1:8080/v1"
     assert providers.provider_for_login("mimo-token-plan").append_only is True
     assert providers.provider_for_login("deepseek").reasoning_effort == "xhigh"
+
+
+def test_model_picker_accepts_view_and_terminal_dependencies(monkeypatch):
+    from types import SimpleNamespace
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    result = picker.pick_model(input=source, output=target, picker_factory=lambda **kwargs: state)
+    assert result == "app"
+    assert seen == [{"input": source, "output": target}]
