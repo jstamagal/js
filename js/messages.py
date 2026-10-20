@@ -1701,6 +1701,46 @@ SESSION_COLUMN_TURNS = Message("turns", banner=False)
 
 SESSION_COLUMN_LENGTH = Message("length", banner=False)
 
+AGENT_MANIFEST_DUPLICATE_FILE_FOR_EXCHANGE = "duplicate {role} file for exchange {number}: {path}"
+
+AGENT_MANIFEST_INVALID_YAML_MANIFEST_IN = "invalid YAML manifest in {path}: {exc}"
+
+AGENT_MANIFEST_YAML_MANIFEST_IN_MUST_BE_A_MAPPING = "YAML manifest in {path} must be a mapping"
+
+AGENT_MANIFEST_IS_NO_LONGER_READ = "{legacy} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ = "frontmatter in {path} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_SKILLS_IN_MUST_BE_A_LIST_OF = "skills in {path} must be a list of family:name entries"
+
+AGENT_MANIFEST_SKILLS_ENTRY_IN_IS_NOT_FAMILY_NAME = "skills entry {item!r} in {path} is not family:name or family:*"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING = "frontmatter in {path} is missing a closing ---"
+
+AGENT_MANIFEST_INVALID_YAML_FRONTMATTER_IN = "invalid YAML frontmatter in {path}: {exc}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING = "frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING = "reasoning in {path} must be a string"
+
+AGENT_MANIFEST_REASONING_IN = "reasoning in {path}: {error}"
+
+AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER = "max_tokens in {path} must be an integer"
+
+AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING = "sampling frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED = "unknown sampling key '{key}' in {path}; allowed: {value}"
+
+AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER = "sampling.{key} in {path} must be a number"
+
+AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
+
+AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT = "prompts directory missing at {prompts_dir}. Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
+
+AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES = "prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
+
+AGENT_MANIFEST_MIGRATION_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

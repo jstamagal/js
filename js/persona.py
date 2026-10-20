@@ -77,7 +77,7 @@ def _load_exchanges(md_files: list[Path]) -> tuple[AgentExchange, ...]:
         role = match[2]
         exchange = numbered.setdefault(number, {})
         if role in exchange:
-            raise ValueError(f"duplicate {role} file for exchange {number}: {path}")
+            raise ValueError(msgs.AGENT_MANIFEST_DUPLICATE_FILE_FOR_EXCHANGE.format(role=role, number=number, path=path))
         with path.open(encoding="utf-8", newline="") as stream:
             exchange[role] = stream.read()
     return tuple(AgentExchange(number, **numbered[number]) for number in sorted(numbered))
@@ -98,7 +98,7 @@ def _is_benchmark_file(path: Path) -> bool:
 
 AGENT_MANIFEST = "agent.yaml"
 _MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills")
-_MIGRATE_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
+_MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
 def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
@@ -112,18 +112,18 @@ def _load_yaml_manifest(path: Path) -> dict[str, Any]:
     try:
         data = yaml.safe_load(text) if text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML manifest in {path}: {exc}") from exc
+        raise ValueError(msgs.AGENT_MANIFEST_INVALID_YAML_MANIFEST_IN.format(path=path, exc=exc)) from exc
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        raise ValueError(f"YAML manifest in {path} must be a mapping")
+        raise ValueError(msgs.AGENT_MANIFEST_YAML_MANIFEST_IN_MUST_BE_A_MAPPING.format(path=path))
     return data
 
 
 def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
     legacy = _find_yaml_zero_file(prompts_dir)
     if legacy is not None:
-        raise ValueError(f"{legacy} is no longer read; {_MIGRATE_HINT}")
+        raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
     for path in md_files:
         if (
             _is_zero_file(path)
@@ -131,19 +131,19 @@ def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
             and not _is_benchmark_file(path)  # load_benchmarks reads its frontmatter
             and path.read_text(encoding="utf-8").startswith("---")
         ):
-            raise ValueError(f"frontmatter in {path} is no longer read; {_MIGRATE_HINT}")
+            raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ.format(path=path, _MIGRATE_HINT=_MIGRATE_HINT))
 
 
 def _coerce_skills(path: Path, raw: Any) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ValueError(f"skills in {path} must be a list of family:name entries")
+        raise ValueError(msgs.AGENT_MANIFEST_SKILLS_IN_MUST_BE_A_LIST_OF.format(path=path))
     out: list[str] = []
     for item in raw:
         family, sep, name = str(item).strip().partition(":") if isinstance(item, str) else ("", "", "")
         if not sep or not family.strip() or not name.strip():
-            raise ValueError(f"skills entry {item!r} in {path} is not family:name or family:*")
+            raise ValueError(msgs.AGENT_MANIFEST_SKILLS_ENTRY_IN_IS_NOT_FAMILY_NAME.format(item=item, path=path))
         out.append(item.strip())
     return tuple(out)
 
@@ -153,10 +153,10 @@ def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, st
         return None, text.rstrip()
     first_line_end = text.find("\n")
     if first_line_end == -1:
-        raise ValueError(f"frontmatter in {path} is missing a closing ---")
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
     close = text.find("\n---", first_line_end + 1)
     if close == -1:
-        raise ValueError(f"frontmatter in {path} is missing a closing ---")
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
     yaml_text = text[first_line_end + 1:close]
     body_start = close + len("\n---")
     if body_start < len(text) and text[body_start:body_start + 1] == "\r":
@@ -166,11 +166,11 @@ def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, st
     try:
         data = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML frontmatter in {path}: {exc}") from exc
+        raise ValueError(msgs.AGENT_MANIFEST_INVALID_YAML_FRONTMATTER_IN.format(path=path, exc=exc)) from exc
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        raise ValueError(f"frontmatter in {path} must be a mapping")
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
     return data, text[body_start:].rstrip()
 
 
@@ -197,11 +197,11 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
     if raw is False:
         return "none"
     if not isinstance(raw, str):
-        raise ValueError(f"reasoning in {path} must be a string")
+        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING.format(path=path))
     spec = settings.SPEC_BY_KEY["EFFORT"]
     value, error = settings.coerce_value(spec, raw)
     if error:
-        raise ValueError(f"reasoning in {path}: {error}")
+        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN.format(path=path, error=error))
     return value
 
 
@@ -212,7 +212,7 @@ def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
     if raw is None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(f"max_tokens in {path} must be an integer")
+        raise ValueError(msgs.AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER.format(path=path))
     return raw if raw > 0 else None
 
 
@@ -220,15 +220,15 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ValueError(f"sampling frontmatter in {path} must be a mapping")
+        raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
     out: dict[str, Any] = {}
     for key, val in raw.items():
         if key not in _SAMPLING_KEYS:
             raise ValueError(
-                f"unknown sampling key '{key}' in {path}; allowed: {', '.join(_SAMPLING_KEYS)}"
+                msgs.AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED.format(key=key, path=path, value=', '.join(_SAMPLING_KEYS))
             )
         if isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise ValueError(f"sampling.{key} in {path} must be a number")
+            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER.format(key=key, path=path))
         value, error = settings.coerce_value(settings.SPEC_BY_KEY[key.upper()], str(val))
         if error is not None:
             output.notice(msgs.ENV_SETTING_IGNORED, name=f"sampling.{key} in {path}", error=error)
@@ -334,7 +334,7 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     unknown = sorted(str(key) for key in manifest if key not in _MANIFEST_KEYS)
     if unknown:
         raise ValueError(
-            f"unknown key(s) {', '.join(unknown)} in {manifest_path}; allowed: {', '.join(_MANIFEST_KEYS)}"
+            msgs.AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED.format(value=', '.join(unknown), manifest_path=manifest_path, value2=', '.join(_MANIFEST_KEYS))
         )
     return PromptSpec(
         system="",
@@ -351,8 +351,7 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
 def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     if not prompts_dir.is_dir():
         raise FileNotFoundError(
-            f"prompts directory missing at {prompts_dir}. "
-            f"Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
+            msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST)
         )
 
     md_files = sorted(prompts_dir.glob("*.md"))
@@ -361,7 +360,7 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
     has_manifest = manifest_path.is_file()
     if not md_files and not has_manifest:
         raise FileNotFoundError(
-            f"prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
+            msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST)
         )
 
     spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
