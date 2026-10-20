@@ -53,6 +53,10 @@ branch the audit was made on; they move as the code changes.
 
 11 findings.
 
+- js-2lg.87: the tool-result adapter owns legacy error classification; headless
+  consumes its text and status. Both structured errors and ERROR-prefixed text
+  retain their existing status.
+
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/runtime.py:597-802` | ToolTrace/_trace_call/_trace_result | presentation | The loop renders tool exchanges, quiet-call folds and live shell output (shell only, at line 680) itself instead of handing structured results to the screen. | js-2lg.28 |

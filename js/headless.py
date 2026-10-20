@@ -18,25 +18,17 @@ from typing import Any, TextIO
 
 from . import messages as msgs
 from . import activity
-from .toolkit.core import ToolResult, TurnStatus
+from .toolkit.core import TurnStatus
+from .toolkit.results import summary_text
 
 SCHEMA_VERSION = 1
 SUMMARY_CHARS = 200
 
 
-def _result_text(result: Any) -> tuple[str, bool]:
-    """A tool result's text and whether it reports an error."""
-    if isinstance(result, ToolResult):
-        text = result.dehydrated()
-        return text, result.is_error or text.startswith("ERROR")
-    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    return text, text.startswith("ERROR")
-
-
 def tool_result_summary(result: Any) -> dict[str, Any]:
     """`ok`, `bytes`, `lines` and `summary` (the first non-blank line, cut to
     SUMMARY_CHARS characters) of a tool result."""
-    text, failed = _result_text(result)
+    text, failed = summary_text(result)
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if len(first) > SUMMARY_CHARS:
         first = first[:SUMMARY_CHARS - 1] + "…"
