@@ -230,8 +230,8 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/task_jobs.py` | started_text / report | policy | Model-facing text is loaded from `prompts/text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
 | `js/toolkit/task_jobs.py` | completion_notes | policy | Model-facing text is loaded from `prompts/text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
 | `js/toolkit/jev.py` | jev | policy | Model-facing text is loaded from `prompts/text/toolkit_jev.json`; selection and execution policy are unchanged. | js-2lg.66 |
-| `js/toolkit/kernel.py:65-72,640,1091` | MISSING_DEPS / get_session / kernel | policy | Model-facing errors name `/set PYTHON_KERNEL on`, `uv sync` and `just` commands. | js-2lg.69 |
-| `js/toolkit/kernel.py:1041-1045,1052-1056,1152-1153,1200-1201,1215-1216` | _died / _busy / kernel | policy | Builds the restart, busy, interrupted and poll guidance the model reads. | js-2lg.69 |
+| `js/toolkit/kernel.py` | MISSING_DEPS / get_session / kernel | policy | Model-facing text is loaded from `prompts/text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
+| `js/toolkit/kernel.py` | _died / _busy / kernel | policy | Model-facing text is loaded from `prompts/text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
 | `js/toolkit/toolbox.py:519,566-567,573-574,581-586` | toolbox | policy | Builds refusal and guidance text in code, including the `/set` command. | js-2lg.73 |
 | `js/toolkit/lsp.py:608,779-780` | server_for / lsp | policy | Builds the jail hint and the "Call again" text the model reads. | js-2lg.76 |
 | `js/cli.py:151,157-172,175-187,190-197,204-219,2693-2700,2726-2730,3656-3657,4201-4202,5000-5007,5037-5038` | _note_mode_switch, _note_model_switch, _run_prompt, _run_repl_turn, _blocking_repl, _run_args | policy | The prompt-changed, mode-switch, model-switch and cut-off reminders are worded in code, and the logic that adds them to the user message is inside cli turn paths. | js-2lg.78 |
