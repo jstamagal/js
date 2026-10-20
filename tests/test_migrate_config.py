@@ -132,3 +132,21 @@ def test_a_new_names_jsrc_that_mentions_an_old_name_is_left_as_it_is(tmp_path):
     assert jsrc.read_bytes() == text.encode("utf-8")
     assert list(rc.iterdir()) == [jsrc]
     assert settings.knob(loaded, "BANNER") == "was model.id"
+
+
+def test_migration_through_a_symlink_keeps_the_config_shared(tmp_path):
+    from js import rename, settings
+
+    shared = tmp_path / "shared" / "jsrc"
+    shared.parent.mkdir()
+    shared.write_text("set model.id old/model\n", encoding="utf-8")
+    linked = tmp_path / "project" / "jsrc"
+    linked.parent.mkdir()
+    linked.symlink_to(shared)
+
+    assert rename.migrate_jsrc_file(linked)
+
+    assert linked.is_symlink()
+    assert shared.read_text() == "set MODEL old/model\n"
+    shared.write_text("set MODEL new/model\n", encoding="utf-8")
+    assert settings.knob(_load(linked)[0], "MODEL") == "new/model"

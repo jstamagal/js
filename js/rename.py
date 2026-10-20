@@ -644,6 +644,7 @@ def migrate_jsrc_file(path: Path, out: TextIO | None = None) -> bool:
     whether the file was rewritten."""
     stream = out if out is not None else sys.stderr
     try:
+        path = path.resolve(strict=False)
         with _locked_jsrc(path):
             return _migrate_jsrc_file(path, stream)
     except OSError:
