@@ -203,11 +203,11 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/core.py` | ToolContext.require_read | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
 | `js/toolkit/core.py` | ToolContext._persist_snapshot / snapshot / call_tool | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
 | `js/toolkit/core.py` | ToolResult.dehydrated | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
-| `js/toolkit/registry.py:59-68` | ToolRegistry.unavailable_error | policy | Builds the model-facing unknown-tool and policy-denied error text, including the "Did you mean" hint and the tool list. | js-2lg.36 |
-| `js/toolkit/registry.py:119-128` | ToolRegistry.with_kernel | policy | Fixes which tools the kernel gate removes, and the refusal text that names the `/set PYTHON_KERNEL` REPL command. | js-2lg.36 |
-| `js/toolkit/registry.py:270-275,280-282` | TurnToolSurface._unavailable_errors | policy | Builds the model-facing "not in the published tool set, load it with tool_discovery" error text. | js-2lg.36 |
-| `js/toolkit/registry.py:362-388` | TurnToolSurface.offer_path_skills | policy | Decides on its own to offer a skill once per session and writes the <js-reminder> text the model reads. | js-2lg.36 |
-| `js/toolkit/registry.py:423,445,469,473,475` | TurnToolSurface.discover_async / discover / _load | policy | Builds the discovery error strings in code. | js-2lg.36 |
+| `js/toolkit/registry.py` | ToolRegistry.unavailable_error | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
+| `js/toolkit/registry.py` | ToolRegistry.with_kernel | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
+| `js/toolkit/registry.py` | TurnToolSurface._unavailable_errors | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
+| `js/toolkit/registry.py` | TurnToolSurface.offer_path_skills | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
+| `js/toolkit/registry.py` | TurnToolSurface.discover_async / discover / _load | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/policy.py:292-295` | argument_refusal | policy | Builds the model-facing ban-pattern refusal text in code. | js-2lg.40 |
 | `js/toolkit/discovery.py:202,230` | catalog_result | policy | Builds the model-facing error and hint text in code. | js-2lg.42 |
 | `js/toolkit/discovery.py:37-41` | discovery_tool | policy | Parameter descriptions the model reads are written in the code schema. | js-2lg.42 |

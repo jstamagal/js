@@ -1,0 +1,19 @@
+{
+  "unavailable_error_error_is_not_allowed_by_this": "ERROR: {canonical} is not allowed by this agent's tool policy.",
+  "unavailable_error_tool_discovery_cannot_load_it_here": "{error} tool_discovery cannot load it here.",
+  "unavailable_error_error_unknown_tool": "ERROR: unknown tool {canonical}.",
+  "unavailable_error_did_you_mean": " Did you mean {closest}?",
+  "unavailable_error_use_tool_discovery_to_find_an": "{error} Use tool_discovery to find an allowed tool and load its exact catalog id before calling it.",
+  "unavailable_error_this_agent_s_tools": "{error} This agent's tools: {join_names}.",
+  "with_kernel_error_kernel_toolbox_disabled_use_set": "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).",
+  "unavailable_errors_error_is_not_in_the_published": "ERROR: {item_name} is not in the published tool set for this call. Fix: tool_discovery {{\"load\":\"{item_id}\"}} then re-issue on the next model call. Retrying unchanged will fail again.",
+  "unavailable_errors_error_is_a_catalog_status_entry": "ERROR: {item_name} is a catalog status entry, not a loadable tool.",
+  "unavailable_errors_error_is_not_in_the_published_2": "ERROR: {name} is not in the published tool set for this call. Fix: tool_discovery {{\"load\":\"mcp:{value_1}\"}} then re-issue on the next model call. Retrying unchanged will fail again.",
+  "offer_path_skills_skill_applies_to_load_it_with": "Skill {skill_name} applies to {relative}: {join_skill_description_split} Load it with tool_discovery {{\"load\":\"{item_id}\"}}.",
+  "offer_path_skills_js_reminder_js_reminder": "<js-reminder>{join_lines}</js-reminder>",
+  "discover_async_error_kind_must_be_native_skill": "ERROR: kind must be native, skill, or mcp",
+  "discover_error_kind_must_be_native_skill": "ERROR: kind must be native, skill, or mcp",
+  "load_error_no_allowed_catalog_entry_with": "ERROR: no allowed catalog entry with id {item_id!r}",
+  "load_error_skill_instructions_could_not_be": "ERROR: skill {skill_name!r} instructions could not be read",
+  "load_error_skill_instructions_could_not_be_2": "ERROR: skill {skill_name!r} instructions could not be read"
+}

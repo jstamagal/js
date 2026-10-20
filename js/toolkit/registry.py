@@ -18,6 +18,10 @@ from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
 from . import jev, lsp, notebook
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_registry')
+
 
 
 def _closest_tool_name(name: str, names: Iterable[str]) -> str:
@@ -57,16 +61,15 @@ class ToolRegistry:
         names = self.by_name
         has_discovery = discovery.DISCOVERY_TOOL_NAME in names
         if canonical in (self.known_names or ()):
-            error = f"ERROR: {canonical} is not allowed by this agent's tool policy."
-            return f"{error} tool_discovery cannot load it here." if has_discovery else error
-        error = f"ERROR: unknown tool {canonical}."
+            error = _PROMPTS['unavailable_error_error_is_not_allowed_by_this'].format(canonical=canonical)
+            return _PROMPTS['unavailable_error_tool_discovery_cannot_load_it_here'].format(error=error) if has_discovery else error
+        error = _PROMPTS['unavailable_error_error_unknown_tool'].format(canonical=canonical)
         closest = _closest_tool_name(canonical, names)
         if closest:
-            error += f" Did you mean {closest}?"
+            error += _PROMPTS['unavailable_error_did_you_mean'].format(closest=closest)
         if has_discovery:
-            return (f"{error} Use tool_discovery to find an allowed tool and load its "
-                    "exact catalog id before calling it.")
-        return f"{error} This agent's tools: {', '.join(names)}."
+            return (_PROMPTS['unavailable_error_use_tool_discovery_to_find_an'].format(error=error))
+        return _PROMPTS['unavailable_error_this_agent_s_tools'].format(error=error, join_names=', '.join(names))
 
     @property
     def by_name(self) -> dict[str, Tool]:
@@ -124,7 +127,7 @@ class ToolRegistry:
             lazy=self.lazy - blocked,
             known_names=(self.known_names or frozenset(self.by_name)) | blocked,
             unavailable_errors={**self.unavailable_errors, **{
-                name: "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel])."
+                name: _PROMPTS['with_kernel_error_kernel_toolbox_disabled_use_set']
                 for name in blocked
             }},
         )
@@ -268,19 +271,15 @@ class TurnToolSurface:
         for item in entries.values():
             if item.loadable:
                 errors[item.name] = (
-                    f"ERROR: {item.name} is not in the published tool set for this call. "
-                    f'Fix: tool_discovery {{"load":"{item.id}"}} then re-issue on the next model call. '
-                    "Retrying unchanged will fail again."
+                    _PROMPTS['unavailable_errors_error_is_not_in_the_published'].format(item_name=item.name, item_id=item.id)
                 )
             else:
-                errors[item.name] = f"ERROR: {item.name} is a catalog status entry, not a loadable tool."
+                errors[item.name] = _PROMPTS['unavailable_errors_error_is_a_catalog_status_entry'].format(item_name=item.name)
         if self.mcp_host is not None:
             for name in self.mcp_host.remote_tools:
                 if self.mcp_host.load(f"mcp:{name}") is not None:
                     errors[name] = (
-                        f'ERROR: {name} is not in the published tool set for this call. '
-                        f'Fix: tool_discovery {{"load":"mcp:{name}"}} then re-issue on the next model call. '
-                        'Retrying unchanged will fail again.'
+                        _PROMPTS['unavailable_errors_error_is_not_in_the_published_2'].format(name=name, value_1=name)
                     )
         return errors
 
@@ -382,11 +381,10 @@ class TurnToolSurface:
                     offers.append((item_id, skill))
             self._state_changed()
         lines = [
-            f"Skill {skill.name} applies to {relative}: {' '.join(skill.description.split())} "
-            f'Load it with tool_discovery {{"load":"{item_id}"}}.'
+            _PROMPTS['offer_path_skills_skill_applies_to_load_it_with'].format(skill_name=skill.name, relative=relative, join_skill_description_split=' '.join(skill.description.split()), item_id=item_id)
             for item_id, skill in offers
         ]
-        return f"<js-reminder>{' '.join(lines)}</js-reminder>" if lines else ""
+        return _PROMPTS['offer_path_skills_js_reminder_js_reminder'].format(join_lines=' '.join(lines)) if lines else ""
 
     def note_skill_loaded(self, name: str) -> None:
         """Record that ``name``'s instructions are in the conversation, so no
@@ -421,7 +419,7 @@ class TurnToolSurface:
         folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().casefold()
         if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
-            return "ERROR: kind must be native, skill, or mcp"
+            return _PROMPTS['discover_async_error_kind_must_be_native_skill']
         mcp_source = (
             self.mcp_host is not None
             and bool(folded_source)
@@ -443,7 +441,7 @@ class TurnToolSurface:
         folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().lower()
         if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
-            return "ERROR: kind must be native, skill, or mcp"
+            return _PROMPTS['discover_error_kind_must_be_native_skill']
         entries = (
             item for item in self.catalog()
             if (not folded_kind or item.kind == folded_kind)
@@ -467,13 +465,13 @@ class TurnToolSurface:
             return discovery.compact_result({"loaded": [tool.name], "id": item_id})
         skill = self._skills.get(item_id)
         if skill is None:
-            return f"ERROR: no allowed catalog entry with id {item_id!r}"
+            return _PROMPTS['load_error_no_allowed_catalog_entry_with'].format(item_id=item_id)
         try:
             loaded = load_skill(self._skill_catalog, skill.name, tool_registry=self)
         except OSError:
-            return f"ERROR: skill {skill.name!r} instructions could not be read"
+            return _PROMPTS['load_error_skill_instructions_could_not_be'].format(skill_name=skill.name)
         if loaded is None:
-            return f"ERROR: skill {skill.name!r} instructions could not be read"
+            return _PROMPTS['load_error_skill_instructions_could_not_be_2'].format(skill_name=skill.name)
         self._loaded_ids.add(item_id)
         self._state_changed()
         result: dict[str, object] = {
