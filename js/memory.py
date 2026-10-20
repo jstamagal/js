@@ -152,6 +152,52 @@ _REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_
 SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from", "reasoning_blocks", "reasoning_layout")
 
 
+def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> int:
+    """Recast an unrestorable assistant turn as user context with completed results.
+
+    Earlier turns keep their signed blocks. The new user context contains the
+    visible replies, calls and results so the next reply can use work already done.
+    """
+    latest = next((i for i in range(len(messages) - 1, -1, -1)
+                   if messages[i].get("role") == "assistant"), None)
+    if latest is None or (require_tool_calls and not messages[latest].get("tool_calls")):
+        return 0
+
+    def opens_turn(msg: dict) -> bool:
+        return msg.get("role") == "user" and not msg.get("steered") and not msg.get("resume_nudge")
+
+    start = 0
+    for index in range(latest - 1, -1, -1):
+        msg = messages[index]
+        if opens_turn(msg):
+            start = index + 1
+            break
+    end = next((i for i in range(latest + 1, len(messages)) if opens_turn(messages[i])), len(messages))
+    tail = messages[start:end]
+    rewritten: list[dict] = []
+    context: list[dict] = []
+
+    def flush_context() -> None:
+        if context:
+            rewritten.append(note_time({"role": "user", "content": (
+                "Continue from this previous assistant context and its completed tool results. "
+                "The calls recorded here have already run.\n"
+                + json.dumps(context, ensure_ascii=False)
+            )}))
+            context.clear()
+
+    for msg in tail:
+        if msg.get("role") == "user":
+            flush_context()
+            rewritten.append(msg)
+        else:
+            context.append({key: value for key, value in msg.items()
+                            if key in {"role", "content", "tool_calls", "tool_call_id", "name"}})
+    flush_context()
+    messages[start:end] = rewritten
+    return len(tail)
+
+
 def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
     """Remove the signed reasoning of every message from ``start`` on, in place.
 

@@ -213,3 +213,31 @@ def test_the_retained_history_of_an_appended_twice_journal_is_read_in_linear_tim
     _old_writer_journal(large, 1000)
 
     assert best(large) < 10 * best(small)
+
+
+def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds():
+    import ai
+
+    from js import model_client
+
+    earlier = {"role": "assistant", "content": "earlier", "reasoning_parts": [
+        {"text": "thought", "provider_metadata": {"anthropic": {"signature": "S0"}}}],
+        "reasoning_from": {"provider": "anthropic", "model": "m"}}
+    prefix = [{"role": "user", "content": "first"}, earlier, {"role": "user", "content": "go"}]
+    first = [_assistant_toolcall("c1"), _tool_result("c1", "first result")]
+    second = [_assistant_toolcall("c2"), _tool_result("c2", "second result")]
+    attachment = ai.types.messages.FilePart(data=b"image", media_type="image/png")
+    steered = {"role": "user", "steered": True,
+               "content": [ai.types.messages.TextPart(text="use this"), attachment]}
+    nudge = {"role": "user", "resume_nudge": True, "content": "continue"}
+    messages = [*prefix, *first, steered, *second, nudge]
+
+    assert M.restart_thinking_turn(messages, require_tool_calls=True) == 6
+
+    assert messages[:3] == prefix
+    assert messages[4] is steered
+    assert messages[6] is nudge
+    assert json.loads(messages[3]["content"].split("\n", 1)[1]) == first
+    assert json.loads(messages[5]["content"].split("\n", 1)[1]) == second
+    projected = model_client.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
+    assert projected[4].parts[-1] is attachment

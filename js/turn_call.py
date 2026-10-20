@@ -257,12 +257,18 @@ class ModelCaller:
                     if await self._recover(e):
                         continue
                 if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
-                    # The provider refused a replayed signature (an edit js
-                    # made before it, or a system or tool change): replay
-                    # the history without signed reasoning, once.
                     signed_reasoning_dropped = True
-                    dropped = memory.drop_signed_reasoning(self._convo.messages)
-                    telemetry.event("signed_reasoning_dropped", model=model, messages=dropped,
+                    restarted = (memory.restart_thinking_turn(
+                        self._convo.messages, require_tool_calls=not model_client.is_modified_thinking_rejection(e))
+                                 if model_client.is_anthropic_thinking_rejection(e) else 0)
+                    # A tool continuation requires the original thinking blocks.
+                    # An unrestorable turn becomes fresh user context; completed
+                    # turns and other providers can discard refused signatures.
+                    # A refused signature can be in any earlier turn.
+                    dropped = (memory.drop_signed_reasoning(self._convo.messages)
+                               if not restarted or model_client.is_signature_rejection(e) else 0)
+                    telemetry.event("thinking_turn_restarted" if restarted else "signed_reasoning_dropped",
+                                    model=model, messages=restarted or dropped,
                                     error=f"{type(e).__name__}: {e}")
                     self._convo.rebuild()
                     compaction.history_rewritten(context)

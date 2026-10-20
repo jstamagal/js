@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from typing import Any, Literal
 from types import SimpleNamespace
 from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 
 import ai
 import httpx2
@@ -33,6 +33,7 @@ import ai.types.usage
 import ai.models
 from ai.models.core import params as ai_params
 from ai.providers import history_utils
+from ai.providers.anthropic.protocol import AnthropicMessagesProtocol
 from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
 
 
@@ -152,9 +153,18 @@ def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.Provi
 
 # Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
 # `signature` in `thinking` block. The block is bound to a different
-# conversation. ..." (the preserved-thinking prefix check) or the same leading
-# clause alone (an undecryptable signature).
-_SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+# conversation. ..." (the preserved-thinking prefix check), the same leading
+# clause alone (an undecryptable signature), or "`thinking` or
+# `redacted_thinking` blocks in the latest assistant message cannot be
+# modified" (the last reply's blocks differ from the response, as when the
+# `ai` SDK lost a redacted_thinking block).
+_MODIFIED_THINKING_REJECTION = "in the latest assistant message cannot be modified"
+_SIGNATURE_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+_SIGNED_REASONING_REJECTIONS = (
+    *_SIGNATURE_REJECTIONS,
+    _MODIFIED_THINKING_REJECTION,
+    "expected `thinking` or `redacted_thinking`, but found",
+)
 # The Responses API's 400 for a replayed reasoning item it cannot decrypt (an
 # item from another account or organization): code ``invalid_encrypted_content``,
 # message "The encrypted content for item rs_... could not be verified" or
@@ -176,6 +186,28 @@ def is_signed_reasoning_rejection(exc: BaseException) -> bool:
     if "encrypted content" in haystack and any(n in haystack for n in _ENCRYPTED_REASONING_REJECTIONS):
         return True
     return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
+
+
+def is_anthropic_thinking_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic refused the thinking blocks of a replayed turn."""
+    if not isinstance(exc, ai.ProviderBadRequestError):
+        return False
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
+
+
+def is_signature_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic refused a thinking signature, which may belong to any
+    earlier turn of the history."""
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return (isinstance(exc, ai.ProviderBadRequestError)
+            and any(needle in haystack for needle in _SIGNATURE_REJECTIONS))
+
+
+def is_modified_thinking_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic requires restoration of the latest assistant turn."""
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return is_anthropic_thinking_rejection(exc) and _MODIFIED_THINKING_REJECTION in haystack
 
 
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
@@ -354,6 +386,71 @@ class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
         return super().stream(view, model, messages, **kwargs)
 
 
+class _RedactedThinkingStream:
+    """Expose the native snapshot and queue redacted blocks the ai parser skips."""
+
+    def __init__(self, stream: Any, pending: list[Any]) -> None:
+        self._stream = stream
+        self._pending = pending
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    async def __aiter__(self):
+        async for event in self._stream:
+            if event.type == "content_block_start" and event.content_block.type == "redacted_thinking":
+                block = event.content_block.model_dump(exclude_none=True)
+                self._pending.extend([
+                    ai.events.ReasoningStart(block_id=str(event.index)),
+                    ai.events.ReasoningEnd(block_id=str(event.index), provider_metadata={
+                        "anthropic": {"redacted_thinking": block}}),
+                ])
+            yield event
+
+
+class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
+    """Round-trip opaque redacted blocks through ai 0.5.2's reasoning parts."""
+
+    protocol_class_id: Literal["js_anthropic_thinking"] = "js_anthropic_thinking"
+
+    async def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        redacted: dict[str, dict] = {}
+        projected = []
+        for message in messages:
+            parts = []
+            for part in message.parts:
+                metadata = getattr(part, "provider_metadata", None) or {}
+                block = (metadata.get("anthropic") or {}).get("redacted_thinking")
+                if isinstance(part, ai.types.messages.ReasoningPart) and isinstance(block, dict):
+                    # Let the SDK place the part through its normal serializer;
+                    # replace this request-local marker before sending the body.
+                    marker = uuid.uuid4().hex
+                    redacted[marker] = block
+                    part = ai.thinking("", provider_metadata={"anthropic": {"signature": marker}})
+                parts.append(part)
+            projected.append(message.model_copy(update={"parts": parts}))
+
+        pending: list[Any] = []
+
+        @asynccontextmanager
+        async def open_message(**api_kwargs: Any):
+            for message in api_kwargs["messages"]:
+                content = message.get("content")
+                if isinstance(content, list):
+                    message["content"] = [redacted.get(block.get("signature"), block)
+                                          if block.get("type") == "thinking" else block for block in content]
+            async with client.messages.stream(**api_kwargs) as stream:
+                yield _RedactedThinkingStream(stream, pending)
+
+        view = SimpleNamespace(messages=SimpleNamespace(stream=open_message))
+        async with aclosing(super().stream(view, model, projected, **kwargs)) as stream:
+            async for event in stream:
+                for redacted_event in pending:
+                    yield redacted_event
+                pending.clear()
+                yield event
+
+
 # Headers the request body decides; a configured one is dropped before the
 # SDK sees it.
 _FRAMING_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "host"})
@@ -450,7 +547,7 @@ def resolve_model(
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
     # Pin chat-completions for those; only the explicit Responses transport keeps
     # the new default.
-    protocol = None
+    protocol = _AnthropicThinkingProtocol() if sdk_provider_id == "anthropic" else None
     transport = provider_def.transport if provider_def is not None else None
     if sdk_provider_id == "openai" and transport != "custom_responses":
         custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
