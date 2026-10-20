@@ -45,6 +45,7 @@ _CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
 # Any other escape: ESC, intermediates, one final byte (ESC c, ESC ( 0, ESC 7).
 _ESC = re.compile(r"\x1b[ -/]*[0-~]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
 _STRING_OPEN = re.compile(r"\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f]")
 _STRING_CLOSE = re.compile(r"\x07|\x1b\\|\x9c")
 
@@ -140,21 +141,110 @@ def field_lines(rendered: str, width: int, sep: str = "  ") -> list[str]:
     return rows
 
 
-# The two voices of a conversation. The user's line sits behind the input
-# prompt in bold; the answer opens with a mirrored glyph on its own line.
+# The two voices of a conversation hang off their marks: column 0 holds only
+# the speaker's mark (MARK_USER, MARK_AGENT), then MARK_GAP spaces, and every
+# row of the text starts at that one column.
+def _speaker(mark_entry: str, colour: str) -> tuple[str, int]:
+    mark = fset.lookup(mark_entry) or ""
+    spaces = fset.mark_gap()
+    return f"{fset.BOLD}{fset.paint(colour, mark)}{' ' * spaces}", cell_len(mark) + spaces
+
+
+def user_speaker() -> tuple[str, int]:
+    """The operator's mark with its gap, painted, and the text column."""
+    return _speaker("MARK_USER", "COLOR_USER_MARK")
+
+
+def agent_speaker() -> tuple[str, int]:
+    """The agent's mark with its gap, painted, and the text column."""
+    return _speaker("MARK_AGENT", "COLOR_AGENT_MARK")
+
+
 def prompt() -> str:
-    """The input prompt, in COLOR_USER_MARK."""
-    return f"{fset.BOLD}{fset.paint('COLOR_USER_MARK', msgs.INPUT_PROMPT)}"
+    """The input prompt: the operator's mark."""
+    return user_speaker()[0]
 
 
-def assistant_mark() -> str:
-    """The mark an answer opens with, in COLOR_AGENT_MARK."""
-    return fset.paint("COLOR_AGENT_MARK", "❮") + "\n"
+def hang(text: str, mark: str, indent: int, *, first: bool = True) -> str:
+    """``text`` with ``mark`` before its first row that shows a character
+    (when ``first``) and ``indent`` spaces before every other row that draws
+    anything, painted spaces included; empty rows stay empty."""
+    rows = text.split("\n")
+    for index, row in enumerate(rows):
+        plain = _SGR_ONLY.sub("", row)
+        if not plain:
+            continue
+        if first and plain.strip():
+            rows[index], first = mark + row, False
+        else:
+            rows[index] = " " * indent + row
+    return "\n".join(rows)
+
+
+def cells(text: str) -> int:
+    """Terminal columns ``text`` takes, colour escapes not counted."""
+    return sum(get_cwidth(char) for char in fset.plain(text))
+
+
+def cut_points(plain: str, room: int, rest: int | None = None, *, words: bool = True) -> list[int]:
+    """Where ``plain`` (one line, no newline) breaks into rows: the end of
+    each row, the last one ``len(plain)``. The first row holds ``room``
+    columns, the rest ``rest`` (``room`` by default). With ``words`` a row
+    ends after its last space that fits, else at the column; a row always
+    holds at least one character. One pass, with running column counts.
+    Every wrapping in js goes through here."""
+    rest = room if rest is None else rest
+    cuts: list[int] = []
+    start, used, space, width = 0, 0, -1, room
+    widths = [get_cwidth(char) for char in plain]
+    for index, cell in enumerate(widths):
+        if used + cell > width and index > start:
+            end = space + 1 if words and space >= start else index
+            cuts.append(end)
+            start, space, width, used = end, -1, rest, 0
+            # The text carried onto the new row holds no space; cut it again
+            # wherever it is wider than that row.
+            for carried in range(end, index):
+                if used + widths[carried] > width and carried > start:
+                    cuts.append(carried)
+                    start, used = carried, 0
+                used += widths[carried]
+            if used + cell > width and index > start:
+                cuts.append(index)
+                start, used = index, 0
+        if plain[index] == " ":
+            space = index
+        used += cell
+    cuts.append(len(plain))
+    return cuts
+
+
+def wrap_words(text: str, width: int) -> str:
+    """``text`` with each line wider than ``width`` columns broken at the
+    last space that fits, or at the column when no space does. The spaces at
+    a break are the break: they end no row and start none."""
+    out: list[str] = []
+    for line in text.split("\n"):
+        start = 0
+        cuts = cut_points(line, width)
+        for index, end in enumerate(cuts):
+            row = line[start:end]
+            start = end
+            if index:
+                row = row.lstrip(" ")
+                if not row:
+                    continue
+            out.append(row.rstrip(" ") if index < len(cuts) - 1 else row)
+    return "\n".join(out)
 
 
 def user_line(text: str) -> str:
-    """One user message as the conversation shows it."""
-    return f"{prompt()}{fset.BOLD}{fset.paint('COLOR_USER', text)}{fset.RESET}\n"
+    """One user message as the conversation shows it, word-wrapped to the
+    text column."""
+    mark, indent = user_speaker()
+    text = wrap_words(text, block_width() - indent)
+    body = "\n".join(f"{fset.BOLD}{fset.paint('COLOR_USER', line)}" if line else "" for line in text.split("\n"))
+    return hang(body, mark, indent) + "\n"
 
 
 def echo_user(text: str) -> None:
@@ -342,6 +432,8 @@ class Display:
         self._refreshed = 0.0
         self._trailing: asyncio.TimerHandle | None = None
         self._committed_any = False
+        self._speaker: tuple[str, int] | None = None
+        self._spoke = False
 
     @classmethod
     def for_stream(cls, stream: Any, *, markdown: bool = True) -> Display:
@@ -358,13 +450,74 @@ class Display:
     def pretty(self) -> bool:
         return self.live is not None
 
-    def mark(self, text: str) -> None:
-        """Write `text` ahead of the stream, outside its Markdown."""
-        if self.live is not None:
-            self.live.commit(text)
-        else:
-            self._write(text)
-        self._flush()
+    def speaker(self, mark: str, indent: int) -> None:
+        """Hang the stream off `mark`: its first row starts with it and every
+        other row starts `indent` columns in."""
+        self._speaker, self._spoke = (mark, indent), False
+        self._word, self._spaces, self._row_used, self._row_start = "", 0, 0, True
+
+    def _width(self) -> int:
+        assert self.live is not None
+        return self.live.width() - (self._speaker[1] if self._speaker else 0)
+
+    def _hung(self, rendered: str, *, keep: bool) -> str:
+        """``rendered`` hung off the speaker's mark; ``keep`` records that the
+        mark has been drawn for good."""
+        if self._speaker is None:
+            return rendered
+        hung = hang(rendered, *self._speaker, first=not self._spoke)
+        if keep and _SGR_ONLY.sub("", rendered).strip():
+            self._spoke = True
+        return hung
+
+    def _hang_plain(self, text: str) -> str:
+        """``text`` flowed under the speaker's mark, word-wrapped to the text
+        column: a word is held until the space or newline after it shows
+        whether it fits on the row."""
+        if self._speaker is None:
+            return text
+        out: list[str] = []
+        for char in text:
+            if char == "\n":
+                out.append(self._flush_word())
+                out.append("\n")
+                self._row_used, self._spaces, self._row_start = 0, 0, True
+            elif char == " ":
+                out.append(self._flush_word())
+                self._spaces += 1
+            else:
+                self._word += char
+        return "".join(out)
+
+    def _flush_word(self) -> str:
+        """The held word placed on the current row, or on a new one under
+        the text column when it does not fit."""
+        if not self._word:
+            return ""
+        mark, indent = self._speaker  # type: ignore[misc]
+        room = block_width() - indent
+        out = ""
+        if self._row_start:
+            out = " " * indent if self._spoke else mark
+            self._spoke, self._row_start = True, False
+        word = self._word
+        size = cells(word)
+        if not out and self._row_used + self._spaces + size > room:
+            out, self._row_used, self._spaces = "\n" + " " * indent, 0, 0
+        if self._row_used + self._spaces + size > room:
+            # A word wider than the row (a run of wide characters with no
+            # space) breaks at the column, one pass over it.
+            cuts = cut_points(word, room - self._row_used - self._spaces, room, words=False)
+            start = 0
+            for end in cuts[:-1]:
+                out += " " * self._spaces + word[start:end] + "\n" + " " * indent
+                start, self._row_used, self._spaces = end, 0, 0
+            word = word[start:]
+            size = cells(word)
+        out += " " * self._spaces + word
+        self._row_used += self._spaces + size
+        self._spaces, self._word = 0, ""
+        return out
 
     def chunk(self, field: str, text: str) -> None:
         if not text:
@@ -375,7 +528,7 @@ class Display:
         if self.live is None:
             cleaned = clean(text)
             if cleaned:
-                self._write(cleaned)
+                self._write(self._hang_plain(cleaned))
                 self._last_char = cleaned[-1]
                 self._wrote = True
                 self._flush()
@@ -410,7 +563,7 @@ class Display:
 
     def _commit(self, source: str) -> None:
         assert self.live is not None
-        rendered = render_markdown(source, self.live.width())
+        rendered = self._hung(render_markdown(source, self._width()), keep=True)
         if self._committed_any:
             rendered = "\n" + rendered
         self.live.commit(rendered)
@@ -434,7 +587,7 @@ class Display:
         assert self.live is not None
         if value.strip():
             separator = "\n" if self._committed_any else ""
-            self.live.update(separator + render_markdown(value, self.live.width()))
+            self.live.update(separator + self._hung(render_markdown(value, self._width()), keep=False))
 
     def finish(self) -> None:
         """Commit whatever is open and end the stream on a fresh line."""
@@ -446,6 +599,9 @@ class Display:
             self._source = ""
             self._committed_any = False
         elif self._wrote:
+            held = self._flush_word() if self._speaker is not None else ""
+            if held:
+                self._write(held)
             if self._last_char != "\n":
                 self._write("\n")
             self._flush()
@@ -787,14 +943,7 @@ def _fit(text: Text, room: int) -> list[Text]:
     column, as a terminal wraps it, and keeps all of itself."""
     text = text.copy()
     text.expand_tabs(8)
-    cuts: list[int] = []
-    used = 0
-    for index, char in enumerate(text.plain):
-        width = cell_len(char)
-        if used + width > room and used:
-            cuts.append(index)
-            used = 0
-        used += width
+    cuts = cut_points(text.plain, room, words=False)[:-1]
     return list(text.divide(cuts)) if cuts else [text]
 
 
@@ -1221,7 +1370,7 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
                      settings: Any = None) -> str:
     """The last `count` exchanges of `messages` as a turn prints them: the
     user's line as `user_line` draws it, each tool exchange at TOOLS_DISPLAY
-    `level`, the answer behind `assistant_mark()` as Markdown at `width` (plain
+    `level`, the answer hung off the agent's mark as Markdown at `width` (plain
     text when `markdown` is off). An exchange starts at a user message that was
     not steered into a turn."""
     starts = [i for i, message in enumerate(messages)
@@ -1239,8 +1388,9 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
             out.append(user_line(text))
         elif role == "assistant":
             if text.strip():
-                out.append(assistant_mark())
-                out.append(render_markdown(text, width) if markdown else text + "\n")
+                mark, indent = agent_speaker()
+                body = render_markdown(text, width - indent) if markdown else wrap_words(text, width - indent) + "\n"
+                out.append(hang(body, mark, indent))
             for call in message.get("tool_calls") or []:
                 name, args = _call_args(call)
                 result = results.get(call.get("id"))

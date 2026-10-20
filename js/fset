@@ -7,6 +7,11 @@
 
 fset THEME crush
 
+# The speaker marks, alone in column 0, and the spaces before their text.
+fset MARK_USER ❯
+fset MARK_AGENT ●
+fset MARK_GAP 1
+
 # The mIRC 99-colour palette, each slot sent as 24-bit colour.
 fset PALETTE_00 #FFFFFF
 fset PALETTE_01 #000000

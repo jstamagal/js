@@ -15,6 +15,7 @@ import sys
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 
+from rich.cells import cell_len
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
@@ -392,21 +393,6 @@ class Scrollback:
         return bool(blocks)
 
 
-def wrap_words(text: str, width: int) -> str:
-    """``text`` with each line longer than ``width`` broken at spaces; a line
-    that fits, and a word longer than ``width``, stay as they are."""
-    out: list[str] = []
-    for line in text.split("\n"):
-        while len(line) > width:
-            cut = line.rfind(" ", 0, width + 1)
-            if cut <= 0:
-                break
-            out.append(line[:cut].rstrip())
-            line = line[cut + 1:]
-        out.append(line)
-    return "\n".join(out)
-
-
 class AnswerSpan:
     """The live answer block: rendered Markdown that is replaced until committed."""
 
@@ -429,6 +415,22 @@ class ReasoningBlock:
         self.collapsed = False
         self.manual = False
         self.tokens: int | None = None
+        # The finished lines of `text` wrapped, kept between renders: a chunk
+        # rewraps only the line still open. (width, length of text wrapped, rows)
+        self._wrapped: tuple[int, int, str] = (0, 0, "")
+
+    def _body(self) -> str:
+        """`text` word-wrapped to the window, reusing the lines wrapped before."""
+        width = display.block_width()
+        done_width, done, rows = self._wrapped
+        if done_width != width:
+            done, rows = 0, ""
+        last = self.text.rfind("\n") + 1
+        if last > done:
+            rows += display.wrap_words(self.text[done:last - 1], width) + "\n"
+            done = last
+        self._wrapped = (width, done, rows)
+        return rows + display.wrap_words(self.text[done:], width) if done < len(self.text) else rows
 
     def render(self) -> str:
         """Collapsed: `N tok reasoning  KEY to expand`, the count the provider
@@ -441,7 +443,7 @@ class ReasoningBlock:
             hint = msgs.REASONING_EXPAND.body(key=self.owner.toggle_key) if self.owner.toggle_key else ""
             return grey(" ".join(filter(None, (count, msgs.REASONING_HEADING.body()))) + hint + "\n")
         heading = " ".join(filter(None, (count if self.level == 3 else "", msgs.REASONING_HEADING.body())))
-        body = wrap_words(self.text, display.block_width())
+        body = self._body()
         return grey(heading + "\n" + body + ("" if body.endswith("\n") else "\n"))
 
     def append(self, text: str) -> None:
@@ -769,7 +771,7 @@ def build_app(
                        # A long line wraps; the box grows to half the screen before it scrolls.
                        height=_input_height, dont_extend_height=True, wrap_lines=True,
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
-                                                                                   else " " * len(_plain(_prompt()))))),
+                                                                                   else " " * cell_len(_plain(_prompt()))))),
                 ConditionalContainer(
                     Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                     filter=has_focus(ex_buffer),

@@ -69,6 +69,17 @@ HOST_COLOR
 CODE_STYLE
     The Pygments style code in answers and tool exchanges is highlighted in.
 
+MARK_USER
+    The operator's speaker mark, alone in column 0: the input prompt and
+    each sent line.
+
+MARK_AGENT
+    The agent's speaker mark, alone in column 0 before its answer.
+
+MARK_GAP
+    Spaces between a speaker mark and its text; every row of the text starts
+    there.
+
 COLOR_BACKGROUND
     The screen's background in the async REPL. Empty leaves the terminal's
     own.

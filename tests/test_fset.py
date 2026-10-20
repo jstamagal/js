@@ -254,3 +254,8 @@ def test_a_theme_file_reads_its_lines_as_a_jsrc_does(tmp_path):
     path = tmp_path / "theme"
     path.write_text('fset\tMARK_GAP\t2\nfset MARK_USER ""\nfset MODEL_SET "two\\nlines %s"\n', encoding="utf-8")
     assert fset.read_file(path) == {"MARK_GAP": "2", "MARK_USER": "", "MODEL_SET": "two\nlines %s"}
+
+
+def test_mark_gap_takes_only_ascii_digits():
+    live = settings.seed_defaults()
+    assert setcmd.fset_command(live, "MARK_GAP ²").error

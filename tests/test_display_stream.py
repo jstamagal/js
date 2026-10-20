@@ -7,7 +7,7 @@ import asyncio
 import io
 import re
 
-from js import cli, display, screen
+from js import cli, display, screen, transcript
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -274,3 +274,200 @@ def test_markdown_highlights_take_the_accent_colour_not_the_tool_colour():
     fset.set_entry("COLOR_TOOL", "#405060")
     rendered = display.render_markdown("## Heading two\n\n1. first\n2. second\n", 60)
     assert "38;2;16;32;48" in rendered and "38;2;64;80;96" not in rendered
+
+
+def test_the_agent_mark_hangs_left_of_the_answer_text():
+    live = RecordingLive()
+    sink = display.Display(lambda _text: None, live=live, refresh_s=0)
+    sink.speaker(*display.agent_speaker())
+    _stream("First paragraph of the answer.\n\nSecond one.\n\n- a list item\n", sink)
+    shown = "".join(text for kind, text in live.events if kind == "commit")
+    rows = [row for row in ANSI.sub("", shown).split("\n") if row.strip()]
+    assert rows[0].startswith("● First paragraph")
+    assert all(row.startswith("  ") for row in rows[1:]), rows
+    assert all(len(row) <= live.width() for row in rows)
+
+
+def test_plain_text_hangs_under_the_mark_too():
+    out = io.StringIO()
+    sink = display.Display(out.write)
+    sink.speaker(*display.agent_speaker())
+    _stream("one\ntwo\n\nthree", sink)
+    assert ANSI.sub("", out.getvalue()) == "● one\n  two\n\n  three\n"
+
+
+def _hung_rows(text: str, width: int) -> list[str]:
+    rows = [row for row in ANSI.sub("", text).split("\n") if row.strip()]
+    assert all(len(row) < width for row in rows), rows
+    assert all(row.startswith("  ") for row in rows[1:]), rows
+    return rows
+
+
+WORDS = [f"word{n}" for n in range(40)]
+
+
+def test_a_long_user_line_wraps_under_its_text_column(monkeypatch):
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    rows = _hung_rows(display.user_line(" ".join(WORDS)), 40)
+    assert [word for row in rows for word in row.split()][1:] == WORDS
+
+
+def test_a_long_plain_answer_wraps_under_its_text_column(monkeypatch):
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    out = io.StringIO()
+    sink = display.Display(out.write)
+    sink.speaker(*display.agent_speaker())
+    _stream(" ".join(WORDS) + "\n", sink, size=7)
+    rows = _hung_rows(out.getvalue(), 40)
+    assert [word for row in rows for word in row.split()][1:] == WORDS
+
+
+def test_wide_characters_wrap_by_cells_under_the_text_column(monkeypatch):
+    from prompt_toolkit.utils import get_cwidth
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 20)
+    rows = [row for row in ANSI.sub("", display.user_line("汉字" * 30 + " 中文 结束")).split("\n") if row.strip()]
+    assert all(get_cwidth(row) < 20 for row in rows), rows
+    assert all(row.startswith("  ") for row in rows[1:]), rows
+    assert "".join(row[2:] for row in rows).replace(" ", "") == "汉字" * 30 + "中文结束"
+
+
+def test_a_plain_answer_breaks_a_wide_run_with_no_spaces_under_the_text_column(monkeypatch):
+    from prompt_toolkit.utils import get_cwidth
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 20)
+    out = io.StringIO()
+    sink = display.Display(out.write)
+    sink.speaker(*display.agent_speaker())
+    _stream("汉字" * 20 + "\n", sink, size=3)
+    rows = [row for row in ANSI.sub("", out.getvalue()).split("\n") if row.strip()]
+    assert len(rows) > 1 and all(get_cwidth(row) < 20 for row in rows), rows
+    assert all(row.startswith("  ") for row in rows[1:])
+
+
+def test_word_wrap_time_grows_with_the_text_not_its_square():
+    import time
+
+    def cost(size: int) -> float:
+        text = ("word " * (size // 5))[:size]
+        best = float("inf")
+        for _ in range(2):
+            start = time.perf_counter()
+            display.wrap_words(text, 77)
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    small, large = cost(16_000), cost(64_000)
+    assert large < small * 8, (small, large)  # four times the text: linear is ~4x, quadratic ~16x
+
+
+def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
+    wrapped: list[int] = []
+    real = display.wrap_words
+
+    def counting(text: str, width: int) -> str:
+        wrapped.append(len(text))
+        return real(text, width)
+
+    monkeypatch.setattr(display, "wrap_words", counting)
+    scroll = screen.Scrollback()
+    block = scroll.reasoning(2)
+    text = "".join(f"paragraph {n} " + "x" * 30 + "\n" for n in range(200))
+    for start in range(0, len(text), 10):
+        block.append(text[start:start + 10])
+    assert sum(wrapped) < 8 * len(text), (sum(wrapped), len(text))
+    assert transcript.strip_ansi(scroll.buffer.text).count("paragraph") == 200
+
+
+def test_a_word_carried_to_a_narrower_row_is_cut_to_fit_it(monkeypatch):
+    from prompt_toolkit.utils import get_cwidth
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    for size in range(28, 40):
+        shell = f"shell=bash\nexit=0\n--- stdout ---\n{'X' * size}\n"
+        rendered = display.render_exchange("shell", {"command": "make"}, shell, level=1)
+        assert all(get_cwidth(row) < 40 for row in ANSI.sub("", rendered).split("\n")), (size, rendered)
+    assert display.cut_points("ab " + "x" * 9, 10, 5) == [3, 8, 12]
+
+
+def test_plain_answer_wrap_time_grows_with_an_unbroken_run_not_its_square(monkeypatch):
+    import time
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+
+    def cost(size: int) -> float:
+        best = float("inf")
+        for _ in range(2):
+            sink = display.Display(io.StringIO().write)
+            sink.speaker(*display.agent_speaker())
+            start = time.perf_counter()
+            _stream("x" * size + "\n", sink, size=4096)
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    small, large = cost(8_000), cost(32_000)
+    assert large < small * 8, (small, large)
+
+
+def test_the_agent_colour_paints_the_answer_text_as_well_as_the_mark():
+    from js import fset
+
+    fset.set_entry("COLOR_AGENT_MARK", "#ffffff")
+    fset.set_entry("COLOR_AGENT", "#102030")
+    assert "38;2;16;32;48" in display.render_markdown("hello there", 40)
+    out = io.StringIO()
+    sink = display.Display(out.write)
+    sink.speaker(*display.agent_speaker())
+    _stream("hello there\n", sink)
+    assert "38;2;16;32;48" in out.getvalue()
+
+
+def test_plain_streaming_shows_each_full_row_of_an_unbroken_run_as_it_arrives(monkeypatch):
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    for char in ("漢", "x"):
+        out = io.StringIO()
+        sink = display.Display(out.write)
+        sink.speaker(*display.agent_speaker())
+        for _ in range(120):
+            sink.chunk("text", char)
+        shown = ANSI.sub("", out.getvalue())
+        assert shown.count(char) >= 60, (char, shown)  # the full rows are out before the turn ends
+        sink.finish()
+        assert ANSI.sub("", out.getvalue()).count(char) == 120
+
+
+def test_a_markdown_table_cell_wraps_instead_of_losing_its_tail(monkeypatch):
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    live = RecordingLive()
+    live.width = lambda: 39
+    sink = display.Display(lambda _text: None, live=live, refresh_s=0)
+    sink.speaker(*display.agent_speaker())
+    _stream("| a | b |\n|---|---|\n| short | " + "x" * 26 + "TAIL |\n", sink, size=200)
+    shown = "".join(text for kind, text in live.events if kind == "commit")
+    assert "TAIL" in "".join(ANSI.sub("", shown).split()) and "…" not in ANSI.sub("", shown)
+
+
+def test_plain_answer_text_keeps_its_trailing_spaces():
+    import io
+
+    out = io.StringIO()
+    sink = display.Display(out.write, colour=False)
+    sink.speaker(*display.agent_speaker())
+    sink.chunk("text", "alpha  \nbeta  ")
+    sink.finish()
+    assert "alpha  \n" in out.getvalue() and "beta  \n" in out.getvalue(), repr(out.getvalue())
+
+
+def test_a_space_that_does_not_fit_ends_the_row_and_starts_no_row():
+    assert display.wrap_words("aaaa bbbb", 4) == "aaaa\nbbbb"
+    assert display.wrap_words("aa  bb cc", 3) == "aa\nbb\ncc"
+
+
+def test_a_code_block_hangs_every_row_it_paints_under_the_text_column():
+    live = RecordingLive()
+    sink = display.Display(lambda _text: None, live=live, refresh_s=0)
+    sink.speaker(*display.agent_speaker())
+    _stream("Intro.\n\n```python\ndef f():\n\n    return 1\n```\n", sink)
+    shown = "".join(text for kind, text in live.events if kind == "commit")
+    rows = [row for row in shown.split("\n") if ANSI.sub("", row)]
+    assert all(row.startswith("  ") for row in rows[1:]), rows

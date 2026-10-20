@@ -640,7 +640,6 @@ BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just 
 
 # --- The REPL ----------------------------------------------------------------
 
-INPUT_PROMPT = "❯ "
 NO_SKILLS = Message("No skills found.")
 SKILL_ROW = Message("{name} {source} {description}", banner=False)
 SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=False)
@@ -1226,6 +1225,7 @@ FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
 # A refusal of a value for NAME, the reason worded by its own format.
 FSET_REFUSED = Message("{name}: {error}")
 FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
+FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone modifier")
 FSET_VALUE = Message("{name} {value}", banner=False)
 FSET_EMPTY = Message("{name}", banner=False)
 

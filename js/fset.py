@@ -67,13 +67,16 @@ THEME = "THEME"
 HOST_COLOR = "HOST_COLOR"
 CODE_STYLE = "CODE_STYLE"
 # The entries that are neither a colour, a palette slot nor a format.
-FIXED: tuple[str, ...] = (THEME, HOST_COLOR, CODE_STYLE)
+FIXED: tuple[str, ...] = (THEME, HOST_COLOR, CODE_STYLE, "MARK_USER", "MARK_AGENT", "MARK_GAP")
 
 _PALETTE_NAME = re.compile(r"PALETTE_(\d\d)")
 _HEX = re.compile(r"#[0-9a-fA-F]{6}")
+_DIGITS = re.compile(r"[0-9]+")
 _SLOT = re.compile(r"\d\d")
 _TOKEN = re.compile(r"%%|%s|%C(\d\d)?|\$(\$|[A-Z][A-Z0-9_]*)")
 _ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+# Variation selectors and skin-tone modifiers: terminals disagree on their width.
+_MARK_MODIFIER = re.compile("[\uFE0E\uFE0F\U0001F3FB-\U0001F3FF]")
 
 
 def palette_name(slot: int) -> str:
@@ -270,7 +273,7 @@ def is_name(name: str) -> bool:
 
 def names() -> list[str]:
     """Every entry this module holds, in the order `/fset` lists them."""
-    return [THEME, HOST_COLOR, CODE_STYLE, *ROLES, *(palette_name(n) for n in range(PALETTE_SIZE)),
+    return [*FIXED, *ROLES, *(palette_name(n) for n in range(PALETTE_SIZE)),
             *format_names()]
 
 
@@ -287,6 +290,10 @@ def check(name: str, value: str) -> str | None:
 
         if value not in set(get_all_styles()):
             return _msgs.FSET_NO_CODE_STYLE.said(value=value)
+    if name == "MARK_GAP" and not _DIGITS.fullmatch(value):
+        return _msgs.EXPECTED_NONNEGATIVE_INTEGER.said()
+    if name in ("MARK_USER", "MARK_AGENT") and _MARK_MODIFIER.search(value):
+        return _msgs.FSET_MARK_MODIFIER.said()
     if _PALETTE_NAME.fullmatch(name) and not _HEX.fullmatch(value):
         return _msgs.EXPECTED_COLOUR.said(value=value)
     if name in ROLES or name == HOST_COLOR:
@@ -451,6 +458,13 @@ def runs(fmt: str, args: list[str], *, hole: str = "", whole: str = "") -> list[
 # Output targets. Each turns runs into what one target draws; NO_COLOR is
 # applied here and in `fg`/`bg`, through `colour_on`, and nowhere else.
 # ---------------------------------------------------------------------------
+
+def mark_gap() -> int:
+    """The spaces between a speaker's mark and its text: MARK_GAP, or 1 when
+    it is not a number."""
+    gap = lookup("MARK_GAP") or ""
+    return int(gap) if _DIGITS.fullmatch(gap) else 1
+
 
 def colour_on() -> bool:
     """Whether js draws colour at all: not under NO_COLOR (no-color.org)."""

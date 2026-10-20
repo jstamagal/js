@@ -154,7 +154,7 @@ class StreamSink:
                     factory(self._markdown) if factory is not None
                     else display.Display.for_stream(sys.stdout, markdown=self._markdown)
                 )
-                self._answer.mark(display.assistant_mark())
+                self._answer.speaker(*display.agent_speaker())
             self._answer.chunk("text", chunk)
 
     def close(self, reasoning_tokens: int | None = None) -> None:

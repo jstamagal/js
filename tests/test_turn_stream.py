@@ -16,7 +16,7 @@ class _Display:
         self.log = log
         self.log.append(("open", markdown))
 
-    def mark(self, text):
+    def speaker(self, mark, indent):
         pass
 
     def chunk(self, kind, text):
