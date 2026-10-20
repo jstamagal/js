@@ -538,29 +538,50 @@ def name_kind_text(session: Session) -> str:
     return session.name if marked == "-" else f"{session.name} · {marked}"
 
 
-_WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
+@dataclass(frozen=True)
+class RowLayout:
+    when: int = 12
+    mode: int = 4
+    agent: int = 16
+    directory: int = 28
+    turns: int = 5
+    length: int = 6
+    speaker: int = 10
+    indent: str = "   "
+    last_branch: str = "└─ "
+    branch: str = "├─ "
+    number: str = "#{number:04d}"
 
 
-def header_line() -> str:
-    return (msgs.SESSION_PICKER_HEADER.words(value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=_WHEN, value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=_MODE, value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=_AGENT, value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=_DIR, value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=_TURNS, value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=_LENGTH))
+_STOCK_LAYOUT = RowLayout()
 
 
-def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
+def header_line(*, layout: RowLayout = _STOCK_LAYOUT) -> str:
+    return msgs.SESSION_PICKER_HEADER.words(
+        value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=layout.when,
+        value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=layout.mode,
+        value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=layout.agent,
+        value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=layout.directory,
+        value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=layout.turns,
+        value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=layout.length)
+
+
+def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ", layout: RowLayout = _STOCK_LAYOUT) -> str:
     """A session row: marker, when, mode, agent, dir, turns, length, then the
     session's name when it has one and its kind. A nested branch shows its
     branch point in place of mode, agent and dir."""
     session = item.session
     assert session is not None
-    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {name_kind_text(session)}")
+    tail = (f" {session.turns:>{layout.turns}}  {length_text(session):<{layout.length}} {name_kind_text(session)}")
     when = when_text(session.started if session.started is not None else session.when, now)
     if item.depth == 0:
-        return (f"{marker} {when:<{_WHEN}}  {_fit(session.mode or '-', _MODE)}  "
-                f"{_fit(session.agent or '-', _AGENT)}  {_fit(short_dir(session.cwd, home), _DIR)}{tail}")
-    prefix = "   " * (item.depth - 1) + ("└─ " if item.last else "├─ ")
+        return (f"{marker} {when:<{layout.when}}  {_fit(session.mode or '-', layout.mode)}  "
+                f"{_fit(session.agent or '-', layout.agent)}  {_fit(short_dir(session.cwd, home), layout.directory)}{tail}")
+    prefix = layout.indent * (item.depth - 1) + (layout.last_branch if item.last else layout.branch)
     point = msgs.SESSIONS_BRANCH.text(point=session_store.point_label(session.branch_point)
                                       if session.branch_point is not None else "-")
-    span = _MODE + _AGENT + _DIR + 4 - len(prefix)
-    return f"{marker} {prefix}{when:<{_WHEN}}  {_fit(point, span)}{tail}"
+    span = layout.mode + layout.agent + layout.directory + 4 - len(prefix)
+    return f"{marker} {prefix}{when:<{layout.when}}  {_fit(point, span)}{tail}"
 
 
 def excerpt(text: str, spans: tuple[tuple[int, int], ...], *, lead: int = 30,
@@ -577,19 +598,19 @@ def excerpt(text: str, spans: tuple[tuple[int, int], ...], *, lead: int = 30,
     return head + cut + tail, moved
 
 
-def hit_line(number: int | None, who: str, text: str) -> str:
+def hit_line(number: int | None, who: str, text: str, *, layout: RowLayout = _STOCK_LAYOUT) -> str:
     """A search hit's matching row, as it shows under the session."""
-    head = f"#{number:04d} " if isinstance(number, int) and number > 0 else ""
+    head = layout.number.format(number=number) + " " if isinstance(number, int) and number > 0 else ""
     return f"{head}{who}  {' '.join(text.split())}"
 
 
-def message_lines(rows: list[Any]) -> list[str]:
+def message_lines(rows: list[Any], *, layout: RowLayout = _STOCK_LAYOUT) -> list[str]:
     """The message list of a session: number, clock, who and heading per row,
     and the model stamp on the rows where it changes."""
     lines = []
     model = None
     for row in rows:
-        text = f"#{row.number:04d} {clock_text(row.ts)} {row.who:<10} | {' '.join(row.heading().split())}"
+        text = f"{layout.number.format(number=row.number)} {clock_text(row.ts)} {row.who:<{layout.speaker}} | {' '.join(row.heading().split())}"
         if row.model and row.model != model:
             model = row.model
             text += f"  [{model}]"
