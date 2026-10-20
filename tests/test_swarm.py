@@ -472,6 +472,20 @@ def _user_texts_of(messages: list[dict]) -> list[str]:
     return [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
 
 
+def test_swarm_runner_fails_when_an_agent_cannot_be_configured(tmp_path, monkeypatch):
+    def configure(spec):
+        raise ValueError("invalid agent configuration")
+
+    monkeypatch.setattr(swarm_run, "_configure", configure)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 1
+    events = _events(out)
+    assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
+    assert events[-1]["exit_code"] == 1
+
+
 def test_recruit_in_process_adds_an_agent_to_the_same_loop(tmp_path, monkeypatch):
     _agent_dir(tmp_path, monkeypatch)
     room = swarm.Room(tmp_path / "bus")

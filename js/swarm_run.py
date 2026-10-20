@@ -233,6 +233,8 @@ class Runner:
             reason = "cancelled"
         except Exception as exc:  # noqa: BLE001 - one agent's failure ends that agent, not the swarm
             reason = "error"
+            if self.code == 0:
+                self.code = 1
             events.emit("error", message=f"{type(exc).__name__}: {exc}", retryable=False)
         finally:
             if cfg is not None:
