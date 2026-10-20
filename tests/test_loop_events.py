@@ -63,3 +63,17 @@ def test_flight_autolog_failure_goes_to_its_event_callback(tmp_path, capsys):
     assert events[0][0] == "compaction_output"
     assert isinstance(dict(events[0][1]["output"].fields)["fields"]["error"], OSError)
     assert capsys.readouterr() == ("", "")
+
+
+def test_agent_registry_warning_is_an_event(tmp_path, capsys):
+    from js.toolkit.registry import _agent_tools
+
+    agent = tmp_path / "read"
+    agent.mkdir()
+    (agent / "prompt.md").write_text("prompt")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert _agent_tools(tmp_path, {"read"}) == ()
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["agent"] == "read"
+    assert capsys.readouterr() == ("", "")
