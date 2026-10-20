@@ -962,12 +962,20 @@ def provider_from_login_or_token(
     provider_headers: dict[str, str] | None = None,
 ) -> OpenAICodexProvider:
     """The Codex provider for the selected token, with its saved refresh state.
-    Its requests also carry ``provider_headers``."""
+    A token of the saved login's account selects the saved login, whose token
+    is the current one after a refresh rotated it. Its requests also carry
+    ``provider_headers``."""
     from . import logins
 
     login = logins.load_logins().get(codex_auth.CODEX_PROVIDER_ID)
+    saved_account = None
+    if login is not None and login.provider_api_key:
+        saved_account = login.codex_account_id or codex_auth.token_profile(login.provider_api_key)[0]
     if login is not None and login.provider_api_key and (
-        not provider_api_key or provider_api_key == login.provider_api_key
+        not provider_api_key
+        or provider_api_key == login.provider_api_key
+        or (saved_account is not None
+            and codex_auth.token_profile(provider_api_key)[0] == saved_account)
     ):
         provider = OpenAICodexProvider.from_login(login, base_url=provider_base_url)
     else:

@@ -87,6 +87,24 @@ def test_explicit_codex_token_selects_its_own_account(monkeypatch):
     asyncio.run(drive())
 
 
+def test_superseded_token_of_the_saved_account_uses_the_saved_login(monkeypatch):
+    claims = {"https://api.openai.com/auth": {"chatgpt_account_id": "acct_saved"}}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    superseded = f"header.{payload}.old-signature"
+    saved = logins.Login(
+        provider_id="openai-codex", provider_api_key="rotated-token",
+        codex_account_id="acct_saved", codex_refresh_token="saved-refresh",
+        codex_token_expires=4102444800,
+    )
+    monkeypatch.setattr(logins, "load_logins", lambda: {"openai-codex": saved})
+
+    provider = codex_provider.provider_from_login_or_token(
+        provider_base_url=None, provider_api_key=superseded,
+    )
+
+    assert asyncio.run(provider._ensure_access()) == ("rotated-token", "acct_saved")
+
+
 def test_streamed_text_items_keep_the_reasoning_between_them(monkeypatch):
     reasoning = {
         "type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "signed",
