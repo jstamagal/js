@@ -8,7 +8,7 @@ import curses
 import os
 import sys
 from getpass import getpass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import ai
@@ -244,6 +244,7 @@ def _select_models_to_cache(
     annotate_dialects: bool = True,
     saved: Login | None = None,
     pending: list[Login] | None = None,
+    noninteractive=None,
 ) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
@@ -256,7 +257,7 @@ def _select_models_to_cache(
     if not models:
         return models
     if not _interactive():
-        return models
+        return models if noninteractive is None else noninteractive(provider_id, models)
     dialects = _dialect_map(provider_id) if annotate_dialects else {}
     cache = load_model_cache()
     cached = cache.get(provider_id, [])
@@ -300,7 +301,7 @@ def _menu(*args, **kwargs):
     return curses.wrapper(*args, **kwargs)
 
 
-def _login_provider_rows() -> list[tuple[str, str, str]]:
+def _login_provider_rows(*, hidden=("openai-completions", "openai-responses")) -> list[tuple[str, str, str]]:
     saved = load_logins()
     rows: list[tuple[str, str, str]] = []
     seen: set[str] = set()
@@ -317,7 +318,7 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
             continue
         # openai-completions / openai-responses live under <add custom provider>;
         # a top-level row is a duplicate path to the same shape.
-        if provider.id in ("openai-completions", "openai-responses"):
+        if provider.id in hidden:
             continue
         env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
         target = env_rows if env_configured else registry_rows
@@ -351,13 +352,14 @@ def _select_api_shape() -> tuple[str, str] | None:
     return pid, sdk
 
 
-def _input(prompt: str, *, default: str | None = None, secret: bool = False) -> str | None:
+def _input(prompt: str, *, default: str | None = None, secret: bool = False, read=None, read_secret=None, write=None) -> str | None:
     label = prompt if default in (None, "") else f"{prompt} [{default}]"
     try:
         hidden = secret and paranoid.masks(paranoid.mode())
-        value = getpass(f"{label}: ") if hidden else input(f"{label}: ")
+        reader = (getpass if read_secret is None else read_secret) if hidden else (input if read is None else read)
+        value = reader(f"{label}: ")
     except (EOFError, KeyboardInterrupt):
-        print()
+        (print if write is None else write)()
         return None
     stripped = value.strip()
     if stripped:
@@ -482,20 +484,22 @@ def _display_models(models: list[str]) -> None:
         msgs.say(msgs.MORE_ROWS, count=len(models) - len(shown))
 
 
-def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | None | bool:
+def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, say=None, write=None) -> str | None | bool:
+    announce = msgs.say if say is None else say
+    reader = input if read is None else read
     if not models:
         return True
     # Enter always means "add it, I don't care to test"; a model number means
     # "test that one first". require_test only adds a heads-up that the listing
     # didn't prove the key can generate — it never forces a test.
     if require_test:
-        msgs.say(msgs.LOGIN_LISTING_NOT_PROOF)
+        announce(msgs.LOGIN_LISTING_NOT_PROOF)
     prompt = msgs.LOGIN_ASK_TEST.text()
     while True:
         try:
-            choice = input(prompt).strip()
+            choice = reader(prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            (print if write is None else write)()
             return False
         if not choice:
             return True
@@ -509,21 +513,22 @@ def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | No
             index = int(choice) - 1
             if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
                 return models[index]
-        msgs.say(msgs.LOGIN_TEST_CHOICES)
+        announce(msgs.LOGIN_TEST_CHOICES)
 
-def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool:
+def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str, *, settings=None, say=None) -> bool:
     # Seeing a real answer back IS the confirmation; a further "hit enter to
     # add" after that just re-asked the same question the model number already
     # answered, so it's gone — a bad answer or an exception is still visible
     # right here, and Ctrl-C still works anywhere above this point.
-    msgs.say(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
+    announce = msgs.say if say is None else say
+    announce(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
     chunks: list[str] = []
 
     def on_text(chunk: str) -> None:
         chunks.append(chunk)
 
     try:
-        settings = config.run_settings()
+        settings = config.run_settings() if settings is None else settings
         run = SimpleNamespace(**turn_settings.project(settings))
         result = model_client.stream_model(
             model_id=model_id,
@@ -541,16 +546,16 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
-        msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
+        announce(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
         return False
 
     answer = result.text.strip() or "".join(chunks).strip()
-    msgs.say(msgs.LOGIN_TEST_ANSWER, answer=answer)
+    announce(msgs.LOGIN_TEST_ANSWER, answer=answer)
     return True
 
-def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str]) -> bool | None:
+def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str], *, listing_proves_auth=None) -> bool | None:
     _display_models(models)
-    if provider.models_list_validates_auth:
+    if (provider.models_list_validates_auth if listing_proves_auth is None else listing_proves_auth(provider)):
         # Listing already proved the credentials work — asking "add without a
         # test, or verify first?" here is a prompt with only one sane answer.
         return True
@@ -842,7 +847,31 @@ def _manage_saved_provider(provider_id: str) -> None:
             return
 
 
-def _run_login(provider_id: str | None = None) -> int:
+@dataclass(frozen=True)
+class LoginAssembly:
+    """Services for collecting, checking, curating and saving an API login."""
+
+    collect: Callable | None = None
+    fetch: Callable | None = None
+    confirm: Callable | None = None
+    keep: Callable | None = None
+    save: Callable | None = None
+    cache: Callable | None = None
+    say: Callable | None = None
+    warn: Callable | None = None
+    unreachable: Callable | None = None
+
+
+def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None = None) -> int:
+    assembly = assembly or LoginAssembly()
+    collect = _collect_api_login if assembly.collect is None else assembly.collect
+    fetch = test_login_with_metadata if assembly.fetch is None else assembly.fetch
+    confirm = _post_fetch_confirmation if assembly.confirm is None else assembly.confirm
+    keep = _keep_list if assembly.keep is None else assembly.keep
+    save = save_login if assembly.save is None else assembly.save
+    cache = cache_models if assembly.cache is None else assembly.cache
+    say = msgs.say if assembly.say is None else assembly.say
+    warn = msgs.warn if assembly.warn is None else assembly.warn
     if provider_id is None:
         return _manage_providers()
     raw_provider_id = provider_id
@@ -863,46 +892,48 @@ def _run_login(provider_id: str | None = None) -> int:
     if xai_auth.is_xai_oauth_provider(provider_id):
         return _run_xai_login()
 
-    login = _collect_api_login(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
+    login = collect(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:
         return 0
 
-    msgs.say(msgs.LOGIN_FETCHING)
+    say(msgs.LOGIN_FETCHING)
     try:
-        models, model_metadata = test_login_with_metadata(login)
+        models, model_metadata = fetch(login)
     except Exception as exc:  # noqa: BLE001
+        if assembly.unreachable is not None:
+            return assembly.unreachable(login, exc)
         # A server that is down now is still saved; its models come later
         # through Models > Re-fetch.
-        msgs.warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
+        warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
         base = login.provider_base_url or ""
         if "404" in str(exc) and base and not base.rstrip("/").endswith("/v1"):
-            msgs.warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
+            warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
         try:
-            save_login(login)
+            save(login)
         except LoginsCorruptError as save_exc:
-            msgs.warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
+            warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
             return 1
         canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-        msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
+        say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
         return 0
 
-    confirmed = _post_fetch_confirmation(login, provider, models)
+    confirmed = confirm(login, provider, models)
     if confirmed is None:
         return 0
     if confirmed is False:
         return 1
 
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    to_cache, login = _keep_list(canonical_id, login, models)
+    to_cache, login = keep(canonical_id, login, models)
     if to_cache is None:
         return 0
     try:
-        save_login(login)
-        cache_models(canonical_id, to_cache, metadata=model_metadata)
+        save(login)
+        cache(canonical_id, to_cache, metadata=model_metadata)
     except LoginsCorruptError as exc:
-        msgs.warn(msgs.LOGIN_NOT_SAVED, error=exc)
+        warn(msgs.LOGIN_NOT_SAVED, error=exc)
         return 1
-    msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
+    say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
     return 0
 
 
