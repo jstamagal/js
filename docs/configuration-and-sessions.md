@@ -236,6 +236,29 @@ skipped.
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
 temporary and is removed after 2 releases.
 
+A `jsrc` that still holds the old setting names (`model.id`,
+`limits.max_read_lines`) is rewritten in place the first time config load
+reads it (`settings.load_jsrc_files`, through `rename.migrate_jsrc_file`),
+before any line is parsed. This holds for the global `~/.js/jsrc`, the
+project `.js/jsrc` and `.js/jsrc.local`, and preset files. The rules are
+`js/rename.py`'s, the same as `scripts/rename-settings.py --write`. The
+original is copied first to `jsrc.bak-YYYY-MM-DD` beside it (`.1`, `.2`, ...
+when that name exists; a backup is never overwritten), and one line on stderr
+names the file and the backup. A live line it cannot convert safely (an
+`alias`/`on` body with a shell operator that sets an old name, a deleted
+setting, the old spelling of a name the file also sets by its new one) is
+commented out as `# js: not migrated: <line as written>`, a note such as
+`(setting deleted)` before the colon. A line that only mentions an old name,
+in a value or in a body that does not set it, stays live. The backup and the
+new file are created with the original's permissions.
+One warning lists those line numbers for a hand edit, so startup loads with
+no unknown-setting errors. A file that is already converted is not changed,
+so a second start does nothing. A file or directory js cannot write is left
+as it is, with one warning naming the command to run by hand
+(`scripts/rename-settings.py --write <file>`). The old names are still
+refused as live settings: `set model.id x` typed in the REPL or given with
+`--extra` is an unknown setting.
+
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
 files -- see [inline-directives.md](inline-directives.md).

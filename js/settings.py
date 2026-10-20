@@ -887,13 +887,18 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
 
 
 def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
-    """Apply each existing jsrc script's settings onto ``settings`` in order.
-    Returns a list of human-readable warnings (bad lines) — a single typo
-    never aborts the boot."""
+    """Apply each existing jsrc script's settings onto ``settings`` in order,
+    each first rewritten from the old setting names when it still holds them
+    (`rename.migrate_jsrc_file`). Returns a list of human-readable warnings
+    (bad lines) — a single typo never aborts the boot."""
+    from .rename import migrate_jsrc_file  # lazy: rename imports this module
+
     warnings: list[str] = []
     for path in paths:
         if path.exists():
-            _apply_jsrc(path.resolve(strict=False), settings, [], warnings)
+            target = path.resolve(strict=False)
+            migrate_jsrc_file(target)
+            _apply_jsrc(target, settings, [], warnings)
     return warnings
 
 

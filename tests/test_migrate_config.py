@@ -304,3 +304,145 @@ def test_a_migrated_map_child_keeps_its_quotes_as_they_were(tmp_path, monkeypatc
     loaded = settings.seed_defaults()
     settings.load_jsrc_files([target], loaded)
     assert settings.knob(loaded, "EXTRA_PARAMS")["note"] == '"quoted" text'
+
+
+# ---------------------------------------------------------------------------
+# A jsrc that still holds old names is rewritten once when js loads it
+# ---------------------------------------------------------------------------
+
+_OLD_JSRC = "set model.id old/model\nset limits.max_read_lines 77\n"
+
+
+def _load(path):
+    from js import settings
+
+    loaded = settings.seed_defaults()
+    return loaded, settings.load_jsrc_files([path], loaded)
+
+
+def test_an_old_names_jsrc_loads_with_the_new_names_and_a_backup(tmp_path):
+    from js import settings
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
+
+    loaded, warnings = _load(jsrc)
+
+    assert warnings == []
+    assert settings.knob(loaded, "MODEL") == "old/model"
+    assert settings.knob(loaded, "READ_LINES_MAX") == 77
+    assert jsrc.read_text(encoding="utf-8") == "set MODEL old/model\nset READ_LINES_MAX 77\n"
+    backups = [path for path in rc.iterdir() if path != jsrc]
+    assert [path.read_text(encoding="utf-8") for path in backups] == [_OLD_JSRC]
+
+
+def test_a_second_load_changes_nothing(tmp_path):
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
+    _load(jsrc)
+    after = {path: path.read_text(encoding="utf-8") for path in rc.iterdir()}
+
+    _load(jsrc)
+
+    assert {path: path.read_text(encoding="utf-8") for path in rc.iterdir()} == after
+
+
+def test_an_existing_backup_is_kept(tmp_path):
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
+    _load(jsrc)
+    first = {path: path.read_text(encoding="utf-8") for path in rc.iterdir() if path != jsrc}
+    jsrc.write_text("set agent forge\n", encoding="utf-8")
+
+    _load(jsrc)
+
+    assert all(path.read_text(encoding="utf-8") == text for path, text in first.items())
+    assert len(list(rc.iterdir())) == 3
+
+
+def test_an_unconvertible_live_line_is_commented_out_and_named(tmp_path, capsys):
+    from js.rename import NOT_MIGRATED
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    bad = "alias a set model.id x >/tmp/out"
+    jsrc.write_text(f"set model.id m\n{bad}\n", encoding="utf-8")
+
+    _loaded, warnings = _load(jsrc)
+
+    assert warnings == []
+    lines = jsrc.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "set MODEL m"
+    assert lines[1].startswith(NOT_MIGRATED) and lines[1].endswith(bad)
+    assert f"{jsrc}:2" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(__import__("os").geteuid() == 0, reason="root writes a read-only file")
+def test_a_read_only_jsrc_is_left_alone_with_a_warning(tmp_path, capsys):
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
+    jsrc.chmod(0o444)
+
+    _load(jsrc)
+
+    assert jsrc.read_text(encoding="utf-8") == _OLD_JSRC
+    assert list(rc.iterdir()) == [jsrc]
+    assert "rename-settings.py --write" in capsys.readouterr().err
+
+
+def test_a_new_names_jsrc_that_mentions_an_old_name_is_left_as_it_is(tmp_path):
+    from js import settings
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    text = 'set SHELL_ENV_KEEP PATH,JS_TEMP\nset BANNER "was model.id"\nalias m echo agent=forge\n'
+    jsrc.write_text(text, encoding="utf-8")
+
+    loaded, _warnings = _load(jsrc)
+
+    assert jsrc.read_bytes() == text.encode("utf-8")
+    assert list(rc.iterdir()) == [jsrc]
+    assert settings.knob(loaded, "BANNER") == "was model.id"
+
+
+def test_a_name_set_from_both_spellings_keeps_the_new_spelling_live(tmp_path):
+    from js import settings
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text("set MODEL new/model\nset model.id old/model\n", encoding="utf-8")
+
+    loaded, _warnings = _load(jsrc)
+
+    assert settings.knob(loaded, "MODEL") == "new/model"
+
+
+def test_a_backup_name_taken_by_another_start_still_migrates(tmp_path, monkeypatch):
+    import datetime
+
+    from js import rename
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
+    taken = rc / f"jsrc.bak-{datetime.date.today().isoformat()}"
+    taken.write_text("another start's backup\n", encoding="utf-8")
+    # Another js start creates the name between the check and the create.
+    monkeypatch.setattr(rename.os.path, "lexists", lambda _path: False)
+
+    _load(jsrc)
+
+    assert jsrc.read_text(encoding="utf-8") == "set MODEL old/model\nset READ_LINES_MAX 77\n"
+    assert taken.read_text(encoding="utf-8") == "another start's backup\n"
