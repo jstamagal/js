@@ -217,4 +217,3 @@ def render_note(context: Any, level: str, lines: list, *, style: str = "COLOR_AC
                                               style=dim))
 
     _show(draw, render_max_lines(context))
-

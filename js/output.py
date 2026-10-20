@@ -4,7 +4,9 @@ a view.
 A turn emits `OutputEvent`s instead of writing to stdout; a `Sink` renders
 them. `Telemetry.sink` is the sink a turn emits to; without one, `sink_of`
 gives js's own: the transcript record (`js/transcript.py`), then the console
-(`js/console.py`). See docs/nonblocking-windows.md.
+(`js/console.py`). Library callers can scope a sink with ``using_sink``;
+``emit`` sends it an event, or uses the console by default.
+See docs/nonblocking-windows.md.
 
 The loop's events, and their fields:
 
@@ -13,7 +15,7 @@ The loop's events, and their fields:
     tools_settle   (none): the run of quiet tool calls ends
     run_line       fields: the run line's "key=value" strings
     call_stats     label, elapsed_s, finish, tool_calls, tokens,
-                   first_token_s, prompt_tokens, cached_tokens
+                   first_token_s, prompt_tokens, cached_tokens, trace, suppressed
     stream_open    stream: a turn's streamed reply begins
     answer_started stream, suppressed
     answer         stream, text, markdown, suppressed
@@ -21,7 +23,13 @@ The loop's events, and their fields:
     reasoning      stream, text, level, suppressed
     reasoning_end  stream, tokens
     notice         message, fields, stderr, flush
-    network        level, line (a Message's Said or text), fallback
+    network        level, line (text, Said, Failure or LabelledLine), fallback
+    retry_wait     n, attempts, delay, error, label
+    user_echo      text
+    kernel_execution context, level, code, stdout, stderr, display, error,
+                   elapsed, cell, added, removed, namespace, images, interrupted
+    kernel_note    context, kind (event/entry/note), level, content, style, verbose_only
+    migration_notice message, fields, stream
 
 ``call`` ties a tool_result to its tool_call; ``stream`` ties the chunks of
 one turn's streamed reply together; ``context`` is the call's ToolContext.

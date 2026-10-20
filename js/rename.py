@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TextIO
 
 from . import messages as msgs
+from . import output
 from .settings import SPEC_BY_KEY, _locked_jsrc, parse_bool
 
 # The names settings had before they were UPPER_SNAKE. `set`, jsrc and
@@ -630,6 +631,10 @@ def _backup(path: Path, data: bytes, mode: int) -> Path:
         number += 1
 
 
+def _notice(message: msgs.Message, stream: TextIO, **fields) -> None:
+    output.emit(output.event("migration_notice", message=message, fields=fields, stream=stream))
+
+
 def migrate_jsrc_file(path: Path, out: TextIO | None = None) -> bool:
     """Rewrite the jsrc at ``path`` in place by `migrate_jsrc_text` when that
     changes it, after copying it to a dated backup beside it. Prints one line
@@ -657,7 +662,7 @@ def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
     if not (os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)):
         if path not in _UNWRITABLE_WARNED:
             _UNWRITABLE_WARNED.add(path)
-            msgs.say(msgs.JSRC_NOT_WRITABLE, file=stream, path=path, command=_command(path))
+            _notice(msgs.JSRC_NOT_WRITABLE, stream, path=path, command=_command(path))
         return False
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
@@ -668,11 +673,11 @@ def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
         os.replace(temp, path)
     except OSError:
         temp.unlink(missing_ok=True)
-        msgs.say(msgs.JSRC_NOT_WRITABLE, file=stream, path=path, command=_command(path))
+        _notice(msgs.JSRC_NOT_WRITABLE, stream, path=path, command=_command(path))
         return False
-    msgs.say(msgs.JSRC_RENAMED, file=stream, path=path, backup=backup)
+    _notice(msgs.JSRC_RENAMED, stream, path=path, backup=backup)
     if commented:
-        msgs.say(msgs.JSRC_NOT_RENAMED, file=stream, path=path, lines=",".join(map(str, commented)))
+        _notice(msgs.JSRC_NOT_RENAMED, stream, path=path, lines=",".join(map(str, commented)))
     return True
 
 

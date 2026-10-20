@@ -291,3 +291,16 @@ def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["error"] == "invalid skill"
     assert capsys.readouterr() == ("", "")
+
+
+def test_jsrc_migration_notice_is_an_event(tmp_path, capsys):
+    from js import rename
+
+    path = tmp_path / "jsrc"
+    path.write_text("set model.id fixture\n")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert rename.migrate_jsrc_file(path)
+    assert [event.name for event in events] == ["migration_notice"]
+    assert dict(events[0].fields)["fields"]["path"] == path
+    assert capsys.readouterr() == ("", "")

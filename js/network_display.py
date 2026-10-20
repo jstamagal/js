@@ -112,4 +112,3 @@ def _request_host(err: BaseException) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return getattr(getattr(request, "url", None), "host", "") or ""
-
