@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -308,8 +308,9 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     return concrete_path
 
 
-def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path) -> Path:
-    for root in (project_root, global_root, repo_root):
+def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path, *, roots=None) -> Path:
+    roots = (repo_root, global_root, project_root) if roots is None else roots
+    for root in reversed(roots):
         candidate = root / agent_id
         try:
             if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
@@ -319,7 +320,7 @@ def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, projec
             # NFS/automount host). Stop here; falling through would silently
             # run a different agent of the same name.
             raise ValueError(msgs.CONFIG_AGENT_AT_IS_UNREADABLE.format(agent_id=agent_id, candidate=candidate, strerror=exc.strerror)) from exc
-    return repo_root / agent_id
+    return (roots[0] if roots else repo_root) / agent_id
 
 def _preset_config_paths(
     presets: list[str] | None,
@@ -442,6 +443,18 @@ def _set_by_invocation(key: str, env: Mapping[str, str], extras: list[str] | Non
     return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras or ())
 
 
+@dataclass(frozen=True)
+class ConfigAssembly:
+    """Dependencies used to assemble a Config from the invocation layers."""
+
+    prompt_roots: tuple[Path, ...] | None = None
+    collect: Callable | None = None
+    set_banner: Callable | None = None
+    bind_formats: Callable | None = None
+    resolve_route: Callable | None = None
+    missing_login: Callable | None = None
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -452,6 +465,7 @@ def from_env(
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
+    assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
 
@@ -465,6 +479,11 @@ def from_env(
     - Provider-specific env vars are scanned so a fresh shell with
       `DEEPSEEK_API_KEY` works without `js --login`.
     """
+    assembly = assembly or ConfigAssembly()
+    collect = _settings.collect_settings if assembly.collect is None else assembly.collect
+    set_banner = msgs.set_banner if assembly.set_banner is None else assembly.set_banner
+    bind_formats = _fset.bind_settings if assembly.bind_formats is None else assembly.bind_formats
+    resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
     env = os.environ
     pkg = Path(__file__).resolve().parent
     js_root = pkg.parent
@@ -476,17 +495,17 @@ def from_env(
         presets=presets,
     )
 
-    jsrc_settings = _settings.collect_settings(
+    jsrc_settings = collect(
         config_paths=config_paths,
         env={},
         extras=None,
     )
-    js_root_settings = _settings.collect_settings(
+    js_root_settings = collect(
         config_paths=config_paths,
         extras=extras,
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
-    msgs.set_banner(str(_settings.knob(js_root_settings, "BANNER")))
+    set_banner(str(_settings.knob(js_root_settings, "BANNER")))
     default_model = _settings.default_value("MODEL")
     from . import model_metadata
 
@@ -501,7 +520,7 @@ def from_env(
     _cfg_base_url = _settings.get_dotted(js_root_settings, ("BASE_URL",))
     _cfg_api_key = _settings.get_dotted(js_root_settings, ("API_KEY",))
     try:
-        route = _routing.resolve_model_route(
+        route = resolve_route(
             raw_model,
             configured_provider_id=_cfg_provider_id,
             configured_base_url=_cfg_base_url,
@@ -510,20 +529,23 @@ def from_env(
             explicit_model=explicit_model,
             prefix_overrides_provider=invocation_explicit_model and not explicit_provider,
         )
-    except _routing.ProviderNotLoggedInError:
-        if invocation_explicit_model:
+    except _routing.ProviderNotLoggedInError as exc:
+        if assembly.missing_login is not None:
+            route = assembly.missing_login(exc, raw_model)
+        elif invocation_explicit_model:
             raise
         # The base/default model names a provider the operator never logged into.
         # Don't fail config-build: a -m override, an agent `model:`, or a later
         # /model may replace it, and a plain run surfaces the friendly
         # not-logged-in error at the model boundary (model_client). Carry NO
         # provider so nothing farms the vendor's env keys in the meantime.
-        route = _routing.ModelRoute(
-            model=raw_model,
-            provider_id=None,
-            base_url=_cfg_base_url,
-            api_key=_cfg_api_key,
-        )
+        else:
+            route = _routing.ModelRoute(
+                model=raw_model,
+                provider_id=None,
+                base_url=_cfg_base_url,
+                api_key=_cfg_api_key,
+            )
     model = route.model
     provider_id = route.provider_id
     provider_base_url = route.base_url
@@ -570,7 +592,7 @@ def from_env(
 
     global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
     project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
-    _fset.bind_settings(js_root_settings)
+    bind_formats(js_root_settings)
 
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,
@@ -585,10 +607,11 @@ def from_env(
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
-        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
+        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents", roots=assembly.prompt_roots),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
-        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
+        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents")
+        if assembly.prompt_roots is None else assembly.prompt_roots,
         agents_files=tuple(p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,
         mcp=mcp,

@@ -276,3 +276,23 @@ def test_get_bool_always_returns_a_bool(tmp_path):
     assert compaction.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
     assert compaction.get_bool(cfg, "COMPACTION_AUTO", True) is True
     assert compaction.get_bool(_compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "yes"}), "COMPACTION_AUTO", None) is True
+
+
+def test_config_assembly_supplies_roots_and_display_services(tmp_path):
+    import copy
+    from js.config import ConfigAssembly
+
+    root = tmp_path / "agents"
+    prompt = root / "custom"
+    prompt.mkdir(parents=True)
+    (prompt / "prompt.md").write_text("instructions")
+    values = settings.seed_defaults()
+    values["MODEL"] = "offline-test"
+    seen = []
+    cfg = from_env(save_session=False, agent_id="custom", cwd=tmp_path,
+                   assembly=ConfigAssembly(prompt_roots=(root,),
+                       collect=lambda **kwargs: copy.deepcopy(values),
+                       set_banner=lambda value: seen.append("banner"),
+                       bind_formats=lambda values: seen.append("formats")))
+    assert cfg.prompts_dir == prompt and cfg.prompt_roots == (root,)
+    assert seen == ["banner", "formats"]
