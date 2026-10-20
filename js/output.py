@@ -42,6 +42,8 @@ to draw the exchange whole when it finishes. Every call still reaches the sink.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -87,6 +89,34 @@ class Sink(Protocol):
 def event(name: str, /, **fields: Any) -> OutputEvent:
     """An `OutputEvent` named ``name`` carrying ``fields``."""
     return OutputEvent(name, fields=tuple(fields.items()))
+
+
+_sink: ContextVar[Sink | None] = ContextVar("js_output_sink", default=None)
+
+
+@contextmanager
+def using_sink(sink: Sink):
+    """Send this task's library output to ``sink`` for the scope."""
+    token = _sink.set(sink)
+    try:
+        yield
+    finally:
+        _sink.reset(token)
+
+
+def emit(event: OutputEvent) -> None:
+    """Hand library output to the current sink, or js's console by default."""
+    sink = _sink.get()
+    if sink is None:
+        from .console import ConsoleSink
+
+        sink = ConsoleSink(None)
+    sink.emit(event)
+
+
+def notice(message: Any, /, *, stderr: bool = True, flush: bool = True, **fields: Any) -> None:
+    """Emit a catalogue message with its fields and destination intact."""
+    emit(event("notice", message=message, fields=fields, stderr=stderr, flush=flush))
 
 
 class Key:

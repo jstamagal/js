@@ -291,10 +291,10 @@ class TranscriptSink:
         self._plain(message.line(**fields) + "\n", stderr=stderr)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        from . import stream_transport
+        from . import network_display, stream_transport
 
         if fallback and stream_transport._sink is None:
-            self._plain(stream_transport._net_line(line) + "\n", stderr=True)
+            self._plain(network_display._net_line(line) + "\n", stderr=True)
 
     def _on_tool_result(self, *, name: str, args: dict | None, result: Any, malformed: bool,
                         context: Any, traced: bool = True, **_fields: Any) -> None:

@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-import socket
-import sys
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -29,7 +27,8 @@ from httpx._transports.default import AsyncResponseStream as HttpxAsyncResponseS
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
-from . import fset
+from . import output
+from .network_display import Failure, LabelledLine, describe_failure  # noqa: F401 — public failure formatter
 from . import messages as msgs
 
 
@@ -106,7 +105,7 @@ def report_held_failure() -> None:
     if hold is None or hold.pending is None:
         return
     exc, hold.pending = hold.pending, None
-    say_for_caller(1, describe_failure(exc))
+    say_for_caller(1, Failure(exc))
 
 
 def say_or_print(level: int, line: str) -> None:
@@ -116,7 +115,7 @@ def say_or_print(level: int, line: str) -> None:
     if emit is not None:
         emit(level, line, True)
     else:
-        draw(level, line, fallback=True)
+        output.emit(output.event("network", level=level, line=line, fallback=True))
 
 
 def say_for_caller(level: int, line: str) -> None:
@@ -127,8 +126,7 @@ def say_for_caller(level: int, line: str) -> None:
 def _labelled(role: NetRole, line: str) -> str:
     if not role.label:
         return line
-    text = fset.to_ansi(line.message.body_runs(**line.fields)) if isinstance(line, msgs.Said) else line
-    return msgs.NET_LABELLED.said(label=role.label, text=text)
+    return LabelledLine(role.label, line)
 
 
 def reset_role(token: contextvars.Token) -> None:
@@ -152,90 +150,13 @@ def say(level: int, line: str) -> None:
     if emit is not None:
         emit(level, line, False)
     else:
-        draw(level, line)
-
-
-def draw(level: int, line: str, *, fallback: bool = False) -> None:
-    """Draw a network notice through the installed channel or its stderr fallback."""
-    if _sink is None and fallback:
-        print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr)
-    elif _sink is not None and (net_level() or 0) >= level:
-        try:
-            _sink.emit(_net_line(line))
-        except Exception:  # noqa: BLE001 — a display failure never fails the request
-            pass
+        output.emit(output.event("network", level=level, line=line, fallback=False))
 
 
 def _host(url: str) -> str:
     return urlsplit(url).hostname or url
 
 
-def _net_line(line: str) -> str:
-    """A network line on the screen: its entry's runs, COLOR_WARN where the
-    format sets no colour."""
-    said = line if isinstance(line, msgs.Said) else msgs.NET_LINE.said(text=line)
-    return fset.to_ansi(said.message.runs(whole="COLOR_WARN", **said.fields))
-
-
-def describe_failure(exc: BaseException) -> str:
-    """One line naming a failed model request: status, DNS, timeout or connect."""
-    seen: set[int] = set()
-    chain: list[BaseException] = []
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        chain.append(current)
-        current = current.__cause__ or current.__context__
-    for err in chain:
-        status = getattr(getattr(err, "http_context", None), "status_code", None)
-        if status is None:
-            status = getattr(err, "status_code", None)
-        if isinstance(status, int):
-            first_line = next(iter(str(err).splitlines()), "")
-            reason = str(getattr(err, "code", None) or getattr(err, "type", None) or first_line[:80])
-            return f"{fset.fg('COLOR_ERROR')}{status}{fset.fg('COLOR_WARN')} {reason}".rstrip()
-    for err in chain:
-        text = str(err)
-        if isinstance(err, socket.gaierror) or any(needle in text for needle in (
-            "Name or service not known", "nodename nor servname",
-            "Temporary failure in name resolution", "No address associated with hostname",
-        )):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return _failure(msgs.NET_DNS_FAILURE, host)
-    for err in chain:
-        if isinstance(err, (httpx2.TimeoutException, TimeoutError)):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return _failure(msgs.NET_TIMEOUT, host)
-    for err in chain:
-        if isinstance(err, (httpx2.ConnectError, ConnectionError)):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
-            return _failure(msgs.NET_CONNECT_FAILED, f"{host} {_one_line(err)}".strip())
-    return f"{fset.fg('COLOR_ERROR')}{type(exc).__name__}{fset.fg('COLOR_WARN')}: {_one_line(exc)}"
-
-
-_DETAIL_WIDTH = 160
-
-
-def _one_line(err: BaseException) -> str:
-    """``err`` as one capped line: a provider error often carries a
-    multi-line JSON body, and the failure is one banner line. Whitespace runs,
-    newlines included, become one space, so a JSON body still reads."""
-    line = " ".join(str(err).split())
-    return line if len(line) <= _DETAIL_WIDTH else line[:_DETAIL_WIDTH - 1] + "…"
-
-
-def _failure(kind: msgs.Message, detail: str) -> str:
-    """A failure line: the kind of failure painted hot, then what it names."""
-    head = f"{fset.fg('COLOR_ERROR')}{kind.body()}{fset.fg('COLOR_WARN')}"
-    return f"{head}: {detail}" if detail else head
-
-
-def _request_host(err: BaseException) -> str:
-    try:
-        request = err.request  # httpx2 raises RuntimeError when none is attached
-    except Exception:  # noqa: BLE001
-        return ""
-    return getattr(getattr(request, "url", None), "host", "") or ""
 
 
 class NetCall:
@@ -294,7 +215,7 @@ class NetCall:
         if self._role.hold is not None:
             self._role.hold.pending = exc
             return
-        say(1, _labelled(self._role, describe_failure(exc)))
+        say(1, _labelled(self._role, Failure(exc)))
 
     async def trace(self, event: str, info: dict[str, Any]) -> None:
         """httpcore2's `trace` request extension: the handshake is the connect."""

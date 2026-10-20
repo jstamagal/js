@@ -343,13 +343,13 @@ class ConsoleSink:
             msgs.say(message, file=sys.stderr if stderr else None, flush=flush, **fields)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        from . import stream_transport
+        from . import network_display, stream_transport
 
         if fallback and stream_transport._sink is None:
             with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
-                stream_transport.draw(level, line, fallback=fallback)
+                network_display.draw(level, line, fallback=fallback)
         else:
-            stream_transport.draw(level, line, fallback=fallback)
+            network_display.draw(level, line, fallback=fallback)
 
     # The streamed reply
 
