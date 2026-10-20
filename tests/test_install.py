@@ -183,3 +183,14 @@ def test_without_a_terminal_it_names_what_is_missing_and_asks_nothing(monkeypatc
     assert "TYPESAFE_API_KEY" in out and "TAVILY_API_KEY" not in out
     assert paths.global_config_file().is_file()
     assert not paths.global_env_file().exists()
+
+
+def test_installer_accepts_key_catalogue_and_notice_sink(tmp_path, capsys):
+    notices = []
+    env_file = tmp_path / "environment"
+    saved = install.ask_keys({}, env_file, _answers("value"),
+                             keys=(("ASSEMBLY_KEY", "service"),),
+                             say=lambda *args, **kwargs: notices.append((args, kwargs)))
+    assert saved == ["ASSEMBLY_KEY"]
+    assert dotenv.parse(env_file.read_text()) == {"ASSEMBLY_KEY": "value"}
+    assert notices and capsys.readouterr().out == ""

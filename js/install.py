@@ -36,13 +36,13 @@ KEYS: tuple[tuple[str, str], ...] = (
 Ask = Callable[[str], "str | None"]
 
 
-def missing_keys(environ: Mapping[str, str], env_file: Path) -> list[tuple[str, str]]:
+def missing_keys(environ: Mapping[str, str], env_file: Path, *, keys=None) -> list[tuple[str, str]]:
     """The `KEYS` entries set neither in ``environ`` nor in ``env_file``."""
     try:
         saved = dotenv.parse(env_file.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         saved = {}
-    return [(name, use) for name, use in KEYS
+    return [(name, use) for name, use in (KEYS if keys is None else keys)
             if not environ.get(name, "").strip() and not saved.get(name, "").strip()]
 
 
@@ -73,12 +73,13 @@ class Cancelled(Exception):
     """The operator pressed Ctrl-C or closed the terminal at a prompt."""
 
 
-def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask) -> list[str]:
+def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask, *, keys=None, say=None) -> list[str]:
     """Ask for each missing key and save the answers. An empty answer skips a
     key; None, the terminal closing or Ctrl-C, raises Cancelled so the install
     stops instead of going on to the next question. Returns the names saved."""
+    announce = msgs.say if say is None else say
     saved: list[str] = []
-    for name, use in missing_keys(environ, env_file):
+    for name, use in missing_keys(environ, env_file, keys=keys):
         answer = ask(msgs.INSTALL_ASK_KEY.words(name=name, use=use))
         if answer is None:
             raise Cancelled
@@ -86,7 +87,7 @@ def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask) -> list[str]:
         if not value:
             continue
         save_key(env_file, name, value)
-        msgs.say(msgs.INSTALL_KEY_SAVED, name=name, path=env_file)
+        announce(msgs.INSTALL_KEY_SAVED, name=name, path=env_file)
         saved.append(name)
     return saved
 
@@ -115,22 +116,24 @@ def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
     return str(model_id), bool(route.provider_id or route.base_url)
 
 
-def _say_unrouted(model_id: str | None) -> None:
+def _say_unrouted(model_id: str | None, *, say=None) -> None:
+    announce = msgs.say if say is None else say
     if model_id:
-        msgs.say(msgs.INSTALL_MODEL_UNROUTED, model=model_id)
+        announce(msgs.INSTALL_MODEL_UNROUTED, model=model_id)
     else:
-        msgs.say(msgs.INSTALL_MODEL_UNSET)
+        announce(msgs.INSTALL_MODEL_UNSET)
 
 
 def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict | None],
-              add_provider: Callable[[], Any]) -> str | None:
+              add_provider: Callable[[], Any], say=None) -> str | None:
     """When the default model does not route: offer the saved logins to pick
     a model from, and the login flow to add a provider, until a model is
     picked or the operator skips. Returns the `MODEL` saved, or None."""
+    announce = msgs.say if say is None else say
     model_id, routes = default_model(environ)
     if routes:
         return None
-    _say_unrouted(model_id)
+    _say_unrouted(model_id, say=announce)
     while True:
         saved = logins.load_logins()
         if saved:
@@ -138,7 +141,7 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
             rows = ", ".join(msgs.INSTALL_LOGIN_ROW.words(provider=provider_id,
                                                          models=msgs.plural(len(cache.get(provider_id, [])), "model"))
                              for provider_id in sorted(saved))
-            msgs.say(msgs.INSTALL_LOGINS, logins=rows)
+            announce(msgs.INSTALL_LOGINS, logins=rows)
             answer = ask(msgs.INSTALL_ASK_MODEL.words())
         else:
             answer = ask(msgs.INSTALL_ASK_PROVIDER.words())
@@ -156,16 +159,16 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
             if selected:
                 chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
                 settings_mod.write_model_id(paths.global_config_file(), chosen)
-                msgs.say(msgs.MODEL_SAVED_AS_DEFAULT, model=chosen)
+                announce(msgs.MODEL_SAVED_AS_DEFAULT, model=chosen)
                 return chosen
 
 
-def _asker(read: Callable[[str], str]) -> Ask:
+def _asker(read: Callable[[str], str], *, write=None) -> Ask:
     def ask(prompt: str) -> str | None:
         try:
             return read(f"{prompt}: ")
         except (EOFError, KeyboardInterrupt):
-            print()
+            (print if write is None else write)()
             return None
     return ask
 
