@@ -542,7 +542,7 @@ def rename_old_names(text: str) -> tuple[str, list[tuple[int, str]]]:
 
 # What starts a live jsrc line `migrate_jsrc_text` could not convert, now a
 # comment.
-NOT_MIGRATED = "# js: not migrated"
+NOT_MIGRATED = msgs.JSRC_NOT_MIGRATED.format()
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "rename-settings.py"
 

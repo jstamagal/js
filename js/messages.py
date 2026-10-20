@@ -1885,6 +1885,8 @@ MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226 = "mcp agent {agent_id!r}.{section} h
 
 MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER = "MCP_TIMEOUT must be a positive number, got {value!r}"
 
+JSRC_NOT_MIGRATED = "# js: not migrated"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
