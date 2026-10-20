@@ -98,6 +98,67 @@ def test_codex_context_window_comes_from_the_model_catalog(monkeypatch):
     assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 1_050_000
 
 
+def test_concurrent_turns_keep_their_own_overflow_window(tmp_path, monkeypatch):
+    import asyncio
+
+    import ai
+    from ai.types.usage import Usage
+
+    from js import model_client, runtime
+    from js.model_client import ModelStreamResult
+    from js.toolkit import ToolContext
+    from js.toolkit.registry import ToolRegistry
+    from js.turn_budget import TurnBudget
+    from test_config_compaction_layers import _compact_test_cfg
+
+    recovered = []
+
+    async def recover(self, error, **kwargs):
+        recovered.append(error.context_window)
+        return False
+
+    monkeypatch.setattr(TurnBudget, "recover_overflow", recover)
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *args: 10)
+
+    async def drive():
+        waiting = asyncio.Event()
+        other_finished = asyncio.Event()
+
+        async def stream(**kwargs):
+            small = kwargs["messages"][-1].parts[0].text == "small"
+            if small:
+                waiting.set()
+                await other_finished.wait()
+            return ModelStreamResult(
+                text="done", tool_calls=[], reasoning="", finish_reason="stop",
+                usage=Usage(input_tokens=1500 if small else 10, output_tokens=1),
+                assistant_message=ai.assistant_message("done"),
+            )
+
+        monkeypatch.setattr(model_client, "stream_model_async", stream)
+
+        async def turn(name, window):
+            cfg = _compact_test_cfg(tmp_path / name, {
+                "CONTEXT_SIZE_PER_MODEL": {"offline-test-model": window},
+            })
+            await runtime.run_turn_async(
+                cfg, "SYSTEM", [{"role": "user", "content": name}], runtime.Telemetry(None),
+                tool_registry=ToolRegistry((), {}), tool_context=ToolContext(cwd=tmp_path),
+                suppress_output=True,
+            )
+
+        first = asyncio.create_task(turn("small", 1000))
+        try:
+            await waiting.wait()
+            await turn("large", 10000)
+        finally:
+            other_finished.set()
+            await first
+
+    asyncio.run(drive())
+    assert recovered == [1000]
+
+
 def test_signed_reasoning_payload_counts_toward_the_estimate():
     plain = {"role": "assistant", "content": "ok", "reasoning_content": "thought"}
     signed = {**plain, "reasoning_parts": [

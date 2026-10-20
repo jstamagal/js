@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 import asyncio
 import base64
 import contextlib
@@ -173,7 +174,9 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
     )
 
 
-_CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
+_CONTEXT_WINDOW_OVERRIDES: ContextVar[dict[str, int] | None] = ContextVar(
+    "context_window_overrides", default=None,
+)
 
 
 def set_context_window_overrides(raw: Any) -> None:
@@ -185,8 +188,9 @@ def set_context_window_overrides(raw: Any) -> None:
     there is no upstream truth to fetch, only a local fact the operator knows.
     Keys are matched most specific first: "provider/model", then "model".
     """
-    _CONTEXT_WINDOW_OVERRIDES.clear()
+    overrides: dict[str, int] = {}
     if not isinstance(raw, dict):
+        _CONTEXT_WINDOW_OVERRIDES.set(overrides)
         return
 
     def walk(node: Any, prefix: str) -> None:
@@ -205,9 +209,10 @@ def set_context_window_overrides(raw: Any) -> None:
             except (TypeError, ValueError):
                 continue
             if window > 0:
-                _CONTEXT_WINDOW_OVERRIDES[path.lower()] = window
+                overrides[path.lower()] = window
 
     walk(raw, "")
+    _CONTEXT_WINDOW_OVERRIDES.set(overrides)
 
 
 def install_context_window_overrides(cfg: Config) -> None:
@@ -226,7 +231,8 @@ def install_context_window_overrides(cfg: Config) -> None:
 
 
 def _context_window_override(model: str, provider_id: str | None) -> int | None:
-    if not _CONTEXT_WINDOW_OVERRIDES:
+    overrides = _CONTEXT_WINDOW_OVERRIDES.get()
+    if not overrides:
         return None
     name = (model or "").strip().lower()
     keys = []
@@ -234,7 +240,7 @@ def _context_window_override(model: str, provider_id: str | None) -> int | None:
         keys.append(f"{provider_id.strip().lower()}/{name}")
     keys.append(name)
     for key in keys:
-        hit = _CONTEXT_WINDOW_OVERRIDES.get(key)
+        hit = overrides.get(key)
         if hit is not None:
             return hit
     return None
@@ -2434,6 +2440,9 @@ def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None
     transition. `messages` is still mutated in place, so ^C mid-turn preserves
     partial work exactly as before.
     """
+    # The sync caller also resolves this window between turns, outside the
+    # task context the runner copies for the turn itself.
+    install_context_window_overrides(args[0] if args else kwargs["cfg"])
     if loop_runner is not None:
         return loop_runner.run(run_turn_async(*args, **kwargs))
     return model_client.run_owning_loop(run_turn_async(*args, **kwargs))
