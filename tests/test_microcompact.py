@@ -111,6 +111,29 @@ def test_post_compact_rehydration_is_none_without_reads():
     assert compaction._post_compact_rehydration(Ctx()) is None
 
 
+def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symlink(tmp_path, monkeypatch):
+    from js import jail
+    from js.toolkit import ToolContext
+    from js.toolkit.fs import fs_read
+
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "notes.txt"
+    target.write_text("project notes")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the permitted project")
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
+    context = ToolContext(cwd=root)
+    assert "project notes" in fs_read(file_path=str(target), context=context)
+    assert target in context.read_paths
+    target.unlink()
+    target.symlink_to(outside)
+
+    assert compaction._post_compact_rehydration(context) is None
+
+
 # Overflow classification: recovery, microcompaction and the manual /compact path
 # all hang off is_context_overflow_error, so a provider whose phrasing misses
 # every needle gets no recovery at all — which is what happened on llama.cpp, the

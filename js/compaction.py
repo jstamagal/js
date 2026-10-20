@@ -26,6 +26,7 @@ from typing import Any
 import ai
 
 from . import context_budget
+from . import jail
 from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
 from .compaction_flight import NOTICE as NOTICE, flight_log_dir as flight_log_dir, printing as printing
 from . import memory as M
@@ -542,7 +543,13 @@ def _post_compact_rehydration(
         token_budget = _settings.default_value("COMPACTION_REATTACH_TOKENS_MAX")
     if per_file_tokens is None:
         per_file_tokens = _settings.default_value("COMPACTION_REATTACH_FILE_TOKENS_MAX")
-    paths = list(getattr(context, "read_paths", []) or [])
+    paths = []
+    resolve_path = getattr(context, "resolve_path", T.STOCK_CONTEXT.resolve_path)
+    for path in list(getattr(context, "read_paths", []) or []):
+        try:
+            paths.append(resolve_path(path))
+        except (OSError, RuntimeError, jail.JailError):
+            continue
     if not paths:
         return None
     # read_paths is a set; order by mtime so "recent" means recent.
