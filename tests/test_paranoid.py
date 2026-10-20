@@ -42,6 +42,12 @@ SECRET_SAMPLES = {
     "EXTRA_HEADERS": f"Authorization: Bearer {SENTINEL}",
     "EXTRA_PARAMS": json.dumps({"api_key": SENTINEL}),
     "MCP_SERVERS": json.dumps({"x": {"command": "srv", "env": {"TOKEN": SENTINEL}}}),
+    "ENDPOINT_DEFAULT_KEY": SENTINEL,
+    "SERPER_API_KEY": SENTINEL,
+    "TAVILY_API_KEY": SENTINEL,
+    "EXA_API_KEY": SENTINEL,
+    "CONTEXT7_API_KEY": SENTINEL,
+    "TYPESAFE_API_KEY": SENTINEL,
 }
 
 
@@ -93,6 +99,12 @@ BAD_SECRET_VALUES = {
     "EXTRA_HEADERS escaped": json.dumps(f"X-Ok: 1\n{SENTINEL}"),
     "EXTRA_PARAMS": f"[{SENTINEL}",
     "MCP_SERVERS": f"{{{SENTINEL}",
+    "ENDPOINT_DEFAULT_KEY": None,  # any string is a valid key
+    "SERPER_API_KEY": None,
+    "TAVILY_API_KEY": None,
+    "EXA_API_KEY": None,
+    "CONTEXT7_API_KEY": None,
+    "TYPESAFE_API_KEY": None,
 }
 
 

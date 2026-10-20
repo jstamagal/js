@@ -425,7 +425,7 @@ def shell(
     _register_job(job)
     with _blocking_on(context, job):
         result = process.wait(wait_s)
-    if result is None and context.shell_kill_on_wait:
+    if result is None and context.shell_kill_unfinished:
         result = process.kill()
     if result is None:
         # The command outlived the window. It is NOT killed: a long build or
@@ -452,7 +452,7 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
     wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     with _blocking_on(context, job):
         result = job.process.wait(wait_s)
-    if result is None and action == "wait" and context.shell_kill_on_wait:
+    if result is None and action == "wait" and context.shell_kill_unfinished:
         result = job.process.kill()
     if result is None:
         return _render_running(job, job.process.elapsed(), context)
