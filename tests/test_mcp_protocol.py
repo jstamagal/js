@@ -361,6 +361,36 @@ def test_timeout_and_local_cancellation_notify_remote_peer(cancel_kind):
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("blocked_method", ["slow", "notifications/cancelled"])
+def test_request_deadline_survives_transport_backpressure(blocked_method):
+    async def drive():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class BackpressuredTransport(FakeTransport):
+            async def send(self, message):
+                if message.get("method") == blocked_method:
+                    entered.set()
+                    await release.wait()
+                await super().send(message)
+
+        transport = BackpressuredTransport()
+        peer = await JSONRPCPeer.connect(lambda: transport)
+        task = asyncio.create_task(peer.request("slow", timeout=0.01))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            done, _pending = await asyncio.wait({task}, timeout=0.3)
+            assert task in done
+            with pytest.raises(TimeoutError):
+                await task
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await peer.close()
+
+    asyncio.run(drive())
+
+
 def test_peer_originated_cancellation_stops_server_to_client_request():
     async def drive():
         peer, transport = await make_peer()

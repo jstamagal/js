@@ -18,6 +18,7 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 REQUEST_CANCELLED = -32800
+_CANCEL_SEND_TIMEOUT_S = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -119,14 +120,14 @@ class JSONRPCPeer:
         if params is not None:
             message["params"] = dict(params)
         try:
-            await self._send(message)
-            if timeout is None:
+            async with asyncio.timeout(timeout):
+                await self._send(message)
                 return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError):
             if not future.done() and not self._closed:
                 with contextlib.suppress(Exception):
-                    await self._send_cancelled(request_id)
+                    async with asyncio.timeout(_CANCEL_SEND_TIMEOUT_S):
+                        await self._send_cancelled(request_id)
             raise
         finally:
             self._pending.pop(request_id, None)
