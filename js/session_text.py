@@ -46,6 +46,14 @@ from .text_bytes import well_formed
 
 USER = "you"
 ASSISTANT = "ape"
+
+@dataclass(frozen=True)
+class TranscriptStyle:
+    user: str = USER
+    assistant: str = ASSISTANT
+    header: Any = None
+
+
 _INDENT = " " * 12
 _EXIT = re.compile(r"^exit=(-?\d+)$", re.MULTILINE)
 _ARG_WIDTH = 200
@@ -218,6 +226,7 @@ class _Transcript:
     calls: dict[str, _Call] = field(default_factory=dict)
     # Record id -> message number, for naming a branch point by its number.
     numbers: dict[str, int] = field(default_factory=dict)
+    style: TranscriptStyle = field(default_factory=TranscriptStyle)
 
     def feed(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -345,14 +354,14 @@ class _Transcript:
             self.replay.append(light)
         if role == "user":
             lines = _lines(_content_text(message.get("content"))) or [""]
-            self.entries[number] = Row(number, role, ts, USER, lines)
+            self.entries[number] = Row(number, role, ts, self.style.user, lines)
         elif role == "assistant":
             model = self._stamp(stamp, number)
             lines = _lines(_content_text(message.get("content")))
             calls = message.get("tool_calls") or []
             if not calls:
                 if lines:
-                    self.entries[number] = Row(number, role, ts, ASSISTANT, lines, model=model)
+                    self.entries[number] = Row(number, role, ts, self.style.assistant, lines, model=model)
                 return
             for index, call in enumerate(calls):
                 if not isinstance(call, dict):
@@ -392,6 +401,8 @@ class _Transcript:
         return sum(1 for row in self.entries.values() if row.role == "user")
 
     def header(self) -> list[str]:
+        if self.style.header is not None:
+            return self.style.header(self)
         if self.models:
             chain = [self.models[0][0], *(f"{model} (#{number:04d})" for model, number in self.models[1:])]
             models = " → ".join(chain)
@@ -449,23 +460,25 @@ class _Transcript:
         return lines
 
 
-def parse(session_file: Path) -> _Transcript:
+def parse(session_file: Path, *, style: TranscriptStyle | None = None) -> _Transcript:
     """The whole of `session_file`, parsed from the start."""
-    transcript = _Transcript()
+    transcript = _Transcript(style=style if style is not None else TranscriptStyle())
     with open(session_file, encoding="utf-8", errors="replace") as stream:
         for line in stream:
             _feed_line(transcript, line)
     return transcript
 
 
-def rows(session_file: Path) -> list[Row]:
+def rows(session_file: Path, *, style: TranscriptStyle | None = None) -> list[Row]:
     """The rows of `session_file` the conversation still holds, in order."""
-    return parse(session_file).rows()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.rows()
 
 
-def render(session_file: Path) -> str:
+def render(session_file: Path, *, style: TranscriptStyle | None = None) -> str:
     """The whole transcript of `session_file`, parsed from the start."""
-    return parse(session_file).text()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.text()
 
 
 def _feed_line(transcript: _Transcript, line: str) -> None:
