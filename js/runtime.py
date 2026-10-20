@@ -1668,7 +1668,8 @@ def _cache_key(cfg: Config) -> str | None:
 
 def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
                           registry: ToolRegistry, event_hooks: Any,
-                          approve: event_mod.Approve | event_mod.Approval | None = None) -> context_budget.TokenState:
+                          approve: event_mod.Approve | event_mod.Approval | None = None,
+                          *, state_dir: Path | None = None) -> context_budget.TokenState:
     """Set ``context`` up for this turn and return its token state, which
     persists across the turns of one context."""
     # Delegation inherits this turn's effective settings, not a fresh env load
@@ -1681,7 +1682,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     )
     context.tool_registry = registry
     context.agent_id = cfg.agent_id
-    context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
     _turn_settings.install(context, cfg)
     install_context_window_overrides(cfg)
     context.model = request.model
@@ -2055,7 +2056,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
              event_sink: Callable[[str, dict], None] | None = None,
              approve: event_mod.Approve | event_mod.Approval | None = None,
-             *, skill_catalog: skills.SkillCatalog | None = None) -> None:
+             *, skill_catalog: skills.SkillCatalog | None = None,
+             state_dir: Path | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -2079,6 +2081,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     ``skill_catalog`` supplies this turn's skill discovery policy and the
     built-in skill tool's catalog. None discovers skills from the usual roots.
+
+    ``state_dir`` is the root of this session's persistent undo store. None
+    uses the usual state root.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -2115,7 +2120,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context.skill_catalog = skill_catalog
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
-    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks, approve)
+    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks, approve,
+                                       state_dir=state_dir)
     turn_approval = active_context.tool_approval
     turn_status = active_context.turn_status
 
