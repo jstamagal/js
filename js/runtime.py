@@ -1180,9 +1180,8 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     # strict encode meets it next; it reaches the model as `?`.
     result = well_formed(result)
     if inline_cap is None:
-        # Read from the active context rather than threading a fifth argument
-        # through four dispatch signatures; subagent contexts inherit it.
-        inline_cap = int(getattr(T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
+        active_context = context if context is not None else T.STOCK_CONTEXT
+        inline_cap = int(getattr(active_context, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:

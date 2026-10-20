@@ -39,6 +39,25 @@ def test_spill_threshold_is_bytes_even_when_notice_cannot_fit(tmp_path):
     assert next(tmp_path.glob("result-*.txt")).read_bytes() == ("é" * 100).encode()
 
 
+def test_dispatch_spills_by_the_active_context_inline_limit(tmp_path, monkeypatch):
+    from js import paths
+    from js.toolkit.core import Tool, ToolContext
+    from js.toolkit.registry import ToolRegistry
+
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0)
+    payload = "é" * 5000
+    registry = ToolRegistry((Tool("probe", "test", lambda: payload, {}),), {})
+    context = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=1000)
+
+    _, delivered = runtime._dispatch("probe", "{}", runtime.Telemetry(None), cap_bytes=0,
+                                     registry=registry, tool_context=context)
+
+    assert byte_size(delivered) < byte_size(payload)
+    saved = next(paths.tool_results_dir().glob("result-*.txt"))
+    assert saved.read_bytes() == payload.encode("utf-8")
+    assert str(saved) in delivered
+
+
 def test_batch_caps_multibyte_and_structured_text():
     results = ["😀" * 100, ToolResult.text("é" * 100), "ok"]
     capped = runtime._cap_batch_results(results, 180)
