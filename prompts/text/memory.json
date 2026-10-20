@@ -1,0 +1,4 @@
+{
+  "heal_orphaned_tool_calls_error_tool_result_was_not_recorded": "ERROR: tool result was not recorded (session interrupted)",
+  "flush_context_continue_from_this_previous_assistant_context": "Continue from this previous assistant context and its completed tool results. The calls recorded here have already run.\n"
+}

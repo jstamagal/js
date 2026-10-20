@@ -29,6 +29,10 @@ from . import messages as msgs
 from . import output
 from . import session_store
 from . import session_text
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('memory')
+
 
 SCHEMA_VERSION = 1
 
@@ -197,7 +201,7 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
                     "role": "tool",
                     "tool_call_id": cid,
                     "name": (call.get("function") or {}).get("name", ""),
-                    "content": "ERROR: tool result was not recorded (session interrupted)",
+                    "content": _PROMPTS['heal_orphaned_tool_calls_error_tool_result_was_not_recorded'],
                 })
     return healed
 
@@ -243,8 +247,7 @@ def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> 
     def flush_context() -> None:
         if context:
             rewritten.append(note_time({"role": "user", "content": (
-                "Continue from this previous assistant context and its completed tool results. "
-                "The calls recorded here have already run.\n"
+                _PROMPTS['flush_context_continue_from_this_previous_assistant_context']
                 + json.dumps(context, ensure_ascii=False)
             )}))
             context.clear()

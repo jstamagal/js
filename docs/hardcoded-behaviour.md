@@ -246,8 +246,8 @@ branch the audit was made on; they move as the code changes.
 | `js/codex_provider.py` | _repair_tool_pairs | presentation | Model-facing text is loaded from `prompts/text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
 | `js/codex_provider.py` | _repair_tool_pairs | presentation | Model-facing text is loaded from `prompts/text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
 | `js/codex_provider.py` | _file_part_to_input | presentation | Model-facing text is loaded from `prompts/text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
-| `js/memory.py:195-200` | _heal_orphaned_tool_calls | policy | Backfills a missing tool result with a fixed English error text that the model reads. | js-2lg.179 |
-| `js/memory.py:244-248` | restart_thinking_turn | policy | Builds a fixed "Continue from this previous assistant context..." user message for the model in code. | js-2lg.179 |
+| `js/memory.py` | _heal_orphaned_tool_calls | policy | Model-facing text is loaded from `prompts/text/memory.json`; selection and execution policy are unchanged. | js-2lg.179 |
+| `js/memory.py` | restart_thinking_turn | policy | Model-facing text is loaded from `prompts/text/memory.json`; selection and execution policy are unchanged. | js-2lg.179 |
 | `js/skills.py:86-96` | LoadedSkill.render | policy | Builds the "Skill tool requirements unavailable / policy-denied / unknown" text that the model reads. | js-2lg.188 |
 | `js/skills.py:248-255` | expand_user_invocation | policy | Builds the model-facing skill frame text ("Base directory for this skill", "load them with tool_discovery") in code. | js-2lg.188 |
 | `js/swarm.py:481-492,664,347,380` | render / Agent._tick / Room.post_cell / Room.finish_cell | policy | Builds the inbox frame, the wake-alarm text and the task/done broadcast text that the model reads. | js-2lg.193 |
