@@ -102,6 +102,10 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     return _vision_by_name(model)
 
 
+def _require_model() -> str:
+    raise TypeError("Config requires a model")
+
+
 @dataclass(frozen=True)
 class Config(_turn_settings.ConfigSettings):
     """One run's configuration. The per-turn settings are fields of the
@@ -109,20 +113,28 @@ class Config(_turn_settings.ConfigSettings):
 
     ``frozen=True`` only stops field reassignment: ``settings``,
     ``provider_headers`` and ``mcp`` are plain dicts that callers can and do
-    change in place, so a Config is not hashable and not a snapshot."""
+    change in place, so a Config is not hashable and not a snapshot.
 
-    agent_id: str
-    agent_dir: Path
-    model: str
-    provider_id: str | None       # explicit js provider id (e.g. "deepseek")
-    provider_base_url: str | None # explicit provider base URL
-    provider_api_key: str | None   # explicit provider API key
-    reasoning_effort: str | None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
-    debug_log: Path | None
-    history_file: Path
-    sessions_dir: Path
-    session_file: Path
-    prompts_dir: Path
+    ``from_env`` builds the Config a js run uses from jsrc, env and ~/.js.
+    A program can build one in code instead: ``model`` is the one required
+    argument, and every other field has a default. Built that way, the
+    session file is os.devnull, so no session is written; ``agent_dir`` is
+    the agent's state directory and ``prompts_dir`` its directory under the
+    repository's prompts/, neither of them created; the per-turn settings are
+    the `js/jsrc` values unless ``settings`` holds them."""
+
+    agent_id: str = field(default_factory=lambda: _settings.default_value("DEFAULT_AGENT"))
+    agent_dir: Path = None  # type: ignore[assignment]  # None: the agent's state directory
+    model: str = field(default_factory=_require_model)
+    provider_id: str | None = None       # explicit js provider id (e.g. "deepseek")
+    provider_base_url: str | None = None # explicit provider base URL
+    provider_api_key: str | None = None   # explicit provider API key
+    reasoning_effort: str | None = None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
+    debug_log: Path | None = None
+    history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
+    sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
+    session_file: Path = field(default_factory=lambda: Path(os.devnull))
+    prompts_dir: Path = None  # type: ignore[assignment]  # None: prompts/<agent_id> in the repository
     provider_headers: dict[str, str] = field(default_factory=dict)
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
@@ -146,6 +158,10 @@ class Config(_turn_settings.ConfigSettings):
     layer_resume: dict = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
+        if self.agent_dir is None:
+            object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
+        if self.prompts_dir is None:
+            object.__setattr__(self, "prompts_dir", Path(__file__).resolve().parent.parent / "prompts" / self.agent_id)
         # A key that is not a setting (an old name such as retry_attempts)
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)

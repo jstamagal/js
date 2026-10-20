@@ -3,6 +3,13 @@
 Configuration is read by `js.config.from_env()` at run start and stored in a
 frozen `Config` dataclass. CLI flags override individual runs where supported.
 
+A program that imports js can build a `Config` in code instead:
+`Config(model=..., provider_id=..., provider_api_key=...)`. `model` is the one
+required argument. Every other field has a default: no session is written
+(the session file is `os.devnull`), and the per-turn settings are the
+`js/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
+file is read.
+
 ## Config Files And Precedence
 
 `js` reads config in this order, lowest to highest:
