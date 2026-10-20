@@ -66,3 +66,19 @@ def test_cli_prints_one_tagged_line_with_extras(tmp_path, capsys):
     line = capsys.readouterr().out.strip()
     assert line.startswith("TOOLSTATS {")
     assert json.loads(line[len("TOOLSTATS "):])["exit"] == "0"
+
+
+def test_non_object_shell_arguments_keep_the_other_calls(tmp_path):
+    session = tmp_path / "s.jsonl"
+    arguments = ["null", "[]", "42", '"command"', "true", '{"command":"cat a.py"}']
+    with session.open("w", encoding="utf-8") as stream:
+        for value in arguments:
+            stream.write(json.dumps({"kind": "message", "message": {
+                "role": "assistant", "content": "", "tool_calls": [{
+                    "function": {"name": "shell", "arguments": value},
+                }],
+            }}) + "\n")
+            stream.flush()
+            summary = toolstats.summarize(session)
+            assert summary["tool_calls"] == arguments.index(value) + 1
+    assert summary["shell_habits"] == {"read_via_shell": 1}
