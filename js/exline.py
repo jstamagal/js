@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import messages as msgs
-from . import paths
+from . import pastes, paths
 
 NOTES_FILE = "notes.txt"
 BUFFER_FILE = "buffer.txt"
@@ -55,7 +55,7 @@ async def edit_buffer(editor: Editor, argv: list[str], path: Path | None = None)
     temp = path is None
     if path is None:
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8", dir=paths.tmp_dir()) as fh:
-            fh.write(editor.text)
+            fh.write(pastes.expand(editor.text))
         path = Path(fh.name)
     try:
         status = await editor.run([*argv, str(path)])
@@ -85,12 +85,12 @@ async def run_ex(
         if verb == "wq":
             path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(editor.text + "\n", encoding="utf-8")
+            path.write_text(pastes.expand(editor.text) + "\n", encoding="utf-8")
             await editor.submit()
         elif verb == "w":
             path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(editor.text + "\n", encoding="utf-8")
+            path.write_text(pastes.expand(editor.text) + "\n", encoding="utf-8")
             msgs.say(msgs.BUFFER_WRITTEN, path=path)
         elif verb == "x":
             await editor.submit()

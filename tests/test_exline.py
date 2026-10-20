@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from js import cli, exline, paths, settings
+from js import cli, exline, pastes, paths, settings
 
 
 class FakeEditor:
@@ -60,6 +60,25 @@ def test_w_writes_the_buffer_and_keeps_it(tmp_path):
     assert (paths.notes_dir() / exline.BUFFER_FILE).read_text(encoding="utf-8").strip() == "draft line"
     assert editor.text == "draft line"
     assert editor.sent == []
+
+
+@pytest.mark.parametrize("verb", ["w", "wq", "e"])
+def test_ex_file_operations_include_collapsed_paste_content(tmp_path, monkeypatch, verb):
+    pasted = "\n".join(f"row {n}" for n in range(30))
+    editor = FakeEditor(f"review {pastes.keep(pasted, 10)}")
+    target = tmp_path / "draft.txt"
+    written = []
+
+    async def inspect_file(argv):
+        from pathlib import Path
+
+        written.append(Path(argv[-1]).read_text(encoding="utf-8"))
+        return 0
+
+    monkeypatch.setattr(editor, "run", inspect_file)
+    _run("e" if verb == "e" else f"{verb} {target}", editor)
+    content = written[0] if verb == "e" else target.read_text(encoding="utf-8")
+    assert content.removesuffix("\n") == f"review {pasted}"
 
 
 def test_x_sends_the_buffer():
