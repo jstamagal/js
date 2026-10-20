@@ -1,0 +1,12 @@
+{
+  "image_result_payload_error_malformed_image_result_marker": "ERROR: malformed image result marker",
+  "visual_read_error_error_could_not_read_visual_result": "ERROR: could not read visual result {raw_path}: {exc}",
+  "mixed_result_parts_error_invalid_content": "ERROR: invalid {kind} content",
+  "mixed_result_parts_attached": "[{kind} {mime} attached]",
+  "mixed_result_parts_embedded_resource": "[embedded resource {uri}]\n{resource_text}",
+  "mixed_result_parts_error_invalid_embedded_resource": "ERROR: invalid embedded resource {uri}",
+  "mixed_result_parts_embedded_resource_attached": "[embedded resource {uri} {mime} attached]",
+  "mixed_result_parts_resource_link": "[resource link {block_get_name}: {block_get_uri}]",
+  "media_label_media_of_tool_result": "[media of tool result {value_0}: {head}]",
+  "provider_text_error_malformed_image_result_marker": "ERROR: malformed image result marker"
+}

@@ -37,6 +37,10 @@ from ai.models.core import params as ai_params
 from ai.providers import history_utils
 from ai.providers.anthropic.protocol import AnthropicMessagesProtocol
 from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('model_client')
+
 
 
 @dataclass(frozen=True)
@@ -921,7 +925,7 @@ def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
         return None
     parts = result.split("\t", 3)
     if len(parts) != 4:
-        return "ERROR: malformed image result marker"
+        return _PROMPTS['image_result_payload_error_malformed_image_result_marker']
     _, raw_path, mime, stub = parts
     try:
         data = Path(raw_path).read_bytes()
@@ -931,7 +935,7 @@ def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
 
 
 def _visual_read_error(raw_path: str, exc: OSError) -> str:
-    return f"ERROR: could not read visual result {raw_path}: {exc}"
+    return _PROMPTS['visual_read_error_error_could_not_read_visual_result'].format(raw_path=raw_path, exc=exc)
 
 
 def _build_tool_result_part(
@@ -990,10 +994,10 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
             try:
                 data = base64.b64decode(str(block.get("data", "")), validate=True)
             except (ValueError, TypeError):
-                text.append(f"ERROR: invalid {kind} content")
+                text.append(_PROMPTS['mixed_result_parts_error_invalid_content'].format(kind=kind))
                 continue
             mime = str(block.get("mimeType", "application/octet-stream"))
-            text.append(f"[{kind} {mime} attached]")
+            text.append(_PROMPTS['mixed_result_parts_attached'].format(kind=kind, mime=mime))
             media.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource":
             resource = block.get("resource")
@@ -1001,18 +1005,18 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
                 continue
             uri = resource.get("uri", "")
             if isinstance(resource.get("text"), str):
-                text.append(f"[embedded resource {uri}]\n{resource['text']}")
+                text.append(_PROMPTS['mixed_result_parts_embedded_resource'].format(uri=uri, resource_text=resource['text']))
             elif resource.get("blob") is not None:
                 try:
                     data = base64.b64decode(str(resource["blob"]), validate=True)
                 except (ValueError, TypeError):
-                    text.append(f"ERROR: invalid embedded resource {uri}")
+                    text.append(_PROMPTS['mixed_result_parts_error_invalid_embedded_resource'].format(uri=uri))
                     continue
                 mime = str(resource.get("mimeType", "application/octet-stream"))
-                text.append(f"[embedded resource {uri} {mime} attached]")
+                text.append(_PROMPTS['mixed_result_parts_embedded_resource_attached'].format(uri=uri, mime=mime))
                 media.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource_link":
-            text.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+            text.append(_PROMPTS['mixed_result_parts_resource_link'].format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
         elif kind == "structured":
             text.append(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return "\n".join(text), media, result.is_error
@@ -1030,7 +1034,7 @@ def media_label(tool_call_id: str, text: str) -> str:
     batch's media messages all follow its tool messages, so the label names
     the call and the first line of the result's text."""
     head = cap_text(text.split("\n", 1)[0], MEDIA_LABEL_HEAD_MAX, "…")
-    return f"[media of tool result {byte_prefix(tool_call_id, MEDIA_LABEL_ID_MAX)}: {head}]"
+    return _PROMPTS['media_label_media_of_tool_result'].format(value_0=byte_prefix(tool_call_id, MEDIA_LABEL_ID_MAX), head=head)
 
 
 def provider_text(result: Any) -> str:
@@ -1042,7 +1046,7 @@ def provider_text(result: Any) -> str:
     if isinstance(result, str) and result.startswith("IMAGE_RESULT\t"):
         parts = result.split("\t", 3)
         if len(parts) != 4:
-            return "ERROR: malformed image result marker"
+            return _PROMPTS['provider_text_error_malformed_image_result_marker']
         try:
             with open(parts[1], "rb"):
                 pass
