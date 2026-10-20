@@ -355,6 +355,11 @@ drops them without touching the turn. `exit` or Ctrl-D during a turn does what
 Ctrl-C does, keeping the partial answer and marking the turn interrupted, and
 the screen closes once the turn has ended.
 
+With no turn running, Ctrl-C clears the input line and shows `Press Ctrl-C
+again to exit` under it; a second Ctrl-C within two seconds quits. Ctrl-D quits on an empty line and deletes the character under
+the cursor inside a line; at the end of a line with text it shows the same
+hint, and a second Ctrl-D within two seconds quits.
+
 Resuming a session in the screen shows its last `RESUME_EXCHANGES` exchanges
 (3 by default, 0 for none) as a turn draws them, below the startup lines and
 the `*** Resumed` and `*** Model` notices.

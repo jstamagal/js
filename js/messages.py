@@ -974,6 +974,8 @@ KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
 KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
 KEYS_UNKNOWN_VERB = Message("unknown command {verb!r}: expected bind or unbind")
 KEYS_UNREADABLE = Message("{path} not read: {error}")
+# Under the input line after the interrupt or eof key arms the exit.
+EXIT_ARMED = Message("Press {key} again to exit", banner=False)
 
 # --- Agents, tools, skills, settings at load time ----------------------------
 

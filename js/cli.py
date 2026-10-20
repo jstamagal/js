@@ -3865,16 +3865,18 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if sup.turn_active() or queue.qsize() > 1:
             msgs.say(msgs.QUEUED, ahead=queue.qsize())
 
-    def on_interrupt() -> None:
+    def on_interrupt() -> bool:
         # ^C cancels the active turn AND drops anything queued behind it —
         # otherwise the queue keeps draining prompts the operator meant to
-        # abort.
-        if sup.turn_active():
+        # abort. True when there was a turn or a queued prompt to stop.
+        active = sup.turn_active()
+        if active:
             n = sup.cancel_kind("turn")
             msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
         flushed = drop_pending()
         if flushed:
             msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
+        return bool(active or flushed)
 
     async def wind_down() -> None:
         # Cancels the running turn, and any turn the consumer starts from a

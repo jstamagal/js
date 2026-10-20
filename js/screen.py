@@ -19,7 +19,7 @@ from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
-from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
+from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
@@ -42,6 +42,9 @@ SCROLLBACK_LINES = 5000
 THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
+# How long the interrupt or eof key stays armed: a second press inside this
+# window quits.
+EXIT_ARM_SECONDS = 2.0
 
 # Variation selectors: prompt_toolkit folds one into the cell before it and
 # keeps that cell's width, so U+26A0 U+FE0F (a warning sign) is one column in
@@ -730,7 +733,7 @@ def build_app(
     history,
     completer,
     on_line: Callable[[str], Coroutine],
-    on_interrupt: Callable[[], None],
+    on_interrupt: Callable[[], bool | None],
     on_eof: Callable[[], Awaitable | None],
     status: Callable[[int], str] = lambda width: "",
     status_colours: Callable[[], str] = status_style,
@@ -746,10 +749,16 @@ def build_app(
     opens the ex line, whose text goes to ``on_ex``. ``keymap`` names the keys
     of each action (`js.keys`); None is the defaults. The history_search key
     opens a reverse incremental search over ``history``. ``key_bindings`` are
-    added after the screen's own and win a shared key. ``on_eof`` runs on the
-    eof key at an empty input line and ends the app with `app.exit()`; an
-    awaitable it returns runs as the key's handler. A sent line's paste
-    markers (`js.pastes`) are expanded before ``on_line`` gets it; the
+    added after the screen's own and win a shared key. ``on_eof`` quits: it
+    ends the app with `app.exit()`, and an awaitable it returns runs as the
+    key's handler. The interrupt key calls ``on_interrupt``; when that returns
+    false (no turn to cancel), the key clears an input line with text and
+    arms the exit, and on an empty line a press within `EXIT_ARM_SECONDS` of
+    the last one quits, else arms. The eof key quits at an empty line,
+    deletes the character under the cursor inside a line, and at the end of
+    a line with text arms the exit, quitting on a second press within the
+    same window. While an exit is armed a row under the input says so. A
+    sent line's paste markers (`js.pastes`) are expanded before ``on_line`` gets it; the
     scrollback echoes the line as typed when ``echo`` of the expanded line is true."""
     scrollback = Scrollback()
     input_buffer = Buffer(
@@ -797,11 +806,51 @@ def build_app(
     def _ex_cancel(event) -> None:
         _ex_close(event.app)
 
-    def _ctrl_d(event):
-        if input_buffer.text:
-            input_buffer.delete()
+    # The action whose next press quits, and the loop time its window closes;
+    # empty when no exit is armed. While it is set, the hint row shows.
+    armed: dict = {}
+
+    def _expire(until: float) -> None:
+        if armed.get("until") == until:
+            armed.clear()
+            get_app().invalidate()
+
+    def _arm(action: str) -> None:
+        loop = asyncio.get_running_loop()
+        until = loop.time() + EXIT_ARM_SECONDS
+        armed.update(action=action, until=until)
+        loop.call_at(until, _expire, until)
+
+    def _arm_or_quit(action: str):
+        armed_now = armed.get("action") == action and asyncio.get_running_loop().time() < armed["until"]
+        if armed_now:
+            armed.clear()
+            return on_eof()
+        _arm(action)
+        return None
+
+    def _ctrl_c(event):
+        if on_interrupt():
+            armed.clear()
             return None
-        return on_eof()
+        if input_buffer.text:
+            input_buffer.reset()
+            _arm("interrupt")
+            return None
+        return _arm_or_quit("interrupt")
+
+    def _ctrl_d(event):
+        if not input_buffer.text:
+            return on_eof()
+        if input_buffer.document.is_cursor_at_the_end:
+            return _arm_or_quit("eof")
+        input_buffer.delete()
+        return None
+
+    def _exit_hint():
+        sequences = keymap.get(armed.get("action", ""), ())
+        key = keys.describe(sequences[0]) if sequences else ""
+        return ANSI(msgs.EXIT_ARMED.body(key=key))
 
     def _toggle_reasoning(event) -> None:
         if scrollback.toggle_reasoning():
@@ -826,7 +875,7 @@ def build_app(
         "ex_open": Handler(_ex_open, has_focus(input_buffer) & vi_navigation_mode),
         "ex_run": Handler(_ex_run, has_focus(ex_buffer)),
         "ex_cancel": Handler(_ex_cancel, has_focus(ex_buffer), eager=True),
-        "interrupt": Handler(lambda event: on_interrupt()),
+        "interrupt": Handler(_ctrl_c),
         "eof": Handler(_ctrl_d),
         "suspend": Handler(lambda event: event.app.suspend_to_background()),
         "reasoning_toggle": Handler(_toggle_reasoning),
@@ -875,6 +924,10 @@ def build_app(
                        height=_input_height, dont_extend_height=True, wrap_lines=True,
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
                                                                                    else " " * display.cells(_prompt())))),
+                ConditionalContainer(
+                    Window(FormattedTextControl(_exit_hint), height=1),
+                    filter=Condition(lambda: bool(armed)),
+                ),
                 ConditionalContainer(
                     Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                     filter=has_focus(ex_buffer),
