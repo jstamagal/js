@@ -120,7 +120,8 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
 
 
 class Runner:
-    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO) -> None:
+    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO, *, configure=None) -> None:
+        self.configure = configure
         self.root = root
         self.specs = specs
         self.spec_slots = slots
@@ -189,7 +190,8 @@ class Runner:
             agent = swarm.Agent(self.root / spec.name)
             agent.recruiter = self.recruiter(spec, agent)
             context.swarm = agent
-            cfg, system, prompt_spec, registry = _configure(spec)
+            configure = _configure if self.configure is None else self.configure
+            cfg, system, prompt_spec, registry = configure(spec)
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)
                 self.gate = asyncio.Semaphore(slots) if slots > 0 else contextlib.nullcontext()
@@ -279,9 +281,9 @@ def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int 
     return root, agents, None if slots is None else int(slots)
 
 
-def run(path: str | os.PathLike[str], out: TextIO | None = None) -> int:
+def run(path: str | os.PathLike[str], out: TextIO | None = None, *, configure=None) -> int:
     root, agents, slots = load_spec(path)
-    runner = Runner(root, agents, slots, out or sys.stdout)
+    runner = Runner(root, agents, slots, out or sys.stdout, configure=configure)
     return asyncio.run(runner.run())
 
 

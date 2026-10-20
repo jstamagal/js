@@ -541,3 +541,13 @@ def test_registered_swarm_spawn_limit_prevents_launch(tmp_path, monkeypatch):
     monkeypatch.setattr(swarm.subprocess, "Popen", forbidden)
     with pytest.raises(ValueError):
         agent.spawn("child", "work")
+
+
+def test_swarm_runner_accepts_agent_configuration_service(tmp_path):
+    configured = []
+    def configure(spec):
+        configured.append(spec.name)
+        raise ValueError("configuration refused")
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+    assert swarm_run.run(spec, out=io.StringIO(), configure=configure) == 1
+    assert configured == ["a"]
