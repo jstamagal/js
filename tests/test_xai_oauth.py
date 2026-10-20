@@ -247,3 +247,17 @@ def test_routing_keeps_a_still_valid_bearer_when_an_early_refresh_fails(monkeypa
     route = routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
 
     assert route.api_key == "still-valid"
+
+
+def test_xai_oauth_can_delegate_notices_without_opening_a_browser(monkeypatch, capsys):
+    notices, opened = [], []
+    monkeypatch.setattr(xai_auth, "discover", lambda: xai_auth.XaiEndpoints("https://auth.test/authorize", "https://auth.test/token"))
+    def callback(**kwargs):
+        kwargs["on_ready"]()
+        return "code"
+    monkeypatch.setattr(xai_auth.oauth_loopback, "wait_for_code", callback)
+    monkeypatch.setattr(xai_auth, "exchange_code_for_token", lambda *args: "token")
+    monkeypatch.setattr(xai_auth, "login_from_token", lambda token: token)
+    assert xai_auth.login_browser(say=lambda *args, **kwargs: notices.append(args),
+                                  open_browser=False, opener=opened.append) == "token"
+    assert notices and opened == [] and capsys.readouterr().out == ""

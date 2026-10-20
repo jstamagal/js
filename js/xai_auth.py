@@ -254,16 +254,18 @@ def refresh_token(refresh: str, endpoint: str, *, previous: XaiToken | None = No
     )
 
 
-def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
+def login_browser(*, timeout_s: float = 300.0, referrer: str = "js", say=None,
+                  open_browser: bool = True, opener=None) -> Login:
     """Run the loopback PKCE flow in a browser and return an unsaved Login."""
     endpoints = discover()
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
     url = build_authorize_url(endpoints.authorize, state, nonce, challenge, referrer=referrer)
-    def open_browser() -> None:
-        msgs.say(msgs.OAUTH_OPENING, service="xAI", url=url)
-        webbrowser.open(url)
+    def ready() -> None:
+        (msgs.say if say is None else say)(msgs.OAUTH_OPENING, service="xAI", url=url)
+        if open_browser:
+            (webbrowser.open if opener is None else opener)(url)
 
     code = oauth_loopback.wait_for_code(
         port=CALLBACK_PORT,
@@ -273,7 +275,7 @@ def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
         label="xAI OAuth",
         success_html=msgs.XAI_LOGIN_SUCCESS_HTML.format(),
         failure_html=msgs.XAI_LOGIN_FAILURE_HTML.format(),
-        on_ready=open_browser,
+        on_ready=ready,
     )
     return login_from_token(exchange_code_for_token(endpoints.token, code, verifier))
 
