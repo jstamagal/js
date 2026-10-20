@@ -232,7 +232,7 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/jev.py` | jev | policy | Model-facing text is loaded from `prompts/text/toolkit_jev.json`; selection and execution policy are unchanged. | js-2lg.66 |
 | `js/toolkit/kernel.py` | MISSING_DEPS / get_session / kernel | policy | Model-facing text is loaded from `prompts/text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
 | `js/toolkit/kernel.py` | _died / _busy / kernel | policy | Model-facing text is loaded from `prompts/text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
-| `js/toolkit/toolbox.py:519,566-567,573-574,581-586` | toolbox | policy | Builds refusal and guidance text in code, including the `/set` command. | js-2lg.73 |
+| `js/toolkit/toolbox.py` | toolbox | policy | Model-facing text is loaded from `prompts/text/toolkit_toolbox.json`; selection and execution policy are unchanged. | js-2lg.73 |
 | `js/toolkit/lsp.py:608,779-780` | server_for / lsp | policy | Builds the jail hint and the "Call again" text the model reads. | js-2lg.76 |
 | `js/cli.py:151,157-172,175-187,190-197,204-219,2693-2700,2726-2730,3656-3657,4201-4202,5000-5007,5037-5038` | _note_mode_switch, _note_model_switch, _run_prompt, _run_repl_turn, _blocking_repl, _run_args | policy | The prompt-changed, mode-switch, model-switch and cut-off reminders are worded in code, and the logic that adds them to the user message is inside cli turn paths. | js-2lg.78 |
 | `js/cli.py:2113-2115,2198,2218,2239` | _cmd_cd, _cmd_add, _cmd_drop | policy | The working-directory and jail-bind reminders the model reads are worded in code and queued automatically. | js-2lg.78 |
