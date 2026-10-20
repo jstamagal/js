@@ -562,7 +562,8 @@ def from_env(
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
 
-    global_instruction_files = _paths.global_instruction_files()
+    global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
+    project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
     _fset.bind_settings(js_root_settings)
 
     return _login_defaults.for_turn(Config(
@@ -582,7 +583,7 @@ def from_env(
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
-        agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),
+        agents_files=tuple(p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,
         mcp=mcp,
         explicit_model=explicit_model,

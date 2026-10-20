@@ -309,3 +309,7 @@ set NOTE_TIMESTAMP_FORMAT "%Y-%m-%d %H:%M:%S"
 set PASTE_IMAGE_BACKENDS ["wayland", "x11", "kitty"]
 
 set PASTE_IMAGE_TIMEOUT 5
+
+set GLOBAL_INSTRUCTION_FILES ["JS.md", "JS.local.md"]
+
+set PROJECT_INSTRUCTION_FILES ["AGENTS.md", "AGENTS.local.md"]
