@@ -116,8 +116,9 @@ _BLOCKING: dict[int, list[_ShellJob]] = {}
 
 class _ShellJob:
     def __init__(self, job_id: str, command: str, process: CappedProcess,
-                 shell_path: str, keep_ansi: bool, cap: int) -> None:
+                 shell_path: str, keep_ansi: bool, cap: int, owner: str) -> None:
         self.id = job_id
+        self.owner = owner
         self.command = command
         self.process = process
         self.shell_path = shell_path
@@ -150,14 +151,15 @@ def _next_job_id() -> str:
         return str(_JOB_SEQ)
 
 
-def _find_job(handle: str | None) -> _ShellJob | None:
+def _find_job(handle: str | None, owner: str) -> _ShellJob | None:
     with _JOBS_LOCK:
+        mine = [job for job in _JOBS.values() if job.owner == owner]
         if handle:
-            return _JOBS.get(str(handle))
-        running = [j for j in _JOBS.values() if j.running()]
+            return next((job for job in mine if job.id == str(handle)), None)
+        running = [j for j in mine if j.running()]
         if running:
             return running[-1]
-        return next(reversed(_JOBS.values()), None) if _JOBS else None
+        return mine[-1] if mine else None
 
 
 @contextlib.contextmanager
@@ -412,7 +414,7 @@ def shell(
         )
     except OSError as exc:
         return f"ERROR: {exc}"
-    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap)
+    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap, context.task_owner)
     job.allowed, job.safe_env = allowed, safe_env
     _register_job(job)
     with _blocking_on(context, job):
@@ -428,7 +430,8 @@ def shell(
 
 def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None,
                       context: ToolContext | None = None) -> str:
-    job = _find_job(handle)
+    assert context is not None
+    job = _find_job(handle, context.task_owner)
     if job is None:
         return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
     if action == "kill":
