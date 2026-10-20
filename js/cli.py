@@ -3101,7 +3101,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.STATS_WRITTEN, path=stats_csv)
     if not stats_json and not stats_csv:
         print(json.dumps(payload, indent=2, default=str))
-    return 130 if interrupted else 0
+    return 130 if interrupted else 1 if any(not row["ok"] for row in rows) else 0
 
 
 def _commit_backup_root() -> Path:

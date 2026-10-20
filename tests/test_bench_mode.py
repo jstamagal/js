@@ -153,6 +153,23 @@ def test_bench_requires_benchmark_files(tmp_path, monkeypatch):
     assert _bench("noBench") == 2
 
 
+def test_failed_benchmark_returns_failure_and_keeps_all_rows(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_agent(tmp_path)
+
+    def fail(**kwargs):
+        raise RuntimeError("offline model failure")
+
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", fail)
+    out = tmp_path / "stats.json"
+    rc = _bench("jokertest", stats_json=str(out))
+
+    rows = json.loads(out.read_text(encoding="utf-8"))["benchmarks"]
+    assert len(rows) == 4
+    assert all(row["ok"] is False for row in rows)
+    assert rc == 1
+
+
 def test_bench_banner_shows_the_expanded_prompt(tmp_path, monkeypatch, capsys):
     """The banner names the prompt that was sent, not its unexpanded source."""
     monkeypatch.setenv("HOME", str(tmp_path))
