@@ -198,7 +198,8 @@ class ModelPicker:
         try:
             models = await logins.fetch_models(login)
             logins.cache_models(provider.id, models)
-            self._load_models()
+            if self.current_provider() is provider:
+                self._load_models()
         except Exception as exc:  # noqa: BLE001
             self.detail = msgs.PICK_FETCH_FAILED.text(error=f"{type(exc).__name__}: {exc}")
 

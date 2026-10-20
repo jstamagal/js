@@ -124,6 +124,45 @@ def test_picker_fetch_action_updates_model_cache(monkeypatch, tmp_path: Path):
         _reset_logins()
 
 
+def test_fetch_finishing_after_provider_switch_preserves_the_selected_model(monkeypatch, tmp_path):
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
+    logins.save_login(logins.Login(provider_id="ollama"))
+    logins.cache_models("deepseek", ["old-model"])
+    logins.cache_models("ollama", ["first-model", "chosen-model"])
+
+    async def drive():
+        started, finish = asyncio.Event(), asyncio.Event()
+
+        async def delayed_fetch(login):
+            assert login.provider_id == "deepseek"
+            started.set()
+            await finish.wait()
+            return ["fresh-model"]
+
+        monkeypatch.setattr(logins, "fetch_models", delayed_fetch)
+        state = picker.ModelPicker(provider_id="deepseek")
+        fetching = asyncio.create_task(state.fetch())
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            state.move(1)
+            state.toggle_focus()
+            state.move(1)
+            selected = state.selection()
+        finally:
+            finish.set()
+            await asyncio.wait_for(fetching, 2)
+        assert selected["provider_id"] == "ollama"
+        assert selected["model"] == "chosen-model"
+        assert state.selection() == selected
+        assert logins.load_model_cache()["deepseek"] == ["fresh-model"]
+
+    try:
+        asyncio.run(drive())
+    finally:
+        _reset_logins()
+
+
 def test_picker_enter_selects_model(tmp_path: Path):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
