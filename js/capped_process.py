@@ -208,14 +208,19 @@ class _StreamCapture:
             if start >= tail_start:
                 return bytes(self._tail[start - tail_start:end - tail_start])
             if self._spilled and self.spill_path is not None:
-                if self._file is not None:
-                    self._file.flush()
                 try:
+                    if self._file is not None:
+                        self._file.flush()
                     with open(self.spill_path, "rb") as spilled:
                         spilled.seek(start)
                         return spilled.read(end - start)
                 except OSError:
-                    pass
+                    self._spill_failed = True
+                    self._spilled = False
+                    if self._file is not None:
+                        with contextlib.suppress(OSError):
+                            self._file.close()
+                        self._file = None
             kept = bytes(self._head[start:min(end, head_len)])
             if end > tail_start:
                 kept += bytes(self._tail[max(start, tail_start) - tail_start:end - tail_start])

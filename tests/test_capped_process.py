@@ -32,6 +32,21 @@ def test_a_spill_that_fails_at_close_is_not_advertised_as_complete(monkeypatch, 
     assert capture.excerpt(0, 8).path is None
 
 
+def test_spill_flush_failure_returns_retained_output(tmp_path, monkeypatch):
+    capture = capped_process._StreamCapture(8, tmp_path / "spill.log")
+    capture.feed(b"abcdefghijklmnop")
+
+    def disk_full():
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(capture._file, "flush", disk_full)
+    try:
+        assert capture.read(0, 16) == b"abcdmnop"
+        assert capture.ensure_spilled() is None
+    finally:
+        capture.close()
+
+
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     with pytest.raises(CappedProcessTimeout) as raised:
         _run_capped(
