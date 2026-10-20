@@ -28,6 +28,7 @@ records appended since the last one.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -518,26 +519,40 @@ def refresh(session_file: Path) -> None:
     key = str(session_file.resolve(strict=False))
     with _lock:
         try:
-            info = os.stat(session_file)
-            parsed = _parsed.pop(key, None)
-            if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
-                    or info.st_size < parsed.offset):
-                parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
-            with open(session_file, "rb") as stream:
-                stream.seek(parsed.offset)
-                data = stream.read()
+            guard = open(f"{session_file}.refresh.lock", "a+b")  # noqa: SIM115 - held through publication
         except OSError:
             return
-        end = data.rfind(b"\n") + 1
-        # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
-        for line in data[:end].decode("utf-8", errors="replace").split("\n"):
-            _feed_line(parsed.transcript, line)
-        parsed.offset += end
-        _parsed[key] = parsed
-        while len(_parsed) > _CACHED_FILES:
-            _parsed.popitem(last=False)
-        _write(session_store.text_path(session_file), parsed.transcript.text())
-        _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
+        with guard:
+            try:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                return
+            _refresh(session_file, key)
+
+
+def _refresh(session_file: Path, key: str) -> None:
+    """Read and publish while holding both refresh locks."""
+    try:
+        info = os.stat(session_file)
+        parsed = _parsed.pop(key, None)
+        if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
+                or info.st_size < parsed.offset):
+            parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
+        with open(session_file, "rb") as stream:
+            stream.seek(parsed.offset)
+            data = stream.read()
+    except OSError:
+        return
+    end = data.rfind(b"\n") + 1
+    # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
+    for line in data[:end].decode("utf-8", errors="replace").split("\n"):
+        _feed_line(parsed.transcript, line)
+    parsed.offset += end
+    _parsed[key] = parsed
+    while len(_parsed) > _CACHED_FILES:
+        _parsed.popitem(last=False)
+    _write(session_store.text_path(session_file), parsed.transcript.text())
+    _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
 
 
 def _index(session_file: Path, transcript: _Transcript, *, size: int, mtime_ns: int) -> None:
