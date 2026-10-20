@@ -28,6 +28,10 @@ from .logins import (
     test_login_with_metadata,
     update_login,
 )
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('login_cli')
+
 
 _API_SHAPES: list[tuple[str, str, str]] = [
     ("openai-completions", "openai", msgs.LOGIN_SHAPE_CHAT_COMPLETIONS.format()),
@@ -36,7 +40,7 @@ _API_SHAPES: list[tuple[str, str, str]] = [
     ("cliproxyapi", "openai", msgs.LOGIN_SHAPE_PROXY.format()),
 ]
 _API_SHAPE_IDS = {shape_id for shape_id, _sdk, _desc in _API_SHAPES}
-_SECONDARY_TEST_PROMPT = "1+1="
+_SECONDARY_TEST_PROMPT = _PROMPTS['default_1_1']
 _MODEL_LIST_LIMIT = 20
 
 

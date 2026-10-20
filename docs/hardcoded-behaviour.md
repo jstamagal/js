@@ -242,7 +242,7 @@ branch the audit was made on; they move as the code changes.
 | `js/attach.py` | _prepare_bytes | presentation | Model-facing text is loaded from `prompts/text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
 | `js/attach.py` | _prepare_image | presentation | Model-facing text is loaded from `prompts/text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
 | `js/attach.py` | _format_text_attachment | presentation | Model-facing text is loaded from `prompts/text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
-| `js/login_cli.py:39,519,533` | _run_secondary_test | presentation | The model-facing test prompt "1+1=" is fixed in code. | js-2lg.147 |
+| `js/login_cli.py` | _run_secondary_test | presentation | Model-facing text is loaded from `prompts/text/login_cli.json`; selection and execution policy are unchanged. | js-2lg.147 |
 | `js/codex_provider.py:62,329` | _repair_tool_pairs | presentation | The model-facing text for an interrupted tool output is fixed in code. | js-2lg.152 |
 | `js/codex_provider.py:319` | _repair_tool_pairs | presentation | The model-facing "[Previous tool result; call_id=...]" wrapper for an orphaned result is built in code. | js-2lg.152 |
 | `js/codex_provider.py:283` | _file_part_to_input | presentation | The model-facing "[Unsupported file for Codex: ...]" text is built in code. | js-2lg.152 |
