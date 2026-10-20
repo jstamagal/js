@@ -52,7 +52,7 @@ class ClipboardError(Exception):
 
 
 def placeholder(n: int) -> str:
-    return f"[image #{n}]"
+    return msgs.IMAGE_PLACEHOLDER.format(n=n)
 
 
 def keep(data: bytes) -> str:
