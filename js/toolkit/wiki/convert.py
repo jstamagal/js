@@ -163,10 +163,10 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
                 f"NOTE transcribe: whisper '{p}' --model small --output_format txt --output_dir '{paths.tmp_dir()}'")
 
     # fallback
-    rc, out, err = run(["file", str(p)], context)
-    # `file` prints "<path>: <description>" — test only the description, else a
-    # binary living under a path containing "text" (e.g. .../context/...) reads as text.
-    desc = out.split(":", 1)[1] if ":" in out else out
+    rc, out, err = run(["file", "-r", str(p)], context)
+    # Raw filenames let us remove the complete path, including any colons or
+    # unprintable characters, before classifying the description.
+    desc = out.removeprefix(f"{p}:")
     if "text" in desc.lower():
         return read_text(p, cap)
     return f"UNREADABLE/binary: {out.strip()}  (quarantine to inbox/_skipped/ if nothing reads it)"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -635,3 +636,14 @@ def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, 
 
     assert len(result.encode()) <= cap
     assert truncation_marker(cap, "TOOL_RESULT_MAX") in result
+
+
+@pytest.mark.skipif(shutil.which("file") is None, reason="file is not installed")
+@pytest.mark.parametrize("filename", ["payload:text.bin", "payload:\ntext.bin"])
+def test_binary_classification_ignores_colons_in_the_filename(tmp_path, filename):
+    document = tmp_path / filename
+    document.write_bytes(b"\x00\x01\x02\x03" * 100)
+
+    result = wiki_convert(str(document), context=_ctx(tmp_path))
+
+    assert result.startswith("UNREADABLE/binary:")
