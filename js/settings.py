@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("ANTHROPIC_REQUIRED_EFFORT", "str", group="runtime"),
+    SettingSpec("ANTHROPIC_THINKING_DISPLAY", "str", group="runtime"),
     SettingSpec("ANTHROPIC_PROMPT_CACHE", "bool", group="runtime"),
     SettingSpec("CLAUDE_PROXY_INCLUDE_REASONING", "bool", group="runtime"),
     SettingSpec("DEEPSEEK_REASONING_TOKENS_MAX", "int", group="runtime"),

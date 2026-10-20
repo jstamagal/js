@@ -121,3 +121,11 @@ def test_mimo_keeps_replayed_reasoning(monkeypatch):
     captured = _capture(monkeypatch, model_id="mimo-v2.5", provider_id="mimo",
                         messages=_reasoning_history())
     assert _has_reasoning(captured["messages"])
+
+
+def test_anthropic_adaptive_display_uses_registered_setting():
+    plan = reasoning.anthropic_thinking(
+        "claude-opus-4-6", "high", None,
+        settings={"ANTHROPIC_THINKING_DISPLAY": "omitted"},
+    )
+    assert plan.thinking["display"] == "omitted"

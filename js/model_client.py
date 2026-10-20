@@ -1661,7 +1661,7 @@ async def _stream_with_model(
         # setting as thinking: adaptive plus an effort on the models that take
         # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
         # EXTRA_PARAMS wins.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
+        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget, settings=settings)
         own_thinking = "thinking" not in extra_body
         if plan is not None:
             if plan.thinking is not None:

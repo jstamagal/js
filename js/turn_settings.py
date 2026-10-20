@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),
+    TurnSetting("anthropic_thinking_display", "ANTHROPIC_THINKING_DISPLAY", text),
     TurnSetting("anthropic_prompt_cache", "ANTHROPIC_PROMPT_CACHE", flag),
     TurnSetting("claude_proxy_include_reasoning", "CLAUDE_PROXY_INCLUDE_REASONING", flag),
     TurnSetting("deepseek_reasoning_tokens_max", "DEEPSEEK_REASONING_TOKENS_MAX", integer),

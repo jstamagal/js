@@ -27,6 +27,8 @@ server either self-normalizes (deepseek-direct, glm) or ignores the knob
 
 from __future__ import annotations
 
+from . import settings as _settings
+
 import re
 from dataclasses import dataclass
 
@@ -159,7 +161,7 @@ def _anthropic_rejects_disabled(name: str) -> bool:
 
 def anthropic_thinking(model_name: str, effort: str | None,
                        max_output_tokens: int | None,
-                       budget: int | None = None) -> AnthropicThinking | None:
+                       budget: int | None = None, *, settings: dict | None = None) -> AnthropicThinking | None:
     """The thinking fields for ``effort`` on this model, or None to send none.
 
     ``budget`` (``THINKING_BUDGET``) replaces the effort's budget on the
@@ -170,12 +172,12 @@ def anthropic_thinking(model_name: str, effort: str | None,
     if anthropic_adaptive(name):
         if effort == "none":
             if _anthropic_rejects_disabled(name):
-                return AnthropicThinking(thinking=None, effort="low", max_tokens=None)
+                return AnthropicThinking(thinking=None, effort=_settings.knob(settings, "ANTHROPIC_REQUIRED_EFFORT"), max_tokens=None)
             return AnthropicThinking(thinking={"type": "disabled"}, effort=None, max_tokens=None)
         version = _claude_version(name)
         allowed = _ADAPTIVE_4_6_EFFORTS if version == (4, 6) else _ADAPTIVE_EFFORTS
         return AnthropicThinking(
-            thinking={"type": "adaptive", "display": "summarized"},
+            thinking={"type": "adaptive", "display": _settings.knob(settings, "ANTHROPIC_THINKING_DISPLAY")},
             effort=snap_effort(effort, allowed),
             max_tokens=None,
         )
