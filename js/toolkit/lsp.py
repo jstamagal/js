@@ -33,6 +33,10 @@ from .. import paths
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_lsp')
+
 
 OPERATIONS = ("diagnostics", "definition", "references", "hover")
 
@@ -609,7 +613,7 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
             server.initialize(timeout)
         except LspError as exc:
             server.shutdown()
-            hint = " Under -C it runs in the jail; JAIL_BIND adds paths it needs." if jail is not None else ""
+            hint = _PROMPTS['server_for_under_c_it_runs_in_the'] if jail is not None else ""
             raise LspError(f"did not start: {exc}.{hint}") from exc
         _SERVERS[key] = server
         return server
@@ -780,8 +784,7 @@ def lsp(
             if items is None:
                 items = server.wait_diagnostics(uri, version, before, timeout)
             if items is None:
-                return (f"{display}: {spec.name} published no diagnostics within {timeout:g}s "
-                        "(LSP_TIMEOUT); it may still be loading the workspace. Call again.")
+                return (_PROMPTS['lsp_published_no_diagnostics_within_s_lsp'].format(display=display, spec_name=spec.name, timeout=timeout))
             return _format_diagnostics(items, lines, display, spec.name)
         position = _position(lines, line, character, symbol)
         if isinstance(position, str):
