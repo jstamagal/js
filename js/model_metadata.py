@@ -173,7 +173,10 @@ def _provider_candidates(provider_id: str | None) -> tuple[str, ...]:
 
 def _normalize_request(model_id: str, provider_id: str | None) -> tuple[str, str | None]:
     parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
-    if parsed_provider is not None and parsed_model is not None:
+    if parsed_provider is not None and parsed_model is not None and (
+        provider_id is None
+        or providers.normalize_provider_id(provider_id) == parsed_provider
+    ):
         return parsed_model, parsed_provider
     return model_id, provider_id
 

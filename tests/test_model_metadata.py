@@ -61,6 +61,17 @@ def test_lookup_limits_prefers_exact_provider_match(monkeypatch):
     assert limits.max_output_tokens == 384_000
 
 
+def test_output_cap_uses_the_explicit_servers_slashy_model_id():
+    from js import logins
+
+    logins.cache_models(
+        "ollama", ["openai/gpt-5"],
+        metadata={"openai/gpt-5": logins.ModelCacheMetadata(max_output_tokens=1024)},
+    )
+
+    assert model_metadata.resolve_max_output("openai/gpt-5", "ollama") == 1024
+
+
 def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypatch):
     """The bidirectional substring fallback let a shorter catalog id (gpt-5) bleed
     into a longer, genuinely-distinct sibling request (gpt-5-mini-2026) since '-'
