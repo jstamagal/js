@@ -297,13 +297,16 @@ class Room:
         """Take `key` for `who` for `ttl` seconds, or renew it. Returns (yours, holder, expires)."""
         check_name(who)
         with self._locked():
-            claims = self._claims()
-            held = claims.get(key)
-            if held is not None and held["holder"] != who:
-                return False, held["holder"], held["expires"]
-            claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
-            self._write_claims(claims)
-            return True, who, claims[key]["expires"]
+            return self._claim_locked(key, who, ttl)
+
+    def _claim_locked(self, key: str, who: str, ttl: float) -> tuple[bool, str, float]:
+        claims = self._claims()
+        held = claims.get(key)
+        if held is not None and held["holder"] != who:
+            return False, held["holder"], held["expires"]
+        claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
+        self._write_claims(claims)
+        return True, who, claims[key]["expires"]
 
     def release(self, key: str, who: str) -> bool:
         with self._locked():
@@ -346,17 +349,19 @@ class Room:
 
     def take_cell(self, cell_id: int, who: str, ttl: float = CLAIM_TTL_S) -> tuple[bool, str, float]:
         """Take cell `cell_id` for `who`: a claim on its key, renewed by taking again."""
-        cell = self.cell(cell_id)
-        if cell is None:
-            raise KeyError(cell_id)
-        if cell.status == "done":
-            return False, cell.holder, 0.0
-        yours, holder, expires = self.claim(cell.key, who, ttl)
-        if yours:
-            with self._locked():
+        check_name(who)
+        with self._locked():
+            cells = self._cells()
+            cell = next((c for c in cells if c.id == cell_id), None)
+            if cell is None:
+                raise KeyError(cell_id)
+            if cell.status == "done":
+                return False, cell.holder, 0.0
+            yours, holder, expires = self._claim_locked(cell.key, who, ttl)
+            if yours:
                 self._write_cells([replace(c, status="taken", holder=who) if c.id == cell_id else c
-                                   for c in self._cells()])
-        return yours, holder, expires
+                                   for c in cells])
+            return yours, holder, expires
 
     def finish_cell(self, cell_id: int, who: str, result: str = "") -> Cell:
         """Mark the cell done with `result`, free its claim, tell everyone with a `done` message."""

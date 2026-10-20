@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -207,6 +208,30 @@ def test_a_claim_has_one_holder_until_released_or_expired(tmp_path, monkeypatch)
     monkeypatch.setattr(swarm.time, "time", lambda: now + 5)
     assert room.claim("parser", "a", ttl=60)[:2] == (True, "a")  # b's claim expired
     assert set(room.claims()) == {"parser"}
+
+
+def test_taking_a_task_preserves_a_concurrent_completion(tmp_path, monkeypatch):
+    taker = swarm.Room(tmp_path / "bus")
+    finisher = swarm.Room(taker.root)
+    task = taker.post_cell("runner", "audit runtime")
+    locked = taker._locked
+    finished = False
+
+    @contextmanager
+    def finish_after_unlock():
+        nonlocal finished
+        with locked():
+            yield
+        if not finished:
+            finished = True
+            finisher.finish_cell(task.id, "a", "audit complete")
+
+    monkeypatch.setattr(taker, "_locked", finish_after_unlock)
+    taker.take_cell(task.id, "b")
+
+    completed = finisher.cell(task.id)
+    assert (completed.status, completed.holder, completed.result) == ("done", "a", "audit complete")
+    assert task.key not in finisher.claims()
 
 
 def test_a_burst_is_one_wake(tmp_path):
