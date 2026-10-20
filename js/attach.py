@@ -16,6 +16,10 @@ from . import messages as msgs
 from . import settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('attach')
+
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
 # A name without a suffix, so image detection goes by the magic bytes alone and
@@ -311,14 +315,14 @@ def _prepare_bytes(
     guessed, _ = mimetypes.guess_type(str(path))
     file_type = guessed or "application/octet-stream"
     return _PreparedAttachment(
-        f"ATTACHED_BINARY_FILE {display_path} type={file_type} size={size} bytes (content not inlined)"
+        _PROMPTS['prepare_bytes_attached_binary_file_type_size_bytes'].format(display_path=display_path, file_type=file_type, size=size)
     )
 
 
 def _prepare_image(display_path: str, mime: str, size: int, data: bytes, cfg: Config) -> _PreparedAttachment:
-    stub = f"VISUAL_FILE {display_path} mime={mime} size={size} bytes"
+    stub = _PROMPTS['prepare_image_visual_file_mime_size_bytes'].format(display_path=display_path, mime=mime, size=size)
     if not getattr(cfg, "vision_enabled", False):
-        return _PreparedAttachment(f"{stub} (vision disabled; image bytes not sent)")
+        return _PreparedAttachment(_PROMPTS['prepare_image_vision_disabled_image_bytes_not_sent'].format(stub=stub))
     return _PreparedAttachment(stub, ai.types.messages.FilePart(data=data, media_type=mime))
 
 
@@ -363,10 +367,10 @@ def _looks_text(data: bytes) -> bool:
 
 def _format_text_attachment(display_path: str, text: str, size: int, truncated: bool, cap: int) -> str:
     fence = _fence_for(text)
-    header = f"Attached file: {display_path} ({size} bytes)"
+    header = _PROMPTS['format_text_attachment_attached_file_bytes'].format(display_path=display_path, size=size)
     if truncated:
-        header += f" [truncated to {cap} bytes]"
-    return f"{header}\n{fence}\n{text}\n{fence}"
+        header += _PROMPTS['format_text_attachment_truncated_to_bytes'].format(cap=cap)
+    return _PROMPTS['format_text_attachment_text'].format(header=header, fence=fence, text=text, value_3=fence)
 
 
 def _fence_for(text: str) -> str:
