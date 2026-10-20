@@ -3164,7 +3164,7 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
     backup_dir = _commit_backup_root() / stamp
     backup_dir.mkdir(parents=True, exist_ok=True)
     if patch:
-        (backup_dir / "tracked.patch").write_text(patch, encoding="utf-8")
+        (backup_dir / "tracked.patch").write_bytes(patch.encode("utf-8", "surrogateescape"))
     for rel in untracked:
         dest = backup_dir / "untracked" / rel
         try:

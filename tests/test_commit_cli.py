@@ -186,6 +186,24 @@ def test_commit_snapshot_restores_modified_binary_contents(tmp_path, monkeypatch
     assert binary.read_bytes() == changed
 
 
+def test_commit_snapshot_restores_non_utf8_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    repo = tmp_path / "legacy"
+    _init_repo(repo)
+    legacy = repo / "legacy.txt"
+    legacy.write_bytes(b"caf\xe9 original\n")
+    _git(repo, "add", "legacy.txt")
+    _git(repo, "commit", "-qm", "legacy baseline")
+    changed = b"caf\xe9 changed\n"
+    legacy.write_bytes(changed)
+
+    snapshot = cli._snapshot_worktree(repo)
+    _git(repo, "restore", "legacy.txt")
+    _git(repo, "apply", str(snapshot / "tracked.patch"))
+
+    assert legacy.read_bytes() == changed
+
+
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
@@ -208,4 +226,3 @@ def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     assert "20200101T000000000000Z" not in remaining
     assert "20200101T000002000000Z" not in remaining
     assert remaining[-1] not in {f"20200101T0000{i:02d}000000Z" for i in range(12)}
-
