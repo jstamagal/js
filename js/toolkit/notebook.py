@@ -229,7 +229,7 @@ def notebook_edit(
         return f"ERROR: {exc}"
     current_hash = _hash_bytes(data)
     guard = context.require_read(target, f"{mode} a cell of it", content_hash=current_hash)
-    if guard:
+    if context.notebook_require_read and guard:
         return guard
     try:
         notebook = _load(data)
@@ -270,10 +270,12 @@ def notebook_edit(
         cell["source"] = _source_value(new_source, isinstance(cell.get("source"), list) or as_list)
         if kind is not None and kind != cell.get("cell_type"):
             _retype(cell, kind)
-        if cell.get("cell_type") == "code":
+        if context.notebook_clear_outputs and cell.get("cell_type") == "code":
             cell["execution_count"] = None
             cell["outputs"] = []
-        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')}); its outputs are cleared"
+        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')})"
+        if context.notebook_clear_outputs:
+            done += "; its outputs are cleared"
 
     original = data.decode("utf-8")
     text = json.dumps(notebook, indent=_indent(original), ensure_ascii=False)

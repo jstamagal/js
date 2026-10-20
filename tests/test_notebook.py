@@ -299,3 +299,17 @@ def test_insert_needs_a_cell_type(nb):
     tool("read", context, file_path=str(path))
 
     assert tool("notebook_edit", context, file_path=str(path), new_source="x", edit_mode="insert").startswith("ERROR")
+
+
+def test_registered_setting_can_preserve_cell_outputs(nb):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    path, context = nb
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"NOTEBOOK_CLEAR_OUTPUTS": False})))
+    tool("read", context, file_path=str(path))
+    before = json.loads(path.read_text())["cells"][0]
+    tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="x = 1")
+    after = json.loads(path.read_text())["cells"][0]
+    assert after["outputs"] == before["outputs"]
+    assert after["execution_count"] == before["execution_count"]

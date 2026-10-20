@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("notebook_clear_outputs", "NOTEBOOK_CLEAR_OUTPUTS", flag, on_context=True),
+    TurnSetting("notebook_require_read", "NOTEBOOK_REQUIRE_READ", flag, on_context=True),
     TurnSetting("lsp_allow_home_root", "LSP_ALLOW_HOME_ROOT", flag, on_context=True),
     TurnSetting("lsp_environment_inherit", "LSP_ENVIRONMENT_INHERIT", flag, on_context=True),
     TurnSetting("toolbox_require_bound_names", "TOOLBOX_REQUIRE_BOUND_NAMES", flag, on_context=True),
