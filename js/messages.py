@@ -32,6 +32,10 @@ from string import Formatter
 from typing import Any
 
 from . import fset
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('swarm')
+
 
 # The banner slot: what starts every line the client says about its own
 # state, and what $BANNER in a /fset format reads. The BANNER setting sets it
@@ -1805,29 +1809,29 @@ SWARM_SENT = Message("sent #{seq}", banner=False)
 
 SWARM_POSTED = Message("posted #{id}", banner=False)
 
-SWARM_ROSTER_YOU = "(you)"
+SWARM_ROSTER_YOU = _PROMPTS['default_you']
 
-SWARM_ROSTER_SILENT = "no answer at rollcall since {value}"
+SWARM_ROSTER_SILENT = _PROMPTS['default_no_answer_at_rollcall_since']
 
-SWARM_ROSTER_ASLEEP = Message("asleep", banner=False)
+SWARM_ROSTER_ASLEEP = Message(_PROMPTS['default_asleep'], banner=False)
 
-SWARM_ROSTER_WORKING = Message("working", banner=False)
+SWARM_ROSTER_WORKING = Message(_PROMPTS['default_working'], banner=False)
 
-SWARM_ROSTER_EMPTY = "(nobody yet)"
+SWARM_ROSTER_EMPTY = _PROMPTS['default_nobody_yet']
 
-SWARM_BOARD_EMPTY = "(no tasks on the board)"
+SWARM_BOARD_EMPTY = _PROMPTS['default_no_tasks_on_the_board']
 
-SWARM_BOARD_TAKEN = "taken by {holder}"
+SWARM_BOARD_TAKEN = _PROMPTS['default_taken_by']
 
-SWARM_BOARD_DONE = "done by {holder}"
+SWARM_BOARD_DONE = _PROMPTS['default_done_by']
 
-SWARM_BOARD_ROW = "#{id} [{state}] {title}"
+SWARM_BOARD_ROW = _PROMPTS['default_text']
 
-SWARM_BOARD_FROM = " (from {by})"
+SWARM_BOARD_FROM = _PROMPTS['default_from']
 
-SWARM_ROSTER_HOLDS = Message("holds {claims}", banner=False)
+SWARM_ROSTER_HOLDS = Message(_PROMPTS['default_holds'], banner=False)
 
-SWARM_BOARD_OPEN = Message("open", banner=False)
+SWARM_BOARD_OPEN = Message(_PROMPTS['default_open'], banner=False)
 
 SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS = "the spec needs a root: the bus directory"
 

@@ -60,6 +60,10 @@ import weakref
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('swarm')
+
 
 POLL_S = 0.25
 COALESCE_S = 0.3
@@ -347,7 +351,7 @@ class Room:
             cells = self._cells()
             cell = Cell(max((c.id for c in cells), default=0) + 1, title.strip(), body, by, time.time())
             self._write_cells([*cells, cell])
-        self.send(by, BROADCAST, f"task #{cell.id}: {cell.title}" + (f"\n{body}" if body.strip() else ""), TASK)
+        self.send(by, BROADCAST, _PROMPTS['post_cell_task'].format(cell_id=cell.id, cell_title=cell.title) + (_PROMPTS['post_cell_text'].format(body=body) if body.strip() else ""), TASK)
         return cell
 
     def take_cell(self, cell_id: int, who: str, ttl: float = CLAIM_TTL_S) -> tuple[bool, str, float]:
@@ -380,7 +384,7 @@ class Room:
             if done.key in claims:
                 del claims[done.key]
                 self._write_claims(claims)
-        self.send(who, BROADCAST, f"done #{done.id}: {done.title}" + (f"\n{result}" if result.strip() else ""), DONE)
+        self.send(who, BROADCAST, _PROMPTS['finish_cell_done'].format(done_id=done.id, done_title=done.title) + (_PROMPTS['finish_cell_text'].format(result=result) if result.strip() else ""), DONE)
         return done
 
     def cell(self, cell_id: int) -> Cell | None:
@@ -483,13 +487,13 @@ def _pulse(ref: weakref.ref[Agent]) -> None:
 
 def render(msgs: list[Msg], me: str) -> str:
     """The messages as the model reads them."""
-    lines = ["--- messages ---"]
+    lines = [_PROMPTS['render_messages']]
     for m in msgs:
-        to = "you" if m.to == me else m.to
-        kind = "" if m.kind == "say" else f" {m.kind}"
-        seq = f"#{m.seq}" if m.seq else ""
-        stamp = time.strftime("%H:%M:%S", time.localtime(m.ts))
-        lines.append(f"[{seq}{kind} {m.sender} -> {to} {stamp}]".replace("[ ", "["))
+        to = _PROMPTS['render_you'] if m.to == me else m.to
+        kind = "" if m.kind == _PROMPTS['render_say'] else _PROMPTS['render_text'].format(m_kind=m.kind)
+        seq = _PROMPTS['render_text_2'].format(m_seq=m.seq) if m.seq else ""
+        stamp = time.strftime(_PROMPTS['render_h_m_s'], time.localtime(m.ts))
+        lines.append(_PROMPTS['render_text_3'].format(seq=seq, kind=kind, m_sender=m.sender, to=to, stamp=stamp).replace(_PROMPTS['render_text_4'], _PROMPTS['render_text_5']))
         lines.append(m.body.rstrip())
         lines.append("")
     return "\n".join(lines).rstrip()
@@ -524,7 +528,7 @@ def board(room: Room) -> str:
         lines.append(msgs.SWARM_BOARD_ROW.format(id=c.id, state=state, title=c.title) + (msgs.SWARM_BOARD_FROM.format(by=c.by) if c.by else ""))
         first = (c.result if c.status == "done" else c.body).strip().splitlines()
         if first:
-            lines.append(f"    {first[0][:160]}")
+            lines.append(_PROMPTS['board_text'].format(first_0_160=first[0][:160]))
     return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
@@ -664,7 +668,7 @@ class Agent:
 
     def _tick(self) -> Msg:
         self.alarm = None
-        return Msg(0, time.time(), CLOCK, self.name, TICK, "The time you asked to be woken after has passed.")
+        return Msg(0, time.time(), CLOCK, self.name, TICK, _PROMPTS['tick_the_time_you_asked_to_be'])
 
     def wake_message(self, msgs: list[Msg]) -> dict:
         return {"role": "user", "content": render(msgs, self.name)}
@@ -710,7 +714,7 @@ class Agent:
 
 # ---------------------------------------------------------------- the tools --swarm puts on the surface
 
-_OFF_BUS = "ERROR: this agent is not on a swarm bus (run js with --swarm ROOT/NAME)"
+_OFF_BUS = _PROMPTS['default_error_this_agent_is_not_on']
 
 
 def _agent(context: Any) -> Agent | None:
@@ -728,14 +732,14 @@ def _send(to: str = "", text: str = "", kind: str = "say", context: Any = None) 
     to = str(to or "").strip()
     text = str(text or "")
     if not to:
-        return "ERROR: to is required: an agent name, or * for everyone else"
+        return _PROMPTS['send_error_to_is_required_an_agent']
     if not text.strip():
-        return "ERROR: text is empty"
+        return _PROMPTS['send_error_text_is_empty']
     try:
         msg = agent.send(to, text, str(kind or "say"))
     except ValueError as exc:
-        return f"ERROR: {exc}"
-    return f"sent #{msg.seq} to {'everyone' if to == BROADCAST else to}"
+        return _PROMPTS['send_error'].format(exc=exc)
+    return _PROMPTS['send_sent_to'].format(msg_seq=msg.seq, everyone_if_to_BROADCAST_else_to='everyone' if to == BROADCAST else to)
 
 
 def _who(context: Any = None) -> str:
@@ -751,15 +755,15 @@ def _claim(key: str = "", ttl: Any = None, context: Any = None) -> str:
         return _OFF_BUS
     key = str(key or "").strip()
     if not key:
-        return "ERROR: key is empty: name the file, area or task you are taking"
+        return _PROMPTS['claim_error_key_is_empty_name_the']
     try:
         seconds = CLAIM_TTL_S if ttl in (None, "") else float(ttl)
     except (TypeError, ValueError):
-        return f"ERROR: ttl must be a number of seconds, not {ttl!r}"
+        return _PROMPTS['claim_error_ttl_must_be_a_number'].format(ttl=ttl)
     yours, holder, expires = agent.room.claim(key, agent.name, seconds)
     if yours:
-        return f"{key} is yours until {_clock(expires)}; claim it again to keep it longer"
-    return f"{key} is held by {holder} until {_clock(expires)}"
+        return _PROMPTS['claim_is_yours_until_claim_it_again'].format(key=key, clock_expires=_clock(expires))
+    return _PROMPTS['claim_is_held_by_until'].format(key=key, holder=holder, clock_expires=_clock(expires))
 
 
 def _release(key: str = "", context: Any = None) -> str:
@@ -767,7 +771,7 @@ def _release(key: str = "", context: Any = None) -> str:
     if agent is None:
         return _OFF_BUS
     key = str(key or "").strip()
-    return f"released {key}" if agent.room.release(key, agent.name) else f"you do not hold {key}"
+    return _PROMPTS['release_released'].format(key=key) if agent.room.release(key, agent.name) else _PROMPTS['release_you_do_not_hold'].format(key=key)
 
 
 def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
@@ -777,8 +781,8 @@ def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
     try:
         kinds = agent.room.subscribe(agent.name, str(kind or ""), on=not _truthy(off))
     except ValueError as exc:
-        return f"ERROR: {exc}"
-    return "subscribed to: " + (", ".join(sorted(kinds)) if kinds else "nothing")
+        return _PROMPTS['subscribe_error'].format(exc=exc)
+    return _PROMPTS['subscribe_subscribed_to'] + (_PROMPTS['subscribe_text'].join(sorted(kinds)) if kinds else _PROMPTS['subscribe_nothing'])
 
 
 def _truthy(value: Any) -> bool:
@@ -792,15 +796,14 @@ def _wake_me(seconds: Any = None, context: Any = None) -> str:
     try:
         s = float(seconds)
     except (TypeError, ValueError):
-        return f"ERROR: seconds must be a number, not {seconds!r}"
+        return _PROMPTS['wake_me_error_seconds_must_be_a_number'].format(seconds=seconds)
     left = None if agent.alarm is None else agent.alarm - time.monotonic()
     if s > 0 and left is not None and left > 0:
-        return (f"an alarm is already set, {left:.0f} s from now, and it stays set when a message wakes you; "
-                "nothing changed. Stop calling tools to sleep. Messages wake you by themselves.")
+        return (_PROMPTS['wake_me_an_alarm_is_already_set_s'].format(left=left))
     agent.wake_me(s)
     if s <= 0:
-        return "alarm cleared"
-    return f"you will be woken in {s:g} s if nothing lands first; stop calling tools to sleep"
+        return _PROMPTS['wake_me_alarm_cleared']
+    return _PROMPTS['wake_me_you_will_be_woken_in_s'].format(s=s)
 
 
 def _retire(handoff: str = "", context: Any = None) -> str:
@@ -809,9 +812,9 @@ def _retire(handoff: str = "", context: Any = None) -> str:
         return _OFF_BUS
     handoff = str(handoff or "")
     if not handoff.strip():
-        return "ERROR: handoff is empty: say what you did, what is left, and where things are"
+        return _PROMPTS['retire_error_handoff_is_empty_say_what']
     msg = agent.retire(handoff)
-    return f"retired; your handoff is #{msg.seq}. This turn is your last: finish and stop calling tools"
+    return _PROMPTS['retire_retired_your_handoff_is_this_turn'].format(msg_seq=msg.seq)
 
 
 def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
@@ -820,15 +823,15 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
         return _OFF_BUS
     name, opener = str(name or "").strip(), str(opener or "")
     if not opener.strip():
-        return "ERROR: opener is empty: the new agent needs to be told who it is and what to do"
+        return _PROMPTS['recruit_error_opener_is_empty_the_new']
     try:
         if agent.recruiter is not None:
             agent.recruiter(name, opener)
         else:
             agent.spawn(name, opener)
     except (ValueError, OSError) as exc:
-        return f"ERROR: {exc}"
-    return f"started {name}; it is on the bus as {name} and reads your opener first"
+        return _PROMPTS['recruit_error'].format(exc=exc)
+    return _PROMPTS['recruit_started_it_is_on_the_bus'].format(name=name, value_1=name)
 
 
 def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
@@ -837,9 +840,9 @@ def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
         return _OFF_BUS
     title = str(title or "").strip()
     if not title:
-        return "ERROR: title is empty: say in one line what needs doing"
+        return _PROMPTS['post_task_error_title_is_empty_say_in']
     cell = agent.room.post_cell(agent.name, title, str(body or ""))
-    return f"posted task #{cell.id}: {cell.title}; everyone was told"
+    return _PROMPTS['post_task_posted_task_everyone_was_told'].format(cell_id=cell.id, cell_title=cell.title)
 
 
 def _cell_id(raw: Any) -> int | None:
@@ -855,17 +858,17 @@ def _take_task(id: Any = None, context: Any = None) -> str:  # noqa: A002 - the 
         return _OFF_BUS
     cell_id = _cell_id(id)
     if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
+        return _PROMPTS['take_task_error_id_must_be_a_task'].format(id=id)
     try:
         yours, holder, expires = agent.room.take_cell(cell_id, agent.name)
     except KeyError:
-        return f"no task #{cell_id} on the board"
+        return _PROMPTS['take_task_no_task_on_the_board'].format(cell_id=cell_id)
     cell = agent.room.cell(cell_id)
     if yours:
-        return f"task #{cell_id} is yours until {_clock(expires)}: {cell.title}\n{cell.body}".rstrip()
+        return _PROMPTS['take_task_task_is_yours_until'].format(cell_id=cell_id, clock_expires=_clock(expires), cell_title=cell.title, cell_body=cell.body).rstrip()
     if cell.status == "done":
-        return f"task #{cell_id} is already done by {holder}"
-    return f"task #{cell_id} is held by {holder} until {_clock(expires)}"
+        return _PROMPTS['take_task_task_is_already_done_by'].format(cell_id=cell_id, holder=holder)
+    return _PROMPTS['take_task_task_is_held_by_until'].format(cell_id=cell_id, holder=holder, clock_expires=_clock(expires))
 
 
 def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str:  # noqa: A002
@@ -874,12 +877,12 @@ def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str: 
         return _OFF_BUS
     cell_id = _cell_id(id)
     if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
+        return _PROMPTS['finish_task_error_id_must_be_a_task'].format(id=id)
     try:
         cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
     except KeyError:
-        return f"no task #{cell_id} on the board"
-    return f"task #{cell.id} done; everyone was told"
+        return _PROMPTS['finish_task_no_task_on_the_board'].format(cell_id=cell_id)
+    return _PROMPTS['finish_task_task_done_everyone_was_told'].format(cell_id=cell.id)
 
 
 def _tasks(context: Any = None) -> str:
@@ -895,43 +898,43 @@ def tools() -> tuple:
 
     return (
         Tool("send", load_description("send"), _send, {
-            "to": {"type": "string", "description": "An agent's name, or * for everyone else on the bus."},
-            "text": {"type": "string", "description": "The message."},
+            "to": {"type": "string", "description": _PROMPTS['tools_an_agent_s_name_or_for']},
+            "text": {"type": "string", "description": _PROMPTS['tools_the_message']},
             "kind": {"type": "string", "default": "say",
-                     "description": "say (default), ask, reply, done, or a short word the troop agrees on."},
+                     "description": _PROMPTS['tools_say_default_ask_reply_done_or']},
         }, required=("to", "text"), source="swarm"),
         Tool("who", load_description("who"), _who, {}, read_only=True, source="swarm"),
         Tool("claim", load_description("claim"), _claim, {
-            "key": {"type": "string", "description": "What you are taking: a file, a module, a task line."},
-            "ttl": {"type": "number", "description": f"Seconds the claim lasts. Default {CLAIM_TTL_S:g}."},
+            "key": {"type": "string", "description": _PROMPTS['tools_what_you_are_taking_a_file']},
+            "ttl": {"type": "number", "description": _PROMPTS['tools_seconds_the_claim_lasts_default'].format(CLAIM_TTL_S=CLAIM_TTL_S)},
         }, required=("key",), source="swarm"),
         Tool("release", load_description("release"), _release, {
-            "key": {"type": "string", "description": "The key you claimed."},
+            "key": {"type": "string", "description": _PROMPTS['tools_the_key_you_claimed']},
         }, required=("key",), source="swarm"),
         Tool("subscribe", load_description("subscribe"), _subscribe, {
-            "kind": {"type": "string", "description": "A message kind, as passed to send."},
-            "off": {"type": "boolean", "default": False, "description": "True to unsubscribe."},
+            "kind": {"type": "string", "description": _PROMPTS['tools_a_message_kind_as_passed_to']},
+            "off": {"type": "boolean", "default": False, "description": _PROMPTS['tools_true_to_unsubscribe']},
         }, required=("kind",), source="swarm"),
         Tool("wake_me", load_description("wake_me"), _wake_me, {
-            "seconds": {"type": "number", "description": "How long to wait. 0 clears a pending alarm."},
+            "seconds": {"type": "number", "description": _PROMPTS['tools_how_long_to_wait_0_clears']},
         }, required=("seconds",), source="swarm"),
         Tool("retire", load_description("retire"), _retire, {
-            "handoff": {"type": "string", "description": "What you did, what is left, where things are."},
+            "handoff": {"type": "string", "description": _PROMPTS['tools_what_you_did_what_is_left']},
         }, required=("handoff",), source="swarm"),
         Tool("recruit", load_description("recruit"), _recruit, {
-            "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
-            "opener": {"type": "string", "description": "Its first prompt: who it is, the goal, what to do first."},
+            "name": {"type": "string", "description": _PROMPTS['tools_the_new_agent_s_name_one']},
+            "opener": {"type": "string", "description": _PROMPTS['tools_its_first_prompt_who_it_is']},
         }, required=("name", "opener"), source="swarm"),
         Tool("post_task", load_description("post_task"), _post_task, {
-            "title": {"type": "string", "description": "One line: what needs doing."},
-            "body": {"type": "string", "default": "", "description": "What the taker needs to know: where, how, done when."},
+            "title": {"type": "string", "description": _PROMPTS['tools_one_line_what_needs_doing']},
+            "body": {"type": "string", "default": "", "description": _PROMPTS['tools_what_the_taker_needs_to_know']},
         }, required=("title",), source="swarm"),
         Tool("take_task", load_description("take_task"), _take_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
+            "id": {"type": "integer", "description": _PROMPTS['tools_the_task_number_from_the_board']},
         }, required=("id",), source="swarm"),
         Tool("finish_task", load_description("finish_task"), _finish_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
-            "result": {"type": "string", "default": "", "description": "What came of it: where the work is, what was found."},
+            "id": {"type": "integer", "description": _PROMPTS['tools_the_task_number_from_the_board_2']},
+            "result": {"type": "string", "default": "", "description": _PROMPTS['tools_what_came_of_it_where_the']},
         }, required=("id",), source="swarm"),
         Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
     )

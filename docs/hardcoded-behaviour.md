@@ -250,10 +250,10 @@ branch the audit was made on; they move as the code changes.
 | `js/memory.py` | restart_thinking_turn | policy | Model-facing text is loaded from `prompts/text/memory.json`; selection and execution policy are unchanged. | js-2lg.179 |
 | `js/skills.py` | LoadedSkill.render | policy | Model-facing text is loaded from `prompts/text/skills.json`; selection and execution policy are unchanged. | js-2lg.188 |
 | `js/skills.py` | expand_user_invocation | policy | Model-facing text is loaded from `prompts/text/skills.json`; selection and execution policy are unchanged. | js-2lg.188 |
-| `js/swarm.py:481-492,664,347,380` | render / Agent._tick / Room.post_cell / Room.finish_cell | policy | Builds the inbox frame, the wake-alarm text and the task/done broadcast text that the model reads. | js-2lg.193 |
-| `js/swarm.py:495-525` | roster / board | presentation | Fixes the member-list and work-board wording and layout that both the model and the operator read. | js-2lg.193 |
-| `js/swarm.py:709-878` | _send / _who / _claim / _release / _subscribe / _wake_me / _retire / _recruit / _post_task / _take_task / _finish_task / _tasks | policy | Bus tools return model-facing result, refusal and nudge text built in code, for example "Stop calling tools to sleep". | js-2lg.193 |
-| `js/swarm.py:893-932` | tools | policy | Writes the bus tools' parameter descriptions in code, not in tool_descriptions/*.md. | js-2lg.193 |
+| `js/swarm.py` | render / Agent._tick / Room.post_cell / Room.finish_cell | policy | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
+| `js/swarm.py` | roster / board | presentation | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
+| `js/swarm.py` | _send / _who / _claim / _release / _subscribe / _wake_me / _retire / _recruit / _post_task / _take_task / _finish_task / _tasks | policy | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
+| `js/swarm.py` | tools | policy | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
 | `js/events.py:286-287` | _failed | policy | Builds the model-facing refusal text for a failed approval in code. | js-2lg.200 |
 | `js/hookexec.py:192` | refusal | policy | Builds the default model-facing refusal text "an on tool_call handler refused ..." in code. | js-2lg.202 |
 | `js/jail.py:517,535-547` | Jail.confine | policy | Builds the refusal text the model reads ("outside the jail", "hidden in the jail", "read-only in the jail") in code. | js-2lg.204 |
