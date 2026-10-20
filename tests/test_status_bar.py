@@ -6,6 +6,7 @@ No test here builds a prompt_toolkit Application.
 from __future__ import annotations
 
 import asyncio
+import re
 
 import ai
 import pytest
@@ -53,13 +54,13 @@ def _cfg(tmp_path, *, session_name: str = "s.jsonl", model: str = "test-model") 
     )
 
 
-def test_status_line_fills_80_columns_with_three_groups():
-    line = screen.status_line(80, **BAR)
+def test_status_line_fills_90_columns_with_three_groups():
+    line = screen.status_line(90, **BAR)
 
-    assert len(line) == 80
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 121000")
+    assert len(line) == 90
+    assert line.startswith("[23:59] cpa/claude-fable-5-1 ctx 121,000")
     assert line.endswith("defaultagent/b61643c8 cache 100%")
-    centre = line[len("[23:59] cpa/claude-fable-5-1 121000"):-len("defaultagent/b61643c8 cache 100%")]
+    centre = line[len("[23:59] cpa/claude-fable-5-1 ctx 121,000"):-len("defaultagent/b61643c8 cache 100%")]
     assert "*" in centre and "9,600" in centre
     assert centre.startswith("  ") and centre.endswith("  ")
 
@@ -68,15 +69,15 @@ def test_status_line_without_a_turn_has_no_centre_group():
     line = screen.status_line(80, **{**BAR, "throbber": ""})
 
     assert len(line) == 80
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 121000")
+    assert line.startswith("[23:59] cpa/claude-fable-5-1 ctx 121,000")
     assert line.endswith("defaultagent/b61643c8 cache 100%")
     assert "9,600" not in line
 
 
 def test_status_line_overflow_drops_cache_before_touching_the_model():
-    wide = screen.status_line(70, **BAR)
+    wide = screen.status_line(80, **BAR)
 
-    assert len(wide) == 70
+    assert len(wide) == 80
     assert "cache" not in wide
     assert "cpa/claude-fable-5-1" in wide
     assert "defaultagent/b61643c8" in wide
@@ -110,7 +111,7 @@ def test_status_line_omits_missing_values():
 
     assert len(line) == 80
     assert "cache" not in line
-    assert line.startswith("[23:59] claude-fable-5-1 121000")
+    assert line.startswith("[23:59] claude-fable-5-1 ctx 121,000")
     assert line.endswith("b61643c8")
 
 
@@ -301,3 +302,9 @@ def test_a_status_field_keeps_its_palette_colour():
     red = fset.fg("PALETTE_04")
     assert red and f"{red}ctx 121,000" in line
     assert len(fset.plain(line)) == 100
+
+
+def test_every_number_on_the_bar_says_what_it_counts():
+    line = screen.status_line(100, **BAR)
+    numbers = re.findall(r"(\S+) (\d[\d,.]*k?)\b", line)
+    assert numbers and all(label.isalpha() for label, _ in numbers), numbers

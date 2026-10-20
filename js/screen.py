@@ -178,7 +178,7 @@ def status_line(
         route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
         left = " ".join(filter(None, (
             clock_text, _field(msgs.STATUS_ROUTE, route=route) if route else "",
-            "" if context_tokens is None else _field(msgs.STATUS_CONTEXT, tokens=context_tokens))))
+            "" if context_tokens is None else _field(msgs.STATUS_CONTEXT, tokens=f"{context_tokens:,}"))))
         centre = ""
         if throbber:
             count = (_field(msgs.STATUS_REPLY, tokens=format_count(output_tokens))
