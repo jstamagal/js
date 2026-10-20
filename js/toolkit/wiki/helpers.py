@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from ... import jail
-from ...capped_process import truncation_marker
+from ...capped_process import _run_capped, truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
 
@@ -67,20 +67,20 @@ def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, 
     """Run ``cmd`` with the allowlisted environment, in the jail under `js -C`."""
     env = {key: os.environ[key] for key in _ENV_ALLOW if key in os.environ}
     argv = jail.wrap(cmd, context, cwd=context.cwd, env=env)
+    cap = context.max_tool_result_bytes
     try:
-        proc = subprocess.run(argv, capture_output=True, timeout=timeout, env=env)
+        proc = _run_capped(argv, timeout=timeout, cwd=None, env=env, cap=cap)
     except FileNotFoundError:
         return 127, "", f"command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return 124, "", f"timed out after {timeout}s"
     except OSError as exc:
         return 1, "", str(exc)
-    cap = context.max_tool_result_bytes
     marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     return (
         proc.returncode,
-        cap_text(proc.stdout.decode("utf-8", "replace"), cap, marker),
-        cap_text(proc.stderr.decode("utf-8", "replace"), cap, marker),
+        cap_text(proc.stdout.decode("utf-8", "replace") + (marker if proc.stdout_truncated else ""), cap, marker),
+        cap_text(proc.stderr.decode("utf-8", "replace") + (marker if proc.stderr_truncated else ""), cap, marker),
     )
 
 

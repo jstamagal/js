@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tracemalloc
 from contextlib import contextmanager
 from pathlib import Path
@@ -630,10 +631,11 @@ def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, 
     document.write_bytes(b"document fixture")
     cap = 1025
 
-    def run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 0, stdout=("é" * 4000).encode(), stderr=b"")
+    def run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=("é" * 4000).encode(), stderr=b"",
+                               stdout_truncated=False, stderr_truncated=False)
 
-    monkeypatch.setattr(wiki_helpers_module.subprocess, "run", run)
+    monkeypatch.setattr(wiki_helpers_module, "_run_capped", run)
     monkeypatch.setattr(wiki_convert_module, "_which", lambda binary: f"/usr/bin/{binary}")
 
     result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=cap))
@@ -728,4 +730,26 @@ def test_file_conversion_reads_only_a_bounded_prefix(tmp_path, monkeypatch, suff
     assert "x" * 100 in result
     assert len(result.encode()) <= 1024
     assert truncation_marker(1024, "TOOL_RESULT_MAX") in result
+    assert peak < 1_000_000
+
+
+def test_converter_capture_retains_bounded_memory_while_draining_both_streams(tmp_path):
+    script = (
+        "import os\n"
+        "for _ in range(64):\n"
+        "    os.write(1, b'x' * 65536)\n"
+        "    os.write(2, b'y' * 65536)\n"
+    )
+    tracemalloc.start()
+    try:
+        rc, out, err = wiki_helpers_module.run(
+            [sys.executable, "-c", script], _ctx(tmp_path, max_bytes=1024), timeout=10,
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert rc == 0
+    assert out.startswith("x") and err.startswith("y")
+    assert len(out.encode()) <= 1024 and len(err.encode()) <= 1024
     assert peak < 1_000_000
