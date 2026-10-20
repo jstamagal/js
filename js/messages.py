@@ -275,7 +275,7 @@ class _HelpFormatter(argparse.HelpFormatter):
 
 def plural(n: int, word: str) -> str:
     """`n word`, with an s when n is not one."""
-    return f"{n} {word}{'' if n == 1 else 's'}"
+    return (COUNT_ONE if n == 1 else COUNT_MANY).words(number=n, noun=word)
 
 
 # ---------------------------------------------------------------------------
