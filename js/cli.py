@@ -2582,12 +2582,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if model is None:
             unreachable_stamp = _stamp_without_login(resumed, cfg)
             model = _resume_model_spec(resumed, cfg)
-    _activate_saved_session(
-        cfg,
-        caller_key=caller_key,
-        announce_generated=announce_generated and save,
-        model=model,
-    )
+    if save:
+        _activate_saved_session(
+            cfg,
+            caller_key=caller_key,
+            announce_generated=announce_generated,
+            model=model,
+        )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
 
@@ -2668,6 +2669,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             messages.append(notice)
             _append_turn(cfg, notice)
     _restore_workspace(cfg)
+    resume_cfg = cfg
+    if not save:
+        cfg = replace(cfg, session_file=Path(os.devnull))
     before_len = len(messages)
     if events is not None:
         saved = cfg.session_file != Path(os.devnull)
@@ -2691,7 +2695,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         return 2
     if save:
         user_bundle = _note_mode_switch(cfg, user_bundle, "-p")
-    user_bundle = _note_model_switch(cfg, user_bundle)
+    user_bundle = _note_model_switch(resume_cfg, user_bundle)
     if cut_off:
         user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
     call_stats: list[dict] = []

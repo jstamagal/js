@@ -132,6 +132,19 @@ def test_headless_resume_keeps_the_original_expanded_system_prompt(tmp_path, mon
     assert memory.load_system_prompt(_saved(tmp_path)) == "SYSTEM first\n"
 
 
+def test_headless_no_save_resume_leaves_the_saved_session_untouched(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {})
+    requests = _model(monkeypatch, ["saved reply", "temporary reply"])
+    assert cli._run_prompt("saved question", session="seeded") == 0
+    session = _saved(tmp_path)
+    before = session.read_bytes()
+
+    assert cli._run_prompt("temporary question", session="seeded", save=False) == 0
+
+    assert ("assistant", "saved reply") in requests[1]
+    assert session.read_bytes() == before
+
+
 @pytest.mark.parametrize("blocking", [True, False])
 def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch, blocking):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
