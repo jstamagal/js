@@ -19,7 +19,7 @@ hostile model. Under `-C`:
   paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
   jail shows them, not the private directory behind them (`shown`).
 
-The jail is process-wide: subagents run in this process and use the same one.
+The stock jail is process-wide; assemblies can scope their own jail state.
 The operator's `exec` commands (js/hookexec.py) are not tools and run on the
 host.
 """
@@ -30,6 +30,7 @@ from . import messages as msgs
 
 import atexit
 import contextlib
+from contextvars import ContextVar
 import itertools
 import os
 import pwd
@@ -813,8 +814,28 @@ class Jail:
 ACTIVE: Jail | None = None
 
 
+@dataclass
+class JailState:
+    jail: Jail | None = None
+    environ: dict[str, str] = field(default_factory=dict)
+
+
+_STATE: ContextVar[JailState | None] = ContextVar("js_jail_state", default=None)
+
+
+@contextlib.contextmanager
+def using_state(state: JailState):
+    """Use this assembly's jail and environment marker for the duration of the body."""
+    token = _STATE.set(state)
+    try:
+        yield state
+    finally:
+        _STATE.reset(token)
+
+
 def active() -> Jail | None:
-    return ACTIVE
+    state = _STATE.get()
+    return ACTIVE if state is None else state.jail
 
 
 def shape(source: object) -> tuple:
@@ -823,7 +844,7 @@ def shape(source: object) -> tuple:
     JAIL_BIND, JAIL_HIDE and the kept environment. A process started under
     another shape than the context's now must not run anything more. Without
     a jail there is nothing they shape."""
-    if ACTIVE is None:
+    if active() is None:
         return ()
     hide = getattr(source, "jail_hide", None)
     return (tuple(getattr(source, "jail_bind", ()) or ()),
@@ -833,31 +854,35 @@ def shape(source: object) -> tuple:
 
 def shown(text: str) -> str:
     """``text`` as `Jail.shown` writes it under a jail, else itself."""
-    return text if ACTIVE is None else ACTIVE.shown(text)
+    jail = active()
+    return text if jail is None else jail.shown(text)
 
 
 def hider(context: object) -> Callable[[Path], bool]:
     """Under a jail, a test of whether a path, with its symlinks resolved,
     lies in a `JAIL_HIDE` path of ``context``; the paths are read once."""
-    if ACTIVE is None:
+    jail = active()
+    if jail is None:
         return lambda path: False
-    test = ACTIVE.hidden_test(getattr(context, "jail_hide", None))
+    test = jail.hidden_test(getattr(context, "jail_hide", None))
     return lambda path: test(_real(Path(path)))
 
 
 def hidden_under(root: Path, context: object) -> list[Path]:
     """Under a jail, the `JAIL_HIDE` paths of ``context`` inside host
     directory ``root``: what a tool walking ``root`` on the host leaves out."""
-    if ACTIVE is None:
+    jail = active()
+    if jail is None:
         return []
-    return ACTIVE.hidden_under(root, getattr(context, "jail_hide", None))
+    return jail.hidden_under(root, getattr(context, "jail_hide", None))
 
 
 def scratch_dir() -> Path:
     """Where js puts a scratch file a jailed command must reach: the jail's
     ~/.js/tmp (visible inside at the host path), else js's scratch directory."""
-    if ACTIVE is not None:
-        return ACTIVE.js_tmp
+    jail = active()
+    if jail is not None:
+        return jail.js_tmp
     return paths.tmp_dir()
 
 
@@ -868,7 +893,7 @@ def wrap(argv: list[str], context: object, *, cwd: Path | str | None = None,
     ``env`` is the environment the command gets; its PATH decides which PATH
     directories are bound back. ``context`` is the ToolContext whose
     `JAIL_BIND` and `JAIL_HIDE` apply."""
-    jail = ACTIVE
+    jail = active()
     if jail is None:
         return list(argv)
     path_value = (env if env is not None else os.environ).get("PATH", "")
@@ -930,8 +955,13 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
         jail.cleanup()
         raise JailError(msgs.JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL.format(failure=failure))
     leave()
-    ACTIVE = jail
-    os.environ["JS_JAIL"] = str(root)
+    state = _STATE.get()
+    if state is None:
+        ACTIVE = jail
+        os.environ["JS_JAIL"] = str(root)
+    else:
+        state.jail = jail
+        state.environ["JS_JAIL"] = str(root)
     atexit.register(jail.cleanup)
     return jail
 
@@ -939,7 +969,13 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
 def leave() -> None:
     """Take this process's tools out of the jail."""
     global ACTIVE
-    if ACTIVE is not None:
-        ACTIVE.cleanup()
-    ACTIVE = None
-    os.environ.pop("JS_JAIL", None)
+    state = _STATE.get()
+    jail = ACTIVE if state is None else state.jail
+    if jail is not None:
+        jail.cleanup()
+    if state is None:
+        ACTIVE = None
+        os.environ.pop("JS_JAIL", None)
+    else:
+        state.jail = None
+        state.environ.pop("JS_JAIL", None)

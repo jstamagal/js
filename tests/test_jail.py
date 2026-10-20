@@ -686,3 +686,22 @@ def test_dash_C_refuses_a_bad_setting_without_a_traceback(monkeypatch, tmp_path)
 
     assert cli.main(["-C", str(work), "--extra", "TOP_P=bad", "-p", "hi"]) == 2
     assert entered == []
+
+
+def test_jail_state_can_belong_to_each_assembly():
+    from types import SimpleNamespace
+
+    before, marker = jail.ACTIVE, os.environ.get("JS_JAIL")
+    cleaned = []
+    instance = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+    first = jail.JailState(instance, {"JS_JAIL": "/first"})
+    second = jail.JailState()
+    with jail.using_state(first):
+        assert jail.active() is instance
+        with jail.using_state(second):
+            assert jail.active() is None
+            jail.leave()
+        assert jail.active() is instance
+        jail.leave()
+    assert first.jail is None and first.environ == {} and cleaned == [True]
+    assert jail.ACTIVE is before and os.environ.get("JS_JAIL") == marker
