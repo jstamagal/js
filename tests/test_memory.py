@@ -153,3 +153,63 @@ def test_heal_drops_duplicate_and_orphaned_tool_results():
     assert [m.get("tool_call_id") for m in healed if m["role"] == "tool"] == ["c1", "c2"]
     assert healed[-1] == {"role": "user", "content": "again"}
     assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []
+
+
+def test_replay_of_a_compacted_journal_does_not_hold_the_history_compaction_dropped(tmp_path: Path):
+    """Only a caller that asks for the retained history pays for it."""
+    import tracemalloc
+
+    f = tmp_path / "s.jsonl"
+    body = "x" * 10_000
+    _write_records(f, [record for n in range(200) for record in (
+        _message_record({"role": "user", "content": f"{n} {body}"}),
+        {"kind": "mark", "version": M.SCHEMA_VERSION, "ts": 1.0,
+         "marker": "compaction:" + json.dumps({"summary": "s", "keep_from": 99})},
+    )])
+
+    tracemalloc.start()
+    try:
+        M.load_replay_messages(f)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 1_000_000
+
+
+def _message_record(message: dict) -> dict:
+    return {"kind": "message", "version": M.SCHEMA_VERSION, "ts": 1.0, "message": message}
+
+
+def _write_records(f: Path, records: list[dict]) -> None:
+    """Records written straight to the file: a big journal without a
+    transcript refresh per record."""
+    f.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def _old_writer_journal(f: Path, turns: int) -> None:
+    """`turns` tool-calling turns, then all of them appended once more, as
+    the writer before 2026-08-14 did."""
+    history = []
+    for n in range(turns):
+        history += [{"role": "user", "content": f"u{n}"}, _assistant_toolcall(f"call_{n}"),
+                    _tool_result(f"call_{n}", f"r{n}"), {"role": "assistant", "content": f"a{n}"}]
+    _write_records(f, [_message_record(message) for message in history + history[1:]])
+
+
+def test_the_retained_history_of_an_appended_twice_journal_is_read_in_linear_time(tmp_path: Path):
+    import time
+
+    def best(f: Path) -> float:
+        times = []
+        for _ in range(3):
+            start = time.perf_counter()
+            M.retained_messages(f)
+            times.append(time.perf_counter() - start)
+        return min(times)
+
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    _old_writer_journal(small, 250)
+    _old_writer_journal(large, 1000)
+
+    assert best(large) < 10 * best(small)

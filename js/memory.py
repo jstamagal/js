@@ -21,7 +21,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from . import messages as msgs
 from . import session_store
@@ -200,8 +200,10 @@ def _compaction_summary_message(summary: str) -> dict:
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
 
-# User messages js writes on its own: reminders and compaction summaries.
-_HARNESS_USER_PREFIXES = ("<js-reminder>", "<compaction-summary>")
+# The tags js wraps its own text in when it writes a user message: reminders,
+# compaction summaries and the files reattached after a compaction.
+HARNESS_USER_TAGS = ("js-reminder", "compaction-summary", "post-compaction-files")
+_HARNESS_USER_PREFIXES = tuple(f"<{tag}>" for tag in HARNESS_USER_TAGS)
 
 
 def turn_cut_off(messages: list[dict]) -> bool:
@@ -345,7 +347,8 @@ def _tool_call_ids(message: dict) -> list[str]:
     return [cid for cid in (_call_id(call) for call in calls) if cid]
 
 
-def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None) -> tuple[list[dict], int]:
+def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None,
+            retained: list[dict] | None = None) -> tuple[list[dict], int]:
     """The replayed history and the number of records skipped for their version.
     ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read.
 
@@ -354,13 +357,15 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
     records repeat a tool-call id (one already in the history the epoch started
     from, or one earlier in the epoch) was written by the old writer that
     appended runs twice; only such epochs are read again undoing those runs
-    (`_Reappends`). A clean epoch, before or after one, replays as written."""
+    (`_Reappends`). A clean epoch, before or after one, replays as written.
+    ``retained`` collects the history as `retained_messages` returns it."""
     flagged: frozenset[int] = frozenset()
     tried: set[frozenset[int]] = set()
     while True:
         if stamps is not None:
             stamps.clear()
-        messages, skipped_versions, found = _replay_records(memory_file, stamps, undo_epochs=flagged)
+        messages, skipped_versions, found = _replay_records(memory_file, stamps, undo_epochs=flagged,
+                                                            retained=retained)
         # Repairing an epoch changes what the next one starts from (a
         # compaction keeps a different tail), so an epoch flagged against the
         # unrepaired history may be clean against the repaired one. Read again
@@ -373,7 +378,8 @@ def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = Non
             flagged = frozenset().union(*tried, found)
             if stamps is not None:
                 stamps.clear()
-            messages, skipped_versions, _found = _replay_records(memory_file, stamps, undo_epochs=flagged)
+            messages, skipped_versions, _found = _replay_records(memory_file, stamps, undo_epochs=flagged,
+                                                                 retained=retained)
             break
         flagged = found
     return messages, skipped_versions
@@ -392,14 +398,76 @@ def _compaction_keep_from(data: dict) -> int | None:
     return keep_from
 
 
+_ROLES = frozenset({"user", "assistant", "tool", "system"})
+
+
+class _RetainedLog:
+    """The message records a replay read, and which of them the history lost
+    to a rollback or to the undoing of a repeated run, by record index.
+
+    A message object in the history maps to its record index; a copy
+    compaction makes maps to its original's. Every object mapped is held here
+    until the replay ends, so no other object takes its id."""
+
+    def __init__(self) -> None:
+        self._read: list[dict] = []
+        self._copies: list[dict] = []
+        self._index: dict[int, int] = {}
+        self._removed: set[int] = set()
+
+    def read(self, message: dict) -> None:
+        self._index[id(message)] = len(self._read)
+        self._read.append(message)
+
+    def took_out(self, messages: list[dict]) -> None:
+        for message in messages:
+            index = self._index.get(id(message))
+            if index is not None:
+                self._removed.add(index)
+
+    def copied(self, originals: list[dict], copies: list[dict]) -> None:
+        for original, copy in zip(originals, copies, strict=True):
+            index = self._index.get(id(original))
+            if copy is not original and index is not None:
+                self._index[id(copy)] = index
+                self._copies.append(copy)
+
+    def kept(self) -> list[dict]:
+        return [message for index, message in enumerate(self._read) if index not in self._removed]
+
+
+class _History(list):
+    """The replayed history of a replay that keeps a `_RetainedLog`: every
+    deletion, a rollback's or an undone run's, tells the log what it took out.
+    A session_reset clears it and a compaction replaces it; neither is a
+    deletion."""
+
+    def __init__(self, log: _RetainedLog) -> None:
+        super().__init__()
+        self._log = log
+
+    def __delitem__(self, key: Any) -> None:
+        self._log.took_out(self[key] if isinstance(key, slice) else [self[key]])
+        super().__delitem__(key)
+
+
 def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None, *,
-                    undo_epochs: frozenset[int]) -> tuple[list[dict], int, frozenset[int]]:
+                    undo_epochs: frozenset[int],
+                    retained: list[dict] | None = None) -> tuple[list[dict], int, frozenset[int]]:
     """The replayed history, the records skipped for their version, and the
     epochs whose message records repeat a tool-call id. Runs the old writer
-    appended twice are undone in ``undo_epochs`` only."""
+    appended twice are undone in ``undo_epochs`` only.
+
+    ``retained``, when given, is filled with every message record in file
+    order that neither a rollback nor the undoing of a repeated run took
+    out: compaction and session_reset take nothing out of it. Bare message
+    records from before the record envelope count too."""
+    if retained is not None:
+        retained.clear()
     if not memory_file.exists():
         return [], 0, frozenset()
-    messages: list[dict] = []
+    log = _RetainedLog() if retained is not None else None
+    messages: list[dict] = _History(log) if log is not None else []
     undo = _Reappends(messages)
     epoch = 0
     undoing = epoch in undo_epochs
@@ -425,6 +493,11 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
             try:
                 raw = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if log is not None and isinstance(raw, dict) and "kind" not in raw and raw.get("role") in _ROLES:
+                # A session from before the record envelope: bare messages,
+                # which the transcript shows and replay does not send.
+                log.read(raw)
                 continue
             migrated = _migrate_record(raw)
             if migrated is None:
@@ -469,7 +542,10 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                         rehydrated = data.get("rehydrated")
                         rehydrated = rehydrated if isinstance(rehydrated, dict) else None
                         tail = messages[keep_from:]
+                        originals = list(tail)
                         drop_signed_reasoning(tail)
+                        if log is not None:
+                            log.copied(originals, tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
                                        *([rehydrated] if rehydrated else []), *tail]
                         next_epoch()
@@ -478,11 +554,13 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
             if rec.kind != "message" or rec.message is None:
                 continue
             role = rec.message.get("role")
-            if isinstance(role, str) and role in {"user", "assistant", "tool", "system"}:
+            if isinstance(role, str) and role in _ROLES:
                 for call_id in _tool_call_ids(rec.message):
                     if call_id in call_ids:
                         repeated.add(epoch)
                     call_ids.add(call_id)
+                if log is not None:
+                    log.read(rec.message)
                 if undoing:
                     undo.append(rec.message)
                 else:
@@ -492,7 +570,20 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                     stamps[id(rec.message)] = (rec.message, stamp)
     if undoing:
         undo.finish()
+    if retained is not None and log is not None:
+        retained.extend(log.kept())
     return _heal_orphaned_tool_calls(messages), skipped_versions, frozenset(repeated)
+
+
+def retained_messages(memory_file: Path) -> list[dict]:
+    """Every message of the session in file order, as its transcript keeps
+    it: rollbacks and the undoing of runs the old writer appended twice take
+    messages out, as they do from replay, while compaction keeps the history
+    it summarized. The compaction summary and reattached files replay sends
+    in its place are not among them."""
+    retained: list[dict] = []
+    _replay(memory_file, retained=retained)
+    return retained
 
 
 def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:

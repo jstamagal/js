@@ -55,8 +55,7 @@ each start, so `ls ~/.js` always shows the whole structure:
 
     ~/.js/
       jsrc           written with every setting on the first run
-      JS.md  tools.yaml  tags.yaml   files; not created, only read
-                     (tags.yaml replaces the stock js/tags.yaml)
+      JS.md  tools.yaml   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, flat
@@ -130,7 +129,6 @@ agent: defaultagent   dir: /home/ronald_rump/js   mode: repl
 models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
 started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
 branched-from: -
-tags: js · linux admin
 
 #0001 08:02 you  APE
 #0014 08:31 you  the spilled result is one line, read can't get past it
@@ -188,8 +186,8 @@ tags: js · linux admin
 
 - **Empty:** the operator said something and nothing came back. Hidden.
 - **Quick:** one operator message, at most 2 tool calls, a final reply under
-  about 1,000 characters (`js -p "foo"`, `wyd`, "whats my GPU temp"). Not
-  tagged, hidden by default.
+  about 1,000 characters (`js -p "foo"`, `wyd`, "whats my GPU temp"). Hidden
+  by default.
 - **Subagent and script-started** (subagent children, the wiki pipeline,
   the commit agent): hidden by default.
 - Everything else is shown.
@@ -206,12 +204,14 @@ Default screen:
 
 ```
  SESSIONS  188 · flat · newest first · all dirs          v=view  /=search  b=messages  i=info  a=all  esc=close
-  when          mode  agent             dir                          turns  length  tags
-> Sep 29 09:14  -p    defaultagent      ~/js                            1    40s    js
-• Sep 29 08:02  repl  defaultagent      ~/js                           41    3h     js · linux admin
-  Sep 17 16:50  repl  defaultagent      ~/.local/share/js/sessions/…    8    10m    nfs / mounts · remote hosts · networking
-  Sep 17 10:01  repl  defaultagent      ~/js                           45    8h     terminal / console · linux admin · hardware
-  ├─ Sep 17 11:40     ⎇ from #0031                                     12    40m    terminal / console
+  when          mode  agent             dir                          turns  length  name
+> Sep 29 09:14  -p    defaultagent      ~/js                            1    40s    -
+        you: whats eating the nfs mount
+        defaultagent: 📌 autofs timeout was 0; set to 300 in auto.master
+• Sep 29 08:02  repl  defaultagent      ~/js                           41    3h     -
+  Sep 17 16:50  repl  defaultagent      ~/.local/share/js/sessions/…    8    10m    -
+  Sep 17 10:01  repl  defaultagent      ~/js                           45    8h     -
+  ├─ Sep 17 11:40     ⎇ from #0031                                     12    40m    -
 ```
 
 - Newest first, cursor on the newest. Every directory and every agent in one
@@ -256,36 +256,16 @@ searched only while `a` is on.
 | `dir:~/js/*`, `dir:~/js/**` | one level under / anywhere under `~/js` |
 | `mode:-p`, `mode:quick` | how it was started |
 | `model:*qwen*` | any message stamped with a matching model |
-| `tag:nfs` | tag |
 
 Terms combine with AND. The index is an SQLite FTS5 table under
 `~/.js/cache/`, updated as sessions are written.
 
-### Tags (Jev)
+### Last lines
 
-Each non-quick session gets up to three tags from a list of one line per tag
-(name and a short description): the stock `js/tags.yaml`, or `~/.js/tags.yaml`
-in its place when the operator writes one.
-
-- One TypeSafe request per session: `state` = the last 10 operator and model
-  messages (tool output excluded); one `noul` question per tag ("does the
-  conversation have this as one of its main subjects").
-- Tags scoring ≥ 0.6 are kept, highest first, at most three.
-- Computed when a session ends. Retagged when `tags.yaml` changes.
-- Tags describe subjects only. Activity tags such as "something broke" or
-  "coding" fire on nearly every session (the operator starts js because
-  something broke, and the coding is the fix), so they are not in the list.
-- Cost measured on 20 real sessions with 22 tags: ~3,200 input tokens and
-  ~200 ms per session; all 188 visible sessions ≈ $0.03 at $0.042 per Mtok.
-- The conversation text is sent to api.typesafe.ai
-  (`TYPESAFE_API_KEY`). TypeSafe states requests are not used for training.
-
-Starting list (from the 2026-09-29 test): js, bitchtea, other harnesses
-(opencode, pi, codex, claude code, crush, forge; installing or upgrading
-them), gpu / vram, hardware, llm serving, model eval, quantization,
-networking, nfs / mounts, remote hosts, linux admin, terminal / console,
-web / html, image gen (AI-generated images, not SVG), video gen, prompts /
-personas, creative writing, personal life, banter.
+Under the highlighted session the picker shows the operator's last text
+(tool calls and js reminders left out) and the agent's last status line,
+the one that begins with 📌 (📌🔨🦍), else the last line of its last text. Session tagging by Jev was
+cut; Jev is the `jev` tool.
 
 ## 3. Mode-switch note
 
@@ -405,4 +385,3 @@ How it is built (`js/jail.py`):
 - Probes that failed with no reply (a 402, a DNS error): shown with the
   error and model (`✗ 402 deepseek-v4-flash`), or hidden with the empty
   sessions?
-- Tags as a fourth `v` view (`[nfs / mounts]`, …) or only a column and filter?

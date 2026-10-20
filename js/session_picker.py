@@ -25,7 +25,7 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
@@ -39,6 +39,8 @@ RESUME = "resume"
 BRANCH = "branch"
 # Search hits whose matching row is looked up; the rest show without one.
 _HIT_LINES = 300
+# Session path -> (size, mtime) of the file when it was previewed, and the preview.
+_PREVIEWS: dict[str, tuple[tuple[int, int], tuple[str, str]]] = {}
 _PAGE = 10
 
 
@@ -72,6 +74,7 @@ _STYLE = Style.from_dict(
         "match": "ansiyellow bold",
         "stamp": "ansibrightblack",
         "label": "ansibrightblack",
+        "preview": "ansibrightblack",
     }
 )
 
@@ -96,6 +99,7 @@ class SessionPicker:
         lines: Callable[[str, dict[str, float]], dict[str, Any]] | None = None,
         rows: Callable[[str], list[Any]] | None = None,
         tokens: Callable[[str], int | None] | None = None,
+        messages: Callable[[str], list[dict]] | None = None,
     ) -> None:
         self.sessions = sessions
         self.cwd = str(cwd).rstrip("/") or "/"
@@ -105,6 +109,7 @@ class SessionPicker:
         self._lines = lines
         self._rows = rows
         self._tokens = tokens
+        self._messages = messages
         self.view = Q.VIEWS[0]
         self.show_all = False
         self.screen = "list"
@@ -118,6 +123,7 @@ class SessionPicker:
         self.message_cursor = 0
         self._message_positions: dict[str, int] = {}
         self.token_count: int | None = None
+        self._previews: dict[str, tuple[str, str]] = {}
         self.refresh()
 
     # -- state -------------------------------------------------------------------
@@ -180,6 +186,34 @@ class SessionPicker:
         last = max(0, len(self.message_rows) - 1)
         self.message_cursor = min(self._message_positions.get(session.path, last), last)
         self.screen = "messages"
+
+    def preview(self, session: Q.Session) -> tuple[str, str]:
+        """The session's last user text and agent line. A file is read again
+        only when its size or mtime changed since it was last previewed; a
+        session with no file to stat is read once per picker."""
+        stamp = _file_stamp(session.path)
+        cached = _PREVIEWS.get(session.path)
+        if stamp is None and session.path in self._previews:
+            preview = self._previews[session.path]
+        elif stamp is not None and cached is not None and cached[0] == stamp:
+            preview = cached[1]
+        else:
+            try:
+                messages = list(self._messages(session.path)) if self._messages is not None else []
+            except (OSError, ValueError):
+                messages = []
+            preview = Q.preview(messages)
+            if stamp is not None:
+                _PREVIEWS[session.path] = (stamp, preview)
+        self._previews[session.path] = preview
+        return preview
+
+    def preview_height(self) -> int:
+        """Lines the highlighted session's preview takes under its row."""
+        session = self.current()
+        if self.screen not in ("list", "search") or session is None:
+            return 0
+        return sum(1 for said in self.preview(session) if said)
 
     def _open_info(self, session: Q.Session) -> None:
         self.token_count = self._tokens(session.path) if self._tokens is not None else None
@@ -344,6 +378,13 @@ class SessionPicker:
                 cursor_line = line
             out += [("class:selected" if selected else "", text), ("", "\n")]
             line += 1
+            if selected:
+                from .session_text import USER
+
+                for who, said in zip((USER, session.agent or "-"), self.preview(session)):
+                    if said:
+                        out += [("class:preview", f"        {who}: {said}"), ("", "\n")]
+                        line += 1
             hit = self.hits.get(session.path)
             if hit is not None and hit.line:
                 out += self._hit_fragments(hit)
@@ -404,8 +445,7 @@ class SessionPicker:
         ]
         if session.parent:
             rows.append((msgs.SESSIONS_INFO_PARENT.text(), session.parent))
-        rows += [(msgs.SESSIONS_INFO_KIND.text(), Q.kind(session)),
-                 (msgs.SESSIONS_INFO_TAGS.text(), " · ".join(session.tags) or "-")]
+        rows.append((msgs.SESSIONS_INFO_KIND.text(), Q.kind(session)))
         return rows
 
     def _info_body(self) -> StyleAndTextTuples:
@@ -447,11 +487,22 @@ class SessionPicker:
             [
                 Window(FormattedTextControl(self.title), height=1),
                 Window(FormattedTextControl(self.subtitle), height=lambda: Dimension.exact(self.subtitle_height())),
-                Window(body, wrap_lines=False, always_hide_cursor=True),
+                # The highlighted session's preview sits under its row: keep
+                # that many lines below the cursor on the screen.
+                Window(body, wrap_lines=False, always_hide_cursor=True,
+                       scroll_offsets=ScrollOffsets(bottom=self.preview_height)),
             ]
         )
         return Application(layout=Layout(root), key_bindings=kb, style=_STYLE, full_screen=True,
                            input=input, output=output)
+
+
+def _file_stamp(path: str) -> tuple[int, int] | None:
+    try:
+        info = Path(path).stat()
+    except (OSError, ValueError):
+        return None
+    return info.st_size, info.st_mtime_ns
 
 
 def _tokens(path: str) -> int | None:
@@ -463,9 +514,15 @@ def _tokens(path: str) -> int | None:
         return None
 
 
+def _messages(path: str) -> list[dict]:
+    from . import memory
+
+    return memory.retained_messages(Path(path))
+
+
 def load(cwd: str | Path, query: str = "") -> SessionPicker:
-    """A picker over every session in the catalog, with search, message rows
-    and token counts read from the index and the session files."""
+    """A picker over every session in the catalog, with search, message rows,
+    previews and token counts read from the index and the session files."""
     from . import paths, session_index, session_text
 
     sessions = [Q.Session.from_summary(summary) for summary in session_index.catalog()]
@@ -478,6 +535,7 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
         lines=session_index.matching_lines,
         rows=lambda path: session_text.rows(Path(path)),
         tokens=_tokens,
+        messages=_messages,
     )
 
 

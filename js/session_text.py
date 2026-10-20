@@ -7,13 +7,12 @@ the two stay in step. Its shape is fixed so ripgrep and head work on it:
     models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
     started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
     branched-from: -
-    tags: js · linux admin
 
     #0001 08:02 you  APE
     #0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
     #0016 08:32 ape  the file has no real newlines
 
-Five header lines and a blank line, then one line per message, numbered by the
+Four header lines and a blank line, then one line per message, numbered by the
 message's position among the message records of the `.jsonl`; a multi-line
 message continues on indented lines. An assistant message that calls tools is
 not a line of its own: its text labels each of its calls, and each tool result
@@ -21,8 +20,7 @@ is one line with the tool's name, that label, the call's first line, and the
 result's exit code and size. Tool output is only in the `.jsonl`, at the same
 message number. A message a later rollback took back out of the conversation
 (an aborted turn, results cleared by compaction and written again) is not
-shown; compaction itself removes nothing from the `.txt`. The `tags:` line
-shows the newest `tags` record (`js.session_tags`).
+shown; compaction itself removes nothing from the `.txt`.
 
 Each file's parse is kept in memory between writes, so a write reads only the
 records appended since the last one.
@@ -219,15 +217,13 @@ class _Transcript:
     calls: dict[str, _Call] = field(default_factory=dict)
     # Record id -> message number, for naming a branch point by its number.
     numbers: dict[str, int] = field(default_factory=dict)
-    # The newest `tags` record (`js.session_tags`), or None.
-    tagging: dict | None = None
 
     def feed(self, record: Any) -> None:
         if not isinstance(record, dict):
             return
         if record.get("kind") == "tags":
-            # Written after the session ends, so its time is not the session's.
-            self.tagging = record
+            # Older sessions hold `tags` records written after the session
+            # ended; their time is not the session's.
             return
         ts = _timestamp(record.get("ts"))
         if ts is not None:
@@ -402,14 +398,8 @@ class _Transcript:
             f"models: {models}",
             f"started: {_day(started)}   last: {_day(self.last_ts)}   turns: {self.turns()}",
             f"branched-from: {self._branched() or '-'}",
-            f"tags: {' · '.join(self.tags()) or '-'}",
             "",
         ]
-
-    def tags(self) -> list[str]:
-        """The tags of the newest `tags` record."""
-        tags = (self.tagging or {}).get("tags")
-        return [str(tag) for tag in tags] if isinstance(tags, list) else []
 
     def text(self) -> str:
         rows = [line for row in self.rows() for line in row.txt()]
@@ -417,8 +407,7 @@ class _Transcript:
 
     def summary(self) -> dict[str, Any]:
         """What the session catalog keeps for the session: where and how it
-        started, its size in turns and calls, its model stamps, and its tags
-        with the tag list and message count they were judged at."""
+        started, its size in turns and calls, and its model stamps."""
         rows = self.rows()
         final = next((row for row in reversed(rows) if row.role == "assistant"), None)
         parent = self._branch_point()
@@ -442,9 +431,6 @@ class _Transcript:
             "models": models,
             "model_changes": [[model, number] for model, number in self.models],
             "last_stamp": self.last_stamp,
-            "tags": self.tags(),
-            "tags_list": (self.tagging or {}).get("list"),
-            "tags_through": (self.tagging or {}).get("through"),
         }
 
     def search_lines(self) -> list[tuple[int, str, float | None, str]]:

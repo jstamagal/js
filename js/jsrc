@@ -55,14 +55,6 @@ set HISTORY_SIZE 10000
 # --- keys ---
 set -KEYBINDS_FILE
 
-# --- tags ---
-set -tags.file
-set tags.threshold 0.6
-set tags.max 3
-set tags.messages 10
-set tags.message_chars 2000
-set tags.model jev-latest
-
 # --- provider ---
 set -PROVIDER
 set -BASE_URL

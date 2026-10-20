@@ -87,7 +87,6 @@ from .config import (
 )
 from . import session_store
 from . import session_picker
-from . import session_tags
 from . import agent_lock
 from .session_catalog import (
     acquire_session,
@@ -308,8 +307,7 @@ _session_leases = threading.local()
 
 
 def _session_scope(func):
-    """Release every saved session activated during one CLI entry point, then
-    start a tag sweep (`js.session_tags`) for the sessions that ended."""
+    """Release every saved session activated during one CLI entry point."""
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
@@ -323,13 +321,10 @@ def _session_scope(func):
         try:
             return func(*args, **kwargs)
         finally:
-            ended = len(leases) > start
             while len(leases) > start:
                 leases.pop().release()
             _session_leases.caller_key = old_caller_key
             _session_leases.start = old_start
-            if ended:
-                session_tags.start_sweep(getattr(_session_leases, "settings", None))
 
     return wrapped
 
@@ -356,7 +351,6 @@ def _activate_saved_session(
     )
     lease = acquire_session(cfg.session_file)
     _session_leases.items.append(lease)
-    _session_leases.settings = cfg.settings
     if announce_generated:
         _announce_generated_session(cfg)
 
@@ -1699,9 +1693,7 @@ def _enter_session_dir(target: _SessionTarget) -> None:
 
 def _cmd_session(arg: str, state: dict, cfg: Config) -> str | None:
     """Open the session picker. A chosen session other than this one ends the
-    REPL, and js starts again in that session's directory, agent and model.
-    Opening it starts a tag sweep, so an edited tag list shows next time."""
-    session_tags.start_sweep(cfg.settings)
+    REPL, and js starts again in that session's directory, agent and model."""
     try:
         choice = session_picker.pick_session(Path.cwd(), query=arg)
     except Exception as exc:  # noqa: BLE001

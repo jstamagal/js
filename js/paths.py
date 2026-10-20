@@ -8,7 +8,7 @@ whole structure is always there:
 
     ~/.js/
       jsrc           written with every setting on the first run
-      JS.md  tools.yaml  tags.yaml  keys   files; not created, only read
+      JS.md  tools.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, filed by the directory it started in
@@ -72,12 +72,6 @@ def global_toolbox_dir() -> Path:
 
 def tools_config_file() -> Path:
     return home() / "tools.yaml"
-
-
-def tags_file() -> Path:
-    """The operator's session tag list, which replaces the stock one
-    (`js.session_tags`)."""
-    return home() / "tags.yaml"
 
 
 def global_env_file() -> Path:

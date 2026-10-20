@@ -167,29 +167,6 @@ KEYBINDS_FILE
     interrupt, eof, suspend, reasoning_toggle, redraw, scroll_up,
     scroll_down, complete. Read when the REPL starts.
 
-tags.file
-    Session tag list: one `name: description` line per tag. Unset =
-    ~/.js/tags.yaml when it exists, else js/tags.yaml, the stock list js
-    ships. A named file that is missing, or no TYPESAFE_API_KEY, means no
-    tagging. Editing the list retags every shown session at the next session
-    end.
-
-tags.threshold
-    Lowest Jev score, 0 to 1, a tag needs to be kept on a session.
-
-tags.max
-    Most tags a session keeps, highest score first.
-
-tags.messages
-    How many of a session's last operator and model messages Jev reads to
-    tag it. Tool output is never sent.
-
-tags.message_chars
-    Longest text sent per message when tagging; longer messages are cut.
-
-tags.model
-    TypeSafe model that judges session tags.
-
 PROVIDER
     Explicit js provider id, e.g. deepseek, openai-codex, ollama.
 

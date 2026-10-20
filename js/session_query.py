@@ -18,7 +18,6 @@ Query grammar, terms combined with AND:
     dir:~/js/*  dir:~/js/**     one level under ~/js / ~/js or anywhere under it
     mode:-p  mode:quick         how it was started, or its kind
     model:GLOB                  any message stamped with a matching model
-    tag:TEXT                    a tag containing TEXT, or matching a glob
 """
 
 from __future__ import annotations
@@ -32,6 +31,7 @@ from typing import Any
 
 from . import messages as msgs
 from . import session_store
+from .memory import HARNESS_USER_TAGS
 
 # Kinds. Every kind but SHOWN is hidden until `a`.
 SHOWN = "shown"
@@ -51,7 +51,7 @@ _GLOB = re.compile(r"[*?\[]")
 _COUNT = re.compile(r"(>=|<=|>|<|=)(\d+)")
 _DAY = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?")
 _DATE_WORDS = ("today", "yesterday", "week")
-_FILTERS = ("agent", "dir", "mode", "model", "tag")
+_FILTERS = ("agent", "dir", "mode", "model")
 _TOKEN = re.compile(r'"([^"]*)"?|(\S+)')
 
 
@@ -79,7 +79,6 @@ class Session:
     models: tuple[str, ...] = ()
     model_changes: tuple[tuple[str, int], ...] = ()
     last_stamp: dict | None = None
-    tags: tuple[str, ...] = ()
 
     @classmethod
     def from_summary(cls, summary: dict[str, Any]) -> Session:
@@ -119,7 +118,6 @@ class Session:
             models=tuple(str(model) for model in summary.get("models") or () if model),
             model_changes=changes,
             last_stamp=stamp if isinstance(stamp, dict) else None,
-            tags=tuple(str(tag) for tag in summary.get("tags") or ()),
         )
 
     @property
@@ -199,7 +197,6 @@ class Query:
     dirs: list[DirPattern] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
 
     @property
     def ranked(self) -> bool:
@@ -332,10 +329,8 @@ def parse_query(text: str, *, now: float, home: str | Path, cwd: str | Path) -> 
                 query.dirs.append(dir_pattern(rest, home=home_text, cwd=cwd_text))
             elif key == "mode":
                 query.modes.append("-p" if rest == "p" else rest.lower())
-            elif key == "model":
-                query.models.append(rest)
             else:
-                query.tags.append(rest)
+                query.models.append(rest)
             continue
         if any(char.isalnum() for char in token):
             query.words.append(token)
@@ -363,7 +358,6 @@ def describe(query: Query) -> str:
             parts.append(msgs.SESSIONS_Q_DIR.text(pattern=pattern.text))
     parts += [msgs.SESSIONS_Q_MODE.text(mode=mode) for mode in query.modes]
     parts += [msgs.SESSIONS_Q_MODEL.text(pattern=pattern) for pattern in query.models]
-    parts += [msgs.SESSIONS_Q_TAG.text(pattern=pattern) for pattern in query.tags]
     return " · ".join(parts) if parts else msgs.SESSIONS_Q_NOTHING.text()
 
 
@@ -380,11 +374,6 @@ def fts_expression(query: Query) -> str | None:
 
 def _count_ok(value: int, op: str, n: int) -> bool:
     return {">": value > n, "<": value < n, ">=": value >= n, "<=": value <= n, "=": value == n}[op]
-
-
-def _glob_or_part(pattern: str, value: str) -> bool:
-    pattern, value = pattern.lower(), value.lower()
-    return fnmatchcase(value, pattern) if _GLOB.search(pattern) else pattern in value
 
 
 def matches(session: Session, query: Query) -> bool:
@@ -404,10 +393,8 @@ def matches(session: Session, query: Query) -> bool:
     session_kind = kind(session)
     if not all(mode in (session.mode, session_kind) for mode in query.modes):
         return False
-    if not all(any(fnmatchcase(model.lower(), pattern.lower()) for model in session.models)
-               for pattern in query.models):
-        return False
-    return all(any(_glob_or_part(pattern, tag) for tag in session.tags) for pattern in query.tags)
+    return all(any(fnmatchcase(model.lower(), pattern.lower()) for model in session.models)
+               for pattern in query.models)
 
 
 def visible(session: Session, query: Query, *, show_all: bool) -> bool:
@@ -534,19 +521,18 @@ def _fit(text: str, width: int) -> str:
     return text.ljust(width)
 
 
-def tags_text(session: Session) -> str:
+def kind_text(session: Session) -> str:
     session_kind = kind(session)
-    parts = [] if session_kind == SHOWN else [session_kind]
-    parts += list(session.tags)
-    return " · ".join(parts) if parts else "-"
+    return "-" if session_kind == SHOWN else session_kind
 
 
-def name_tags_text(session: Session) -> str:
-    """The row's last column: the session's name when it has one, then its tags."""
-    tags = tags_text(session)
+def name_kind_text(session: Session) -> str:
+    """The row's last column: the session's name when it has one, then its
+    kind when it is a hidden one."""
+    marked = kind_text(session)
     if session.name is None:
-        return tags
-    return session.name if tags == "-" else f"{session.name} · {tags}"
+        return marked
+    return session.name if marked == "-" else f"{session.name} · {marked}"
 
 
 _WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
@@ -554,16 +540,16 @@ _WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
 
 def header_line() -> str:
     return (f"  {'when':<{_WHEN}}  {'mode':<{_MODE}}  {'agent':<{_AGENT}}  {'dir':<{_DIR}} "
-            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} name · tags")
+            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} name")
 
 
 def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
     """A session row: marker, when, mode, agent, dir, turns, length, then the
-    session's name when it has one and its tags. A nested branch shows its
+    session's name when it has one and its kind. A nested branch shows its
     branch point in place of mode, agent and dir."""
     session = item.session
     assert session is not None
-    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {name_tags_text(session)}")
+    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {name_kind_text(session)}")
     when = when_text(session.started if session.started is not None else session.when, now)
     if item.depth == 0:
         return (f"{marker} {when:<{_WHEN}}  {_fit(session.mode or '-', _MODE)}  "
@@ -608,3 +594,59 @@ def message_lines(rows: list[Any]) -> list[str]:
         lines.append(text)
     return lines
 
+
+
+# The agent's status line begins with 📌 (the 📌🔨🦍 group): what the preview
+# shows for it.
+_STATUS_MARK = "📌"
+_HARNESS_OPEN = tuple(f"<{tag}>" for tag in HARNESS_USER_TAGS)
+_HARNESS_CLOSE = tuple(f"</{tag}>" for tag in HARNESS_USER_TAGS)
+
+
+def _operator_lines(lines: list[str]) -> list[str]:
+    """A user message's lines without the blocks js wrote into it."""
+    kept, inside = [], False
+    for line in lines:
+        text = line.strip()
+        if text.startswith(_HARNESS_OPEN):
+            inside = not text.endswith(_HARNESS_CLOSE)
+            continue
+        if inside:
+            inside = not text.endswith(_HARNESS_CLOSE)
+            continue
+        kept.append(line)
+    return kept
+
+
+def _message_lines(message: Any) -> list[str]:
+    """A message's text, one entry per non-blank line."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "\n".join(part.get("text", "") for part in content
+                            if isinstance(part, dict) and isinstance(part.get("text"), str))
+    if not isinstance(content, str):
+        return []
+    return [line.rstrip() for line in content.splitlines() if line.strip()]
+
+
+def preview(messages: list[Any]) -> tuple[str, str]:
+    """What the picker shows under the highlighted session: the operator's
+    last text, and the agent's last status line (one that begins with 📌),
+    else the last line of its last text. The agent's text includes what it
+    wrote beside tool calls, answered or not. Each on one line; "" when there is none."""
+    user = ""
+    said: list[list[str]] = []
+    for message in messages:
+        role = message.get("role") if isinstance(message, dict) else None
+        if role == "user":
+            kept = _operator_lines(_message_lines(message))
+            if kept:
+                user = " ".join(" ".join(kept).split())
+        elif role == "assistant":
+            lines = _message_lines(message)
+            if lines:
+                said.append(lines)
+    pinned = next((line for lines in reversed(said) for line in reversed(lines)
+                   if line.lstrip().startswith(_STATUS_MARK)), None)
+    agent = pinned if pinned is not None else (said[-1][-1] if said else "")
+    return user, " ".join(agent.split())

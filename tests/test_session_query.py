@@ -155,9 +155,9 @@ def test_a_named_session_row_shows_its_name_and_a_generated_one_does_not():
     assert (named.name, generated.name, subagent.name) == ("modelswap", None, None)
 
 
-def test_a_hidden_kind_is_marked_in_the_tags_column():
-    assert Q.tags_text(_session("q", turns=1, tool_calls=0, final_len=5)) == Q.QUICK
-    assert Q.tags_text(_session("n")) == "-"
+def test_a_hidden_kind_is_marked_in_the_last_column():
+    assert Q.kind_text(_session("q", turns=1, tool_calls=0, final_len=5)) == Q.QUICK
+    assert Q.kind_text(_session("n")) == "-"
 
 
 # --- the query grammar -------------------------------------------------------
@@ -263,13 +263,6 @@ def test_model_matches_any_stamped_model():
     assert sorted(_paths(Q.select(sessions, _parse("model:deepseek-v4-flash"), show_all=False))) == ["d", "q"]
 
 
-def test_tag_matches_a_tag_containing_it():
-    sessions = [_session("n", tags=("nfs / mounts", "linux admin")), _session("j", tags=("js",)),
-                _session("none")]
-    assert _paths(Q.select(sessions, _parse("tag:nfs"), show_all=False)) == ["n"]
-    assert _paths(Q.select(sessions, _parse("tag:j*"), show_all=False)) == ["j"]
-
-
 def test_terms_combine_with_and():
     sessions = [_session("a", agent="defaultagent", turns=20), _session("b", agent="defaultagent", turns=2),
                 _session("c", agent="research", turns=20)]
@@ -283,8 +276,8 @@ def test_words_keep_only_scored_sessions_best_score_first():
 
 
 def test_the_parse_line_names_every_term():
-    described = Q.describe(_parse("niri >10 today agent:x* dir:~/js/** mode:-p model:*qwen* tag:nfs"))
-    for part in ("niri", ">10", "today", "x*", "~/js", "-p", "*qwen*", "nfs"):
+    described = Q.describe(_parse("niri >10 today agent:x* dir:~/js/** mode:-p model:*qwen*"))
+    for part in ("niri", ">10", "today", "x*", "~/js", "-p", "*qwen*"):
         assert part in described
     assert Q.describe(_parse("")) != Q.describe(_parse("niri"))
 

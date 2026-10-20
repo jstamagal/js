@@ -116,9 +116,8 @@ def test_the_txt_has_the_fixed_header_numbered_rows_and_no_tool_output(monkeypat
     assert lines[1].startswith("models: ")
     assert lines[2].startswith("started: ") and "turns: 1" in lines[2]
     assert lines[3] == "branched-from: -"
-    assert lines[4].startswith("tags: ")
-    assert lines[5] == ""
-    rows = lines[6:]
+    assert lines[4] == ""
+    rows = lines[5:]
     assert rows[0].startswith("#0001 ") and rows[0].endswith("you  run it")
     assert rows[1].startswith(" ") and rows[1].strip() == "please"
     tool = next(row for row in rows if "tool:shell" in row)

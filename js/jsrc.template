@@ -313,36 +313,6 @@
 
 
 ################################################################################
-#  SESSION TAGS  --  short topic labels on your saved sessions
-################################################################################
-
-# js asks a small model (Jev, through TypeSafe) to tag each session from its
-# last few messages. No TYPESAFE_API_KEY means no tagging.
-
-# The list of tags to choose from: one `name: description` per line.
-# Unset: ~/.js/tags.yaml if you made one, else the list that ships with js.
-# Edit the list and every session is tagged again next time one ends.
-#set -tags.file
-
-# How sure Jev has to be, 0 to 1, before a tag sticks.
-#   example:  set tags.threshold 0.8
-#set tags.threshold 0.6
-
-# The most tags one session gets. The surest win.
-#set tags.max 3
-
-# How many of the session's last messages (yours and the model's) are sent
-# to be tagged. Tool output is never sent.
-#set tags.messages 10
-
-# Each of those messages is cut to this many characters.
-#set tags.message_chars 2000
-
-# The TypeSafe model that does the tagging.
-#set tags.model jev-latest
-
-
-################################################################################
 #  TOOLS  --  how far the model can go in one turn
 ################################################################################
 

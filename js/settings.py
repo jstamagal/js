@@ -177,14 +177,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- keys ---
     SettingSpec("KEYBINDS_FILE", "str",
                 empty=EMPTY_NONE, group="history"),
-    # --- tags ---
-    SettingSpec("tags.file", "str",
-                empty=EMPTY_NONE),
-    SettingSpec("tags.threshold", "float"),
-    SettingSpec("tags.max", "int"),
-    SettingSpec("tags.messages", "int"),
-    SettingSpec("tags.message_chars", "int"),
-    SettingSpec("tags.model", "str"),
     # --- provider ---
     SettingSpec("PROVIDER", "str", empty=EMPTY_NONE, aliases=("provider",), group="providers"),
     SettingSpec("BASE_URL", "str", empty=EMPTY_NONE, aliases=("baseurl",), group="providers"),
@@ -441,7 +433,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if spec.key in {
             "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "ui.tools_preview_lines",
             "TERMINAL_COLUMNS", "TERMINAL_ROWS", "PARALLEL_TOOLS_MAX",
-            "HISTORY_SIZE", "LSP_TIMEOUT", "tags.max", "tags.messages", "tags.message_chars",
+            "HISTORY_SIZE", "LSP_TIMEOUT",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None
@@ -454,8 +446,6 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
         if spec.key == "MCP_TIMEOUT" and not (math.isfinite(number) and number > 0):
             return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
-        if spec.key == "tags.threshold" and not 0 <= number <= 1:
-            return None, msgs.EXPECTED_PROBABILITY.text()
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
