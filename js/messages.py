@@ -1541,6 +1541,54 @@ LOGIN_SOURCE_REGISTRY = Message("registry", banner=False)
 
 LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT = "needs an interactive terminal (stdin and stdout must be a TTY)"
 
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE = "OpenAI Codex token response did not include access_token"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_119 = "OpenAI Codex token response did not include refresh_token"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121 = "OpenAI Codex token response did not include expires_in"
+
+CODEX_OAUTH_OPENAI_CODEX_ACCESS_TOKEN_DID_NOT_INCLUDE = "OpenAI Codex access token did not include chatgpt_account_id"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_REQUEST_FAILED = "OpenAI Codex token request failed: {detail}"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_WAS_NOT_A = "OpenAI Codex token response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_COULD_NOT_BIND_THE = "OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
+
+CODEX_OAUTH_INVALID_CALLBACK = "Invalid callback"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_TIMED_OUT_WAITING_FOR = "OpenAI Codex OAuth timed out waiting for browser callback"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_FAILED = "OpenAI Codex OAuth failed: {received_error}"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_STATE_MISMATCH = "OpenAI Codex OAuth state mismatch"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_FAILED = "OpenAI Codex device authorization failed: {value}"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_WAS_NOT = "OpenAI Codex device authorization response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_MISSING_DEVICE = "OpenAI Codex device authorization response missing device_auth_id or user_code"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_POLLING_FAILED = "OpenAI Codex device token polling failed: {value}"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_WAS_NOT = "OpenAI Codex device token response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_MISSING_AUTHORIZATION = "OpenAI Codex device token response missing authorization_code or code_verifier"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_TIMED_OUT = "OpenAI Codex device authorization timed out"
+
+CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN = "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+
+CODEX_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the OpenAI Codex login can refresh"
+
+CODEX_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh"
+
+CODEX_LOGIN_SUCCESS_HTML = "<h1>OpenAI Codex login complete</h1><p>You can close this tab and return to js.</p>"
+
+CODEX_LOGIN_FAILURE_HTML = "<h1>OpenAI Codex login failed</h1><p>Return to js and try again.</p>"
+
+CODEX_REFRESH_REJECTED = "OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

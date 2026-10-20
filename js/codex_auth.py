@@ -111,19 +111,19 @@ def _token_from_response(data: dict[str, Any], *, previous: CodexToken | None = 
     refresh = data.get("refresh_token")
     expires_in = data.get("expires_in")
     if not isinstance(access, str) or not access:
-        raise RuntimeError("OpenAI Codex token response did not include access_token")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE.format())
     # Refresh responses may omit a rotated refresh_token; carry the prior one forward.
     if not (isinstance(refresh, str) and refresh):
         refresh = previous.refresh if previous else None
     if not (isinstance(refresh, str) and refresh):
-        raise RuntimeError("OpenAI Codex token response did not include refresh_token")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_119.format())
     if not isinstance(expires_in, (int, float)):
-        raise RuntimeError("OpenAI Codex token response did not include expires_in")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121.format())
     account_id, email = token_profile(access)
     if not account_id and previous:
         account_id = previous.account_id
     if not account_id:
-        raise RuntimeError("OpenAI Codex access token did not include chatgpt_account_id")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_ACCESS_TOKEN_DID_NOT_INCLUDE.format())
     if not email and previous:
         email = previous.email
     return CodexToken(
@@ -171,10 +171,10 @@ def _post_token_form(
         )
         if response.status_code >= 400:
             detail = _error_detail(response)
-            raise RuntimeError(f"OpenAI Codex token request failed: {detail}")
+            raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_REQUEST_FAILED.format(detail=detail))
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError("OpenAI Codex token response was not a JSON object")
+            raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_WAS_NOT_A.format())
         return _token_from_response(payload, previous=previous)
     finally:
         if owns_client:
@@ -198,10 +198,10 @@ async def _apost_token_form(
         )
         if response.status_code >= 400:
             detail = _error_detail(response)
-            raise RuntimeError(f"OpenAI Codex token request failed: {detail}")
+            raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_REQUEST_FAILED.format(detail=detail))
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError("OpenAI Codex token response was not a JSON object")
+            raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_WAS_NOT_A.format())
         return _token_from_response(payload, previous=previous)
     finally:
         if owns_client:
@@ -316,9 +316,9 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         if ok:
-            body = "<h1>OpenAI Codex login complete</h1><p>You can close this tab and return to js.</p>"
+            body = msgs.CODEX_LOGIN_SUCCESS_HTML.format()
         else:
-            body = "<h1>OpenAI Codex login failed</h1><p>Return to js and try again.</p>"
+            body = msgs.CODEX_LOGIN_FAILURE_HTML.format()
         self.wfile.write(body.encode("utf-8"))
 
 
@@ -361,7 +361,7 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
     servers = _bind_callback_servers(_CallbackHandler)
     if not servers:
         raise RuntimeError(
-            f"OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
+            msgs.CODEX_OAUTH_OPENAI_CODEX_OAUTH_COULD_NOT_BIND_THE.format(CALLBACK_PORT=CALLBACK_PORT)
         )
     for server in servers:
         server.expected_state = state
@@ -403,7 +403,7 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
                                 or len(query.get("code", [])) != 1
                                 or "error" in query
                             ):
-                                raise ValueError("Invalid callback")
+                                raise ValueError(msgs.CODEX_OAUTH_INVALID_CALLBACK.format())
                         except (ValueError, UnicodeError):
                             msgs.say(msgs.OAUTH_BAD_CALLBACK)
                             continue
@@ -425,11 +425,11 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
         for server in servers:
             server.server_close()
     if winner is None:
-        raise RuntimeError("OpenAI Codex OAuth timed out waiting for browser callback")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_OAUTH_TIMED_OUT_WAITING_FOR.format())
     if winner.received_error:
-        raise RuntimeError(f"OpenAI Codex OAuth failed: {winner.received_error}")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_OAUTH_FAILED.format(received_error=winner.received_error))
     if winner.received_state != state:
-        raise RuntimeError("OpenAI Codex OAuth state mismatch")
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_OAUTH_STATE_MISMATCH.format())
     return login_from_token(
         exchange_code_for_token(winner.received_code, verifier, CALLBACK_REDIRECT_URI)
     )
@@ -446,16 +446,16 @@ def login_device(*, open_browser: bool = True) -> Login:
         )
         if response.status_code >= 400:
             raise RuntimeError(
-                f"OpenAI Codex device authorization failed: {_error_detail(response)}"
+                msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_FAILED.format(value=_error_detail(response))
             )
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError("OpenAI Codex device authorization response was not a JSON object")
+            raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_WAS_NOT.format())
         device_auth_id = payload.get("device_auth_id")
         user_code = payload.get("user_code")
         if not isinstance(device_auth_id, str) or not isinstance(user_code, str):
             raise RuntimeError(
-                "OpenAI Codex device authorization response missing device_auth_id or user_code"
+                msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_MISSING_DEVICE.format()
             )
         raw_interval = payload.get("interval", 5)
         try:
@@ -479,19 +479,19 @@ def login_device(*, open_browser: bool = True) -> Login:
                 continue
             if poll_response.status_code >= 400:
                 raise RuntimeError(
-                    f"OpenAI Codex device token polling failed: {_error_detail(poll_response)}"
+                    msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_POLLING_FAILED.format(value=_error_detail(poll_response))
                 )
             poll_payload = poll_response.json()
             if not isinstance(poll_payload, dict):
-                raise RuntimeError("OpenAI Codex device token response was not a JSON object")
+                raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_WAS_NOT.format())
             code = poll_payload.get("authorization_code")
             verifier = poll_payload.get("code_verifier")
             if not isinstance(code, str) or not isinstance(verifier, str):
                 raise RuntimeError(
-                    "OpenAI Codex device token response missing authorization_code or code_verifier"
+                    msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_MISSING_AUTHORIZATION.format()
                 )
             return login_from_token(exchange_code_for_token(code, verifier, DEVICE_REDIRECT_URI))
-    raise RuntimeError("OpenAI Codex device authorization timed out")
+    raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_TIMED_OUT.format())
 
 
 _DEVICE_SLOW_DOWN_STEP_S = 5.0
@@ -591,7 +591,7 @@ def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
 def refreshed_login(login: Login) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError(
-            "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+            msgs.CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN.format()
         )
     token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
     return apply_refreshed_token(login, token)
@@ -600,7 +600,7 @@ def refreshed_login(login: Login) -> Login:
 async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError(
-            "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+            msgs.CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN.format()
         )
     token = await refresh_token_async(
         login.codex_refresh_token, client=client, previous=_token_from_login(login)
@@ -652,7 +652,7 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
 
 def relogin_error(detail: object) -> RuntimeError:
     return RuntimeError(
-        f"OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
+        msgs.CODEX_REFRESH_REJECTED.format(detail=detail)
     )
 
 
@@ -681,10 +681,10 @@ def _adopt_or_refresh_decision(login: Login) -> tuple[Login, bool, bool]:
     current = _stored_login(login)
     if current is None:
         if logins.store_unreadable():
-            raise RuntimeError(f"{logins.login_path()} cannot be read; fix it before the OpenAI Codex login can refresh")
+            raise RuntimeError(msgs.CODEX_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE.format(value=logins.login_path()))
         return login, login_needs_refresh(login), False
     if logins.store_unreadable() and login_needs_refresh(current):
-        raise RuntimeError(f"{logins.login_path()} cannot be read; fix it before the OpenAI Codex login can refresh")
+        raise RuntimeError(msgs.CODEX_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE.format(value=logins.login_path()))
     return current, login_needs_refresh(current), True
 
 
@@ -714,7 +714,7 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
         if current is not None and not login_needs_refresh(current):
             return current
         if isinstance(exc, OSError):
-            raise RuntimeError(f"{logins.lock_path()} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh") from exc
+            raise RuntimeError(msgs.CODEX_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE.format(value=logins.lock_path(), exc=exc)) from exc
         raise
     try:
         current, needed, stored = _adopt_or_refresh_decision(login)
@@ -807,7 +807,7 @@ async def _locked_refresh(login: Login, *, persist: bool, client: httpx.AsyncCli
         if current is not None and not login_needs_refresh(current):
             return current
         if isinstance(exc, OSError):
-            raise RuntimeError(f"{logins.lock_path()} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh") from exc
+            raise RuntimeError(msgs.CODEX_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE.format(value=logins.lock_path(), exc=exc)) from exc
         raise
 
 
