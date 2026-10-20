@@ -160,7 +160,7 @@ def status_line(
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
-    cost`, where `cost` is the session's spend (`usage.status_text`). Each
+    cost`, where `cost` is the session's spend (`usage_display.status_text`). Each
     field is drawn through its /fset format, STATUS_CLOCK and the rest.
     Groups that do not fit give way in a fixed order: cache, then the model's
     head, then the provider, then the centre count, then the cost, then the

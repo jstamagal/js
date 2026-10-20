@@ -76,6 +76,7 @@ from . import stream_transport
 from . import turn_settings
 from . import headless
 from . import usage as usage_mod
+from . import usage_display
 from . import routing
 from . import sampling as sampling_mod
 from .sampling import Sampling
@@ -1859,7 +1860,7 @@ def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
 def _cost_text(tally: usage_mod.Tally) -> str:
     if not tally.priced:
         return msgs.COST_UNPRICED.said()
-    dollars = usage_mod.format_dollars(tally.cost)
+    dollars = usage_display.format_dollars(tally.cost)
     if tally.unpriced_calls:
         return msgs.COST_PARTLY_PRICED.said(cost=dollars, calls=msgs.plural(tally.unpriced_calls, "call"))
     return dollars
@@ -3831,7 +3832,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
         agent_id=cfg.agent_id,
         session_short=screen.session_short(cfg.session_file),
         cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
-        cost=usage_mod.status_text(usage_mod.totals(cfg.session_file)),
+        cost=usage_display.status_text(usage_mod.totals(cfg.session_file)),
     )
 
 

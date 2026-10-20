@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-37 findings.
+36 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -36,7 +36,6 @@ branch the audit was made on; they move as the code changes.
 | `js/runtime.py:544-552,651-652,768` | _print_trace/ToolTrace.settle/ToolTrace.result | presentation | The loop writes tool exchanges straight to sys.stdout when no exchange factory is set. | js-2lg.27 |
 | `js/runtime.py:1936-1970,2353-2354` | _trace_banner/_print_run_line | presentation | Prints the run line (model, provider, ctx, tools) to stdout. | js-2lg.27 |
 | `js/runtime.py:2137-2138,2266-2267,2390,2405-2406,2431` | _send_resume_nudge/_take_steer/run_turn_async | presentation | Prints MAX_OUTPUT_RESUMING, STEERED, RETRY_BUDGET_EXHAUSTED, RESPONSE_INCOMPLETE and MAX_ITERATIONS straight to stdout/stderr. | js-2lg.27 |
-| `js/usage.py:319-341` | format_dollars/format_tokens/status_text | presentation | The status-bar figure format is fixed in the accounting module. | js-2lg.31 |
 | `js/toolkit/registry.py:531,538` | _agent_tools | presentation | Prints warnings to stderr for an unreadable agent directory or an agent named like a tool. | js-2lg.37 |
 | `js/toolkit/policy.py:227-236` | warn_unmatched | presentation | Prints one stderr line per chain entry that matches no tool. | js-2lg.39 |
 | `js/toolkit/descriptions.py:71-75` | _warn_once | presentation | Prints problems in tool descriptions to stderr. | js-2lg.41 |
