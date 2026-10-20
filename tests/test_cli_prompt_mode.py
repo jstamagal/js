@@ -575,6 +575,18 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
     assert not list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
 
 
+def test_empty_one_shot_reply_records_failed_statistics(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result(""))
+    path = tmp_path / "stats.json"
+
+    assert cli._run_prompt("question", save=False, stats_json=str(path)) == 1
+    row = json.loads(path.read_text(encoding="utf-8"))["turns"][0]
+
+    assert row["ok"] is False
+    assert row["error"]
+
+
 # Agent drivers read this stderr line after a headless run as the signal that
 # the next round cannot resume (docs/configuration-and-sessions.md).
 # stderr is not a terminal here, so the line is plain: what a driver parses.

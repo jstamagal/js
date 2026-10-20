@@ -2888,53 +2888,59 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             if previous_sigterm is not None:
                 signal.signal(signal.SIGTERM, previous_sigterm)
 
+    answer = None
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            break
+        if message.get("role") == "assistant" and message.get("content"):
+            answer = message
+            break
+
     if stats_json or stats_csv:
+        error = None if answer is not None else msgs.NO_ASSISTANT_RESPONSE.words()
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
-               "ok": True, "error": None, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
+               "ok": answer is not None, "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
         payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
         if stats_json:
             stats.write_json(stats_json, payload)
         if stats_csv:
             stats.write_csv(stats_csv, [row])
 
-    for message in reversed(messages):
-        if message.get("role") == "user":
-            break
-        if message.get("role") == "assistant" and message.get("content"):
-            # In debug, run_turn already streamed the answer live to stdout — a
-            # second print here is the double-print bug. Only print when the
-            # stream was suppressed (non-debug one-shot/pipe).
-            with _transcript_stdio(telemetry):
-                if not debug:
-                    content = message["content"].strip()
-                    if (sink := _transcript_sink(telemetry)) is not None:
-                        sink.write_assistant(content)
-                    if events is None:
-                        with _mute_transcript_tee(_transcript_sink(telemetry)):
-                            display_mod.print_answer(
-                                content, sys.stdout,
-                                markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
-                            )
-                if save:
-                    _maybe_auto_compact(cfg, {
-                        "system": system,
-                        "messages": messages,
-                        "model": cfg.model,
-                    })
-                    if show_continue:
-                        hint = _session_hint_arg(cfg)
-                        cont = resume_prefix or "js"
-                        # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
-                        # setting unless told otherwise, so a non-default agent MUST
-                        # be echoed or the session continues under the wrong agent.
-                        # (wiki/commit already fold the agent into resume_prefix.)
-                        if resume_prefix is None and agent:
-                            cont += f" --agent {shlex.quote(agent)}"
-                        if model:
-                            cont += f" --model {shlex.quote(model)}"
-                        cont += f" --session {hint}"
-                        msgs.warn(msgs.CONTINUE_HINT, command=cont)
-            return 0
+    if answer is not None:
+        # In debug, run_turn already streamed the answer live to stdout — a
+        # second print here is the double-print bug. Only print when the
+        # stream was suppressed (non-debug one-shot/pipe).
+        with _transcript_stdio(telemetry):
+            if not debug:
+                content = answer["content"].strip()
+                if (sink := _transcript_sink(telemetry)) is not None:
+                    sink.write_assistant(content)
+                if events is None:
+                    with _mute_transcript_tee(_transcript_sink(telemetry)):
+                        display_mod.print_answer(
+                            content, sys.stdout,
+                            markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
+                        )
+            if save:
+                _maybe_auto_compact(cfg, {
+                    "system": system,
+                    "messages": messages,
+                    "model": cfg.model,
+                })
+                if show_continue:
+                    hint = _session_hint_arg(cfg)
+                    cont = resume_prefix or "js"
+                    # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
+                    # setting unless told otherwise, so a non-default agent MUST
+                    # be echoed or the session continues under the wrong agent.
+                    # (wiki/commit already fold the agent into resume_prefix.)
+                    if resume_prefix is None and agent:
+                        cont += f" --agent {shlex.quote(agent)}"
+                    if model:
+                        cont += f" --model {shlex.quote(model)}"
+                    cont += f" --session {hint}"
+                    msgs.warn(msgs.CONTINUE_HINT, command=cont)
+        return 0
 
     with _transcript_stdio(telemetry):
         msgs.warn(msgs.NO_ASSISTANT_RESPONSE)
