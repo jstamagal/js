@@ -53,6 +53,9 @@ branch the audit was made on; they move as the code changes.
 
 11 findings.
 
+- js-2lg.194: bus tools hand message, roster, claim, subscription, alarm,
+  handoff, recruitment and task fields to the existing tool-result event.
+  Their model-facing strings stay unchanged.
 - js-2lg.97: tool results carry screen metadata on their output event. The
   toolkit owns built-in argument roles, call kinds, languages and legacy result
   adapters; display renders the prepared stream, file and diff fields.

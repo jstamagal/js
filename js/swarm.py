@@ -505,25 +505,32 @@ def roster(room: Room, me: str | None = None) -> str:
     for key, claim in room.claims().items():
         held.setdefault(claim["holder"], []).append(key)
     lines = []
+    members = []
     for name in room.members():
         bits = [name]
         if name == me:
             bits.append(msgs.SWARM_ROSTER_YOU.format())
         silent = None if name == me else room.silent_since(name)
+        state = "silent" if silent is not None else "asleep" if room.asleep(name) else "working"
+        members.append({"name": name, "self": name == me, "state": state,
+                        "silent_since": silent, "claims": sorted(held.get(name, []))})
         if silent is not None:
             bits.append(msgs.SWARM_ROSTER_SILENT.format(value=_clock(silent)))
         else:
-            bits.append(msgs.SWARM_ROSTER_ASLEEP.words() if room.asleep(name) else msgs.SWARM_ROSTER_WORKING.words())
+            bits.append(msgs.SWARM_ROSTER_ASLEEP.words() if state == "asleep" else msgs.SWARM_ROSTER_WORKING.words())
         if held.get(name):
             bits.append(msgs.SWARM_ROSTER_HOLDS.words(claims=", ".join(sorted(held[name]))))
         lines.append(" ".join(bits))
+    _view(members=members)
     return "\n".join(lines) or msgs.SWARM_ROSTER_EMPTY.format()
 
 
 def board(room: Room) -> str:
     """The work board as the model and the operator read it."""
     lines = []
-    for c in room.cells():
+    cells = room.cells()
+    _view(tasks=[cell.as_dict() for cell in cells])
+    for c in cells:
         state = {"open": msgs.SWARM_BOARD_OPEN.words(), "taken": msgs.SWARM_BOARD_TAKEN.format(holder=c.holder), "done": msgs.SWARM_BOARD_DONE.format(holder=c.holder)}[c.status]
         lines.append(msgs.SWARM_BOARD_ROW.format(id=c.id, state=state, title=c.title) + (msgs.SWARM_BOARD_FROM.format(by=c.by) if c.by else ""))
         first = (c.result if c.status == "done" else c.body).strip().splitlines()
@@ -717,6 +724,12 @@ class Agent:
 _OFF_BUS = _PROMPTS['default_error_this_agent_is_not_on']
 
 
+def _view(**fields: Any) -> None:
+    from .toolkit.core import view
+
+    view(**fields)
+
+
 def _agent(context: Any) -> Agent | None:
     return getattr(context, "swarm", None)
 
@@ -739,6 +752,8 @@ def _send(to: str = "", text: str = "", kind: str = "say", context: Any = None) 
         msg = agent.send(to, text, str(kind or "say"))
     except ValueError as exc:
         return _PROMPTS['send_error'].format(exc=exc)
+    _view(message={"seq": msg.seq, "ts": msg.ts, "from": msg.sender,
+                   "to": msg.to, "kind": msg.kind, "body": msg.body})
     return _PROMPTS['send_sent_to'].format(msg_seq=msg.seq, everyone_if_to_BROADCAST_else_to='everyone' if to == BROADCAST else to)
 
 
@@ -761,6 +776,7 @@ def _claim(key: str = "", ttl: Any = None, context: Any = None) -> str:
     except (TypeError, ValueError):
         return _PROMPTS['claim_error_ttl_must_be_a_number'].format(ttl=ttl)
     yours, holder, expires = agent.room.claim(key, agent.name, seconds)
+    _view(key=key, claimed=yours, holder=holder, expires=expires)
     if yours:
         return _PROMPTS['claim_is_yours_until_claim_it_again'].format(key=key, clock_expires=_clock(expires))
     return _PROMPTS['claim_is_held_by_until'].format(key=key, holder=holder, clock_expires=_clock(expires))
@@ -771,7 +787,9 @@ def _release(key: str = "", context: Any = None) -> str:
     if agent is None:
         return _OFF_BUS
     key = str(key or "").strip()
-    return _PROMPTS['release_released'].format(key=key) if agent.room.release(key, agent.name) else _PROMPTS['release_you_do_not_hold'].format(key=key)
+    released = agent.room.release(key, agent.name)
+    _view(key=key, released=released)
+    return _PROMPTS['release_released'].format(key=key) if released else _PROMPTS['release_you_do_not_hold'].format(key=key)
 
 
 def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
@@ -782,6 +800,7 @@ def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
         kinds = agent.room.subscribe(agent.name, str(kind or ""), on=not _truthy(off))
     except ValueError as exc:
         return _PROMPTS['subscribe_error'].format(exc=exc)
+    _view(subscriptions=sorted(kinds))
     return _PROMPTS['subscribe_subscribed_to'] + (_PROMPTS['subscribe_text'].join(sorted(kinds)) if kinds else _PROMPTS['subscribe_nothing'])
 
 
@@ -801,6 +820,7 @@ def _wake_me(seconds: Any = None, context: Any = None) -> str:
     if s > 0 and left is not None and left > 0:
         return (_PROMPTS['wake_me_an_alarm_is_already_set_s'].format(left=left))
     agent.wake_me(s)
+    _view(seconds=s, alarm=agent.alarm)
     if s <= 0:
         return _PROMPTS['wake_me_alarm_cleared']
     return _PROMPTS['wake_me_you_will_be_woken_in_s'].format(s=s)
@@ -814,6 +834,7 @@ def _retire(handoff: str = "", context: Any = None) -> str:
     if not handoff.strip():
         return _PROMPTS['retire_error_handoff_is_empty_say_what']
     msg = agent.retire(handoff)
+    _view(retired=True, handoff=handoff, seq=msg.seq)
     return _PROMPTS['retire_retired_your_handoff_is_this_turn'].format(msg_seq=msg.seq)
 
 
@@ -831,6 +852,7 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
             agent.spawn(name, opener)
     except (ValueError, OSError) as exc:
         return _PROMPTS['recruit_error'].format(exc=exc)
+    _view(recruited=name, opener=opener)
     return _PROMPTS['recruit_started_it_is_on_the_bus'].format(name=name, value_1=name)
 
 
@@ -842,6 +864,7 @@ def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
     if not title:
         return _PROMPTS['post_task_error_title_is_empty_say_in']
     cell = agent.room.post_cell(agent.name, title, str(body or ""))
+    _view(task=cell.as_dict())
     return _PROMPTS['post_task_posted_task_everyone_was_told'].format(cell_id=cell.id, cell_title=cell.title)
 
 
@@ -864,6 +887,7 @@ def _take_task(id: Any = None, context: Any = None) -> str:  # noqa: A002 - the 
     except KeyError:
         return _PROMPTS['take_task_no_task_on_the_board'].format(cell_id=cell_id)
     cell = agent.room.cell(cell_id)
+    _view(task=cell.as_dict(), taken=yours, holder=holder, expires=expires)
     if yours:
         return _PROMPTS['take_task_task_is_yours_until'].format(cell_id=cell_id, clock_expires=_clock(expires), cell_title=cell.title, cell_body=cell.body).rstrip()
     if cell.status == "done":
@@ -882,6 +906,7 @@ def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str: 
         cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
     except KeyError:
         return _PROMPTS['finish_task_no_task_on_the_board'].format(cell_id=cell_id)
+    _view(task=cell.as_dict())
     return _PROMPTS['finish_task_task_done_everyone_was_told'].format(cell_id=cell.id)
 
 

@@ -551,3 +551,19 @@ def test_swarm_runner_accepts_agent_configuration_service(tmp_path):
     spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
     assert swarm_run.run(spec, out=io.StringIO(), configure=configure) == 1
     assert configured == ["a"]
+
+
+def test_bus_send_hands_its_message_to_the_result_event(tmp_path, capsys):
+    from js.toolkit.core import call_scope, call_view
+
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path, swarm=agent)
+    with call_scope("send-1"):
+        swarm._send(to="b", text="inspect the parser", context=context)
+        message = call_view()["message"]
+
+    assert message["from"] == "a"
+    assert message["to"] == "b"
+    assert message["body"] == "inspect the parser"
+    assert message["seq"] == 1
+    assert capsys.readouterr() == ("", "")
