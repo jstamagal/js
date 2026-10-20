@@ -177,15 +177,15 @@ class Runner:
 
     async def run_agent(self, spec: AgentSpec) -> None:
         events = AgentEvents(self.out, self.lock, spec.name)
-        agent = swarm.Agent(self.root / spec.name)
-        agent.recruiter = self.recruiter(spec, agent)
         reason = "stopped"
         cfg = None
         messages: list[dict] = []
         context = ToolContext(cwd=Path(spec.cwd).expanduser() if spec.cwd else Path.cwd())
-        context.swarm = agent
         context.net_label = spec.name
         try:
+            agent = swarm.Agent(self.root / spec.name)
+            agent.recruiter = self.recruiter(spec, agent)
+            context.swarm = agent
             cfg, system, prompt_spec, registry = _configure(spec)
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)

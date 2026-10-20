@@ -511,6 +511,18 @@ def test_swarm_runner_fails_when_an_agent_cannot_be_configured(tmp_path, monkeyp
     assert events[-1]["exit_code"] == 1
 
 
+def test_swarm_runner_reports_an_unusable_bus_path(tmp_path):
+    (tmp_path / "bus").write_text("occupied")
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 1
+    events = _events(out)
+    assert [e["agent"] for e in events if e["type"] == "error"] == ["a"]
+    assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
+    assert events[-1]["exit_code"] == 1
+
+
 def test_recruit_in_process_adds_an_agent_to_the_same_loop(tmp_path, monkeypatch):
     _agent_dir(tmp_path, monkeypatch)
     room = swarm.Room(tmp_path / "bus")
