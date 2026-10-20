@@ -187,3 +187,14 @@ def test_registering_the_same_handler_twice_keeps_one(tmp_path):
     cli._handle_command("/on turn_start set COMPACTION_AUTO off", state, None)
 
     assert len(state["events"].handlers_for("turn_start")) == 1
+
+
+def test_disabled_skills_survive_save_and_restart(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    cfg, state, _errors = _launch(tmp_path)
+    _run(['/set SKILLS_DISABLED ["grilling", "handoff"]', "/save"], state, cfg)
+
+    cfg, state, errors = _launch(tmp_path)
+
+    assert errors == []
+    assert cli._cfg_for_live_state(cfg, state).skills_disabled == ("grilling", "handoff")

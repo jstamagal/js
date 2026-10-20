@@ -15,6 +15,7 @@ reference implementation, not as the target.
 | Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
 | Path-scoped | Claude Code `paths:` | The first `read`, `patch` or `write` of a matching file starts its result with one `<js-reminder>` offering the skill, once per session (see `docs/tools-reference.md`, `skill`). The skill stays in the catalog either way. |
 | User-only | `disable-model-invocation: true` | Honored. The skill is absent from the `tool_discovery` catalog, `skill` and `load=skill:<name>` refuse it, and `/skill <name>` still loads it. |
+| Disable | hide disabled skills from the catalog | `SKILLS_DISABLED` (a JSON list of names) leaves those skills out of discovery for the model and the user: absent from the `tool_discovery` catalog and path-scoped offers, refused by `skill`, `load=skill:<name>` and `/skill <name>`, not listed by `/skill`. `/skills` opens a picker that lists every skill with its source and description; space switches one on or off, enter sets the setting, `/save` keeps it. |
 | Protect | exempt skill content from compaction | Not checked in this pass. |
 
 The disclosure gap is why agents never load skills: a skill the model cannot see

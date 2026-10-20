@@ -144,6 +144,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("notebook_output_lines", "NOTEBOOK_OUTPUT_LINES_MAX", integer, on_context=True),
     TurnSetting("jev_model", "JEV_MODEL", text, on_context=True),
     TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
+    TurnSetting("skills_disabled", "SKILLS_DISABLED", names, on_context=True),
     # --- on the Config only ---
     TurnSetting("max_tool_iterations", "TURN_ROUNDS_MAX", integer),
     TurnSetting("max_tool_calls_per_message", "REPLY_TOOL_CALLS_MAX", integer),

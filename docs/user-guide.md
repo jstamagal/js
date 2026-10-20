@@ -131,6 +131,7 @@ REPL commands:
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session [query]               open the session picker
+/skills                        open the skill picker: switch each skill on or off (SKILLS_DISABLED)
 /cost                          the session's tokens and cost, in total and by model
 /cd [dir]                      print or change the session's working directory
 /add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)

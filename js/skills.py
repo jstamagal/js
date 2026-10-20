@@ -116,12 +116,14 @@ class SkillCatalog:
         builtin_dir: Path | None = None,
         global_dir: Path | None = None,
         user_dir: Path | None = None,
+        disabled: Iterable[str] = (),
     ) -> SkillCatalog:
         return discover_skills(
             project_dir,
             builtin_dir=builtin_dir,
             global_dir=global_dir,
             user_dir=user_dir,
+            disabled=disabled,
         )
 
     @property
@@ -298,11 +300,13 @@ def discover_skills(
     builtin_dir: Path | None = None,
     global_dir: Path | None = None,
     user_dir: Path | None = None,
+    disabled: Iterable[str] = (),
 ) -> SkillCatalog:
     """Index built-in, global, and project skills without retaining their bodies.
 
     Layers run lowest first, so a global or project skill shadows a built-in
-    one of the same name.
+    one of the same name. A skill named in ``disabled`` (the SKILLS_DISABLED
+    setting; case does not matter) is left out of the catalog.
     """
 
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
@@ -348,6 +352,8 @@ def discover_skills(
                         name=record.metadata.name, path=record.metadata.path, prior=prior.metadata.path))
             layer_records.update(root_records)
         selected.update(layer_records)
+    for name in disabled:
+        selected.pop(name.casefold(), None)
     return SkillCatalog(selected.values())
 
 

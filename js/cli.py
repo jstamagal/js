@@ -91,6 +91,7 @@ from .config import (
 )
 from . import session_store
 from . import session_picker
+from . import skill_picker
 from . import agent_lock
 from .session_catalog import (
     acquire_session,
@@ -1972,8 +1973,21 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
     input line never reaches the table: it is a turn (see _handle_command)."""
     if arg:
         return msgs.SKILL_IS_A_TURN.said()
-    _print_skill_catalog()
+    _print_skill_catalog(state)
     return None
+
+
+def _cmd_skills(arg: str, state: dict, cfg: Config) -> str | None:
+    """Open the skill picker. Enter there sets SKILLS_DISABLED to the skills
+    left switched off."""
+    current = _disabled_skills(state)
+    try:
+        chosen = skill_picker.pick_skills(Path.cwd(), current)
+    except Exception as exc:  # noqa: BLE001
+        return msgs.FAILED.said(error=f"{type(exc).__name__}: {exc}")
+    if chosen is None or tuple(chosen) == current:
+        return None
+    return _cmd_set(f"SKILLS_DISABLED {json.dumps(list(chosen))}", state, cfg)
 
 
 def _help_set(name: str) -> str | None:
@@ -2241,6 +2255,7 @@ COMMANDS: dict[str, Command] = {
     "tools": Command(_cmd_tools, "tools", msgs.CMD_TOOLS),
     "skill": Command(_cmd_skill, "skill [name [request]]",
                      msgs.CMD_SKILL),
+    "skills": Command(_cmd_skills, "skills", msgs.CMD_SKILLS),
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
                      "turns", msgs.CMD_TURNS),
     "cost": Command(_cmd_cost, "cost", msgs.CMD_COST),
@@ -3599,7 +3614,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     )
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
-        prompt_text = _expand_skill_line(prompt_text)
+        prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
     except ValueError as e:
@@ -3637,7 +3652,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
             built = await loop.run_in_executor(
                 None,
                 lambda: attach.build_user_message(
-                    _expand_skill_line(steer_text), steer_attachments, turn_cfg
+                    _expand_skill_line(steer_text, state), steer_attachments, turn_cfg
                 ),
             )
         except ValueError as e:
@@ -3662,9 +3677,14 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         await job.task  # _do_turn persists partial work on cancel; keep looping
 
 
-def _print_skill_catalog() -> None:
-    """`/skill` alone lists every discovered skill; user-only ones are marked."""
-    catalog = skills.discover_skills(Path.cwd())
+def _disabled_skills(state: dict) -> tuple[str, ...]:
+    """The SKILLS_DISABLED names in the live settings."""
+    return turn_settings.project(state.get("settings"))["skills_disabled"]
+
+
+def _print_skill_catalog(state: dict) -> None:
+    """`/skill` alone lists every enabled skill; user-only ones are marked."""
+    catalog = skills.discover_skills(Path.cwd(), disabled=_disabled_skills(state))
     if not catalog.skills:
         msgs.say(msgs.NO_SKILLS)
         return
@@ -3713,9 +3733,10 @@ def _is_skill_invocation(line: str) -> bool:
     return len(words) == 2 and words[0] == "/skill"
 
 
-def _expand_skill_line(prompt_text: str) -> str:
+def _expand_skill_line(prompt_text: str, state: dict) -> str:
     """A `/skill <name> [request]` line becomes the user message carrying that
-    skill; SkillInvocationError (a ValueError) names an unknown skill. A
+    skill; SkillInvocationError (a ValueError) names an unknown or disabled
+    (SKILLS_DISABLED) skill. A
     `/NAME args` line naming a markdown command (`js.prompt_commands`) becomes
     that command's text with the arguments filled in."""
     words = prompt_text.split(maxsplit=1)
@@ -3724,7 +3745,7 @@ def _expand_skill_line(prompt_text: str) -> str:
     if words[0] != "/skill":
         expanded = prompt_commands.expand(prompt_text, prompt_commands.discover(Path.cwd()))
         return prompt_text if expanded is None else expanded
-    catalog = skills.discover_skills(Path.cwd())
+    catalog = skills.discover_skills(Path.cwd(), disabled=_disabled_skills(state))
     expanded = skills.expand_user_invocation(catalog, prompt_text)
     return prompt_text if expanded is None else expanded
 
@@ -4137,7 +4158,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         )
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
         try:
-            prompt_text = _expand_skill_line(prompt_text)
+            prompt_text = _expand_skill_line(prompt_text, state)
             turn_cfg = _cfg_for_live_state(cfg, state)
             user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
         except ValueError as e:

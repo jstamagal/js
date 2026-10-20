@@ -3,6 +3,7 @@ write first touches a matching file, once per session."""
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -214,3 +215,18 @@ def test_parallel_reads_in_one_batch_offer_once(project, monkeypatch):
         _result(text='done'),
     ])
     assert len(_reminders(_run(project, monkeypatch, _cfg(project), responses))) == 1
+
+
+def test_a_disabled_skill_is_absent_from_tool_discovery_and_cannot_be_loaded(project, monkeypatch):
+    cfg = replace(_cfg(project), skills_disabled=('plain',))
+    results = _turn(project, monkeypatch, cfg, [
+        ('tool_discovery', {'kind': 'skill'}),
+        ('tool_discovery', {'load': 'skill:plain'}),
+        ('skill', {'name': 'plain'}),
+        ('tool_discovery', {'load': 'skill:rust-style'}),
+    ], selection=['read:eager', 'skill:eager'])
+    listing, discovery_load, skill_load, other = results
+    assert 'skill:rust-style' in listing and 'plain' not in listing
+    assert discovery_load.startswith('ERROR') and skill_load.startswith('ERROR')
+    assert 'Body of plain' not in discovery_load + skill_load
+    assert 'Body of rust-style' in other

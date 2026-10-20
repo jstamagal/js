@@ -415,6 +415,14 @@ HTTP_USER_AGENT
 JEV_MODEL
     TypeSafe model the jev tool asks. Needs TYPESAFE_API_KEY.
 
+SKILLS_DISABLED
+    Skills switched off: a JSON list of skill names, matched without
+    regard to case. A disabled skill is out of the tool_discovery catalog,
+    the skill tool refuses it, no path-scoped reminder names it, and
+    /skill <name> refuses it. /skills opens a picker that lists every
+    skill with its source and switches each on or off; enter there sets
+    this list. /save writes it to the global jsrc.
+
 TERMINAL_COLUMNS
     Columns of a terminal_session started without cols.
 

@@ -444,6 +444,7 @@ CMD_PERSONA = Message("Print the system prompt.")
 CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A state is eager, lazy or ban.")
 CMD_SKILL = Message(
     "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
+CMD_SKILLS = Message("Open the skill picker: switch each skill on or off. Enter sets SKILLS_DISABLED.")
 CMD_TURNS = Message("Count the messages in context.")
 CMD_COST = Message("Show the session's tokens and cost, in total and by model.")
 CMD_SESSION = Message("Open the session picker. Words after it start a search.")
@@ -1039,6 +1040,7 @@ EXPECTED_AT_LEAST = Message("expected a number >= {low}")
 EXPECTED_JSON = Message("expected a JSON value")
 EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
+EXPECTED_SKILL_NAMES = Message("expected a JSON list of non-empty skill names")
 EXPECTED_JSON_LIST = Message("expected a JSON list")
 EXPECTED_ALIAS_PROFILES = Message("expected profiles with match and aliases")
 EXPECTED_NONEMPTY_ALIASES = Message("expected non-empty aliases")
@@ -1163,6 +1165,15 @@ PICK_FETCHING = Message("Fetching…")
 PICK_PROVIDERS = Message("Providers")
 PICK_MODELS = Message("Models")
 PICK_PROVIDER_ROW = Message("● {provider}  {name}")
+
+# --- The skill picker ----------------------------------------------------------
+
+SKILLS_TITLE = Message(" SKILLS  {on} of {total} on", banner=False)
+SKILLS_KEYS = Message("space=on/off  enter=keep  /=search  esc=close", banner=False)
+SKILLS_QUERY_KEYS = Message("enter=keep  esc=clear", banner=False)
+SKILLS_NONE = Message("No skills match.", banner=False)
+SKILLS_ON = Message("[x]", banner=False)
+SKILLS_OFF = Message("[ ]", banner=False)
 
 # --- The session picker --------------------------------------------------------
 

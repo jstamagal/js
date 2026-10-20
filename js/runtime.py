@@ -2309,7 +2309,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         mcp_host = MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
-    active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
+    active_registry = base_registry.aliased(alias_map).lazy_surface(
+        active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled)
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
     token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks)

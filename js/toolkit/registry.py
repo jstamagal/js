@@ -152,9 +152,12 @@ class ToolRegistry:
                 merged[key] = canonical
         return replace(self, aliases=merged)
 
-    def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
-        """Create a fresh view; the runtime restores session visibility within selection."""
-        return TurnToolSurface(self, cwd, mcp_host=mcp_host)
+    def lazy_surface(
+        self, cwd: Path, mcp_host: object | None = None, disabled_skills: Iterable[str] = ()
+    ) -> TurnToolSurface:
+        """Create a fresh view; the runtime restores session visibility within selection.
+        ``disabled_skills`` (SKILLS_DISABLED) are left out of its skill catalog."""
+        return TurnToolSurface(self, cwd, mcp_host=mcp_host, disabled_skills=disabled_skills)
 
 
 def _search_text(tool: Tool, present: set[str]) -> str:
@@ -182,7 +185,10 @@ def _catalog_summary(description: str, present: set[str], tool: str) -> str:
 class TurnToolSurface:
     """A selected registry split into deterministic eager and loaded subsets."""
 
-    def __init__(self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None) -> None:
+    def __init__(
+        self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None,
+        disabled_skills: Iterable[str] = (),
+    ) -> None:
         self.allowed = allowed
         self.on_change: Callable[[dict], None] | None = None
         self.mcp_host = mcp_host
@@ -197,7 +203,8 @@ class TurnToolSurface:
             reserved.add(discovery.DISCOVERY_TOOL_NAME)
             self.mcp_host.reserve_public_names(reserved)
         self._skill_catalog = (
-            discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
+            discover_skills(cwd, disabled=disabled_skills)
+            if allowed.resolve("skill") is not None else SkillCatalog()
         )
         self._skills = {
             f"skill:{skill.name}": skill for skill in self._skill_catalog.model_skills

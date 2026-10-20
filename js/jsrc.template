@@ -409,6 +409,11 @@
 # The TypeSafe model the jev tool asks.
 #set JEV_MODEL jev-latest
 
+# Skills switched off, by name: the model never sees or loads them, and
+# /skill <name> refuses them. /skills opens a picker that edits this list.
+#   example:  set SKILLS_DISABLED ["grilling", "handoff"]
+#set SKILLS_DISABLED []
+
 
 ################################################################################
 #  SHELL

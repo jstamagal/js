@@ -270,6 +270,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 empty=EMPTY_NONE, group="tools"),
     SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
     SettingSpec("JEV_MODEL", "str", group="tools"),
+    SettingSpec("SKILLS_DISABLED", "json", group="tools"),
     SettingSpec("TERMINAL_COLUMNS", "int", group="tools"),
     SettingSpec("TERMINAL_ROWS", "int", group="tools"),
     # --- lsp ---
@@ -528,6 +529,11 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.said()
+        if spec.key == "SKILLS_DISABLED":
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                return None, msgs.EXPECTED_SKILL_NAMES.said()
         if spec.key in {"JAIL_BIND", "JAIL_HIDE"}:
             from . import jail
 
