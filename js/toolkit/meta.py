@@ -285,6 +285,9 @@ async def _run_one_task_async(
         return f"ERROR {type(exc).__name__}: {exc}"
     finally:
         close_terminal_sessions(child_context)
+        if child_context.kernel_session is not None:
+            child_context.kernel_session.shutdown()
+            child_context.kernel_session = None
         M.persist_messages(cfg.session_file, messages,
                            stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
 

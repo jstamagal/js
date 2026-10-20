@@ -151,6 +151,37 @@ def test_task_requires_named_agent_id(tmp_path):
     assert actual == "ERROR: task requires agent_id"
 
 
+def test_child_kernel_shuts_down_when_task_finishes(monkeypatch, tmp_path):
+    from js.toolkit import kernel
+    from js.toolkit.meta import _run_one_task_async
+
+    prompts = prompt_dir(tmp_path, "worker")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    parent = ToolContext(cwd=tmp_path, kernel_enabled=True)
+    sessions = []
+
+    async def turn(cfg, system, messages, telemetry, *, tool_context, **kwargs):
+        session, problem, _started = kernel.get_session(tool_context)
+        assert not problem
+        sessions.append(session)
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    try:
+        result = asyncio.run(_run_one_task_async(
+            1, 1, "work", parent, cfg, build_default_registry(), "worker", None,
+        ))
+        assert result == "done"
+        assert len(sessions) == 1
+        assert not sessions[0].alive()
+        assert sessions[0].bridge is None
+        assert sessions[0].socket_dir is None
+        assert sessions[0] not in kernel._LIVE_SESSIONS
+    finally:
+        for session in sessions:
+            session.shutdown()
+
+
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
 def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, outcome):
     from js.toolkit.meta import _run_one_task_async
