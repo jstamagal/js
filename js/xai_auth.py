@@ -260,8 +260,10 @@ def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
     url = build_authorize_url(endpoints.authorize, state, nonce, challenge, referrer=referrer)
-    msgs.say(msgs.OAUTH_OPENING, service="xAI", url=url)
-    webbrowser.open(url)
+    def open_browser() -> None:
+        msgs.say(msgs.OAUTH_OPENING, service="xAI", url=url)
+        webbrowser.open(url)
+
     code = oauth_loopback.wait_for_code(
         port=CALLBACK_PORT,
         path=CALLBACK_PATH,
@@ -270,6 +272,7 @@ def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
         label="xAI OAuth",
         success_html="<h1>xAI login complete</h1><p>You can close this tab and return to js.</p>",
         failure_html="<h1>xAI login failed</h1><p>Return to js and try again.</p>",
+        on_ready=open_browser,
     )
     return login_from_token(exchange_code_for_token(endpoints.token, code, verifier))
 

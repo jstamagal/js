@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Callable
 from typing import Any
 
 # How long one connection may sit idle before its handler gives up. Each
@@ -109,6 +110,7 @@ def wait_for_code(
     label: str,
     success_html: str,
     failure_html: str,
+    on_ready: Callable[[], None] | None = None,
 ) -> str:
     """Serve the redirect URI until the browser hits it; return the auth code."""
     try:
@@ -134,6 +136,8 @@ def wait_for_code(
         sel.register(server, selectors.EVENT_READ, server)
     winner: _Server | None = None
     try:
+        if on_ready is not None:
+            on_ready()
         while winner is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
