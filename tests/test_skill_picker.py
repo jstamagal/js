@@ -13,6 +13,19 @@ from js import cli, settings, skill_picker
 from test_command_table import _launch, _run
 
 
+def test_skill_picker_accepts_context_keymaps(tmp_path):
+    from js import skills
+
+    root = tmp_path / ".agents" / "skills" / "alpha"
+    root.mkdir(parents=True)
+    (root / "SKILL.md").write_text("instructions")
+    state = skill_picker.SkillPicker(skills.discover_skills(tmp_path).skills,
+                                    keymaps={"list": {"toggle": (("z",),), "choose": (("enter",),)}})
+    state.press(" ")
+    state.press("z")
+    assert state.press("enter") == ("alpha",)
+
+
 def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     cfg, state, _errors = _launch(tmp_path)

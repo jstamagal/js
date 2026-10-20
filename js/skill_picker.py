@@ -16,6 +16,7 @@ from pathlib import Path
 from prompt_toolkit.application import Application, get_app
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
@@ -25,14 +26,23 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset
+from . import fset, keys
 from . import messages as msgs
 from .skills import SkillMetadata
 
 _PAGE = 10
-_MOVES = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -_PAGE, "pagedown": _PAGE}
-_FIRST = ("home", "g")
-_LAST = ("end", "G")
+_MOVES = {"up": -1, "down": 1, "page_up": -_PAGE, "page_down": _PAGE}
+SKILL_KEYMAPS: dict[str, keys.Keymap] = {
+    "list": {"interrupt": (("c-c",),), "up": (("up",), ("k",)), "down": (("down",), ("j",)),
+             "page_up": (("pageup",),), "page_down": (("pagedown",),),
+             "first": (("home",), ("g",)), "last": (("end",), ("G",)),
+             "toggle": ((" ",),), "choose": (("enter",),), "search": (("/",),),
+             "back": (("escape",),), "quit": (("q",),)},
+    "search": {"interrupt": (("c-c",),), "up": (("up",),), "down": (("down",),),
+               "page_up": (("pageup",),), "page_down": (("pagedown",),),
+               "choose": (("enter",),), "back": (("escape",),),
+               "backspace": (("backspace",),), "clear": (("c-u",),)},
+}
 
 
 class _Closed:
@@ -64,7 +74,9 @@ class SkillPicker:
     ``disabled`` is the SKILLS_DISABLED list. A name in it that names no listed
     skill (a project skill of another directory) stays in the result."""
 
-    def __init__(self, skills: Sequence[SkillMetadata], disabled: Iterable[str] = ()) -> None:
+    def __init__(self, skills: Sequence[SkillMetadata], disabled: Iterable[str] = (), *,
+                 keymaps: dict[str, keys.Keymap] | None = None) -> None:
+        self.keymaps = SKILL_KEYMAPS if keymaps is None else keymaps
         self.skills = sorted(skills, key=lambda skill: skill.name.casefold())
         wanted = {name.casefold() for name in disabled}
         listed = {skill.name.casefold() for skill in self.skills}
@@ -109,45 +121,47 @@ class SkillPicker:
     def press(self, key: str) -> tuple[str, ...] | _Closed | None:
         """Apply one key. A tuple (the chosen SKILLS_DISABLED) or CLOSED ends
         the picker; None keeps it open."""
-        if key == "c-c":
+        action = keys.action_for(self.keymaps[self.screen], key)
+        if action == "interrupt":
             return CLOSED
         if self.screen == "search":
             return self._search_key(key)
-        if key in _MOVES:
-            self.move(_MOVES[key])
-        elif key in _FIRST or key in _LAST:
-            self.cursor = max(0, len(self.shown) - 1) if key in _LAST else 0
-        elif key == " ":
+        if action in _MOVES:
+            self.move(_MOVES[action])
+        elif action in ("first", "last"):
+            self.cursor = max(0, len(self.shown) - 1) if action == "last" else 0
+        elif action == "toggle":
             self.toggle()
-        elif key == "enter":
+        elif action == "choose":
             return self.disabled()
-        elif key == "/":
+        elif action == "search":
             self.screen = "search"
-        elif key == "escape":
+        elif action == "back":
             if not self.query_text:
                 return CLOSED
             self.query_text = ""
             self.refresh()
-        elif key == "q":
+        elif action == "quit":
             return CLOSED
         return None
 
     def _search_key(self, key: str) -> None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         text = self.query_text
-        if key in ("up", "down", "pageup", "pagedown"):
-            self.move(_MOVES[key])
+        if action in _MOVES:
+            self.move(_MOVES[action])
             return None
-        if key == "enter":
+        if action == "choose":
             self.screen = "list"
             return None
-        if key == "escape":
+        if action == "back":
             self.query_text = ""
             self.screen = "list"
-        elif key == "backspace":
+        elif action == "backspace":
             self.query_text = text[:-1]
-        elif key == "c-u":
+        elif action == "clear":
             self.query_text = ""
-        elif len(key) == 1 and key.isprintable():
+        elif isinstance(key, str) and len(key) == 1 and key.isprintable():
             self.query_text = text + key
         if self.query_text != text:
             self.refresh()
@@ -158,7 +172,7 @@ class SkillPicker:
     def title(self) -> StyleAndTextTuples:
         on = sum(1 for skill in self.skills if skill.name.casefold() not in self.off)
         text = msgs.SKILLS_TITLE.words(on=on, total=len(self.skills))
-        keys = (msgs.SKILLS_QUERY_KEYS if self.screen == "search" else msgs.SKILLS_KEYS).words()
+        keys = (msgs.SKILLS_QUERY_KEYS if self.screen == "search" else msgs.SKILLS_KEYS).with_keymap(self.keymaps[self.screen], SKILL_KEYMAPS[self.screen]).words()
         return [("class:title", text), ("", "    "), ("class:keys", keys)]
 
     def subtitle(self) -> StyleAndTextTuples:
@@ -205,6 +219,8 @@ class SkillPicker:
                 key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
             if not key:
                 return
+            if len(event.key_sequence) > 1:
+                key = tuple(names.get(press.key, press.key) for press in event.key_sequence)
             result = self.press(key)
             if isinstance(result, tuple):
                 event.app.exit(result=result)
@@ -212,7 +228,15 @@ class SkillPicker:
                 event.app.exit(result=None)
 
         kb.add(Keys.Any)(dispatch)
-        kb.add("escape", eager=True)(dispatch)
+        kb.add("escape", eager=Condition(
+            lambda: keys.action_for(self.keymaps[self.screen], "escape") is not None,
+        ))(dispatch)
+
+        for keymap in self.keymaps.values():
+            for sequences in keymap.values():
+                for sequence in sequences:
+                    if len(sequence) > 1:
+                        kb.add(*sequence)(dispatch)
 
         body = FormattedTextControl(
             lambda: self.body()[0],

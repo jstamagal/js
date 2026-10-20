@@ -327,6 +327,8 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.113: the skill picker accepts separate list and search action maps;
+  hints read those maps and defaults retain the original keys.
 - js-2lg.111: session-picker list, search, messages and info keys are supplied
   as separate action maps; each screen renders its active map in its hint.
 - js-2lg.109: the model picker accepts action bindings and handlers; its hint
