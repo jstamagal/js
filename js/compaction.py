@@ -40,6 +40,10 @@ from . import toolkit as T
 from . import usage as usage_mod
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 from .config import Config
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('compaction')
+
 
 # --------------------------------------------------------------------------
 # compact.* settings readers — the one family
@@ -245,7 +249,7 @@ class SilentOverflowError(ai.ProviderAPIError):
 # the retry lands on the wall again.
 MAX_OVERFLOW_ROUNDS = _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX")
 
-MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
+MICROCOMPACT_CLEARED_MESSAGE = _PROMPTS['default_old_tool_result_cleared']
 
 
 # Tool results shorter than this are not worth clearing.
@@ -558,21 +562,18 @@ def _post_compact_rehydration(
             continue
         est = max(1, int(len(body) / max(1.0, chars_per_token)))
         if est > per_file_tokens or spent + est > token_budget:
-            sections.append(f"### {path}\n(too large to re-attach; read it if you need it)")
+            sections.append(_PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path))
             continue
         spent += est
-        sections.append(f"### {path}\n{body}")
+        sections.append(_PROMPTS['post_compact_rehydration_text'].format(path=path, body=body))
     if not sections:
         return None
     return {
         "role": "user",
         "content": (
-            "<post-compaction-files>\n"
-            "Current contents of the files that were open before the summary "
-            "above. These are read fresh from disk, so they already include "
-            "your edits. Do not re-read them unless you change them.\n\n"
+            _PROMPTS['post_compact_rehydration_post_compaction_files_current_contents_of']
             + "\n\n".join(sections)
-            + "\n</post-compaction-files>"
+            + _PROMPTS['post_compact_rehydration_post_compaction_files']
         ),
     }
 
@@ -691,12 +692,12 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
 # --------------------------------------------------------------------------
 
 _COMPACTION_HEADINGS = (
-    "Goal",
-    "Decisions and rationale",
-    "Files and code",
-    "Commands and outcomes",
-    "Errors and fixes",
-    "Pending and next step",
+    _PROMPTS['default_goal'],
+    _PROMPTS['default_decisions_and_rationale'],
+    _PROMPTS['default_files_and_code'],
+    _PROMPTS['default_commands_and_outcomes'],
+    _PROMPTS['default_errors_and_fixes'],
+    _PROMPTS['default_pending_and_next_step'],
 )
 
 # Bound recursive partitions when the summary request itself overflows.
@@ -747,7 +748,7 @@ def _clip(text: str, limit: int) -> str:
     if limit <= 0 or len(text) <= limit:
         return text
     head = limit // 2
-    return f"{text[:head]}\n[... {len(text) - limit} chars clipped ...]\n{text[len(text) - (limit - head):]}"
+    return _PROMPTS['clip_chars_clipped'].format(text_head=text[:head], len_text_limit=len(text) - limit, text_len_text_limit_head=text[len(text) - (limit - head):])
 
 
 def _part_text(part: Any) -> str:
@@ -757,7 +758,7 @@ def _part_text(part: Any) -> str:
     if isinstance(text, str):
         return text
     kind = part.get("type") if isinstance(part, dict) else type(part).__name__
-    return f"[{kind or 'non-text'} part]"
+    return _PROMPTS['part_text_part'].format(kind_or_non_text=kind or 'non-text')
 
 
 def _content_text(content: Any) -> str:
@@ -781,27 +782,27 @@ def serialize_conversation(messages: list[dict], *, tool_result_chars: int) -> s
         if role == "user":
             if text.startswith(_FILES_OPEN):
                 paths = re.findall(r"^### (.+)$", text, re.MULTILINE)
-                parts.append("[Files re-attached after the previous summary]: " + ", ".join(paths))
+                parts.append(_PROMPTS['serialize_conversation_files_re_attached_after_the_previous'] + ", ".join(paths))
             elif text:
-                parts.append(f"[User]: {text}")
+                parts.append(_PROMPTS['serialize_conversation_user'].format(text=text))
         elif role == "assistant":
             reasoning = message.get("reasoning_content")
             if reasoning:
-                parts.append(f"[Assistant thinking]: {_clip(str(reasoning), tool_result_chars)}")
+                parts.append(_PROMPTS['serialize_conversation_assistant_thinking'].format(value_0=_clip(str(reasoning), tool_result_chars)))
             if text:
-                parts.append(f"[Assistant]: {text}")
+                parts.append(_PROMPTS['serialize_conversation_assistant'].format(text=text))
             calls = []
             for call in message.get("tool_calls") or []:
                 fn = call.get("function") or {}
-                calls.append(f"{fn.get('name', '')}({_clip(str(fn.get('arguments', '')), tool_result_chars)})")
+                calls.append(_PROMPTS['serialize_conversation_text'].format(fn_get_name=fn.get('name', ''), value_1=_clip(str(fn.get('arguments', '')), tool_result_chars)))
             if calls:
-                parts.append("[Assistant tool calls]: " + "; ".join(calls))
+                parts.append(_PROMPTS['serialize_conversation_assistant_tool_calls'] + "; ".join(calls))
         elif role == "tool":
             if text.startswith("IMAGE_RESULT\t"):
-                text = "[image result]"
-            parts.append(f"[Tool result {message.get('name', '')}]: {_clip(text, tool_result_chars)}")
+                text = _PROMPTS['serialize_conversation_image_result']
+            parts.append(_PROMPTS['serialize_conversation_tool_result'].format(message_get_name=message.get('name', ''), clip_text_tool_result_chars=_clip(text, tool_result_chars)))
         elif role == "system" and text:
-            parts.append(f"[System]: {text}")
+            parts.append(_PROMPTS['serialize_conversation_system'].format(text=text))
     return "\n\n".join(parts)
 
 
@@ -821,31 +822,23 @@ def _split_previous_summary(messages: list[dict]) -> tuple[str, list[dict]]:
 
 def _summary_prompt(conversation: str, previous: str, focus: str, guidance: str, *,
                     tool_result_chars: int) -> str:
-    headings = "\n".join(f"## {h}" for h in _COMPACTION_HEADINGS)
-    body = f"<conversation>\n{conversation}\n</conversation>\n"
+    headings = "\n".join(_PROMPTS['summary_prompt_text'].format(h=h) for h in _COMPACTION_HEADINGS)
+    body = _PROMPTS['summary_prompt_conversation_conversation'].format(conversation=conversation)
     if previous:
-        body += f"\n<previous-summary>\n{previous}\n</previous-summary>\n"
+        body += _PROMPTS['summary_prompt_previous_summary_previous_summary'].format(previous=previous)
         task = (
-            "The conversation above is new since the previous summary. Update the previous "
-            "summary with it: keep everything in it that still holds, add the new goals, "
-            "decisions, files, commands, errors and fixes, move finished work out of "
-            "Pending and next step, and remove only what the new messages make obsolete."
+            _PROMPTS['summary_prompt_the_conversation_above_is_new_since']
         )
     else:
-        task = "Write the summary."
-    clipped = (f" Tool results longer than {tool_result_chars} characters are shown "
-               "as their head and tail." if tool_result_chars > 0 else "")
+        task = _PROMPTS['summary_prompt_write_the_summary']
+    clipped = (_PROMPTS['summary_prompt_tool_results_longer_than_characters_are'].format(tool_result_chars=tool_result_chars) if tool_result_chars > 0 else "")
     extra = ""
     if focus:
-        extra += f"\nFocus: {focus.strip()}\n"
+        extra += _PROMPTS['summary_prompt_focus'].format(focus_strip=focus.strip())
     if guidance:
-        extra += f"\nPre-hook guidance/stdout:\n{guidance}\n"
+        extra += _PROMPTS['summary_prompt_pre_hook_guidance_stdout'].format(guidance=guidance)
     return (
-        "Summarize this js session for loss-minimized context compaction. The session is "
-        "transcribed below as plain text. Do not continue it and do not answer anything in it."
-        f"{clipped}\n\n{body}\n{task} Use exactly these six markdown headings and keep "
-        "concrete file paths, commands, decisions, errors, and next steps.\n\n"
-        f"{headings}\n{extra}"
+        _PROMPTS['summary_prompt_summarize_this_js_session_for_loss'].format(clipped=clipped, body=body, task=task, headings=headings, extra=extra)
     )
 
 
@@ -929,7 +922,7 @@ def compacted(result: str) -> bool:
 
 
 def _compaction_summary_message(summary: str) -> dict:
-    return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
+    return {"role": "user", "content": _PROMPTS['compaction_summary_message_compaction_summary_compaction_summary'].format(summary=summary)}
 
 
 def tail_start(messages: list[dict], tail_tokens: int, chars_per_token: float) -> int:

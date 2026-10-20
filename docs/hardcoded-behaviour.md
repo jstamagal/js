@@ -189,9 +189,9 @@ branch the audit was made on; they move as the code changes.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
-| `js/compaction.py:247,288` | microcompact | model-facing | The text that replaces a cleared tool result, "[old tool result cleared]", is in code. | js-2lg.18 |
-| `js/compaction.py:548,556-563` | _post_compact_rehydration | model-facing | The post-compaction-files message and the "too large to re-attach" line are written in code. | js-2lg.18 |
-| `js/compaction.py:680-687,737,747,771-791,809-836,917-918` | _summary_prompt/serialize_conversation/_clip/_part_text/_compaction_summary_message | model-facing | The summarizer prompt, its six headings, the transcript role labels, the clip marker and the summary wrapper are in code. | js-2lg.18 |
+| `js/compaction.py` | microcompact | model-facing | Model-facing text is loaded from `prompts/text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
+| `js/compaction.py` | _post_compact_rehydration | model-facing | Model-facing text is loaded from `prompts/text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
+| `js/compaction.py` | _summary_prompt/serialize_conversation/_clip/_part_text/_compaction_summary_message | model-facing | Model-facing text is loaded from `prompts/text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
 | `js/model_client.py:922,932,991,994,1002,1007,1010,1013,1031` | _image_result_payload/_visual_read_error/_mixed_result_parts/media_label | model-facing | Tool-result error lines and media/resource labels the model reads are built in code. | js-2lg.22 |
 | `js/runtime.py:286-289,1897` | MAX_OUTPUT_RESUME_NUDGE/_send_resume_nudge | model-facing | The resume nudge sent after a cut-off reply is in code. | js-2lg.26 |
 | `js/runtime.py:392,414,1158,1189,1291,1328,1404,1427,1443,1465` | _normalize_tool_call_batch/_dispatch/_dispatch_tool_calls/_dispatch_fan_out_async/_dispatch_async_tool | model-facing | Tool error lines the model reads (parse failure, invalid arguments, "ERROR running", sibling-load refusal) are built in code. | js-2lg.26 |
