@@ -98,6 +98,19 @@ A setting a turn reads is also one `TurnSetting` row in `js/turn_settings.py`;
 the row makes it a `Config` field and, with `on_context`, a `ToolContext` field
 that subagents inherit.
 
+### Naming a setting
+
+- A setting is a global variable, named UPPER_SNAKE: `set BANNER ***`.
+- Spell words out. No clipped abbreviations (`CTX` is wrong). `ENV`, `URL`
+  and `API` are fine.
+- A cap ends `_MAX`, as in C's `limits.h`. A timeout that kills ends
+  `_TIMEOUT`, in seconds. A wait that returns a handle ends `_WAIT`, in
+  seconds.
+- One file ends `_FILE`, a directory ends `_DIR`, so `/set *_FILE` lists them.
+- Setting `NAME` is also env var `JS_NAME`.
+- When in doubt, do it the way bash, unix, ircII, C or classic tooling does.
+- js output never says "knob" or "folder". Say setting, and directory.
+
 ## Docs
 
 Deep dives belong in `docs/`: reference material, benchmark results, design
