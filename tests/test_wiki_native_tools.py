@@ -713,3 +713,15 @@ def test_asset_copy_preserves_a_destination_created_after_the_check(tmp_path, mo
 
     assert destination.read_bytes() == b"other worker's image"
     assert result.startswith("ERROR:")
+
+
+def test_upsert_of_a_missing_slug_still_checks_for_duplicates(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "canonical", slug="chain-of-draft", context=context)
+
+    result = wiki_write(str(vault), "concept", "duplicate", slug="chain-of-draft-prompting",
+                        overwrite=True, context=context)
+
+    assert not (vault / "concepts" / "chain-of-draft-prompting.md").exists()
+    assert result.startswith("NEAR-MATCH:")

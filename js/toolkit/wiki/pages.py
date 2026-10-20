@@ -124,7 +124,7 @@ def wiki_write(
 
             # Entity and concept slugs are checked under the vault lock so
             # concurrent writers see every page already published.
-            if not existed and not overwrite and not override_dedup and k in ("entity", "concept"):
+            if not existed and not override_dedup and k in ("entity", "concept"):
                 near = _find_near_matches(folder, s)
                 if near:
                     listed = "\n  ".join(str(p) for p in near[:5])
