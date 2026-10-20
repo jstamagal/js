@@ -126,13 +126,13 @@ class _StreamCapture:
             handle.write(self._head)
             handle.write(self._tail)
             handle.flush()
+            if self._closed:
+                handle.close()
         except OSError:
             self._spill_failed = True
             return
         self._spilled = True
-        if self._closed:
-            handle.close()
-        else:
+        if not self._closed:
             self._file = handle
 
     def feed(self, chunk: bytes) -> None:

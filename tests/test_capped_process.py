@@ -32,6 +32,24 @@ def test_a_spill_that_fails_at_close_is_not_advertised_as_complete(monkeypatch, 
     assert capture.excerpt(0, 8).path is None
 
 
+def test_late_spill_close_failure_preserves_the_excerpt(tmp_path, monkeypatch):
+    class FailingClose(io.BytesIO):
+        def close(self):
+            super().close()
+            raise OSError(errno.EIO, "close failed")
+
+    monkeypatch.setattr(capped_process, "open", lambda *args: FailingClose(), raising=False)
+    capture = capped_process._StreamCapture(64, tmp_path / "output.log")
+    capture.feed(b"HEADmiddleTAIL")
+    capture.close()
+
+    excerpt = capture.excerpt(0, 8)
+
+    assert excerpt.head == b"HEAD"
+    assert excerpt.tail == b"TAIL"
+    assert excerpt.path is None
+
+
 def test_spill_flush_failure_returns_retained_output(tmp_path, monkeypatch):
     capture = capped_process._StreamCapture(8, tmp_path / "spill.log")
     capture.feed(b"abcdefghijklmnop")
