@@ -1522,7 +1522,14 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
     """Print a settings verb's output and carry changed keys into live state."""
     keys = result.changed_keys
     if _changed_model_key(keys):
+        session = getattr(cfg, "session_file", None)
+        recorded = session is not None and session != Path(os.devnull)
+        previous = _live_stamp(cfg, state) if recorded else None
         _sync_model_from_live_settings(state)
+        if recorded:
+            stamp = _live_stamp(cfg, state)
+            if stamp != previous:
+                record_model_switch(session, stamp=stamp, previous=previous)
     if _changed_provider_key(keys):
         _sync_provider_from_live_settings(state, keys)
     if _changed_lock_subagent_model_key(keys) or "PYTHON_KERNEL" in keys:

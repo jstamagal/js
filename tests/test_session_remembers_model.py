@@ -114,3 +114,12 @@ def test_pick_model_is_remembered_before_the_next_turn(monkeypatch, tmp_path):
     models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem], lines=["continue"])
 
     assert models == ["picked-model"]
+
+
+def test_set_model_is_remembered_before_the_next_turn(monkeypatch, tmp_path):
+    _repl(monkeypatch, tmp_path, ["--model", "original-model"], lines=["/set MODEL replacement-model"])
+    session_file = _only_session(tmp_path)
+
+    models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem], lines=["continue"])
+
+    assert models == ["replacement-model"]
