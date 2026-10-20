@@ -157,6 +157,7 @@ set SUBAGENT_MODEL_LOCK off
 # --- tools ---
 set -TOOL_ALIASES
 set HTTP_USER_AGENT js-agent/0.1
+set JEV_MODEL jev-latest
 set TERMINAL_COLUMNS 64
 set TERMINAL_ROWS 36
 

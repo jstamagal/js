@@ -21,6 +21,8 @@ dependencies = [
     # Core tool argument validation; referencing brings native rpds-py.
     "jsonschema>=4.25.1",
     "httpx2>=2.12.0",
+    # The jev tool.
+    "typesafe-sdk>=0.7.2",
 ]
 
 [project.optional-dependencies]
@@ -31,15 +33,12 @@ kernel = [
 vision = [
     "Pillow>=10.0",
 ]
-tags = [
-    "typesafe-sdk>=0.7.2",
-]
 browser = [
     "js[vision]",
     "playwright>=1.61.0",
 ]
 test = [
-    "js[kernel,vision,tags,browser]",
+    "js[kernel,vision,browser]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]

@@ -276,6 +276,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("TOOL_ALIASES", "json",
                 empty=EMPTY_NONE, group="tools"),
     SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
+    SettingSpec("JEV_MODEL", "str", group="tools"),
     SettingSpec("TERMINAL_COLUMNS", "int", group="tools"),
     SettingSpec("TERMINAL_ROWS", "int", group="tools"),
     # --- lsp ---

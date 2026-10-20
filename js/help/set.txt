@@ -487,6 +487,9 @@ HTTP_USER_AGENT
     User-Agent header fetch and the web-search backends send when a call
     names none.
 
+JEV_MODEL
+    TypeSafe model the jev tool asks. Needs TYPESAFE_API_KEY.
+
 TERMINAL_COLUMNS
     Columns of a terminal_session started without cols.
 

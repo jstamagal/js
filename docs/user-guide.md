@@ -29,7 +29,7 @@ the next time js starts. It runs the venv's js directly rather than through
 model runs. `just uninstall` removes the launcher and the `wiki` symlink.
 
 Heavy features are explicit extras: `uv sync --no-dev --extra kernel`,
-`--extra vision`, `--extra tags`, or `--extra browser` (combine flags as needed).
+`--extra vision`, or `--extra browser` (combine flags as needed).
 Enable kernel/toolbox with `/set PYTHON_KERNEL on`; it defaults off.
 The setting is applied at turn boundaries, like other turn settings.
 Managed CLI binaries are opt-in via `just install-tool-binaries` on supported

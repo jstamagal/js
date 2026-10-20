@@ -449,6 +449,9 @@
 #   example:  set HTTP_USER_AGENT Mozilla/5.0
 #set HTTP_USER_AGENT js-agent/0.1
 
+# The TypeSafe model the jev tool asks.
+#set JEV_MODEL jev-latest
+
 
 ################################################################################
 #  SHELL

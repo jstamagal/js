@@ -16,7 +16,7 @@ from .. import messages as msgs
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
-from . import lsp, notebook
+from . import jev, lsp, notebook
 
 
 def _closest_tool_name(name: str, names: Iterable[str]) -> str:
@@ -576,6 +576,7 @@ def build_default_registry(
         ("fs", fs.tools()),
         ("shell", process_net.tools()),
         ("search", search.tools()),
+        ("jev", jev.tools()),
         ("terminal", terminal.tools()),
         ("browser", browser.tools()),
         ("meta", meta.tools(flags)),

@@ -13,3 +13,4 @@ tools:
   - commit:eager
   - lsp:lazy
   - notebook_edit:lazy
+  - jev:lazy

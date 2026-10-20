@@ -38,15 +38,15 @@ Use system tools from PATH, or explicitly run `just install-tool-binaries` on
 supported platforms. `just sync` is the developer setup and includes test extras.
 
 Install optional features with `uv sync --no-dev --extra kernel`, `--extra vision`,
-`--extra tags`, or `--extra browser` (combine flags to retain multiple extras).
-Package installers can use `js[kernel,vision,tags,browser]` instead of `js`.
+or `--extra browser` (combine flags to retain multiple extras).
+Package installers can use `js[kernel,vision,browser]` instead of `js`.
 The kernel/toolbox pair is disabled by default: `/set PYTHON_KERNEL on` enables
 it after installation; `/set PYTHON_KERNEL off` disables both, including in
 subagents on subsequent turns, and `/save` persists the setting. Like other
 turn settings, changing it does not interrupt an already-running turn or cell. `vision` supplies Pillow for terminal snapshots;
 `browser` includes it plus Playwright. Browser binaries are a separate opt-in:
 `just --set browser-extra '--extra browser' install-browser`.
-`tags` enables TypeSafe-based session tagging when configured with a key.
+The `jev` tool, part of the core install, needs `TYPESAFE_API_KEY`.
 
 Python 3.12+ is required. A slim install removes Jupyter/ZeroMQ and Pillow,
 not all native extensions: core tool validation needs `jsonschema`/`rpds-py`,

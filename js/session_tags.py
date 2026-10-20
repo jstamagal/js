@@ -208,10 +208,7 @@ def questions(tags: list[Tag]) -> dict[str, dict[str, Any]]:
 
 def judge(state: dict[str, Any], asked: dict[str, dict[str, Any]], *, model: str) -> dict[str, float]:
     """Each question's Noul answer, from one TypeSafe System One request."""
-    try:
-        from typesafe_sdk import TypeSafeClient
-    except ImportError as exc:
-        raise RuntimeError("session tagging requires js[tags]; run uv sync --inexact --extra tags") from exc
+    from typesafe_sdk import TypeSafeClient
 
     with TypeSafeClient(model=model) as client:
         response = client.system_one(state, asked)

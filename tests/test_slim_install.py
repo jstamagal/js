@@ -85,12 +85,12 @@ def test_disabled_kernel_hides_discovery_and_refuses_direct_calls(tmp_path, monk
     assert kernel.get_session(context)[0] is None
 
 
-@pytest.mark.parametrize("feature", ["vision", "browser", "tags"])
+@pytest.mark.parametrize("feature", ["vision", "browser"])
 def test_optional_feature_reports_its_install_extra(feature, monkeypatch, tmp_path):
     original = builtins.__import__
 
     def without_optional(name, *args, **kwargs):
-        if name.split(".")[0] in {"PIL", "typesafe_sdk"}:
+        if name.split(".")[0] == "PIL":
             raise ModuleNotFoundError(name)
         return original(name, *args, **kwargs)
 
@@ -98,8 +98,5 @@ def test_optional_feature_reports_its_install_extra(feature, monkeypatch, tmp_pa
     with pytest.raises(RuntimeError):
         if feature == "vision":
             terminal._draw_screen(None, tmp_path / "screen.png")
-        elif feature == "browser":
-            browser._frame_metrics(b"")
         else:
-            from js import session_tags
-            session_tags.judge({}, {}, model="test")
+            browser._frame_metrics(b"")

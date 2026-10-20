@@ -26,7 +26,7 @@ from . import settings as settings_mod
 
 # The keys js reads from the environment, and what each one is for.
 KEYS: tuple[tuple[str, str], ...] = (
-    ("TYPESAFE_API_KEY", "session tags"),
+    ("TYPESAFE_API_KEY", "jev"),
     ("TAVILY_API_KEY", "tavily_search"),
     ("EXA_API_KEY", "exa_search"),
     ("SERPER_API_KEY", "serper_search"),
