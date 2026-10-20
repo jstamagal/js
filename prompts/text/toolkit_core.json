@@ -1,0 +1,16 @@
+{
+  "dehydrated_omitted_from_history": "[{kind} {value_1} omitted from history]",
+  "dehydrated_resource_link": "[resource link {block_get_name}: {block_get_uri}]",
+  "dehydrated_embedded_resource": "[embedded resource {uri}]",
+  "dehydrated_text": "\n{text}",
+  "dehydrated_binary_omitted": " [binary omitted]",
+  "dehydrated_content_omitted_from_history": "[{kind} content omitted from history]",
+  "require_read_error_you_must_read_the_file": "ERROR: You must read the file with the read tool before attempting to {action}.",
+  "require_read_error_changed_since_it_was_read": "ERROR: {path} changed since it was read (hash {known_hash} when read, {content_hash} now); read it again before attempting to {action}.",
+  "load_snapshots_snapshot_target_is_not_absolute": "snapshot target is not absolute",
+  "persist_snapshot_snapshot_exceeds_the_mib_session_undo": "snapshot exceeds the {SNAPSHOT_MAX_DISK_BYTES_1024_1024} MiB session undo cap",
+  "persist_snapshot_this_undo_is_available_only_until": "{reason}; this undo is available only until the process exits",
+  "persist_snapshot_could_not_persist_undo_snapshot_for": "could not persist undo snapshot for {path}: {exc}",
+  "snapshot_could_not_capture_undo_snapshot_for": "could not capture undo snapshot for {path}: {exc}",
+  "call_tool_warning": "WARNING: {notice}"
+}

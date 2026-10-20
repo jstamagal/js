@@ -200,9 +200,9 @@ branch the audit was made on; they move as the code changes.
 | `js/runtime.py` | ToolErrorTracker.record/_record_tool_error_limit | model-facing | Model-facing text is loaded from `prompts/text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
 | `js/runtime.py` | _media_notice/_dehydrate_capped_result/_cap_media/_cap_image_marker/_cap_result/spill_oversized_result/_cap_batch_results | model-facing | Model-facing text is loaded from `prompts/text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
 | `js/runtime.py` | _record_assistant | model-facing | Model-facing text is loaded from `prompts/text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/toolkit/core.py:647,651-652,657-660` | ToolContext.require_read | policy | Builds the model-facing read-before-write refusal text in code. | js-2lg.35 |
-| `js/toolkit/core.py:948,957,964,1082,1134-1137` | ToolContext._persist_snapshot / snapshot / call_tool | policy | Builds undo-snapshot WARNING text in code and appends it to the model's tool result. | js-2lg.35 |
-| `js/toolkit/core.py:315-335` | ToolResult.dehydrated | policy | Fixes the history placeholder wording for omitted image, audio and resource blocks. | js-2lg.35 |
+| `js/toolkit/core.py` | ToolContext.require_read | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
+| `js/toolkit/core.py` | ToolContext._persist_snapshot / snapshot / call_tool | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
+| `js/toolkit/core.py` | ToolResult.dehydrated | policy | Model-facing text is loaded from `prompts/text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
 | `js/toolkit/registry.py:59-68` | ToolRegistry.unavailable_error | policy | Builds the model-facing unknown-tool and policy-denied error text, including the "Did you mean" hint and the tool list. | js-2lg.36 |
 | `js/toolkit/registry.py:119-128` | ToolRegistry.with_kernel | policy | Fixes which tools the kernel gate removes, and the refusal text that names the `/set PYTHON_KERNEL` REPL command. | js-2lg.36 |
 | `js/toolkit/registry.py:270-275,280-282` | TurnToolSurface._unavailable_errors | policy | Builds the model-facing "not in the published tool set, load it with tool_discovery" error text. | js-2lg.36 |
