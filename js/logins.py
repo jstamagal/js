@@ -26,6 +26,7 @@ import tomli_w
 import tomllib
 
 from . import messages as msgs
+from . import output
 from . import paths, providers
 
 _CONFIG_DIR_OVERRIDE: Path | None = None
@@ -564,13 +565,13 @@ def _parse_store(ident: tuple | None, data: dict[str, Any]) -> _Store:
     for provider_id, raw in data.items():
         if not isinstance(raw, dict):
             quarantined[provider_id] = raw
-            msgs.warn(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error="not a table")
+            output.notice(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error="not a table")
             continue
         try:
             login = _login_from_section(provider_id, raw)
         except _BadSection as exc:
             quarantined[provider_id] = raw
-            msgs.warn(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error=exc)
+            output.notice(msgs.ENV_SETTING_IGNORED, name=f"logins.toml [{provider_id}]", error=exc)
             continue
         key = providers.normalize_provider_id(provider_id) or provider_id
         logins[key] = login
