@@ -157,3 +157,17 @@ def test_the_urllib_fallback_is_an_entry_on_stderr_once_per_purpose(monkeypatch,
     tool_binaries.warn_urllib_fallback("x")
     tool_binaries.warn_urllib_fallback("x")
     assert capsys.readouterr().err.splitlines() == [msgs.banner(msgs.URLLIB_FALLBACK.text(purpose="x"))]
+
+
+def test_assemblies_can_hold_separate_banner_state():
+    from js import fset, messages
+
+    before = messages.BANNER
+    first, second = messages.Banner("one"), messages.Banner("two")
+    with messages.using_banner(first):
+        messages.set_banner("changed")
+        with messages.using_banner(second):
+            assert fset.banner_text() == "two"
+        assert fset.banner_text() == "changed"
+    assert first.value == "changed" and second.value == "two"
+    assert messages.BANNER == before

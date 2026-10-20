@@ -24,6 +24,8 @@ that is a terminal.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
 import sys
 from dataclasses import dataclass, field
 from string import Formatter
@@ -35,6 +37,29 @@ from . import fset
 # state, and what $BANNER in a /fset format reads. The BANNER setting sets it
 # (`set_banner`).
 BANNER = "***"
+
+@dataclass
+class Banner:
+    value: str = "***"
+
+
+_BANNER: ContextVar[Banner | None] = ContextVar("js_message_banner", default=None)
+
+
+@contextmanager
+def using_banner(state: Banner):
+    """Render and update this assembly's banner for the duration of the body."""
+    token = _BANNER.set(state)
+    try:
+        yield state
+    finally:
+        _BANNER.reset(token)
+
+
+def current_banner() -> str:
+    state = _BANNER.get()
+    return BANNER if state is None else state.value
+
 
 INFO = "info"
 WARN = "warn"
@@ -148,7 +173,11 @@ def banner(text: str) -> str:
 def set_banner(value: str) -> None:
     """Make ``value``, the BANNER setting, the banner slot."""
     global BANNER
-    BANNER = value
+    state = _BANNER.get()
+    if state is None:
+        BANNER = value
+    else:
+        state.value = value
 
 
 def _holes(template: str, fields: dict[str, Any]) -> list[str | list[fset.Run]]:
@@ -254,7 +283,8 @@ class ArgumentParser(argparse.ArgumentParser):
     """argparse with its headings and its refusal in entries. A bad command
     line prints the usage, then ARGUMENTS_REFUSED on stderr, and exits 2."""
 
-    def __init__(self, *args: Any, add_help: bool = True, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, add_help: bool = True, on_error=None, **kwargs: Any) -> None:
+        self.on_error = on_error
         kwargs.setdefault("formatter_class", _HelpFormatter)
         super().__init__(*args, add_help=False, **kwargs)
         self._positionals.title = ARGS_POSITIONALS.words()
@@ -263,6 +293,8 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.words())
 
     def error(self, message: str) -> Any:
+        if self.on_error is not None:
+            return self.on_error(self, message)
         self.print_usage(sys.stderr)
         warn(ARGUMENTS_REFUSED, error=message)
         self.exit(2)

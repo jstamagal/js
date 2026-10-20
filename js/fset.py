@@ -257,7 +257,7 @@ def banner_text() -> str:
     reports its state."""
     from . import messages as _msgs  # lazy: messages imports this
 
-    return _msgs.BANNER
+    return _msgs.current_banner()
 
 
 # ---------------------------------------------------------------------------
