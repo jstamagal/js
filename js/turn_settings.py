@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("tool_errors_max", "TOOL_ERRORS_MAX", integer),
     TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),
     TurnSetting("anthropic_thinking_display", "ANTHROPIC_THINKING_DISPLAY", text),
     TurnSetting("anthropic_prompt_cache", "ANTHROPIC_PROMPT_CACHE", flag),

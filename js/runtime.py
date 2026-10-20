@@ -622,13 +622,17 @@ def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message
 
 @dataclass
 class ToolErrorTracker:
-    limit: int = 3
+    limit: int = field(default_factory=lambda: _settings.default_value("TOOL_ERRORS_MAX"))
     errors: dict[str, int] = field(default_factory=dict)
     # Under the non-blocking supervisor a turn's leaf tools dispatch in an
     # executor thread while its fan-out calls run as coroutines on the loop; both
     # record into this tracker, so guard the counter against that cross-thread
     # interleave.
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    @classmethod
+    def from_settings(cls, settings: dict | None) -> ToolErrorTracker:
+        return cls(limit=int(_settings.knob(settings, "TOOL_ERRORS_MAX")))
 
     def record(self, tool_name: str, result: str) -> str:
         if isinstance(result, _jail.Refusal):
@@ -2134,7 +2138,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
         call_stats=call_stats, trace=trace, suppress_output=suppress_output,
     )
-    error_tracker = ToolErrorTracker()
+    error_tracker = ToolErrorTracker.from_settings(getattr(cfg, "settings", None))
 
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,

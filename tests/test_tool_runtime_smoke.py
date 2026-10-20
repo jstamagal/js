@@ -1488,3 +1488,9 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
 
     assert result == "ERROR: You must read the file with the read tool before attempting to edit it."
     assert target.read_text(encoding="utf-8") == "print(“hello there, world”)\n"
+
+
+def test_tool_error_tracker_uses_registered_limit():
+    tracker = runtime.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
+    tracker.record("read", "ERROR: missing")
+    assert tracker.limit_reached()
