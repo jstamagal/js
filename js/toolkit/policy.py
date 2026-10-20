@@ -329,3 +329,8 @@ def removal_decision(context: Any, *, permanent: bool | None, size: int) -> tupl
         return permanent, (f"ERROR: target is over the {limit} trash limit ({size} bytes); "
                            "confirm with the operator and pass permanent=true to delete directly.")
     return permanent, None
+
+
+def schema_flags(config: Any) -> tuple[str, ...]:
+    """Schema features allowed by this configuration's tool policy."""
+    return () if getattr(config, "lock_subagent_model", False) else ("model_override",)

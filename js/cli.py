@@ -135,16 +135,7 @@ def _error_text(e: BaseException) -> str:
 
 
 def _registry_for(cfg) -> object:
-    # Always build from THIS cfg's prompt roots. The old code returned a module-level
-    # registry built with no roots on the normal path, and only passed cfg.prompt_roots
-    # on the locked branch — so every agent in ~/.js/agents and .js/agents was
-    # invisible as a tool unless the operator happened to lock subagent models.
-    #
-    # The `model_override` flag exposes the subagent `model` param on the task tool;
-    # when the operator has locked subagent model selection it is dropped from both the
-    # schema and the description rather than merely ignored.
-    flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags).with_kernel(
+    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=tool_policy.schema_flags(cfg)).with_kernel(
         getattr(cfg, "kernel_enabled", False)
     )
 

@@ -201,6 +201,10 @@ branch the audit was made on; they move as the code changes.
 
 2 findings.
 
+- js-2lg.80: toolkit policy supplies schema flags from the configuration;
+  the CLI assembles the registry with those flags. The model parameter stays
+  exposed only when subagent model selection is unlocked.
+
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/cli.py:131-143` | _registry_for | policy | cli decides that the task tool's model parameter exists only when the subagent model lock is off. | js-2lg.80 |
