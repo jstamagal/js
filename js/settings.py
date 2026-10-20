@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("FILE_REQUIRE_READ", "bool", group="tools"),
     SettingSpec("TOOL_ERRORS_MAX", "int", group="runtime"),
     SettingSpec("ANTHROPIC_REQUIRED_EFFORT", "str", group="runtime"),
     SettingSpec("ANTHROPIC_THINKING_DISPLAY", "str", group="runtime"),

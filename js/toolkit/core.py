@@ -642,6 +642,8 @@ class ToolContext(_turn_settings.ContextSettings):
         content_hash: str | None = None,
         seen_ranges: list[tuple[int, int]] | None = None,
     ) -> str | None:
+        if not self.file_require_read:
+            return None
         with self._coverage_lock:
             if path not in self.read_paths:
                 return f"ERROR: You must read the file with the read tool before attempting to {action}."

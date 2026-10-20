@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("file_require_read", "FILE_REQUIRE_READ", flag, on_context=True),
     TurnSetting("tool_errors_max", "TOOL_ERRORS_MAX", integer),
     TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),
     TurnSetting("anthropic_thinking_display", "ANTHROPIC_THINKING_DISPLAY", text),
