@@ -1461,6 +1461,24 @@ PASTE_MARKER_CHARACTERS = "[paste #{n} {value} chars]"
 
 IMAGE_PLACEHOLDER = "[image #{n}]"
 
+CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS = "agent id must contain only letters, numbers, '_' or '-'"
+
+CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL = "session path must be an existing .jsonl file: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE = "session path must be inside {root}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE_273 = "session path must be inside {sessions_dir}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE = "session path must be a .jsonl file: {session}"
+
+CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "session must identify an existing .jsonl file: {session}"
+
+CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl file inside {sessions_dir}: {session}"
+
+CONFIG_AGENT_AT_IS_UNREADABLE = "agent {agent_id!r} at {candidate} is unreadable: {strerror}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

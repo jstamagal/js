@@ -41,7 +41,7 @@ def _norm_effort(raw: str | None) -> str | None:
 
 def validate_agent_id(agent_id: str) -> str:
     if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise ValueError("agent id must contain only letters, numbers, '_' or '-'")
+        raise ValueError(msgs.CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS.format())
     return agent_id
 
 
@@ -260,21 +260,21 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
         if raw_path.suffix != ".jsonl" or not raw_path.is_file():
-            raise ValueError(f"session path must be an existing .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL.format(session=session))
         resolved_path = raw_path.resolve(strict=True)
         if not resolved_path.is_relative_to(resolved_root):
-            raise ValueError(f"session path must be inside {root}: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE.format(root=root, session=session))
         return raw_path
 
     relative_path = _relative_session_path(session)
     concrete_path = sessions_dir / relative_path
     resolved_path = concrete_path.resolve(strict=False)
     if not resolved_path.is_relative_to(resolved_sessions_dir):
-        raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+        raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
 
     if concrete_path.exists():
         if not concrete_path.is_file():
-            raise ValueError(f"session path must be a .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE.format(session=session))
         return concrete_path
 
     found = (
@@ -286,7 +286,7 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
         return found
 
     if not create:
-        raise ValueError(f"session must identify an existing .jsonl file: {session}")
+        raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
 
     sessions_dir.mkdir(parents=True, exist_ok=True)
     parent = sessions_dir
@@ -296,15 +296,15 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
             parent.mkdir()
         except FileExistsError:
             if not parent.is_dir():
-                raise ValueError(f"session parent must be a directory: {session}") from None
+                raise ValueError(msgs.CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY.format(session=session)) from None
         if not parent.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
     try:
         with concrete_path.open("x", encoding="utf-8"):
             pass
     except FileExistsError:
         if not concrete_path.is_file() or not concrete_path.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session}") from None
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307.format(sessions_dir=sessions_dir, session=session)) from None
     return concrete_path
 
 
@@ -318,7 +318,7 @@ def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, projec
             # Named agent exists but can't be read (symlink onto a sleeping
             # NFS/automount host). Stop here; falling through would silently
             # run a different agent of the same name.
-            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc.strerror}") from exc
+            raise ValueError(msgs.CONFIG_AGENT_AT_IS_UNREADABLE.format(agent_id=agent_id, candidate=candidate, strerror=exc.strerror)) from exc
     return repo_root / agent_id
 
 def _preset_config_paths(
