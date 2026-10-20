@@ -186,3 +186,14 @@ def test_registered_clipboard_backends_control_fallback_order():
         {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
     )
     assert command == list(clipimage.X11_COMMAND)
+
+
+def test_image_storage_can_belong_to_each_assembly():
+    first, second = {}, {}
+    with clipimage.using_store(first):
+        token = clipimage.keep(b"first")
+        with clipimage.using_store(second):
+            other = clipimage.keep(b"second")
+            assert clipimage.lookup(other) == b"second"
+        assert clipimage.lookup(token) == b"first"
+    assert first == {1: b"first"} and second == {1: b"second"}

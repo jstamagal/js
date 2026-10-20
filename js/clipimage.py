@@ -11,6 +11,8 @@ recalled from history in the same process still carries its image.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import re
 import shlex
@@ -40,6 +42,23 @@ _DETECT_NAME = Path("clipboard")
 _PLACEHOLDER = re.compile(r"\[image #([1-9][0-9]{0,8})\]")
 _images: dict[int, bytes] = {}
 
+_STORE: ContextVar[dict | None] = ContextVar("js_image_store", default=None)
+
+
+@contextmanager
+def using_store(store: dict[int, bytes]):
+    """Keep and resolve images in the caller's store for the duration of the body."""
+    token = _STORE.set(store)
+    try:
+        yield store
+    finally:
+        _STORE.reset(token)
+
+
+def _store() -> dict[int, bytes]:
+    store = _STORE.get()
+    return _images if store is None else store
+
 
 class ClipboardError(Exception):
     """The clipboard gave no image. ``message`` and ``fields`` are the one line
@@ -57,15 +76,16 @@ def placeholder(n: int) -> str:
 
 def keep(data: bytes) -> str:
     """Keep ``data`` and return the placeholder that names it."""
-    n = len(_images) + 1
-    _images[n] = data
+    store = _store()
+    n = len(store) + 1
+    store[n] = data
     return placeholder(n)
 
 
 def lookup(token: str) -> bytes | None:
     """The bytes a placeholder names; None for any other text."""
     match = _PLACEHOLDER.fullmatch(token)
-    return _images.get(int(match.group(1))) if match else None
+    return _store().get(int(match.group(1))) if match else None
 
 
 def placeholders(text: str) -> list[str]:
@@ -73,7 +93,7 @@ def placeholders(text: str) -> list[str]:
     found: list[str] = []
     for match in _PLACEHOLDER.finditer(text):
         token = match.group(0)
-        if int(match.group(1)) in _images and token not in found:
+        if int(match.group(1)) in _store() and token not in found:
             found.append(token)
     return found
 
