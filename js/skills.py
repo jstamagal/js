@@ -359,9 +359,13 @@ def discover_skills(
 
 def _skill_paths(root: Path) -> tuple[Path, ...]:
     """A skill is a subdirectory holding a SKILL.md — the Agent Skills format."""
-    if not root.is_dir():
+    try:
+        if not root.is_dir():
+            return ()
+        return tuple(sorted(root.glob("*/SKILL.md"), key=lambda item: str(item).casefold()))
+    except OSError as exc:
+        _warn_once(msgs.SKILL_SKIPPED.said(path=root, error=exc))
         return ()
-    return tuple(sorted(root.glob("*/SKILL.md"), key=lambda item: str(item).casefold()))
 
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:

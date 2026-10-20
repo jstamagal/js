@@ -12,6 +12,22 @@ import os
 from js.skills import discover_skills
 
 
+def test_unsearchable_skill_root_parent_does_not_abort_other_roots(tmp_path):
+    root = tmp_path / "skills"
+    _skill(root, "good")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0)
+    try:
+        catalog = discover_skills(
+            tmp_path, builtin_dir=root, global_dir=blocked / "skills",
+            user_dir=tmp_path / "none",
+        )
+    finally:
+        blocked.chmod(0o700)
+    assert [record.name for record in catalog.skills] == ["ok"]
+
+
 def _skill(root: Path, name: str, body: str = "---\nname: ok\ndescription: fine\n---\nbody\n") -> Path:
     path = root / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
