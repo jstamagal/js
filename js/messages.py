@@ -1635,6 +1635,12 @@ OAUTH_CALLBACK_STATE_MISMATCH = "{label} state mismatch"
 
 OAUTH_CALLBACK_CALLBACK_CARRIED_NO_AUTHORIZATION_CODE = "{label} callback carried no authorization code"
 
+PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING = "provider {id!r} has no base URL configured; refusing to fall back to the {sdk!r} SDK default endpoint and credentials. Run `js --login {id2}` or {hint}."
+
+PROVIDER_ENDPOINT_ENV_HINT = Message("set {value}", banner=False)
+
+PROVIDER_ENDPOINT_CONFIGURE_HINT = Message("configure its base URL", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

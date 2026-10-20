@@ -7,6 +7,8 @@ prefix parsing.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import os
 import time
 from dataclasses import dataclass, field
@@ -734,14 +736,12 @@ def assert_endpoint_configured(provider: ProviderDef, base_url: str | None) -> N
     if not sdk or sdk == provider.id:
         return
     hint = (
-        f"set {provider.base_url_env[0]}"
+        msgs.PROVIDER_ENDPOINT_ENV_HINT.words(value=provider.base_url_env[0])
         if provider.base_url_env
-        else "configure its base URL"
+        else msgs.PROVIDER_ENDPOINT_CONFIGURE_HINT.words()
     )
     raise ValueError(
-        f"provider {provider.id!r} has no base URL configured; refusing to fall "
-        f"back to the {sdk!r} SDK default endpoint and credentials. Run "
-        f"`js --login {provider.id}` or {hint}."
+        msgs.PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING.format(id=provider.id, sdk=sdk, id2=provider.id, hint=hint)
     )
 
 
