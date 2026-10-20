@@ -542,8 +542,7 @@ _WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
 
 
 def header_line() -> str:
-    return (f"  {'when':<{_WHEN}}  {'mode':<{_MODE}}  {'agent':<{_AGENT}}  {'dir':<{_DIR}} "
-            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} name")
+    return (msgs.SESSION_PICKER_HEADER.words(value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=_WHEN, value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=_MODE, value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=_AGENT, value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=_DIR, value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=_TURNS, value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=_LENGTH))
 
 
 def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:

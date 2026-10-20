@@ -1687,6 +1687,20 @@ TOOL_ARIA2_HOMEBREW_FAILED = "aria2: Homebrew unavailable or `brew install aria2
 
 TOOLKIT_INCOMPLETE_PREFIX = "toolkit incomplete:\n"
 
+SESSION_PICKER_HEADER = Message("  {value:<{_WHEN}}  {value2:<{_MODE}}  {value3:<{_AGENT}}  {value4:<{_DIR}} {value5:>{_TURNS}}  {value6:<{_LENGTH}} name", banner=False)
+
+SESSION_COLUMN_WHEN = Message("when", banner=False)
+
+SESSION_COLUMN_MODE = Message("mode", banner=False)
+
+SESSION_COLUMN_AGENT = Message("agent", banner=False)
+
+SESSION_COLUMN_DIR = Message("dir", banner=False)
+
+SESSION_COLUMN_TURNS = Message("turns", banner=False)
+
+SESSION_COLUMN_LENGTH = Message("length", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
