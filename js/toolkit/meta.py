@@ -89,14 +89,14 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
 def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -> Path:
     raw = Path(session_id).expanduser()
     if raw.is_absolute():
-        resolved = raw.resolve(strict=False)
-        if resolved.suffix != ".jsonl" or not resolved.is_relative_to(sessions_dir.resolve(strict=False)):
-            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session_id}")
         path = raw
     else:
         path = sessions_dir / (raw if raw.suffix else raw.with_suffix(".jsonl"))
         if path.suffix != ".jsonl":
             raise ValueError(f"session_id must resolve to a .jsonl file: {session_id}")
+    resolved = path.resolve(strict=False)
+    if resolved.suffix != ".jsonl" or not resolved.is_relative_to(sessions_dir.resolve(strict=False)):
+        raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session_id}")
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text("", encoding="utf-8")
