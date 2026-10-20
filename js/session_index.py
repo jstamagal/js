@@ -268,8 +268,9 @@ def _index_file(session_file: Path, info: os.stat_result) -> dict[str, Any] | No
         transcript = session_text.parse(session_file)
     except OSError:
         return None
-    summary = transcript.summary()
-    store(session_file, summary, transcript.search_lines(), size=info.st_size, mtime_ns=info.st_mtime_ns)
+    summary = session_text._well_formed(transcript.summary())
+    store(session_file, summary, session_text._well_formed(transcript.search_lines()),
+          size=info.st_size, mtime_ns=info.st_mtime_ns)
     return summary
 
 

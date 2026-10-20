@@ -94,6 +94,17 @@ def test_an_unreadable_index_is_rebuilt(tmp_path):
     assert set(_by_path(session_index.catalog())) == {_key(path)}
 
 
+def test_rebuilding_the_index_keeps_sessions_with_lone_surrogates_searchable(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "question", "needle\udcff")
+    source = path.read_bytes()
+    session_index.reset()
+
+    assert set(_by_path(session_index.catalog())) == {_key(path)}
+    assert set(_search("needle")) == {_key(path)}
+    assert path.read_bytes() == source
+
+
 def test_a_wiped_or_deleted_session_leaves_the_catalog(tmp_path):
     wiped = _session(tmp_path / "a")
     _say(wiped, "hello", "hi")
