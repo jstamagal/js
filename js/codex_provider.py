@@ -497,6 +497,8 @@ async def _build_body_async(
         body["temperature"] = temperature
     if top_p is not None:
         body["top_p"] = top_p
+    if params is not None and params.cache is not None and params.cache.key is not None:
+        body["prompt_cache_key"] = params.cache.key
     if params is not None and params.extra_body:
         body.update(params.extra_body)
     return body

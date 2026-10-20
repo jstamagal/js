@@ -1007,6 +1007,23 @@ def test_codex_extra_params_reach_the_http_body(monkeypatch):
     assert body["service_tier"] == "priority"
 
 
+def test_codex_session_cache_key_reaches_the_http_body(monkeypatch):
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(
+        codex_provider, "provider_from_login_or_token",
+        lambda **_kwargs: _provider_with_client(client),
+    )
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
+        cache_key="js-agent-session-1",
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+
+    assert client.stream_calls[0]["json"]["prompt_cache_key"] == "js-agent-session-1"
+
+
 def test_codex_oauth_authorization_wins_over_an_extra_header_of_any_case(monkeypatch):
     from js import logins
 
