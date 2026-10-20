@@ -1455,6 +1455,10 @@ KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
 
 KEY_ESCAPE = Message("Esc", banner=False)
 
+PASTE_MARKER_LINES = "[paste #{n} +{lines} lines]"
+
+PASTE_MARKER_CHARACTERS = "[paste #{n} {value} chars]"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

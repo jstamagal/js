@@ -10,6 +10,8 @@ for the life of the process, so a marker recalled from history still expands.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import re
 from collections.abc import Callable, Mapping
 
@@ -31,8 +33,8 @@ def normalize(data: str) -> str:
 def marker(n: int, text: str, line_limit: int) -> str:
     lines = text.count("\n") + 1
     if line_limit > 0 and lines > line_limit:
-        return f"[paste #{n} +{lines} lines]"
-    return f"[paste #{n} {len(text)} chars]"
+        return msgs.PASTE_MARKER_LINES.format(n=n, lines=lines)
+    return msgs.PASTE_MARKER_CHARACTERS.format(n=n, value=len(text))
 
 
 def collapses(text: str, line_limit: int, char_limit: int) -> bool:
