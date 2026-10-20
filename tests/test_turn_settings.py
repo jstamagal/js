@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -170,3 +171,25 @@ def test_a_partial_fallback_takes_the_default_for_what_it_lacks():
     values = project({"READ_LINES_MAX": "x"}, fallback=SimpleNamespace())
     row = next(row for row in TURN_SETTINGS if row.attr == "max_read_lines")
     assert values["max_read_lines"] == row.default()
+
+
+def test_live_settings_reads_config_files_at_most_once(monkeypatch):
+    from js import config
+
+    calls = []
+    monkeypatch.setattr(config, "run_settings", lambda **kw: calls.append(kw) or {})
+    monkeypatch.setattr(settings, "_policy_cache", None)
+    settings.bind_live_settings(None)
+    for _ in range(20):
+        settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 1
+
+    settings.bind_live_settings({"SWARM_SPAWN_MAX": 3})
+    try:
+        seen = []
+        worker = threading.Thread(target=lambda: seen.append(settings.live_value("SWARM_SPAWN_MAX")))
+        worker.start()
+        worker.join()
+        assert seen == [3] and len(calls) == 1
+    finally:
+        settings.bind_live_settings(None)

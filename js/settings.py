@@ -952,18 +952,37 @@ def knob_attr(obj: Any, attr: str, key: str) -> Any:
 _live_settings: ContextVar[dict | None] = ContextVar("js_live_settings", default=None)
 
 
+# The store bound last in any context: a thread started without a copy of
+# the binding context reads it.
+_process_settings: dict | None = None
+# Startup policy read once per cwd, environment and invocation.
+_policy_cache: tuple[tuple, dict] | None = None
+
+
 def bind_live_settings(settings: dict | None) -> None:
     """Bind the current invocation or turn's live store in this execution context."""
+    global _process_settings
     _live_settings.set(settings)
+    _process_settings = settings
+
+
+def _startup_policy() -> dict:
+    global _policy_cache
+    from . import config
+
+    key = (os.getcwd(), frozenset(os.environ.items()), repr(sorted(config._invocation.items())))
+    if _policy_cache is None or _policy_cache[0] != key:
+        _policy_cache = (key, config.run_settings(migrate=False))
+    return _policy_cache[1]
 
 
 def live_value(key: str, settings: dict | None = None) -> Any:
     """Read explicit settings, the bound turn store, or startup policy without migration."""
     store = settings if settings is not None else _live_settings.get()
     if store is None:
-        from . import config
-
-        store = config.run_settings(migrate=False)
+        store = _process_settings
+    if store is None:
+        store = _startup_policy()
     return knob(store, key)
 
 
