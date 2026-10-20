@@ -911,24 +911,24 @@ def _live_settings_overlay(
     # provider.* — a saved login / provider default fills these outside the store.
     store_pid = settings.get_dotted(settings_store, ("PROVIDER",))
     if provider_id and provider_id != store_pid:
-        _mark("PROVIDER", provider_id, f"login {provider_id}" if saved_login is not None else "session")
+        _mark("PROVIDER", provider_id, msgs.SETTING_SOURCE_LOGIN.words(provider_id=provider_id) if saved_login is not None else msgs.SETTING_SOURCE_SESSION.words())
 
     store_base = settings.get_dotted(settings_store, ("BASE_URL",))
     if provider_base_url and provider_base_url != store_base:
         if saved_login is not None and saved_login.provider_base_url == provider_base_url:
-            source = f"login {provider_id}"
+            source = msgs.SETTING_SOURCE_LOGIN.words(provider_id=provider_id)
         elif provider_default_base_url and provider_default_base_url == provider_base_url:
-            source = "provider default"
+            source = msgs.SETTING_SOURCE_PROVIDER_DEFAULT.words()
         else:
-            source = "session"
+            source = msgs.SETTING_SOURCE_SESSION.words()
         _mark("BASE_URL", provider_base_url, source)
 
     store_key = settings.get_dotted(settings_store, ("API_KEY",))
     if provider_api_key and provider_api_key != store_key:
         if saved_login is not None and saved_login.provider_api_key == provider_api_key:
-            source = f"login {provider_id}"
+            source = msgs.SETTING_SOURCE_LOGIN.words(provider_id=provider_id)
         else:
-            source = "session"
+            source = msgs.SETTING_SOURCE_SESSION.words()
         _mark("API_KEY", provider_api_key, source)
 
     # Sampling — js/sampling.py reads JS_TEMPERATURE/JS_TOP_K/... itself, and
@@ -942,11 +942,11 @@ def _live_settings_overlay(
             continue
         if getattr(env_sampling, field) is not None and _same_number(getattr(env_sampling, field), eff):
             env_var = _sampling_env_var(field, environ)
-            source = f"env {env_var}" if env_var else "env"
+            source = msgs.SETTING_SOURCE_ENVIRONMENT_VARIABLE.words(env_var=env_var) if env_var else msgs.SETTING_SOURCE_ENVIRONMENT.words()
         elif getattr(manifest_sampling, field) is not None and _same_number(getattr(manifest_sampling, field), eff):
-            source = "agent sampling"
+            source = msgs.SETTING_SOURCE_AGENT_SAMPLING.words()
         else:
-            source = "session"
+            source = msgs.SETTING_SOURCE_SESSION.words()
         _mark(field.upper(), eff, source)
 
     return overlay
@@ -994,8 +994,8 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
             continue  # the overlay already names the env var or flag
         if source in (None, "jsrc") and values.get(key) == settings.get_dotted(state["settings"], (key,)):
             continue
-        label = (f"login {login.provider_id} {source}" if source in ("server", "model") and login is not None
-                 else source or "unset")
+        label = (msgs.SETTING_SOURCE_LOGIN_LAYER.words(provider_id=login.provider_id, source=source) if source in ("server", "model") and login is not None
+                 else source or msgs.SETTING_SOURCE_UNSET.words())
         overlay[key] = setcmd.LiveValue(
             display=setcmd.render_value(settings.SPEC_BY_KEY[key], values.get(key), masked=masked),
             source=label,
@@ -2397,7 +2397,7 @@ def _event_dispatcher(state: dict, cfg: Config):
         handled, error = _run_command(setcmd.expand_line(hook.handler, state.get("settings")), state, cfg)
         if not handled:
             parsed = setcmd.split_command(hook.handler)
-            error = f"unsupported event handler command: {parsed[0] if parsed else '<blank>'}"
+            error = msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=parsed[0] if parsed else '<blank>')
         return events.EventHandlerResult(hook=hook, error=error)
 
     return dispatch

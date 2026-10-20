@@ -1327,6 +1327,24 @@ SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER = Message("sampling.{key} must be a fi
 
 SAMPLING_SAMPLING_MUST_BE_AN_INTEGER = Message("sampling.{key} must be an integer", banner=False)
 
+EVENT_HANDLER_COMMAND_UNSUPPORTED = Message("unsupported event handler command: {value}", banner=False)
+
+SETTING_SOURCE_LOGIN = Message("login {provider_id}", banner=False)
+
+SETTING_SOURCE_SESSION = Message("session", banner=False)
+
+SETTING_SOURCE_PROVIDER_DEFAULT = Message("provider default", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT_VARIABLE = Message("env {env_var}", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+SETTING_SOURCE_AGENT_SAMPLING = Message("agent sampling", banner=False)
+
+SETTING_SOURCE_LOGIN_LAYER = Message("login {provider_id} {source}", banner=False)
+
+SETTING_SOURCE_UNSET = Message("unset", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
