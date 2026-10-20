@@ -1,5 +1,5 @@
 Render and screenshot a page or local HTML in real Chromium: pixels, canvas,
-WebGL (through SwiftShader, no GPU needed), and whether an interaction changes
+WebGL (through ANGLE Vulkan), and whether an interaction changes
 the result. Use it when how the page looks or responds matters, including
 controls that only appear after JavaScript. Local files and directories are
 served from a temporary localhost server.

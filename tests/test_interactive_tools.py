@@ -619,6 +619,23 @@ def test_browser_output_path_refusal_leaves_no_local_server(tmp_path, monkeypatc
 
 
 @_needs_chromium
+def test_browser_probe_uses_the_available_vulkan_webgl_renderer():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as driver:
+        with driver.chromium.launch(args=["--use-angle=vulkan"]) as reference:
+            expected = browser_module._webgl_report(reference.new_page())
+        if "NVIDIA" not in (expected["renderer"] or ""):
+            pytest.skip("NVIDIA Vulkan renderer unavailable")
+
+        with browser_module._launch_browser(driver) as browser:
+            actual = browser_module._webgl_report(browser.new_page())
+
+    assert actual["webgl2"]
+    assert actual["renderer"] == expected["renderer"]
+
+
+@_needs_chromium
 def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path):
     target = tmp_path / "index.html"
     target.write_text(

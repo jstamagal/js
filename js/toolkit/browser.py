@@ -23,8 +23,7 @@ from .sanitize import int_or_default, text_or_default
 
 CHROME_FALLBACK = Path("/opt/chrome-for-testing/chrome-linux64/chrome")
 GL_ARGS = (
-    "--use-gl=swiftshader",
-    "--enable-unsafe-swiftshader",
+    "--use-angle=vulkan",
     "--hide-scrollbars",
     "--mute-audio",
 )
