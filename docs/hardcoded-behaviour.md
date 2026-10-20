@@ -53,6 +53,9 @@ branch the audit was made on; they move as the code changes.
 
 11 findings.
 
+- js-2lg.97: tool results carry screen metadata on their output event. The
+  toolkit owns built-in argument roles, call kinds, languages and legacy result
+  adapters; display renders the prepared stream, file and diff fields.
 - js-2lg.87: the tool-result adapter owns legacy error classification; headless
   consumes its text and status. Both structured errors and ERROR-prefixed text
   retain their existing status.

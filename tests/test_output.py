@@ -159,3 +159,16 @@ def test_a_turn_with_its_own_sink_gets_every_visible_thing_as_fields_and_prints_
     assert [event["text"] for event in sink.named("reasoning")] == ["look first"]
     assert [event["text"] for event in sink.named("answer")] == ["done"]
     assert sink.named("call_stats")[-1]["finish"] == "stop"
+
+
+def test_tool_result_event_carries_screen_fields_without_rendering(capsys):
+    from js import runtime
+
+    sink = _Sink()
+    runtime._trace_result(runtime.Telemetry(None, sink=sink), None, "shell",
+                          "shell=/bin/sh\nexit=7\n--- stdout ---\nout\n--- stderr ---\nerr\n")
+
+    result = sink.named("tool_result")[0]["view"]["screen"]
+    assert result.exit_code == 7
+    assert result.lines == [("out", False), ("err", True)]
+    assert capsys.readouterr() == ("", "")
