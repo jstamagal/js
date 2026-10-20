@@ -543,10 +543,12 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
     )
 
 
-def pick_session(cwd: str | Path, query: str = "") -> Choice | None:
+def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, load_picker=None) -> Choice | None:
     """Run the picker on the terminal and return the choice, or None when closed."""
     from . import picker
 
-    state = load(cwd, query)
-    app = state.application(input=create_input(sys.__stdin__), output=create_output(sys.__stdout__))
+    factory = load if load_picker is None else load_picker
+    state = factory(cwd, query)
+    app = state.application(input=create_input(sys.__stdin__) if input is None else input,
+                            output=create_output(sys.__stdout__) if output is None else output)
     return picker.run_modal(app)

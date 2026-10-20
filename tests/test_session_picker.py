@@ -545,3 +545,16 @@ def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
     M.append_message(path, {"role": "user", "content": "second"})
 
     assert "second" in "\n".join(_body_lines(picker))
+
+
+def test_session_picker_accepts_its_view_and_streams(monkeypatch):
+    from types import SimpleNamespace
+    from js import picker
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    assert session_picker.pick_session("/work", input=source, output=target,
+                                       load_picker=lambda *args: state) == "app"
+    assert seen == [{"input": source, "output": target}]
