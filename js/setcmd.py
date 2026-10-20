@@ -44,7 +44,7 @@ def _empty_display(spec: _s.SettingSpec) -> str:
 
 
 def render_value(spec: _s.SettingSpec, value) -> str:
-    """Render a knob's current value with honest empty states."""
+    """Render a setting's current value with honest empty states."""
     if value is None:
         return _empty_display(spec)
     if spec.type == "bool":
@@ -93,14 +93,14 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
 # `show_lines` renders the settings STORE — the values in the jsrc-derived dict.
 # But a flag (`--model`), a saved login, and env-read sampling (JS_TEMPERATURE ...) feed
 # the next turn WITHOUT ever landing in the store, so the store lies about what
-# runs. The REPL overlays those live sources onto the display via a per-knob
+# runs. The REPL overlays those live sources onto the display via a per-setting
 # ``LiveValue`` map computed at the call site (cli.py), keeping `show_lines`
 # itself pure for config-file processing.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class LiveValue:
-    """One knob's effective value plus where it actually comes from."""
+    """One setting's effective value plus where it actually comes from."""
 
     display: str   # already rendered + masked (secrets stay <set>)
     source: str    # e.g. "--model flag", "login testes", "env JS_TEMPERATURE"
@@ -190,8 +190,8 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
 
 
 def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> CommandResult:
-    """`set -<key>` — clear a knob. With ``baseline`` (the layers below this
-    one), the knob takes the baseline's value; a knob the baseline does not
+    """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
+    one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``."""
     spec = _s.spec_for(key)
     if spec is None:
@@ -374,7 +374,7 @@ def config_owns(verb: str) -> bool:
 def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -> CommandResult:
     """Apply one jsrc line to ``settings`` at config load. Comments/blanks are
     no-ops; a verb the settings layer does not own returns ``handled=False``.
-    `set -key` puts that knob back to its ``baseline`` value (see
+    `set -key` puts that setting back to its ``baseline`` value (see
     `apply_unset`). A bad `set` returns an ``error`` so the loader can surface
     it without aborting."""
     parsed = split_command(line)

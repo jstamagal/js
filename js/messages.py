@@ -429,8 +429,8 @@ OPT_DEBUG_FILE = Message(
     "with descriptions, the messages sent each call, and per-call timings. The clean final answer still "
     "prints to stdout. REQUEST_LOG always writes the same trace under logs/<agent>/<session>.log.")
 OPT_SESSION = Message(
-    "Create or resume a named session: this directory's folder first, then every folder under ~/.js/sessions."
-    " Bare, open the session picker.")
+    "--session NAME: resume NAME, looking in this directory's sessions first, then in all of them."
+    " Not found: start it. Bare, open the session picker.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
 OPT_NO_SAVE = Message(
     "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
@@ -823,8 +823,8 @@ AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives"
 
 # --- Session files -----------------------------------------------------------
 
-SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
-SESSION_NOT_RESERVED = Message("No free session name in {folder}")
+SESSION_AMBIGUOUS = Message("Session {session} is in more than one directory: {paths}")
+SESSION_NOT_RESERVED = Message("No free session name in {directory}")
 SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "

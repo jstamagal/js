@@ -124,7 +124,7 @@
 #  AGENT
 ################################################################################
 
-# The agent js runs when you don't pass --agent. It's a folder name under
+# The agent js runs when you don't pass --agent. It's a directory name under
 # ~/.js/agents/. Read when js starts, so a change applies to the next run.
 #   example:  set DEFAULT_AGENT forge
 #set DEFAULT_AGENT defaultagent
@@ -691,8 +691,8 @@
 
 # Language servers the lsp tool may start, as JSON. For a file, js uses the
 # first one whose extensions include the file's and whose program is
-# installed. "roots" are the files that mark a project's top folder;
-# without any, the nearest folder with .git in it.
+# installed. "roots" are the files that mark a project's top directory;
+# without any, the nearest directory with .git in it.
 #set LSP_SERVERS [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
 
 # How long an lsp call waits for its server to start or answer, in seconds.

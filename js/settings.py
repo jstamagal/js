@@ -1,9 +1,9 @@
-"""Knob registry and config loader for the js harness.
+"""Setting registry and config loader for the js harness.
 
-`REGISTRY` (a list of `SettingSpec`) names every runtime knob: its storage
+`REGISTRY` (a list of `SettingSpec`) names every runtime setting: its storage
 path, type, env-var override, empty-state display, and help text. The values
-a knob starts with live in ONE file, `js/jsrc`, shipped in the package: one
-`set` line per knob. `seed_defaults` and `default_value` read it; a missing
+a setting starts with live in ONE file, `js/jsrc`, shipped in the package: one
+`set` line per setting. `seed_defaults` and `default_value` read it; a missing
 or broken `js/jsrc` stops startup with one line naming the path.
 
 A config file is a *script*: each non-comment line is a command (see
@@ -39,7 +39,7 @@ STEER_MODES: tuple[str, ...] = ("now", "batch", "one")
 # The order Up offers prompts in: last = newest first, cwd = this directory's first.
 HISTORY_ORDERS: tuple[str, ...] = ("last", "cwd")
 
-# The built-in default layer: one `set` line per registered knob.
+# The built-in default layer: one `set` line per registered setting.
 PACKAGE_JSRC = Path(__file__).with_name("jsrc")
 
 
@@ -59,8 +59,8 @@ CONFIG_PRECEDENCE_LAYERS = (
 CANONICAL_CONFIG_PRECEDENCE = " < ".join(CONFIG_PRECEDENCE_LAYERS)
 
 
-# Empty-state display semantics. A knob with no value shows one of these:
-EMPTY_OFF = "off"        # boolean knob, explicitly false
+# Empty-state display semantics. A setting with no value shows one of these:
+EMPTY_OFF = "off"        # boolean setting, explicitly false
 EMPTY_NONE = "none"      # no value set (rendered "<none>")
 EMPTY_UNSET = "unset"    # param deliberately not sent; provider default wins ("<unset>")
 
@@ -87,7 +87,7 @@ class SettingSpec:
 
     @property
     def default(self) -> Any:
-        """This knob's value in `js/jsrc`; None when that file leaves it unset."""
+        """This setting's value in `js/jsrc`; None when that file leaves it unset."""
         return default_value(self.key)
 
     @property
@@ -344,7 +344,7 @@ def is_key_name(value: object) -> bool:
 # The only values `EFFORT` accepts: the effort ladder in
 # js/reasoning.py, with its bottom stop "none" spelled "off" (stored as the
 # literal "none"). Everything else is rejected outright — no
-# default/auto/unset synonyms. Clearing the knob back to provider-default is
+# default/auto/unset synonyms. Clearing the setting back to provider-default is
 # `set -EFFORT`, never a magic value here.
 REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
 _REASONING_EFFORT_ERROR = "expected " + "|".join(REASONING_EFFORT_VALUES)
@@ -374,7 +374,7 @@ _NONNEGATIVE_KNOBS = frozenset({
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
     VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
-    special-casing); the only way to clear a knob back to its default/unset
+    special-casing); the only way to clear a setting back to its default/unset
     state is `set -key` (see `apply_unset` in `js.setcmd`)."""
     text = raw.strip()
     if spec.key == "EFFORT":
@@ -685,7 +685,7 @@ _package_cache: tuple[Path, dict] | None = None
 def _package_settings() -> dict:
     """The settings `js/jsrc` sets, read once per path. Raises `DefaultsError`
     naming the file when it is missing, a line in it does not apply, or a
-    registered knob has no line in it."""
+    registered setting has no line in it."""
     global _package_cache
     path = PACKAGE_JSRC
     if _package_cache is not None and _package_cache[0] == path:
@@ -723,7 +723,7 @@ def seed_defaults() -> dict:
 
 
 def default_value(key: str) -> Any:
-    """Registered knob ``key``'s value in `js/jsrc`; None when that file leaves
+    """Registered setting ``key``'s value in `js/jsrc`; None when that file leaves
     it unset."""
     spec = spec_for(key)
     path = spec.path if spec is not None else tuple(key.split("."))
@@ -731,7 +731,7 @@ def default_value(key: str) -> Any:
 
 
 def knob(settings: dict | None, key: str) -> Any:
-    """Knob ``key`` from a settings store, or its `js/jsrc` value when the
+    """Setting ``key`` from a settings store, or its `js/jsrc` value when the
     store does not hold it."""
     spec = spec_for(key)
     path = spec.path if spec is not None else tuple(key.split("."))
@@ -741,7 +741,7 @@ def knob(settings: dict | None, key: str) -> Any:
 
 
 def knob_attr(obj: Any, attr: str, key: str) -> Any:
-    """``obj.attr`` (a Config or ToolContext field), or knob ``key``'s js/jsrc
+    """``obj.attr`` (a Config or ToolContext field), or setting ``key``'s js/jsrc
     value when ``obj`` has no such attribute."""
     value = getattr(obj, attr, None)
     return default_value(key) if value is None else value

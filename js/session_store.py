@@ -136,7 +136,7 @@ def reserve(folder: Path, make_name: Callable[[], str] = generated_name) -> Path
         except FileExistsError:
             continue
         return path
-    raise RuntimeError(msgs.SESSION_NOT_RESERVED.text(folder=folder))
+    raise RuntimeError(msgs.SESSION_NOT_RESERVED.text(directory=folder))
 
 
 def _named(folder: Path, relative: Path) -> Path | None:
