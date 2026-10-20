@@ -936,8 +936,8 @@ def append_tool_surface(memory_file: Path, state: dict) -> None:
     append_mark(memory_file, 'tool_surface:' + json.dumps(state, separators=(',', ':')))
 
 
-def load_tool_surface(memory_file: Path) -> dict | None:
-    """Read the latest surface snapshot after the last session reset."""
+def load_tool_surface(memory_file: Path, *, scope: dict | None = None) -> dict | None:
+    """Read the latest matching surface snapshot after the last session reset."""
     try:
         with _open_locked(memory_file, 'r') as stream:
             lines = stream.readlines()
@@ -960,5 +960,6 @@ def load_tool_surface(memory_file: Path) -> dict | None:
         except json.JSONDecodeError:
             continue
         if isinstance(state, dict) and state.get('version') == 1:
-            return state
+            if scope is None or all(state.get(key) == value for key, value in scope.items()):
+                return state
     return None
