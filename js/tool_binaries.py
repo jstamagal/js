@@ -11,6 +11,7 @@ through PATH (notably, ``sg`` on this box is not ast-grep).
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import math
 import os
@@ -309,7 +310,37 @@ def download_with_aria2(
     before_publish: Callable[[], None] | None = None,
 ) -> None:
     """Download to a resumable hidden partial and atomically publish on success."""
+    started = time.monotonic()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # The persistent lock inode covers partials, identity metadata and publication.
+    lock_path = destination.with_name(f".{destination.name}.aria2-lock")
+    with lock_path.open("ab") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = timeout_s - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise DownloadError(
+                        f"aria2c timed out after {timeout_s:g}s waiting to download {url}"
+                    ) from None
+                time.sleep(min(0.05, remaining))
+        _download_with_aria2(binary, url, destination, timeout_s=timeout_s, headers=headers,
+                             max_bytes=max_bytes, before_publish=before_publish, started=started)
+
+
+def _download_with_aria2(
+    binary: str,
+    url: str,
+    destination: Path,
+    *,
+    timeout_s: float,
+    headers: dict[str, str] | None,
+    max_bytes: int | None,
+    before_publish: Callable[[], None] | None,
+    started: float,
+) -> None:
     partial = _partial_download_path(destination)
     control = Path(f"{partial}.aria2")
     metadata = Path(f"{partial}.js-meta")
@@ -335,7 +366,6 @@ def download_with_aria2(
         stream.write(identity)
     temporary_metadata.chmod(0o600)
     os.replace(temporary_metadata, metadata)
-    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="js-aria2-") as private, \
             tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         input_file = None
