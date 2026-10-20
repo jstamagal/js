@@ -282,9 +282,9 @@ def terminal_session(
         workdir = context.resolve_path(cwd) if cwd else context.cwd.resolve()
         if not workdir.is_dir():
             return f"ERROR: no such directory: {workdir}"
-        shell = os.environ.get("SHELL") or "/bin/sh"
+        shell = context.terminal_shell_program or os.environ.get("SHELL") or "/bin/sh"
         env = dict(os.environ)
-        if jail.active() is not None:
+        if jail.active() is not None or not context.terminal_environment_inherit:
             # In the jail the command gets the shell tool's environment: the
             # names in SHELL_ENV_KEEP, so no provider key reaches it.
             env = {key: os.environ[key] for key in context.shell_env_allow if key in os.environ}

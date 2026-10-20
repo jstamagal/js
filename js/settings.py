@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
+    SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),
     SettingSpec("BROWSE_ALLOW_PRIVATE_NETWORK", "bool", group="tools"),
     SettingSpec("BROWSE_STEALTH", "bool", group="tools"),
     SettingSpec("CONTEXT7_API_KEY", "str", secret=True, group="tools"),

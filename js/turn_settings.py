@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("terminal_environment_inherit", "TERMINAL_ENVIRONMENT_INHERIT", flag, on_context=True),
+    TurnSetting("terminal_shell_program", "TERMINAL_SHELL_PROGRAM", text, on_context=True),
     TurnSetting("browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK", flag, on_context=True),
     TurnSetting("browse_stealth", "BROWSE_STEALTH", flag, on_context=True),
     TurnSetting("context7_api_key", "CONTEXT7_API_KEY", text, on_context=True),
