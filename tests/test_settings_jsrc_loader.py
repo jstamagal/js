@@ -180,6 +180,22 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     assert global_cfg.read_text(encoding="utf-8").startswith("set MODEL global-model")
 
 
+def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
+    from types import SimpleNamespace
+
+    from js import cli, logins
+
+    model_id = settings.default_value("MODEL")
+    provider_id, _, _ = model_id.partition("/")
+    logins.save_login(logins.Login(provider_id=provider_id, provider_api_key="fixture-key"))
+    cfg = from_env(cwd=tmp_path, save_session=False, extras=[f"MODEL={model_id}"])
+    agent = SimpleNamespace(model="agent-model")
+
+    active = cli._apply_agent_model(cfg, agent, None)
+
+    assert active.model == cfg.model
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
 def test_unreadable_project_agent_refuses_global_fallback(tmp_path):
     project = tmp_path / "project"
