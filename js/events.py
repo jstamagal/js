@@ -11,6 +11,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import messages as msgs
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('events')
+
 
 
 CANONICAL_EVENT_NAMES: tuple[str, ...] = (
@@ -284,4 +288,4 @@ class Approval:
 
 
 def _failed(call: dict, exc: BaseException) -> str:
-    return f"ERROR: {call.get('name')} was not run: the approval failed: {type(exc).__name__}: {msgs.of_error(exc)}"
+    return _PROMPTS['failed_error_was_not_run_the_approval'].format(call_get_name=call.get('name'), type_exc___name=type(exc).__name__, msgs_of_error_exc=msgs.of_error(exc))
