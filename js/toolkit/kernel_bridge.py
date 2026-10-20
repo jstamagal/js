@@ -296,7 +296,7 @@ class ToolBridge:
             _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
             return {"error": result}
         output = as_output(result)
-        result = output.model
+        result = output.shown()
         if observer is not None:
             # The trace shows the operator everything the call produced.
             observer(tool.name, arguments, output.shown(), time.monotonic() - started, None)

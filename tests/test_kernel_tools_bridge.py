@@ -313,6 +313,17 @@ def test_a_stopped_bridge_serves_again_on_the_same_socket_and_token(bridge, tmp_
     assert "read" in raw_request(bridge, names_request(bridge))["value"]
 
 
+def test_bridge_gives_code_the_whole_shell_output(bridge, tmp_path):
+    context = ToolContext(cwd=tmp_path, max_bash_output_bytes=32)
+    bridge.attach(build_default_registry(), context)
+    request = {"token": bridge.token, "op": "call", "tool": "shell",
+               "kwargs": {"command": "printf '%04096d' 0"}}
+
+    response = raw_request(bridge, json.dumps(request).encode())
+
+    assert response["value"].endswith("0" * 4096)
+
+
 def _guard_refusing(tool_name: str, seen: list[tuple[str, str]]):
     """An `on` table whose tool_call handler refuses ``tool_name``; ``seen``
     collects (event, tool) for every tool_call and tool_result it is shown."""
