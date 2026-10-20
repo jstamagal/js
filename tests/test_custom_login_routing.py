@@ -777,3 +777,14 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
         0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
 
     assert seen["turn"] == expected
+
+
+def test_route_prefix_policy_and_login_lookup_are_injectable():
+    looked_up = []
+    def lookup(provider):
+        looked_up.append(provider)
+        return None
+    route = resolve_model_route("openai/model", env={"OPENAI_API_KEY": "key"},
+                                login_lookup=lookup, prefix_allowed=lambda *args: True)
+    assert route.provider_id == "openai" and route.model == "model" and route.api_key == "key"
+    assert looked_up and set(looked_up) == {"openai"}
