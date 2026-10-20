@@ -162,6 +162,7 @@ def start(
     owner: str,
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
+    schedule: Callable | None = None,
 ) -> TaskJob:
     """Start the fan-out in the background and return its job at once.
 
@@ -192,6 +193,10 @@ def start(
     with _JOBS_LOCK:
         _JOBS[job.id] = job
     label = f"task {job.id} (background)"
+    if schedule is not None:
+        cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
+        job.set_cancel(cancel)
+        return job
     sup = get_current()
     if sup is not None and on_loop:
         tracked = sup.spawn(run_all(), kind="subagent", label=label)
