@@ -13,6 +13,7 @@ import yaml
 
 from . import paths
 from . import messages as msgs
+from . import output
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
@@ -460,12 +461,12 @@ def _yaml_problem(exc: yaml.YAMLError) -> str:
 
 
 def _warn_once(message: str) -> None:
-    """Print a discovery warning as one line, once per process."""
+    """Emit a discovery warning once per process."""
     line = " ".join(message.split())
     if line in _WARNED:
         return
     _WARNED.add(line)
-    msgs.warn(msgs.FAILED_WARN, error=message if isinstance(message, msgs.Said) else line)
+    output.notice(msgs.FAILED_WARN, error=message if isinstance(message, msgs.Said) else line)
 
 
 def _string_field(manifest: dict[str, Any], field: str) -> str:

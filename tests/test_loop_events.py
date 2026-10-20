@@ -278,3 +278,16 @@ def test_ignored_sampling_value_emits_a_warning(tmp_path, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["name"] == f"sampling.temperature in {path}"
     assert capsys.readouterr() == ("", "")
+
+
+def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
+    from js import skills
+
+    monkeypatch.setattr(skills, "_WARNED", set())
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        skills._warn_once("invalid skill")
+        skills._warn_once("invalid skill")
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["error"] == "invalid skill"
+    assert capsys.readouterr() == ("", "")

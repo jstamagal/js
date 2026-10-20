@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-21 findings.
+20 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -47,7 +47,6 @@ branch the audit was made on; they move as the code changes.
 | `js/messages.py:200-218` | for_stream / line_for / say | presentation | Write to the global sys.stdout when no file is passed. | js-2lg.105 |
 | `js/messages.py:248-250` | warn | presentation | Always writes to the global sys.stderr. | js-2lg.105 |
 | `js/model_metadata.py:528,533` | ensure_fresh_catalog | presentation | Catalog progress and failure lines go through stream_transport.say_or_print, which prints to stderr when no sink is installed. | js-2lg.166 |
-| `js/skills.py:462-468` | _warn_once | presentation | Prints skill discovery warnings to stderr itself, once per process. | js-2lg.190 |
 | `js/swarm_run.py:247-257` | Runner.compact | presentation | Passes compaction.printing(), so notices go to stderr and the other compaction events are dropped instead of reaching the JSON event stream; failures are swallowed. | js-2lg.197 |
 | `js/rename.py:640,660,671,673,675` | migrate_jsrc_file / _migrate_jsrc_file | presentation | Prints the migration notices to stderr by default. | js-2lg.210 |
 
