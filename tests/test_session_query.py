@@ -250,6 +250,12 @@ def test_dir_is_a_shell_glob_over_the_start_directory(pattern, keep):
     assert sorted(_paths(Q.select(sessions, _parse(pattern), show_all=False))) == keep
 
 
+def test_an_invalid_directory_range_matches_nothing_without_aborting_search():
+    sessions = [_session("a", cwd="/tmp/a"), _session("z", cwd="/tmp/z")]
+
+    assert Q.select(sessions, _parse("dir:/tmp/[z-a]"), show_all=False) == []
+
+
 def test_mode_matches_how_it_started():
     sessions = [_session("p", mode="-p"), _session("r", mode="repl"), _session("pipe", mode="pipe")]
     assert _paths(Q.select(sessions, _parse("mode:-p"), show_all=False)) == ["p"]

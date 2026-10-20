@@ -289,7 +289,11 @@ def dir_pattern(text: str, *, home: str, cwd: str) -> DirPattern:
     regex = "".join("(?:/[^/]+)*" if part == "**" else "/" + _component(part) for part in parts)
     plain = parts and not _GLOB.search("".join(parts[:-1]))
     depth = "any" if plain and parts[-1] == "**" else "one" if plain and parts[-1] == "*" else "exact"
-    return DirPattern(text, path, re.compile(f"^{regex or '/'}$"), depth)
+    try:
+        compiled = re.compile(f"^{regex or '/'}$")
+    except re.error:
+        compiled = re.compile(r"(?!)")
+    return DirPattern(text, path, compiled, depth)
 
 
 def _tokens(text: str) -> list[tuple[str, bool]]:
