@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from pathlib import Path
 import asyncio
@@ -22,6 +22,18 @@ from .core import Tool, ToolContext
 from . import task_jobs
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+
+
+@dataclass(frozen=True)
+class SubagentAssembly:
+    """Services and output policy shared by a parent's delegated turns."""
+
+    config_factory: Any = None
+    registry_factory: Any = None
+    worker: Any = None
+    turn: Any = None
+    write_latest: Any = None
+    suppress_output: bool = True
 
 
 def _filename_limit(directory: Path) -> int:
@@ -82,13 +94,14 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
     # A subagent gets its own kernel (kernel_session stays None) but the
     # parent's per-turn settings, kernel verbosity among them.
     child = ToolContext(cwd=parent.cwd, model=getattr(parent, "model", ""), **_turn_settings.inherit(parent))
+    child.subagent_assembly = parent.subagent_assembly
     child.tool_registry = registry
     child.agent_id = agent
     child.task_depth = getattr(parent, "task_depth", 0) + 1
     return child
 
 
-def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -> Path:
+def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str, *, write_latest=None) -> Path:
     raw = Path(session_id).expanduser()
     if raw.is_absolute():
         path = raw
@@ -102,13 +115,13 @@ def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text("", encoding="utf-8")
-    session_store.write_latest(agent_dir, path)
+    (session_store.write_latest if write_latest is None else write_latest)(agent_dir, path)
     return path
 
 
-def _reserve_worker_session(agent_dir: Path, sessions_dir: Path) -> Path:
+def _reserve_worker_session(agent_dir: Path, sessions_dir: Path, *, write_latest=None) -> Path:
     session_file = session_store.reserve(sessions_dir, session_store.task_name)
-    session_store.write_latest(agent_dir, session_file)
+    (session_store.write_latest if write_latest is None else write_latest)(agent_dir, session_file)
     return session_file
 
 
@@ -138,7 +151,7 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
             raise ValueError(f"agent {agent!r} at {candidate} is unreadable: {exc.strerror}") from exc
     return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
 
-def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
+def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
     from ..mcp_config import resolve as resolve_mcp
 
     # The per-agent data dir holds that agent's latest.json and input history.
@@ -156,8 +169,8 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         session_file = parent_file
     else:
         sessions_dir = session_store.subagent_folder(parent_file)
-        session_file = (_session_file_for_id(agent_dir, sessions_dir, session_id) if session_id
-                        else _reserve_worker_session(agent_dir, sessions_dir))
+        session_file = (_session_file_for_id(agent_dir, sessions_dir, session_id, write_latest=write_latest) if session_id
+                        else _reserve_worker_session(agent_dir, sessions_dir, write_latest=write_latest))
     return replace(
         parent_cfg,
         agent_id=agent,
@@ -187,6 +200,8 @@ async def _run_one_task_async(
     from .. import routing
     from .terminal import close_terminal_sessions
 
+    assembly = parent_context.subagent_assembly or SubagentAssembly()
+    turn = run_turn_async if assembly.turn is None else assembly.turn
     prompt = _task_text(item)
     if not prompt:
         return "ERROR task is empty"
@@ -203,7 +218,9 @@ async def _run_one_task_async(
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
 
-    cfg = P.apply_agent_max_tokens(_agent_cfg(parent_cfg, agent, task_session_id), prompt_spec)
+    cfg = P.apply_agent_max_tokens(
+        _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest), prompt_spec
+    )
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >
@@ -286,7 +303,7 @@ async def _run_one_task_async(
             "trace_override": False,
             "tool_registry": registry,
             "tool_context": child_context,
-            "suppress_output": True,
+            "suppress_output": assembly.suppress_output,
             "sampling": sampling,
             "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
             "approve": parent_approval,
@@ -294,7 +311,7 @@ async def _run_one_task_async(
         try:
             await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
             messages.append(M.note_time({"role": "user", "content": prompt}))
-            await run_turn_async(
+            await turn(
                 cfg,
                 system,
                 messages,
@@ -469,20 +486,24 @@ def _prepare_fan_out(
     except ValueError as exc:
         return f"ERROR: {exc}", None
 
-    parent_cfg = getattr(context, "config", None) or from_env(save_session=True)
+    assembly = context.subagent_assembly or SubagentAssembly()
+    config_factory = from_env if assembly.config_factory is None else assembly.config_factory
+    registry_factory = build_default_registry if assembly.registry_factory is None else assembly.registry_factory
+    worker = _run_one_task_async if assembly.worker is None else assembly.worker
+    parent_cfg = getattr(context, "config", None) or config_factory(save_session=True)
     # Honor the subagent-model lock at every depth: when locked, rebuild the
     # nested registry without the `model_override` flag so the task tool's
     # `model` param is gone from the schema/description, not just ignored
     # (mirrors cli._registry_for).
     reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
-    full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
+    full_registry = registry_factory(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
     total = len(normalized_items)
     gate = asyncio.Semaphore(_subagent_worker_cap(context, total))
 
     def _coro(idx: int, item: Any):
         async def _gated() -> str:
             async with gate:
-                return await _run_one_task_async(
+                return await worker(
                     idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
                 )
 
