@@ -1,24 +1,25 @@
 """HYMEM: long-term memory from a Hy-Memory server (`js/hymem_server.py`),
-on while HYMEM_URL is set (`JS_HYMEM_URL=http://vader:19527`).
+on while HYMEM_URL (`JS_HYMEM_URL=http://vader:19527`) and Jev's
+TYPESAFE_API_KEY are both set.
 
 On, a run's session is sent to the server 10 user turns at a time (the chunk
 size the model was trained on) as the run goes, and the rest when it ends; the
 first message of a `js -p` run or a swarm agent carries the memories that match
 its task; the `memory_search` tool searches them mid-task. A memory is passed
-on only when Jev judges it helps the task (HYMEM_RELEVANCE_MIN), or, without
-Jev, when the server scores it at HYMEM_SCORE_MIN or more. What js itself put
+on only when Jev judges it helps the task (HYMEM_RELEVANCE_MIN). What js itself put
 in front of the model, the memory block and memory_search results, is never
 sent back to be filed. Each memory carries the date it was written and, when
 the files it names have commits since, how many, so a note that may be stale
 says so. Memories are keyed by repository: the main checkout and its
-worktrees share one set. A server
-that does not answer costs one short timeout: no memories are added, and what
-was not sent is sent by a later run."""
+worktrees share one set. Memory works whole or not at all: when the server or
+Jev cannot answer, the run goes on with no memories, never with unjudged ones.
+What a server that is down was not sent is sent by a later run."""
 
 from __future__ import annotations
 
 import getpass
 import json
+import os
 import re
 import subprocess
 import urllib.request
@@ -33,6 +34,12 @@ TOOL_CLIP = 300                 # chars kept of each tool result: lessons live i
 SEARCH_TIMEOUT = 8              # seconds a search waits for the server
 ADD_TIMEOUT = 5                 # seconds an add waits; the server only queues it
 PATH_IN_TEXT = re.compile(r"(?<![\w/~.-])(?:[\w.-]+/)*[\w.-]+\.\w{1,8}(?=[\s:`'\"),;]|$)")
+
+
+class Unavailable(Exception):
+    """Memory is on but the server or Jev cannot answer."""
+
+
 BLOCK = re.compile(r"\n*<workspace_memory\b.*?</workspace_memory>\n*", re.S)
 
 
@@ -42,7 +49,9 @@ def _url(cfg) -> str:
 
 
 def enabled(cfg) -> bool:
-    return bool(_url(cfg))
+    """On while HYMEM_URL and TYPESAFE_API_KEY are both set: unset either to turn memory off."""
+    from .toolkit import jev
+    return bool(_url(cfg)) and bool(os.environ.get(jev.API_KEY_ENV, "").strip())
 
 
 def workspace(cwd: str | Path) -> str:
@@ -75,9 +84,8 @@ def _number(cfg, attr: str, key: str) -> float:
     return float(_settings.knob_attr(cfg, attr, key))
 
 
-def _relevance(cfg, query: str, memories: list[str]) -> list[float] | None:
-    """Jev's 0-1 judgment of whether each memory helps ``query``, in one call;
-    None when Jev cannot answer."""
+def _relevance(cfg, query: str, memories: list[str]) -> list[float]:
+    """Jev's 0-1 judgment of whether each memory helps ``query``, in one call."""
     from .toolkit import jev
     state = {"task": query[:4000], "memories": {f"m{i}": m for i, m in enumerate(memories, 1)}}
     asked = {f"q{i}": {"type": "noul", "instructions": f"Would `memories.m{i}` help an agent doing `task`?"}
@@ -86,8 +94,8 @@ def _relevance(cfg, query: str, memories: list[str]) -> list[float] | None:
         with jev._client(getattr(cfg, "jev_model", None) or "jev-latest") as client:
             answers = client.system_one(state, asked).answers
         return [float(jev._field(answers[f"q{i}"], "noul")) for i in range(1, len(memories) + 1)]
-    except Exception:  # noqa: BLE001 - no key, no SDK or no answer: fall back to the server's scores
-        return None
+    except Exception as exc:  # noqa: BLE001 - no key, no SDK or no answer
+        raise Unavailable(f"Jev did not judge the memories: {exc}") from exc
 
 
 def changed_since(repo: str, files: list, written: str) -> tuple[int, list[str]]:
@@ -126,10 +134,13 @@ def _dated(repo: str, memory: dict, text: str, written) -> str:
 
 def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[str]:
     """One line per memory that helps ``query`` in ``cwd``'s repository, most
-    helpful first. Raises OSError or ValueError when the server cannot answer."""
+    helpful first. Raises Unavailable when the server or Jev cannot answer."""
     limit = limit or int(_settings.knob_attr(cfg, "hymem_recall_max", "HYMEM_RECALL_MAX") or 8)
-    r = _post(cfg, "/search", {"query": query[:2000], "user_id": _user(cfg), "workspace_id": workspace(cwd),
-                               "scene": "coding", "limit": limit * 2}, SEARCH_TIMEOUT)
+    try:
+        r = _post(cfg, "/search", {"query": query[:2000], "user_id": _user(cfg), "workspace_id": workspace(cwd),
+                                   "scene": "coding", "limit": limit * 2}, SEARCH_TIMEOUT)
+    except (OSError, ValueError) as exc:
+        raise Unavailable(f"the memory server at {_url(cfg)} did not answer: {exc}") from exc
     repo = workspace(cwd)
     found = [(float(e.get("score") or 0),
               _dated(repo, e, f"{e['task']}: {str(e.get('solution') or '')[:600]}", e.get("updated_at")))
@@ -139,12 +150,8 @@ def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[s
     if not found:
         return []
     judged = _relevance(cfg, query, [text for _, text in found])
-    if judged is None:
-        floor = _number(cfg, "hymem_score_min", "HYMEM_SCORE_MIN")
-        ranked = sorted(found, key=lambda m: -m[0])
-    else:
-        floor = _number(cfg, "hymem_relevance_min", "HYMEM_RELEVANCE_MIN")
-        ranked = sorted(((j, text) for j, (_, text) in zip(judged, found)), key=lambda m: -m[0])
+    floor = _number(cfg, "hymem_relevance_min", "HYMEM_RELEVANCE_MIN")
+    ranked = sorted(((j, text) for j, (_, text) in zip(judged, found)), key=lambda m: -m[0])
     return [f"- {text}" for value, text in ranked if value >= floor][:limit]
 
 
@@ -154,7 +161,7 @@ def recall_block(cfg, query: str, cwd: str | Path) -> str:
         return ""
     try:
         lines = search(cfg, query, cwd)
-    except (OSError, ValueError):
+    except Unavailable:
         return ""
     if not lines:
         return ""

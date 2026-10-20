@@ -110,7 +110,6 @@ set -HYMEM_URL
 set -HYMEM_USER
 set HYMEM_RECALL_MAX 8
 set HYMEM_RELEVANCE_MIN 0.5
-set HYMEM_SCORE_MIN 0.6
 set INLINE_CODE on
 
 # --- events ---

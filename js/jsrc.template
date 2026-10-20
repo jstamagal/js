@@ -547,9 +547,10 @@
 #set -TRANSCRIPT_LOG_DIR
 
 # Long-term memory from a Hy-Memory server (js/hymem_server.py). Set to its
-# URL to turn it on: sessions are sent to it 10 turns at a time, the first
-# message of `js -p` and of a swarm agent carries the memories matching its
-# task, and the memory_search tool searches them. Unset: off.
+# URL, with TYPESAFE_API_KEY set for Jev, to turn it on; unset either: off.
+# On, sessions are sent to it 10 turns at a time, the first message of
+# `js -p` and of a swarm agent carries the memories matching its task, and
+# the memory_search tool searches them.
 #set -HYMEM_URL
 
 # Whose memories these are on the server. Unset: your login name.
@@ -561,10 +562,6 @@
 # A memory is passed on when Jev judges, 0 to 1, that it helps the task by
 # at least this much.
 #set HYMEM_RELEVANCE_MIN 0.5
-
-# Without Jev (no TYPESAFE_API_KEY, or no answer): the memory server's own
-# match score a memory needs instead.
-#set HYMEM_SCORE_MIN 0.6
 
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer

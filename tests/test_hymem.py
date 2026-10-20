@@ -6,6 +6,7 @@ import subprocess
 from types import SimpleNamespace
 
 from js import hymem
+from js.toolkit import jev
 
 
 def _turns(n):
@@ -58,10 +59,16 @@ def test_only_memories_jev_judges_helpful_pass_most_helpful_first(monkeypatch, t
     monkeypatch.setattr(hymem, "_post", lambda *a, **k: found)
     monkeypatch.setattr(hymem, "_relevance", lambda cfg, q, memories: [0.05, 0.9, 0.7])
     cfg = SimpleNamespace(hymem_url="http://m", hymem_user="u", hymem_recall_max=8,
-                          hymem_relevance_min=0.5, hymem_score_min=0.6)
+                          hymem_relevance_min=0.5)
     assert hymem.search(cfg, "fix the build", tmp_path) == ["- build fix: pass -j1", "- the build needs -j1"]
-    monkeypatch.setattr(hymem, "_relevance", lambda cfg, q, memories: None)
-    assert hymem.search(cfg, "fix the build", tmp_path) == ["- gorilla search: chest beats"]
+
+
+def test_jev_down_means_no_memory_not_unjudged_memory(monkeypatch, tmp_path):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    monkeypatch.setattr(hymem, "_post", lambda *a, **k: {"facts": [{"statement": "the build needs -j1"}]})
+    monkeypatch.setattr(jev, "_client", lambda model: (_ for _ in ()).throw(RuntimeError("no key")))
+    cfg = SimpleNamespace(hymem_url="http://m", hymem_user="u", hymem_recall_max=8, hymem_relevance_min=0.5)
+    assert hymem.recall_block(cfg, "fix the build", tmp_path) == ""
 
 
 def test_a_memory_whose_files_changed_after_it_was_written_says_so(tmp_path):
@@ -81,3 +88,10 @@ def test_a_memory_whose_files_changed_after_it_was_written_says_so(tmp_path):
     root = str(repo.resolve())
     assert hymem.changed_since(root, ["fs.py", str(repo), "~/nowhere"], "2026-10-10T00:00:00") == (1, ["fs.py"])
     assert hymem.changed_since(root, [str(repo / "fs.py")], "2026-10-16T00:00:00") == (0, [])
+
+
+def test_memory_is_off_without_the_jev_key(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    assert not hymem.enabled(SimpleNamespace(hymem_url="http://m"))
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    assert hymem.enabled(SimpleNamespace(hymem_url="http://m"))

@@ -156,7 +156,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("hymem_user", "HYMEM_USER", optional_text, on_context=True),
     TurnSetting("hymem_recall_max", "HYMEM_RECALL_MAX", at_least_one, on_context=True),
     TurnSetting("hymem_relevance_min", "HYMEM_RELEVANCE_MIN", number, on_context=True),
-    TurnSetting("hymem_score_min", "HYMEM_SCORE_MIN", number, on_context=True),
     TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
     # --- on the Config only ---
     TurnSetting("max_tool_iterations", "TURN_ROUNDS_MAX", integer),

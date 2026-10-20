@@ -12,11 +12,11 @@ def memory_search(query: str, limit: int | None = None, context: ToolContext | N
     if not isinstance(query, str) or not query.strip():
         return "ERROR: query is required"
     if not hymem.enabled(context):
-        return "ERROR: long-term memory is off (HYMEM_URL is not set)"
+        return "ERROR: long-term memory is off (it needs HYMEM_URL and TYPESAFE_API_KEY)"
     try:
         lines = hymem.search(context, query, context.cwd, limit if isinstance(limit, int) and limit > 0 else None)
-    except (OSError, ValueError) as exc:
-        return f"ERROR: the memory server did not answer: {exc}"
+    except hymem.Unavailable as exc:
+        return f"ERROR: {exc}"
     return "\n".join(lines) if lines else "(no memories match)"
 
 
