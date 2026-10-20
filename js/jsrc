@@ -21,7 +21,7 @@ set -MOTD_FILE
 set -MOTD_DIR
 
 # --- display: /fset entries ---
-fset REASONING_DISPLAY 2
+fset REASONING_DISPLAY 1
 fset NET_DISPLAY 2
 fset TOOLS_DISPLAY 1
 fset TOOLS_PREVIEW_LINES 12

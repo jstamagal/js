@@ -122,7 +122,7 @@ REPL commands:
 /alias [name [command]]       list, show or define a command alias
 /exec <command>               run a shell command; its stdout goes with the next message
 /set EFFORT high
-/fset REASONING_DISPLAY 2     show reasoning and leave it visible (default)
+/fset REASONING_DISPLAY 2     show reasoning and leave it visible (1, the default, folds it)
 /fset TOOLS_DISPLAY 3         show every tool call and its whole result
 /fset TOOLS_DISPLAY 1         fold reads and searches, show diffs, running commands and failures
 /set COMPACTION_AUTO off
@@ -255,9 +255,9 @@ the JSONL so future loads ignore older messages in that file.
 `/wipe` rotates the active session file to `.jsonl.bak`, `.jsonl.bak.1`, and so
 on, then clears the in-process messages.
 
-Reasoning streams visibly by default. `/fset REASONING_DISPLAY 0` hides it, `1`
-auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
-token counts. In the standard async screen, **Ctrl-O** toggles retained reasoning
+Reasoning streams in and folds to one line, `N tok reasoning`, when the answer
+starts: `REASONING_DISPLAY` 1, the default. `0` hides it, `2` leaves it visible,
+and `3` also puts the provider's token count on the open block. Off the screen (`js -p`, the blocking REPL) nothing can unfold a block, so reasoning never folds there: levels 1 to 3 print its text, and the count line after it when the provider gives one. In the standard async screen, **Ctrl-O** toggles retained reasoning
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 

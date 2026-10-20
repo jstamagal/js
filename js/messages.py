@@ -1065,6 +1065,12 @@ STATUS_CACHE = Message("cache {pct}%", banner=False)
 STATUS_COST = Message("{cost}", banner=False)
 STATUS_COMPACTING = Message("compacting", banner=False)
 
+# --- Reasoning ---------------------------------------------------------------
+
+REASONING_HEADING = Message("reasoning", banner=False)
+REASONING_COUNT = Message("{tokens} tok", banner=False)
+REASONING_EXPAND = Message("  {key} to expand", banner=False)
+
 # --- Tool exchanges ----------------------------------------------------------
 
 TOOL_ARGS_UNPARSED = Message("<arguments are not a JSON object>")

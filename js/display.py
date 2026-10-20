@@ -82,6 +82,33 @@ def clean(text: str) -> str:
     return _CONTROL.sub("", text)
 
 
+# The end of a chunk that may be the start of an escape sequence the next
+# chunk finishes: a lone ESC, an unfinished CSI, or an unterminated string.
+_OPEN_ESCAPE = re.compile(r"(?:\x1b(?:\[[0-?]*[ -/]*|[\]PX^_][^\x07\x1b]*(?:\x1b)?)?|[\x90\x98\x9d-\x9f][^\x07\x9c]*|\x9b[0-?]*)$")
+
+
+class StreamCleaner:
+    """`clean()` for text that arrives in chunks, such as a model's stream: an
+    escape sequence cut between two chunks is held until it is whole, so no
+    piece of it is ever measured, wrapped or shown. Model and tool text is
+    cleaned here, at intake."""
+
+    def __init__(self) -> None:
+        self._held = ""
+
+    def feed(self, text: str) -> str:
+        text = self._held + text
+        match = _OPEN_ESCAPE.search(text)
+        self._held = match.group(0) if match and match.group(0) else ""
+        return clean(text[:len(text) - len(self._held)])
+
+    def flush(self) -> str:
+        """The stream ended: an escape sequence still open is dropped, never
+        shown in pieces."""
+        self._held = ""
+        return ""
+
+
 # Transcript marker for a tool exchange: typeable ASCII, one per exchange, so a
 # grep of a saved transcript finds every exchange the screen showed.
 TOOL_MARKER = ">"

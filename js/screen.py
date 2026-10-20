@@ -36,7 +36,6 @@ from prompt_toolkit.widgets import SearchToolbar
 from . import display, fset, keys, pastes
 from . import messages as msgs
 from . import session_store
-from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
 
 SCROLLBACK_LINES = 5000
@@ -393,6 +392,21 @@ class Scrollback:
         return bool(blocks)
 
 
+def wrap_words(text: str, width: int) -> str:
+    """``text`` with each line longer than ``width`` broken at spaces; a line
+    that fits, and a word longer than ``width``, stay as they are."""
+    out: list[str] = []
+    for line in text.split("\n"):
+        while len(line) > width:
+            cut = line.rfind(" ", 0, width + 1)
+            if cut <= 0:
+                break
+            out.append(line[:cut].rstrip())
+            line = line[cut + 1:]
+        out.append(line)
+    return "\n".join(out)
+
+
 class AnswerSpan:
     """The live answer block: rendered Markdown that is replaced until committed."""
 
@@ -417,16 +431,18 @@ class ReasoningBlock:
         self.tokens: int | None = None
 
     def render(self) -> str:
+        """Collapsed: `N tok reasoning  KEY to expand`, the count the provider
+        gave or none. Open: the same heading, then the text wrapped at word
+        boundaries to the window."""
         if self.level == 0:
             return ""
-        heading = "── reasoning ──"
-        if self.collapsed or self.level == 3:
-            count = str(self.tokens) if self.tokens is not None else f"~{estimate_text_tokens(self.text)}"
-            heading += f" {count} tok"
+        count = msgs.REASONING_COUNT.body(tokens=f"{self.tokens:,}") if self.tokens is not None else ""
         if self.collapsed:
-            hint = f"  {self.owner.toggle_key} to expand" if self.owner.toggle_key else ""
-            return grey(heading + hint + "\n")
-        return grey(heading + "\n" + self.text + ("" if self.text.endswith("\n") else "\n"))
+            hint = msgs.REASONING_EXPAND.body(key=self.owner.toggle_key) if self.owner.toggle_key else ""
+            return grey(" ".join(filter(None, (count, msgs.REASONING_HEADING.body()))) + hint + "\n")
+        heading = " ".join(filter(None, (count if self.level == 3 else "", msgs.REASONING_HEADING.body())))
+        body = wrap_words(self.text, display.block_width())
+        return grey(heading + "\n" + body + ("" if body.endswith("\n") else "\n"))
 
     def append(self, text: str) -> None:
         self.text += text

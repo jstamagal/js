@@ -236,9 +236,9 @@ independently of `EFFORT`:
 | Value | Display |
 |---|---|
 | `0` | Hidden |
-| `1` | Stream, then collapse when the answer starts (or a tool-only call completes) |
-| `2` | Stream and leave visible — **default** |
-| `3` | Stream and leave visible, with token counts (`~` marks estimates) |
+| `1` | Stream, then collapse to `N tok reasoning` when the answer starts (or a tool-only call completes) — **default** |
+| `2` | Stream and leave visible |
+| `3` | Stream and leave visible, with the provider's token count; no count when the provider gives none |
 
 Use `/fset REASONING_DISPLAY <0-3>` and `/save`; `JS_REASONING_DISPLAY` is its canonical
 environment variable. Setting changes apply to subsequent turns. In the standard async screen,

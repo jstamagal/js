@@ -168,8 +168,8 @@
 #   3  like 2, plus a token count when the thinking ends
 # Ctrl-O folds and unfolds the thinking whatever the level. This only
 # changes the screen; the thinking is kept either way.
-#   example:  fset REASONING_DISPLAY 1
-#fset REASONING_DISPLAY 2
+#   example:  fset REASONING_DISPLAY 2
+#fset REASONING_DISPLAY 1
 
 # Network chatter, on screen.
 #   0  nothing, not even errors
