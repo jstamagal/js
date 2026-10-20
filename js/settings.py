@@ -26,6 +26,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
@@ -1151,8 +1152,18 @@ def _serialized(lines: list[str]) -> str:
 
 
 def _write_lines(path: Path, lines: list[str]) -> None:
+    path = path.resolve(strict=False)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_serialized(lines), encoding="utf-8")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    staging = Path(name)
+    try:
+        staging.write_text(_serialized(lines), encoding="utf-8")
+        if path.exists():
+            staging.chmod(path.stat().st_mode & 0o7777)
+        os.replace(staging, path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _reloaded(path: Path, text: str) -> tuple[dict, dict[str, str]]:

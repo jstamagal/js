@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from js import runtime, session_store, settings
+from js import rename, runtime, session_store, settings
 from js.config import Config, from_env
 from js import messages as msgs
 
@@ -395,3 +395,33 @@ def test_every_setting_survives_save_then_load_with_awkward_values(tmp_path):
             checked += 1
     assert checked > len(settings.REGISTRY)
     assert any(spec.key == "EXTRA_HEADERS" for spec in settings.REGISTRY)
+
+
+def test_save_keeps_the_complete_config_visible_to_another_reader(tmp_path, monkeypatch):
+    path = tmp_path / "jsrc"
+    path.write_text("set MODEL previous-model\nset TEMPERATURE 0.25\n")
+    path.chmod(0o640)
+    live = settings.collect_settings(config_paths=[path], env={})
+    settings.set_dotted(live, ("MODEL",), "next-model")
+    settings.set_dotted(live, ("TEMPERATURE",), 0.75)
+    observed = []
+
+    def interleaved_write(target, text, *args, **kwargs):
+        with target.open("w", encoding="utf-8") as stream:
+            stream.write(text[:len(text) // 2])
+            stream.flush()
+            other = settings.collect_settings(config_paths=[path], env={})
+            observed.append((settings.knob(other, "MODEL"), settings.knob(other, "TEMPERATURE")))
+            stream.write(text[len(text) // 2:])
+        return len(text)
+
+    # The reader is past its startup migration, which waits on the save's
+    # lock; its read of the jsrc itself takes no lock.
+    monkeypatch.setattr(rename, "migrate_jsrc_file", lambda *args, **kwargs: False)
+    monkeypatch.setattr(Path, "write_text", interleaved_write)
+    settings.save_settings_to_jsrc(path, live)
+
+    assert observed == [("previous-model", 0.25)]
+    loaded = settings.collect_settings(config_paths=[path], env={})
+    assert (settings.knob(loaded, "MODEL"), settings.knob(loaded, "TEMPERATURE")) == ("next-model", 0.75)
+    assert path.stat().st_mode & 0o777 == 0o640
