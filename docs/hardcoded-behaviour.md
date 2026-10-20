@@ -211,12 +211,12 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/policy.py` | argument_refusal | policy | Model-facing text is loaded from `prompts/text/toolkit_policy.json`; selection and execution policy are unchanged. | js-2lg.40 |
 | `js/toolkit/discovery.py` | catalog_result | policy | Model-facing text is loaded from `prompts/text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
 | `js/toolkit/discovery.py` | discovery_tool | policy | Model-facing text is loaded from `prompts/text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
-| `js/toolkit/fs.py:619-622,637-638` | write | policy | Builds the model-facing overwrite refusal text in code. | js-2lg.45 |
-| `js/toolkit/fs.py:205-221` | _changed_since_read | policy | Builds the changed-on-disk refusal and retry guidance the model reads. | js-2lg.45 |
-| `js/toolkit/fs.py:798-814,1069,1071,1093-1096` | _nearest_hint / _apply_edit | policy | Builds the model-facing miss, ambiguity and closest-line hint text in code. | js-2lg.45 |
-| `js/toolkit/fs.py:531-538` | fs_read | policy | Builds the READ_BYTES_MAX refusal with an example call in code. | js-2lg.45 |
-| `js/toolkit/fs.py:1288,1295-1297` | module constants | policy | The missing-binary messages tell the model to run `just install-tool-binaries`. | js-2lg.45 |
-| `js/toolkit/fs.py:2136-2260` | tools | policy | Parameter descriptions the model reads are written in the code schemas. | js-2lg.45 |
+| `js/toolkit/fs.py` | write | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
+| `js/toolkit/fs.py` | _changed_since_read | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
+| `js/toolkit/fs.py` | _nearest_hint / _apply_edit | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
+| `js/toolkit/fs.py` | fs_read | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
+| `js/toolkit/fs.py` | module constants | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
+| `js/toolkit/fs.py` | tools | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
 | `js/toolkit/process_net.py:317-325,343-349` | _render_finished / _render_running | policy | Builds the filtered-environment note and the poll/wait/kill guidance the model reads. | js-2lg.48 |
 | `js/toolkit/process_net.py:500-504,885,888` | _inline_read_limit_error / _fetch_file_url | policy | Builds the inline-limit refusal and "use save=" guidance in code. | js-2lg.48 |
 | `js/toolkit/process_net.py:1053-1087` | tools | policy | Parameter descriptions the model reads are written in the code schemas. | js-2lg.48 |
