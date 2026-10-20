@@ -74,7 +74,7 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def check_name(name: str) -> str:
-    if not _NAME.fullmatch(name or ""):
+    if name in {".", ".."} or not _NAME.fullmatch(name or ""):
         raise ValueError(f"swarm name must be one word of [A-Za-z0-9_.-]: {name!r}")
     return name
 

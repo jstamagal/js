@@ -51,6 +51,15 @@ def test_a_message_waits_for_an_agent_that_has_not_joined_yet(tmp_path):
     assert [m.body for m in room.join("late").drain()] == ["opener"]
 
 
+@pytest.mark.parametrize("name", [".", ".."])
+def test_send_rejects_directory_components_as_agent_names(tmp_path, name):
+    room = swarm.Room(tmp_path / "bus")
+    with pytest.raises(ValueError):
+        room.send("runner", name, "opener")
+    assert not (tmp_path / "inbox").exists()
+    assert not (room.root / "inbox").exists()
+
+
 def test_a_rollcall_is_answered_by_the_process_and_touches_no_inbox_or_log(tmp_path, monkeypatch):
     monkeypatch.setattr(swarm, "PULSE_S", 0.01)
     agent = swarm.Agent(tmp_path / "bus" / "a")
