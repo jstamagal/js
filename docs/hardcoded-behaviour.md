@@ -255,7 +255,7 @@ branch the audit was made on; they move as the code changes.
 | `js/swarm.py` | _send / _who / _claim / _release / _subscribe / _wake_me / _retire / _recruit / _post_task / _take_task / _finish_task / _tasks | policy | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
 | `js/swarm.py` | tools | policy | Model-facing text is loaded from `prompts/text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
 | `js/events.py` | _failed | policy | Model-facing text is loaded from `prompts/text/events.json`; selection and execution policy are unchanged. | js-2lg.200 |
-| `js/hookexec.py:192` | refusal | policy | Builds the default model-facing refusal text "an on tool_call handler refused ..." in code. | js-2lg.202 |
+| `js/hookexec.py` | refusal | policy | Model-facing text is loaded from `prompts/text/hookexec.json`; selection and execution policy are unchanged. | js-2lg.202 |
 | `js/jail.py:517,535-547` | Jail.confine | policy | Builds the refusal text the model reads ("outside the jail", "hidden in the jail", "read-only in the jail") in code. | js-2lg.204 |
 | `js/capped_process.py:462-463` | truncation_marker | policy | Builds the model-facing "[truncated: ... reached]" text in code. | js-2lg.213 |
 | `js/mcp/host.py:306-331` | MCPHost.CONTROL_TOOLS | policy | Writes the MCP control tool descriptions and usage nudges in code, not in tool_descriptions/*.md. | js-2lg.215 |

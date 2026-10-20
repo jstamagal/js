@@ -18,6 +18,10 @@ import time
 from dataclasses import dataclass
 
 from . import events, settings as _settings
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('hookexec')
+
 
 # The exit status that refuses a refusable event (Claude Code's blocking status).
 REFUSE_STATUS = 2
@@ -190,4 +194,4 @@ def refusal(outcome: ExecOutcome, tool: str) -> str:
             line = line.strip()
             if line:
                 return line if line.startswith("ERROR") else f"ERROR: {line}"
-    return f"ERROR: an on tool_call handler refused {tool}."
+    return _PROMPTS['refusal_error_an_on_tool_call_handler'].format(tool=tool)
