@@ -36,6 +36,7 @@ from typing import Any
 
 from . import reasoning as _reasoning
 from . import messages as msgs
+from . import output
 
 # What a line typed while a turn runs does: now = join the running turn at its
 # next tool boundary, batch = one message after the turn, one = one turn per line.
@@ -870,7 +871,7 @@ def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *,
             # garbage in the env: skip rather than clobber a working value,
             # but say so — a silently dropped JS_BASE_URL costs an evening
             if warn:
-                msgs.warn(msgs.ENV_SETTING_IGNORED, name=name, error=error)
+                output.notice(msgs.ENV_SETTING_IGNORED, name=name, error=error)
             continue
         return value
     return missing
