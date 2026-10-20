@@ -598,3 +598,12 @@ def test_registered_tmp_age_changes_which_entries_are_swept(tmp_path):
     os.utime(stale, (90, 90))
     assert home.sweep_tmp(now=100, settings={"TMP_AGE_MAX": 5}) == [stale]
     assert not stale.exists()
+
+
+def test_startup_migration_delivers_steps_to_its_caller(tmp_path, capsys):
+    _old_layout(tmp_path)
+    seen = []
+    done = home.migrate_once(on_step=seen.append)
+    assert done and seen == done
+    assert paths.home_migration_marker().is_file()
+    assert capsys.readouterr().err == ""

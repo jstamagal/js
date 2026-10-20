@@ -626,11 +626,13 @@ def _locked_home() -> Iterator[None]:
         os.close(fd)
 
 
-def migrate_once(out: TextIO | None = None) -> list[Step]:
+def migrate_once(out: TextIO | None = None, *, on_step=None, on_error=None, should_migrate=None) -> list[Step]:
     """The startup migration: runs when an old location exists and the marker
     does not, then writes the marker. With nothing to move it touches nothing.
     Each step is printed as it is done."""
     marker = paths.home_migration_marker()
+    if should_migrate is not None and not should_migrate(marker):
+        return []
     if marker.exists() or not any(os.path.lexists(path) for path in paths.legacy_homes().values()):
         return []
     stream = out if out is not None else sys.stderr
@@ -641,11 +643,17 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
                 return []
             for step in steps(apply=True):
                 done.append(step)
-                msgs.say_said(describe(step, apply=True), file=stream)
+                if on_step is None:
+                    msgs.say_said(describe(step, apply=True), file=stream)
+                else:
+                    on_step(step)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
-        msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
+        if on_error is None:
+            msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
+        else:
+            on_error(exc)
     return done
 
 
