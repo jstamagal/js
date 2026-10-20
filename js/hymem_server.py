@@ -10,8 +10,9 @@ imports it.
 
 The servers come from the MEMORY_* environment (MEMORY_LLM_BASE_URL,
 MEMORY_LLM_MODEL, MEMORY_EMBEDDER_BASE_URL, MEMORY_EMBEDDER_MODEL, ...);
-MEMORY_DATA_DIR holds the store and the add queue. Adds are filed one at a
-time, oldest first, by one thread; a queued add survives a restart."""
+MEMORY_DATA_DIR holds the store and the add queue. FILERS threads file the
+queue oldest first, one per writer slot, never two adds of one session at
+once, so a session's chunks land in order. A queued add survives a restart."""
 
 import argparse
 import json
@@ -26,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DATA = pathlib.Path(os.environ.setdefault("MEMORY_DATA_DIR", str(pathlib.Path.home() / ".hymem" / "data")))
 QUEUE = DATA.parent / "queue"
 SCENES = {"chat", "working", "coding"}
+FILERS = int(os.environ.get("HYMEM_FILERS", "4"))   # the writer LLM's parallel slots
 
 for key, value in {
     "MEMORY_MODE": "pro",
@@ -39,7 +41,9 @@ for key, value in {
 
 _client = None
 _client_lock = threading.Lock()
-_wake = threading.Event()
+_wake = threading.Condition()
+_taken: set[str] = set()                # queue files being filed
+_busy: set[str] = set()                 # sessions with an add being filed
 
 
 def embedding_dims() -> int:
@@ -66,16 +70,30 @@ def scene_of(body: dict) -> str | None:
     return scene if scene in SCENES else None
 
 
-def filer() -> None:
-    """File queued adds oldest first; one that fails waits and is retried."""
-    while True:
-        jobs = sorted(QUEUE.glob("*.json"))
-        if not jobs:
+def _next() -> tuple[pathlib.Path, dict, str]:
+    """The oldest queued add whose session has none being filed, claimed."""
+    with _wake:
+        while True:
+            for job in sorted(QUEUE.glob("*.json")):
+                if job.name in _taken:
+                    continue
+                try:
+                    body = json.loads(job.read_text())
+                except (OSError, ValueError):
+                    continue
+                key = str(body.get("session_id") or job.name)
+                if key in _busy:
+                    continue
+                _taken.add(job.name)
+                _busy.add(key)
+                return job, body, key
             _wake.wait(60)
-            _wake.clear()
-            continue
-        job = jobs[0]
-        body = json.loads(job.read_text())
+
+
+def filer() -> None:
+    """File queued adds; one that fails waits and is retried."""
+    while True:
+        job, body, key = _next()
         try:
             r = client().add(body["messages"], scene=scene_of(body), user_id=body["user_id"],
                              workspace_id=body.get("workspace_id"))
@@ -88,6 +106,10 @@ def filer() -> None:
         else:
             print(f"retrying {job.name} in 60s: {r.get('error_message')}", flush=True)
             time.sleep(60)
+        with _wake:
+            _taken.discard(job.name)
+            _busy.discard(key)
+            _wake.notify_all()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -118,7 +140,8 @@ class Handler(BaseHTTPRequestHandler):
             name = f"{time.time_ns()}-{uuid.uuid4().hex[:8]}.json"
             (QUEUE / (name + ".tmp")).write_text(json.dumps(body))
             (QUEUE / (name + ".tmp")).rename(QUEUE / name)
-            _wake.set()
+            with _wake:
+                _wake.notify_all()
             return self.reply(202, {"queued": name})
         if self.path == "/search":
             if not body.get("query"):
@@ -139,8 +162,9 @@ def main() -> None:
     args = parser.parse_args()
     QUEUE.mkdir(parents=True, exist_ok=True)
     client()
-    threading.Thread(target=filer, daemon=True).start()
-    print(f"hymem server on {args.host}:{args.port}, store {DATA}", flush=True)
+    for _ in range(FILERS):
+        threading.Thread(target=filer, daemon=True).start()
+    print(f"hymem server on {args.host}:{args.port}, store {DATA}, {FILERS} filers", flush=True)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 

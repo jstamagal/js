@@ -317,6 +317,14 @@ HYMEM_USER
 HYMEM_RECALL_MAX
     Most memories a first message carries and memory_search returns.
 
+HYMEM_RELEVANCE_MIN
+    How sure Jev must be, 0 to 1, that a memory helps the task for the
+    memory to reach the model. Jev judges every candidate in one call.
+
+HYMEM_SCORE_MIN
+    Without Jev, which needs TYPESAFE_API_KEY: the memory server's match
+    score a memory needs to reach the model.
+
 INLINE_CODE
     Execute !{sh|python|c|node ...} inline directives / ```!lang fences in
     prompt files and inject their stdout. This runs arbitrary code from

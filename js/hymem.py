@@ -4,7 +4,11 @@ on while HYMEM_URL is set (`JS_HYMEM_URL=http://vader:19527`).
 On, a run's session is sent to the server 10 user turns at a time (the chunk
 size the model was trained on) as the run goes, and the rest when it ends; the
 first message of a `js -p` run or a swarm agent carries the memories that match
-its task; the `memory_search` tool searches them mid-task. Memories are keyed
+its task; the `memory_search` tool searches them mid-task. A memory is passed
+on only when Jev judges it helps the task (HYMEM_RELEVANCE_MIN), or, without
+Jev, when the server scores it at HYMEM_SCORE_MIN or more. What js itself put
+in front of the model, the memory block and memory_search results, is never
+sent back to be filed. Memories are keyed
 by repository: the main checkout and its worktrees share one set. A server
 that does not answer costs one short timeout: no memories are added, and what
 was not sent is sent by a later run."""
@@ -13,6 +17,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -21,9 +26,11 @@ from . import paths as _paths
 from . import settings as _settings
 
 CHUNK_TURNS = 10
-CLIP = 1500                     # chars kept of each message body sent
+CLIP = 1500                     # chars kept of each user or assistant message sent
+TOOL_CLIP = 300                 # chars kept of each tool result: lessons live in the talk, not the output
 SEARCH_TIMEOUT = 8              # seconds a search waits for the server
 ADD_TIMEOUT = 5                 # seconds an add waits; the server only queues it
+BLOCK = re.compile(r"\n*<workspace_memory\b.*?</workspace_memory>\n*", re.S)
 
 
 def _url(cfg) -> str:
@@ -61,16 +68,44 @@ def _user(cfg) -> str:
     return str(_settings.knob_attr(cfg, "hymem_user", "HYMEM_USER") or getpass.getuser())
 
 
+def _number(cfg, attr: str, key: str) -> float:
+    return float(_settings.knob_attr(cfg, attr, key))
+
+
+def _relevance(cfg, query: str, memories: list[str]) -> list[float] | None:
+    """Jev's 0-1 judgment of whether each memory helps ``query``, in one call;
+    None when Jev cannot answer."""
+    from .toolkit import jev
+    state = {"task": query[:4000], "memories": {f"m{i}": m for i, m in enumerate(memories, 1)}}
+    asked = {f"q{i}": {"type": "noul", "instructions": f"Would `memories.m{i}` help an agent doing `task`?"}
+             for i in range(1, len(memories) + 1)}
+    try:
+        with jev._client(getattr(cfg, "jev_model", None) or "jev-latest") as client:
+            answers = client.system_one(state, asked).answers
+        return [float(jev._field(answers[f"q{i}"], "noul")) for i in range(1, len(memories) + 1)]
+    except Exception:  # noqa: BLE001 - no key, no SDK or no answer: fall back to the server's scores
+        return None
+
+
 def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[str]:
-    """One line per memory matching ``query`` in ``cwd``'s repository. Raises
-    OSError or ValueError when the server cannot answer."""
+    """One line per memory that helps ``query`` in ``cwd``'s repository, most
+    helpful first. Raises OSError or ValueError when the server cannot answer."""
     limit = limit or int(_settings.knob_attr(cfg, "hymem_recall_max", "HYMEM_RECALL_MAX") or 8)
     r = _post(cfg, "/search", {"query": query[:2000], "user_id": _user(cfg), "workspace_id": workspace(cwd),
-                               "scene": "coding", "limit": limit}, SEARCH_TIMEOUT)
-    lines = [f"- {e['task']}: {str(e.get('solution') or '')[:600]}"
+                               "scene": "coding", "limit": limit * 2}, SEARCH_TIMEOUT)
+    found = [(float(e.get("score") or 0), f"{e['task']}: {str(e.get('solution') or '')[:600]}")
              for e in r.get("experiences") or [] if e.get("task")]
-    lines += [f"- {f['statement'][:600]}" for f in r.get("facts") or [] if f.get("statement")]
-    return lines
+    found += [(float(f.get("score") or 0), str(f["statement"])[:400]) for f in r.get("facts") or [] if f.get("statement")]
+    if not found:
+        return []
+    judged = _relevance(cfg, query, [text for _, text in found])
+    if judged is None:
+        floor = _number(cfg, "hymem_score_min", "HYMEM_SCORE_MIN")
+        ranked = sorted(found, key=lambda m: -m[0])
+    else:
+        floor = _number(cfg, "hymem_relevance_min", "HYMEM_RELEVANCE_MIN")
+        ranked = sorted(((j, text) for j, (_, text) in zip(judged, found)), key=lambda m: -m[0])
+    return [f"- {text}" for value, text in ranked if value >= floor][:limit]
 
 
 def recall_block(cfg, query: str, cwd: str | Path) -> str:
@@ -102,9 +137,36 @@ def _messages(session: Path) -> list[dict]:
         keep = {k: m[k] for k in ("role", "content", "tool_calls", "tool_call_id", "name") if k in m}
         if isinstance(keep.get("content"), list):
             keep["content"] = "\n".join(p.get("text", "") for p in keep["content"] if isinstance(p, dict))
-        if isinstance(keep.get("content"), str):
-            keep["content"] = keep["content"][:CLIP]
         out.append(keep)
+    return _unrecalled(out)
+
+
+def _clipped_call(call):
+    """A tool call with its arguments clipped: a write carries a whole file."""
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):
+        return call
+    return {**call, "function": {**function, "arguments": function["arguments"][:TOOL_CLIP]}}
+
+
+def _unrecalled(messages: list[dict]) -> list[dict]:
+    """``messages`` without what memory itself put there (the memory block,
+    memory_search calls and their results), bodies clipped."""
+    recalled = {c.get("id") for m in messages for c in m.get("tool_calls") or []
+                if isinstance(c, dict) and (c.get("function") or {}).get("name") == "memory_search"}
+    out = []
+    for m in messages:
+        if m.get("role") == "tool" and (m.get("name") == "memory_search" or m.get("tool_call_id") in recalled):
+            continue
+        m = dict(m)
+        if m.get("tool_calls"):
+            m["tool_calls"] = [_clipped_call(c) for c in m["tool_calls"]
+                               if not (isinstance(c, dict) and c.get("id") in recalled)]
+            if not m["tool_calls"]:
+                del m["tool_calls"]
+        if isinstance(m.get("content"), str):
+            m["content"] = BLOCK.sub("\n\n", m["content"]).strip()[:TOOL_CLIP if m.get("role") == "tool" else CLIP]
+        out.append(m)
     return out
 
 
@@ -130,7 +192,7 @@ def file(cfg, cwd: str | Path, final: bool) -> None:
     for end, chunk in chunks(_messages(session), sent, final):
         try:
             _post(cfg, "/add", {"messages": chunk, "user_id": _user(cfg), "workspace_id": workspace(cwd),
-                                "scene": "coding"}, ADD_TIMEOUT)
+                                "scene": "coding", "session_id": session.stem}, ADD_TIMEOUT)
         except (OSError, ValueError):
             return
         mark.parent.mkdir(parents=True, exist_ok=True)

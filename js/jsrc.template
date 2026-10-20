@@ -558,6 +558,14 @@
 # Most memories a first message carries, and memory_search returns.
 #set HYMEM_RECALL_MAX 8
 
+# A memory is passed on when Jev judges, 0 to 1, that it helps the task by
+# at least this much.
+#set HYMEM_RELEVANCE_MIN 0.5
+
+# Without Jev (no TYPESAFE_API_KEY, or no answer): the memory server's own
+# match score a memory needs instead.
+#set HYMEM_SCORE_MIN 0.6
+
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer
 #fset TRACE on

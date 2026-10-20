@@ -1,7 +1,9 @@
 """HYMEM: what is sent to the memory server, and which repository it is filed under."""
 from __future__ import annotations
 
+import json
 import subprocess
+from types import SimpleNamespace
 
 from js import hymem
 
@@ -32,3 +34,31 @@ def test_a_worktree_files_under_its_main_checkout(tmp_path):
     subprocess.run([*git, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "wt"], cwd=main, check=True)
     assert hymem.workspace(tmp_path / "wt") == hymem.workspace(main) == str(main.resolve())
     assert hymem.workspace(tmp_path) == str(tmp_path.resolve())
+
+
+def test_what_memory_put_in_front_of_the_model_is_not_sent_back():
+    messages = hymem._unrecalled([
+        {"role": "user", "content": "fix the build\n\n<workspace_memory repo=\"/r\">\n- old lesson\n</workspace_memory>"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "function": {"name": "memory_search", "arguments": "{}"}},
+            {"id": "c2", "function": {"name": "shell", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "- old lesson"},
+        {"role": "tool", "tool_call_id": "c2", "content": "make: ok"},
+    ])
+    assert "old lesson" not in json.dumps(messages)
+    assert messages[0]["content"] == "fix the build"
+    assert [c["id"] for c in messages[1]["tool_calls"]] == ["c2"]
+    assert [m["content"] for m in messages if m["role"] == "tool"] == ["make: ok"]
+
+
+def test_only_memories_jev_judges_helpful_pass_most_helpful_first(monkeypatch, tmp_path):
+    found = {"experiences": [{"task": "gorilla search", "solution": "chest beats", "score": 0.9},
+                             {"task": "build fix", "solution": "pass -j1", "score": 0.4}],
+             "facts": [{"statement": "the build needs -j1", "score": 0.5}]}
+    monkeypatch.setattr(hymem, "_post", lambda *a, **k: found)
+    monkeypatch.setattr(hymem, "_relevance", lambda cfg, q, memories: [0.05, 0.9, 0.7])
+    cfg = SimpleNamespace(hymem_url="http://m", hymem_user="u", hymem_recall_max=8,
+                          hymem_relevance_min=0.5, hymem_score_min=0.6)
+    assert hymem.search(cfg, "fix the build", tmp_path) == ["- build fix: pass -j1", "- the build needs -j1"]
+    monkeypatch.setattr(hymem, "_relevance", lambda cfg, q, memories: None)
+    assert hymem.search(cfg, "fix the build", tmp_path) == ["- gorilla search: chest beats"]
