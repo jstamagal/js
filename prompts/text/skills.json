@@ -1,0 +1,9 @@
+{
+  "render_policy_denied": "policy-denied: ",
+  "render_unknown": "unknown: ",
+  "render_skill_tool_requirements_unavailable": "Skill tool requirements unavailable: ",
+  "expand_user_invocation_base_directory_for_this_skill": "Base directory for this skill: {metadata_path_parent}",
+  "expand_user_invocation_tools_this_skill_declares_load_them": "Tools this skill declares (load them with tool_discovery): ",
+  "expand_user_invocation_skill_name": "<skill name=\"{metadata_name}\">\n",
+  "expand_user_invocation_skill": "\n\n{body}\n</skill>"
+}

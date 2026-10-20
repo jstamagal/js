@@ -14,6 +14,10 @@ import yaml
 from . import paths
 from . import messages as msgs
 from . import output
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('skills')
+
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
@@ -87,12 +91,12 @@ class LoadedSkill:
     def render(self) -> str:
         problems = []
         if self.activation.denied:
-            problems.append("policy-denied: " + ", ".join(self.activation.denied))
+            problems.append(_PROMPTS['render_policy_denied'] + ", ".join(self.activation.denied))
         if self.activation.missing:
-            problems.append("unknown: " + ", ".join(self.activation.missing))
+            problems.append(_PROMPTS['render_unknown'] + ", ".join(self.activation.missing))
         if not problems:
             return self.instructions
-        report = "Skill tool requirements unavailable: " + "; ".join(problems)
+        report = _PROMPTS['render_skill_tool_requirements_unavailable'] + "; ".join(problems)
         separator = "" if self.instructions.endswith("\n") else "\n"
         return f"{self.instructions}{separator}\n{report}"
 
@@ -246,14 +250,14 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
     if loaded is None:
         raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))
     metadata = loaded.metadata
-    header = [f"Base directory for this skill: {metadata.path.parent}"]
+    header = [_PROMPTS['expand_user_invocation_base_directory_for_this_skill'].format(metadata_path_parent=metadata.path.parent)]
     if metadata.tools:
         header.append(
-            "Tools this skill declares (load them with tool_discovery): "
+            _PROMPTS['expand_user_invocation_tools_this_skill_declares_load_them']
             + ", ".join(metadata.tools)
         )
     body = loaded.instructions.strip("\n")
-    block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f"\n\n{body}\n</skill>"
+    block = _PROMPTS['expand_user_invocation_skill_name'].format(metadata_name=metadata.name) + "\n".join(header) + _PROMPTS['expand_user_invocation_skill'].format(body=body)
     return f"{block}\n\n{request}" if request else block
 
 
