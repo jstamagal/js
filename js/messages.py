@@ -1377,6 +1377,48 @@ SETTING_VALUE_SECRET = Message("<set>", banner=False)
 
 EVENT_HANDLER_REGISTERED = Message("on {prefix}{event} = {handler}", banner=False)
 
+TOOL_SIZE_BYTES = Message("{count} B", banner=False)
+
+TOOL_SIZE_KILOBYTES = Message("{value:.1f} KB", banner=False)
+
+TOOL_SIZE_MEGABYTES = Message("{value:.1f} MB", banner=False)
+
+COUNT_ONE = Message("{number} {noun}", banner=False)
+
+COUNT_MANY = Message("{number} {noun}s", banner=False)
+
+TOOL_EXIT_CODE = Message("exit {exit_code}", banner=False)
+
+TOOL_LINES_OF_TOTAL = Message("{total} of {value}", banner=False)
+
+TOOL_LINES_SHOWN = Message("{shown} shown", banner=False)
+
+TOOL_BYTE_RANGE = Message("bytes {value}-{value2}", banner=False)
+
+TOOL_LINE_RANGE = Message("lines {value}-{value2}", banner=False)
+
+TOOL_FOLD_COUNT = Message("{value} {value2}", banner=False)
+
+TOOL_FOLD_NOUNS = {
+    "read": ("file", "files"),
+    "fs_search": ("search", "searches"),
+    "ast_search": ("search", "searches"),
+    "exa_search": ("search", "searches"),
+    "serper_search": ("search", "searches"),
+    "tavily_search": ("search", "searches"),
+    "docs_search": ("search", "searches"),
+    "fetch": ("page", "pages"),
+    "browse": ("page", "pages"),
+    "shell": ("look", "looks"),
+}
+TOOL_FOLD_DEFAULT_NOUNS = ("call", "calls")
+
+TOOL_LINE_NOUN = Message("line", banner=False)
+
+TOOL_EDIT_NOUN = Message("edit", banner=False)
+
+TOOL_FAILURE_TRIES_LEFT = Message("failed · {left} of {allowed} tries left", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

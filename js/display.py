@@ -1088,14 +1088,14 @@ def _byte_len(text: str) -> int:
 
 def _size(count: int) -> str:
     if count < 1024:
-        return f"{count} B"
+        return msgs.TOOL_SIZE_BYTES.words(count=count)
     if count < 1024 * 1024:
-        return f"{count / 1024:.1f} KB"
-    return f"{count / (1024 * 1024):.1f} MB"
+        return msgs.TOOL_SIZE_KILOBYTES.words(value=count / 1024)
+    return msgs.TOOL_SIZE_MEGABYTES.words(value=count / (1024 * 1024))
 
 
 def _count(number: int, noun: str) -> str:
-    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+    return msgs.COUNT_ONE.words(number=number, noun=noun) if number == 1 else msgs.COUNT_MANY.words(number=number, noun=noun)
 
 
 def metrics(output: ToolOutput, *, shown: int | None = None, lines: int | None = None,
@@ -1106,16 +1106,16 @@ def metrics(output: ToolOutput, *, shown: int | None = None, lines: int | None =
     file's, for a `read` of one page."""
     parts: list[str] = []
     if output.tries is not None:
-        parts.append(f"failed · {output.tries[0]} of {output.tries[1]} tries left")
+        parts.append(msgs.TOOL_FAILURE_TRIES_LEFT.words(left=output.tries[0], allowed=output.tries[1]))
     if output.exit_code:
-        parts.append(f"exit {output.exit_code}")
+        parts.append(msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code))
     total = len(output.lines) if lines is None else lines
     if of is not None and of > total:
-        parts.append(f"{total} of {_count(of, 'line')}")
+        parts.append(msgs.TOOL_LINES_OF_TOTAL.words(total=total, value=_count(of, msgs.TOOL_LINE_NOUN.words())))
     else:
-        parts.append(_count(total, "line"))
+        parts.append(_count(total, msgs.TOOL_LINE_NOUN.words()))
     if shown is not None and shown < total:
-        parts.append(f"{shown} shown")
+        parts.append(msgs.TOOL_LINES_SHOWN.words(shown=shown))
     parts.append(_size(_byte_len(output.text)))
     return " · ".join(parts)
 
@@ -1218,13 +1218,13 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
         span = {key: clean(value) if isinstance(value, str) else value for key, value in span.items()}
         args = {**args, "range": span}
         if "start_byte" in span or "end_byte" in span:
-            notes.append(f"bytes {span.get('start_byte', 0)}-{span.get('end_byte', '')}")
+            notes.append(msgs.TOOL_BYTE_RANGE.words(value=span.get('start_byte', 0), value2=span.get('end_byte', '')))
         elif "start_line" in span or "end_line" in span:
-            notes.append(f"lines {span.get('start_line', 1)}-{span.get('end_line', '')}")
+            notes.append(msgs.TOOL_LINE_RANGE.words(value=span.get('start_line', 1), value2=span.get('end_line', '')))
     if name == "write" and isinstance(args.get("content"), str):
-        notes.append(_count(len(args["content"].rstrip("\n").split("\n")), "line"))
+        notes.append(_count(len(args["content"].rstrip("\n").split("\n")), msgs.TOOL_LINE_NOUN.words()))
     if name == "patch" and isinstance(args.get("edits"), list):
-        notes.append(_count(len(args["edits"]), "edit"))
+        notes.append(_count(len(args["edits"]), msgs.TOOL_EDIT_NOUN.words()))
     # The whole form leaves out only what it shows elsewhere: the key
     # argument, the body, a message's text.
     shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, ())
@@ -1430,18 +1430,7 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
 
 
 # What a fold row counts, singular and plural; a tool not named counts calls.
-_FOLD_NOUN: dict[str, tuple[str, str]] = {
-    "read": ("file", "files"),
-    "fs_search": ("search", "searches"),
-    "ast_search": ("search", "searches"),
-    "exa_search": ("search", "searches"),
-    "serper_search": ("search", "searches"),
-    "tavily_search": ("search", "searches"),
-    "docs_search": ("search", "searches"),
-    "fetch": ("page", "pages"),
-    "browse": ("page", "pages"),
-    "shell": ("look", "looks"),
-}
+_FOLD_NOUN: dict[str, tuple[str, str]] = msgs.TOOL_FOLD_NOUNS
 _URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
 
 
@@ -1468,8 +1457,8 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
     block = _Block(width or block_width(), theme(settings), MARK if running else OK)
-    one, many = _FOLD_NOUN.get(name, ("call", "calls"))
-    about = f"{len(calls)} {one if len(calls) == 1 else many}"
+    one, many = _FOLD_NOUN.get(name, msgs.TOOL_FOLD_DEFAULT_NOUNS)
+    about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
     room = block.inner - len(name) - len(about) - 10
     shown: list[str] = []
@@ -1587,7 +1576,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
     command = kind == "command" or name == "shell"
     if output.failed:
         if command:
-            parts = [f"exit {output.exit_code}"] if output.exit_code else []
+            parts = [msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code)] if output.exit_code else []
             last = _last_line(output)
             block.header(name, args, malformed=malformed,
                          tail=" · ".join([*parts, last] if last else parts), tail_style=colours.error)
