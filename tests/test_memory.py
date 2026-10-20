@@ -2,9 +2,43 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from js import memory as M
+
+
+def test_a_stale_process_cannot_rollback_another_turn(tmp_path):
+    path = tmp_path / "shared.jsonl"
+    first = {"role": "user", "content": "first"}
+    M.append_message(path, first)
+    stale = M.load_replay_messages(path)
+    newer = [first, {"role": "assistant", "content": "other process"}]
+    subprocess.run([sys.executable, "-c", """
+import json, sys
+from pathlib import Path
+from js import memory
+memory.persist_messages(Path(sys.argv[1]), json.loads(sys.argv[2]))
+""", str(path), json.dumps(newer)], check=True, timeout=10)
+
+    rejected = False
+    try:
+        M.persist_messages(path, stale)
+    except OSError:
+        rejected = True
+    assert M.load_replay_messages(path) == newer
+    assert rejected
+
+    live = M.load_replay_messages(path)
+    question = {"role": "user", "content": "next"}
+    live.append(question)
+    M.append_message(path, question)
+    live.append({"role": "assistant", "content": "local answer"})
+    M.persist_messages(path, live)
+    live[-1] = {"role": "assistant", "content": "edited answer"}
+    M.persist_messages(path, live)
+    assert M.load_replay_messages(path) == live
 
 
 def _assistant_toolcall(cid: str = "tc1") -> dict:

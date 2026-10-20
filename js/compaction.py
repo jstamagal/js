@@ -337,7 +337,7 @@ def _flight_recording(flight: CompactionFlight, system: str, messages: list[dict
 
 
 def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_recent: int) -> tuple[int, int]:
-    before = list(messages)
+    before = messages.copy()
     cleared, reclaimed = microcompact(messages, keep_recent=keep_recent)
     changed = [
         {"message_index": index, "tool_call_id": old.get("tool_call_id"),

@@ -12,6 +12,8 @@ transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -28,6 +30,66 @@ from . import session_store
 from . import session_text
 
 SCHEMA_VERSION = 1
+
+_owned_records: dict[tuple[int, str], set[str]] = {}
+
+
+def _file_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
+class _Snapshot(list):
+    """Live history with the journal position it was read or saved from."""
+
+    def __init__(self, messages: list[dict], path: Path, revision: tuple[int, int, int] | None) -> None:
+        super().__init__(messages)
+        self.path = _file_key(path)
+        self.revision = revision
+
+    def copy(self) -> _Snapshot:
+        return _Snapshot(self, Path(self.path), self.revision)
+
+
+@contextlib.contextmanager
+def _save_lock(path: Path):
+    """Serialize history-changing transactions across processes."""
+    if path == Path(os.devnull):
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(f"{_file_key(path)}.save.lock", "a+b") as guard:
+        fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def _revision(stream) -> tuple[int, int, int]:
+    info = os.fstat(stream.fileno())
+    return info.st_dev, info.st_ino, info.st_size
+
+
+def _check_snapshot(path: Path, messages: list[dict]) -> None:
+    if not isinstance(messages, _Snapshot) or messages.path != _file_key(path):
+        return
+    owned = _owned_records.get((os.getpid(), messages.path), set())
+    with _open_locked(path, "r") as stream:
+        current = _revision(stream)
+        previous = messages.revision
+        if previous is not None and (current[:2] != previous[:2] or current[2] < previous[2]):
+            raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
+        # Text streams seek by byte offsets at record boundaries.
+        stream.seek(previous[2] if previous is not None else 0)
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            changes_history = record.get("kind") == "message" or (
+                record.get("kind") == "mark" and _rewrites_history(record.get("marker")))
+            record_id = record.get("id")
+            if changes_history and (not isinstance(record_id, str) or record_id not in owned):
+                raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
 
 
 @dataclass
@@ -293,11 +355,17 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     reasoning, and `model_client.history_to_ai_messages` applies the transport's
     replay policy.
     """
-    messages, skipped_versions = _replay(memory_file)
+    memory_file = Path(memory_file)
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            messages, skipped_versions = _replay(memory_file)
+            revision = _revision(stream)
+    except FileNotFoundError:
+        messages, skipped_versions, revision = [], 0, None
     if skipped_versions:
         msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
                   records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
-    return messages
+    return _Snapshot(messages, memory_file, revision)
 
 
 def _compared(message: dict) -> dict:
@@ -636,13 +704,22 @@ def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> lis
     """The `load_replay_messages` history. ``preserve_reasoning=True`` returns it
     unchanged; the default projects it to tool-call reasoning only."""
     messages = load_replay_messages(memory_file)
-    return messages if preserve_reasoning else _strip_orphan_reasoning(messages)
+    if not preserve_reasoning:
+        messages[:] = _strip_orphan_reasoning(messages)
+    return messages
 
 
 def _append(memory_file: Path, rec: Record, *, refresh: bool = True) -> None:
-    session_store.append(memory_file, rec.as_dict())
+    with _save_lock(memory_file):
+        _append_owned(memory_file, rec)
     if refresh:
         session_text.refresh(memory_file)
+
+
+def _append_owned(memory_file: Path, rec: Record) -> None:
+    linked = session_store.append(memory_file, rec.as_dict())
+    if "id" in linked:
+        _owned_records.setdefault((os.getpid(), _file_key(memory_file)), set()).add(linked["id"])
 
 
 def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
@@ -691,19 +768,29 @@ def append_message(memory_file: Path, message: dict, stamp: dict | None = None) 
 
 def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
     """Append the live suffix, retaining replaced records in the journal.
-    Each appended assistant message carries `stamp`."""
-    persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
-    comparable = _without_answer_reasoning_text(messages)
-    common = 0
-    for old, new in zip(persisted, comparable):
-        if old != new:
-            break
-        common += 1
-    if common < len(persisted):
-        _append(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"), refresh=False)
-    for message in messages[common:]:
-        _append(memory_file, _message_record(message, stamp), refresh=False)
-    if common < len(persisted) or messages[common:]:
+    Each appended assistant message carries `stamp`. A loaded snapshot with
+    unseen history changes raises ESTALE before any replacement is written."""
+    with _save_lock(memory_file):
+        if memory_file.exists():
+            _check_snapshot(memory_file, messages)
+        elif isinstance(messages, _Snapshot) and messages.revision is not None:
+            raise OSError(errno.ESTALE, "session removed; reload before saving", str(memory_file))
+        persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
+        comparable = _without_answer_reasoning_text(messages)
+        common = 0
+        for old, new in zip(persisted, comparable):
+            if old != new:
+                break
+            common += 1
+        changed = common < len(persisted) or bool(messages[common:])
+        if common < len(persisted):
+            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"))
+        for message in messages[common:]:
+            _append_owned(memory_file, _message_record(message, stamp))
+        if isinstance(messages, _Snapshot) and memory_file.exists():
+            with _open_locked(memory_file, "r") as stream:
+                messages.revision = _revision(stream)
+    if changed:
         session_text.refresh(memory_file)
 
 
