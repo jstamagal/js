@@ -41,6 +41,10 @@ from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_process_net')
+
 
 
 # The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
@@ -313,17 +317,15 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
                      allowed: set[str], safe_env: dict[str, str], context: Any, *,
                      since_last: bool, preface: str = "") -> str | ToolOutput:
     parts = [preface] if preface else []
-    parts += [f"shell={job.shell_path}", f"exit={result.returncode}"]
+    parts += [_PROMPTS['render_finished_shell'].format(job_shell_path=job.shell_path), _PROMPTS['render_finished_exit'].format(result_returncode=result.returncode)]
     if description:
-        parts.append(f"description={description}")
+        parts.append(_PROMPTS['render_finished_description'].format(description=description))
     filtered = _filtered_references(job.command, allowed)
     if filtered:
-        allowed_names = ",".join(sorted(allowed)) or "<none>"
-        present_names = ",".join(sorted(safe_env)) or "<none>"
+        allowed_names = ",".join(sorted(allowed)) or _PROMPTS['render_finished_none']
+        present_names = ",".join(sorted(safe_env)) or _PROMPTS['render_finished_none_2']
         parts.append(
-            "environment=filtered "
-            f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
-            "names not allowed by SHELL_ENV_KEEP or the env parameter are unset"
+            _PROMPTS['render_finished_environment_filtered_unset_allowed_present_names'].format(join_filtered=','.join(filtered), allowed_names=allowed_names, present_names=present_names)
         )
     (stdout, stderr), whole = _job_output(job, context, "\n".join(parts), since_last=since_last)
     _view(command=job.command, handle=job.id, running=False, exit_code=result.returncode,
@@ -332,11 +334,11 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
     def text(stdout: str, stderr: str) -> str:
         rows = list(parts)
         if stdout:
-            rows.append(f"--- stdout ---\n{stdout}")
+            rows.append(_PROMPTS['text_stdout'].format(stdout=stdout))
         if stderr:
-            rows.append(f"--- stderr ---\n{stderr}")
+            rows.append(_PROMPTS['text_stderr'].format(stderr=stderr))
         if not stdout and not stderr:
-            rows.append("(no output)")
+            rows.append(_PROMPTS['text_no_output'])
         return "\n".join(rows)
 
     return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
@@ -344,10 +346,7 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
 
 def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOutput:
     head = (
-        f"command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). "
-        f"It keeps running. Poll it with action=\"poll\", handle=\"{job.id}\" for new output, "
-        f"action=\"wait\", handle=\"{job.id}\", timeout=N to block for it, "
-        f"or action=\"kill\", handle=\"{job.id}\" to stop it."
+        _PROMPTS['render_running_command_still_running_after_s_handle'].format(waited=waited, job_id=job.id, job_process_pid=job.process.pid, value_3=job.id, value_4=job.id, value_5=job.id)
     )
     (stdout, stderr), whole = _job_output(job, context, head, since_last=True)
     _view(command=job.command, handle=job.id, running=True, exit_code=None,
@@ -356,9 +355,9 @@ def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOu
     def text(stdout: str, stderr: str) -> str:
         parts = [head]
         if stdout:
-            parts.append(f"--- stdout so far ---\n{stdout}")
+            parts.append(_PROMPTS['text_stdout_so_far'].format(stdout=stdout))
         if stderr:
-            parts.append(f"--- stderr so far ---\n{stderr}")
+            parts.append(_PROMPTS['text_stderr_so_far'].format(stderr=stderr))
         parts.append(f"HANDLE {job.id} RUNNING")
         return "\n".join(parts)
 
@@ -505,8 +504,7 @@ class _FetchTimeoutError(Exception):
 
 def _inline_read_limit_error() -> str:
     return (
-        f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte inline read limit; "
-        "use save= to stream the full response to disk"
+        _PROMPTS['inline_read_limit_error_error_response_exceeds_byte_inline_read'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
     )
 
 
@@ -888,10 +886,10 @@ def _fetch_file_url(
         # not land in RAM, and _read_regular_bytes refuses devices/FIFOs whose
         # st_size is 0 and whose read never reaches EOF.
         if size > _DOWNLOAD_MAX_BYTES:
-            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+            return _PROMPTS['fetch_file_url_error_file_exceeds_byte_read_limit'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
         data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
         if len(data) > _DOWNLOAD_MAX_BYTES:
-            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+            return _PROMPTS['fetch_file_url_error_file_exceeds_byte_read_limit_2'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
         truncated = len(data) > context.max_tool_result_bytes
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
@@ -1063,15 +1061,15 @@ def tools() -> tuple[Tool, ...]:
                 "cwd": {"type": "string"},
                 "timeout": {
                     "type": "integer",
-                    "description": "Seconds this call blocks before returning a handle. The command is never killed by this.",
+                    "description": _PROMPTS['tools_seconds_this_call_blocks_before_returning'],
                 },
                 "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run"},
-                "handle": {"type": "string", "description": "Job id from a HANDLE line, for poll/wait/kill."},
+                "handle": {"type": "string", "description": _PROMPTS['tools_job_id_from_a_handle_line']},
                 "keep_ansi": {"type": "boolean", "default": False},
                 "env": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Variable names to pass through. The child environment is filtered by default.",
+                    "description": _PROMPTS['tools_variable_names_to_pass_through_the'],
                 },
                 "description": {"type": "string"},
             },

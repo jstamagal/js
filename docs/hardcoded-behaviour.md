@@ -217,9 +217,9 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/fs.py` | fs_read | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
 | `js/toolkit/fs.py` | module constants | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
 | `js/toolkit/fs.py` | tools | policy | Model-facing text is loaded from `prompts/text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/process_net.py:317-325,343-349` | _render_finished / _render_running | policy | Builds the filtered-environment note and the poll/wait/kill guidance the model reads. | js-2lg.48 |
-| `js/toolkit/process_net.py:500-504,885,888` | _inline_read_limit_error / _fetch_file_url | policy | Builds the inline-limit refusal and "use save=" guidance in code. | js-2lg.48 |
-| `js/toolkit/process_net.py:1053-1087` | tools | policy | Parameter descriptions the model reads are written in the code schemas. | js-2lg.48 |
+| `js/toolkit/process_net.py` | _render_finished / _render_running | policy | Model-facing text is loaded from `prompts/text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
+| `js/toolkit/process_net.py` | _inline_read_limit_error / _fetch_file_url | policy | Model-facing text is loaded from `prompts/text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
+| `js/toolkit/process_net.py` | tools | policy | Model-facing text is loaded from `prompts/text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
 | `js/toolkit/search.py:586-590,602` | browse | policy | Builds the screenshot and HTTP-error guidance the model reads. | js-2lg.53 |
 | `js/toolkit/terminal.py:165-174` | _observe | policy | Builds the "reading" guidance paragraph the model reads. | js-2lg.55 |
 | `js/toolkit/terminal.py:210-211,372` | _jail_refusal / _draw_screen | policy | Builds the restart and install-hint text (`uv sync --extra vision`) in code. | js-2lg.55 |
