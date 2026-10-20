@@ -949,12 +949,14 @@ def provider_from_login_or_token(
     provider_api_key: str | None,
     provider_headers: dict[str, str] | None = None,
 ) -> OpenAICodexProvider:
-    """The Codex provider for the saved login, else for ``provider_api_key``.
+    """The Codex provider for the selected token, with its saved refresh state.
     Its requests also carry ``provider_headers``."""
     from . import logins
 
     login = logins.load_logins().get(codex_auth.CODEX_PROVIDER_ID)
-    if login is not None and login.provider_api_key:
+    if login is not None and login.provider_api_key and (
+        not provider_api_key or provider_api_key == login.provider_api_key
+    ):
         provider = OpenAICodexProvider.from_login(login, base_url=provider_base_url)
     else:
         provider = OpenAICodexProvider(
