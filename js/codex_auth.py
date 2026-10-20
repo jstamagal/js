@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from . import messages as msgs
+from . import output
 
 if TYPE_CHECKING:
     from .logins import Login
@@ -639,12 +640,12 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
                 # Removed (a --logout), replaced by a key login, or rotated
                 # past us by another process: the store's state stands, and
                 # nothing of ours is kept, not even in memory (doc #983).
-                msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error="login changed underneath the refresh")
+                output.notice(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error="login changed underneath the refresh")
                 return False
             logins.save_login(refreshed)
     except (logins.LoginsCorruptError, logins.LoginStoreBusyError, OSError) as exc:
         logins.note_memory_login(refreshed, derived_from=derived_from)
-        msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error=exc)
+        output.notice(msgs.OAUTH_REFRESH_NOT_SAVED, service="OpenAI Codex", error=exc)
         return False
     return True
 

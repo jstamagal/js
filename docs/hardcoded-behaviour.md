@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-26 findings.
+25 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -46,7 +46,6 @@ branch the audit was made on; they move as the code changes.
 | `js/screen.py:671` | _ScreenStdout.isatty | presentation | Reports every captured stream as a terminal. | js-2lg.104 |
 | `js/messages.py:200-218` | for_stream / line_for / say | presentation | Write to the global sys.stdout when no file is passed. | js-2lg.105 |
 | `js/messages.py:248-250` | warn | presentation | Always writes to the global sys.stderr. | js-2lg.105 |
-| `js/codex_auth.py:642,647` | save_refreshed_login | presentation | A background token refresh prints warnings to stderr itself. | js-2lg.151 |
 | `js/xai_auth.py:357,362` | save_refreshed_login | presentation | A background token refresh prints warnings to stderr itself. | js-2lg.158 |
 | `js/model_metadata.py:528,533` | ensure_fresh_catalog | presentation | Catalog progress and failure lines go through stream_transport.say_or_print, which prints to stderr when no sink is installed. | js-2lg.166 |
 | `js/tool_binaries.py:173-179` | warn_urllib_fallback | presentation | The runtime download path prints the aria2 fallback warning to stderr itself. | js-2lg.174 |
