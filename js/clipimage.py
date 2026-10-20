@@ -31,7 +31,6 @@ WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")
 X11_COMMAND = ("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
 # Over ssh there is no display; kitty forwards its clipboard through the tty.
 KITTY_COMMAND = ("kitten", "clipboard", "-g", "-m", "image/png", "/dev/stdout")
-READ_TIMEOUT_S = 5.0
 # A name without a suffix, so the paste check takes the mime type from the bytes.
 _DETECT_NAME = Path("clipboard")
 
@@ -88,12 +87,15 @@ def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = 
         # Raises ValueError on an unbalanced quote; read_image reports it.
         return shlex.split(str(configured))
     env = os.environ if env is None else env
-    if env.get("WAYLAND_DISPLAY"):
-        return list(WAYLAND_COMMAND)
-    if env.get("DISPLAY"):
-        return list(X11_COMMAND)
-    if env.get("TERM") == "xterm-kitty":
-        return list(KITTY_COMMAND)
+    backends = {
+        "wayland": (bool(env.get("WAYLAND_DISPLAY")), WAYLAND_COMMAND),
+        "x11": (bool(env.get("DISPLAY")), X11_COMMAND),
+        "kitty": (env.get("TERM") == "xterm-kitty", KITTY_COMMAND),
+    }
+    for name in _settings.knob(settings, "PASTE_IMAGE_BACKENDS"):
+        available, command = backends.get(name, (False, ()))
+        if available:
+            return list(command)
     return None
 
 
@@ -126,7 +128,7 @@ def read_image(
     if shutil.which(argv[0]) is None:
         raise ClipboardError(msgs.CLIPBOARD_TOOL_MISSING, tool=argv[0])
     try:
-        done = run(argv, capture_output=True, timeout=READ_TIMEOUT_S, check=False)
+        done = run(argv, capture_output=True, timeout=float(_settings.knob(settings, "PASTE_IMAGE_TIMEOUT")), check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool=argv[0], error=exc) from exc
     data = done.stdout or b""

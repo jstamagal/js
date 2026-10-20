@@ -251,3 +251,11 @@ def test_placeholder_takes_plain_bounded_numbers_only():
     assert clipimage.lookup("[image #" + "1" * 5000 + "]") is None
     assert clipimage.placeholders("[image #" + "1" * 5000 + "] [image #1]") == ["[image #1]"]
     assert clipimage.placeholders("[image #01] and [image #1]") == ["[image #1]"]
+
+
+def test_registered_clipboard_backends_control_fallback_order():
+    command = clipimage.clipboard_command(
+        {"PASTE_IMAGE_BACKENDS": ["x11", "wayland"]},
+        {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+    )
+    assert command == list(clipimage.X11_COMMAND)
