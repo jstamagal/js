@@ -21,17 +21,20 @@ Built on git plumbing, diff and apply, which has been stable for about 20
 years. Binary diffs, pure renames and mode-only changes have no text hunks; the
 helper says so and the whole file is staged instead.
 
-Every line it prints is an entry in `js/messages.py`, printed with `.text()`.
+Commands emit `commit_output` events. The stock renderer prints their plain text.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
 
 from . import messages as msgs
+from . import output
 
 
 @dataclass(slots=True)
@@ -147,16 +150,53 @@ def _printable(text: str) -> str:
         return text.encode("utf-8", "replace").decode("utf-8")
 
 
+_OUTPUT: ContextVar = ContextVar("js_commit_output", default=None)
+
+
+@contextmanager
+def _output_to(emit):
+    token = _OUTPUT.set(emit if emit is not None else _OUTPUT.get())
+    try:
+        yield
+    finally:
+        _OUTPUT.reset(token)
+
+
+def _render(event: output.OutputEvent) -> None:
+    payload = dict(event.fields)
+    message = payload.get("message")
+    text = message.text(**payload["fields"]) if message is not None else payload["text"]
+    if payload.get("printable"):
+        text = _printable(text)
+    print(text, file=sys.stderr if payload.get("stderr") else sys.stdout)
+
+
+def _emit(**fields) -> None:
+    sink = _OUTPUT.get()
+    (_render if sink is None else sink)(output.event("commit_output", **fields))
+
+
+def _raw(text: str, *, stderr: bool = False, printable: bool = False) -> None:
+    _emit(text=text, stderr=stderr, printable=printable)
+
+
 def _print(text: str) -> None:
-    print(_printable(text))
+    _raw(text, printable=True)
 
 
 def _out(message: msgs.Message, **fields) -> None:
-    _print(message.text(**fields))
+    _emit(message=message, fields=fields, stderr=False, printable=True)
 
 
 def _err(message: msgs.Message, **fields) -> None:
-    print(message.text(**fields), file=sys.stderr)
+    _emit(message=message, fields=fields, stderr=True)
+
+
+def _write_error(text: str) -> None:
+    if isinstance(text, msgs.Said):
+        _err(text.message, **text.fields)
+    else:
+        _raw(text, stderr=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,13 +315,13 @@ def _print_diff_section(repo: Path, rows: list[StatusRow], *, cached: bool) -> N
         _out(msgs.SURVEY_NONE)
 
 
-def cmd_survey(repo: str | Path | None = None) -> int:
+def _cmd_survey(repo: str | Path | None = None) -> int:
     try:
         repo_path = _toplevel(repo)
         branch = _branch_name(repo_path)
         rows = _porcelain(repo_path)
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 2 if exc.kind == "not-a-repo" else 1
 
     _out(msgs.SURVEY_HEADING, repo=repo_path)
@@ -301,7 +341,7 @@ def cmd_survey(repo: str | Path | None = None) -> int:
         _print_diff_section(repo_path, tracked, cached=True)
         _print_diff_section(repo_path, tracked, cached=False)
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 1
 
     _out(msgs.SURVEY_UNTRACKED)
@@ -323,7 +363,7 @@ def _stage_whole(path: str, repo: Path) -> int:
     try:
         _git("add", "--", path, repo=repo)
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 1
     _out(msgs.STAGED_WHOLE, path=path)
     return 0
@@ -337,12 +377,12 @@ def _wanted_hunks(spec: str) -> list[int] | None:
     return want or None
 
 
-def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
+def _cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
     try:
         repo_path = _toplevel(repo)
         rows = {row.path: row.xy for row in _porcelain(repo_path)}
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 2 if exc.kind == "not-a-repo" else 1
 
     xy = rows.get(path)
@@ -367,7 +407,7 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
     try:
         diff = _git(*_diff_args(path, cached=False), repo=repo_path).stdout
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 1
     header, hunks = _split_hunks(diff)
     if not hunks:
@@ -391,7 +431,7 @@ def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
     return 0
 
 
-def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool = False) -> int:
+def _cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool = False) -> int:
     """Commit staged changes with the message read VERBATIM from a file.
 
     The message never transits a shell. Composed as `git commit -m "..."`
@@ -418,10 +458,10 @@ def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool
     try:
         proc = _git(*args, repo=repo_path)
     except GitCommandError as exc:
-        print(_git_failure_message(exc), file=sys.stderr)
+        _write_error(_git_failure_message(exc))
         return 1
     if proc.stdout.strip():
-        print(proc.stdout.strip())
+        _raw(proc.stdout.strip())
     else:
         _out(msgs.COMMITTED)
     return 0
@@ -444,6 +484,21 @@ def _extract_repo(argv: list[str]) -> tuple[Path | None, list[str], str | None]:
             continue
         break
     return repo, rest, None
+
+
+def cmd_survey(repo: str | Path | None = None, *, emit=None) -> int:
+    with _output_to(emit):
+        return _cmd_survey(repo)
+
+
+def cmd_stage(path: str, spec: str, repo: str | Path | None = None, *, emit=None) -> int:
+    with _output_to(emit):
+        return _cmd_stage(path, spec, repo)
+
+
+def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool = False, emit=None) -> int:
+    with _output_to(emit):
+        return _cmd_commit(message_file, repo, amend=amend)
 
 
 def main(argv: list[str] | None = None) -> int:

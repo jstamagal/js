@@ -421,3 +421,13 @@ def test_line_separator_inside_a_changed_line_is_not_a_hunk_boundary(repo):
     assert commit_helper.main(["stage", "f.txt", "1"]) == 0
     staged = _staged(repo)
     assert "old\u2028@@ inner" in staged and "line28_X" not in staged
+
+
+def test_commit_commands_emit_to_the_caller_instead_of_the_screen(tmp_path, capsys):
+    events = []
+    assert commit_helper.cmd_commit("missing.txt", repo=tmp_path, emit=events.append) == 2
+    assert len(events) == 1 and events[0].name == "commit_output"
+    payload = dict(events[0].fields)
+    assert payload["stderr"] is True and payload["message"] is msgs.MESSAGE_FILE_UNREADABLE
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
