@@ -591,17 +591,20 @@ def _file_ident(path: Path) -> tuple | None:
     return (path, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
 
-def _read_store() -> _Store:
+def _read_store(*, strict: bool = False) -> _Store:
     """Parse logins.toml now, bypassing the identity cache, and cache the
     result. An empty store when the file is missing; an UNREADABLE store
     (nothing known, not "removed") when it exists but cannot be read or
-    parsed (maggie #1045/#1110)."""
+    parsed (maggie #1045/#1110). Writers use ``strict`` to propagate read
+    failures and refuse malformed TOML."""
     global _loaded
     path = _logins_path()
     try:
         ident = _file_ident(path)
     except OSError:
         _loaded = _UNREADABLE_STORE
+        if strict:
+            raise
         return _loaded
     if ident is None:
         _loaded = _EMPTY_STORE
@@ -609,8 +612,12 @@ def _read_store() -> _Store:
     try:
         with path.open("rb") as f:
             data = tomllib.load(f)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         _loaded = _UNREADABLE_STORE
+        if strict:
+            if isinstance(exc, OSError):
+                raise
+            raise LoginsCorruptError(f"{path}: {exc}") from exc
         return _loaded
     _loaded = _parse_store(ident, data)
     return _loaded
@@ -705,7 +712,7 @@ def save_login(login: Login) -> None:
         login = _with_overlay_tokens(login, entry[1])
     with hold_login_lock():
         _refuse_if_corrupt()
-        store = _read_store()
+        store = _read_store(strict=True)
         loaded = dict(store.logins)
         previous = loaded.get(canonical_id)
         login = replace(
@@ -761,7 +768,7 @@ def remove_login(provider_id: str) -> bool:
     provider_id = _normalize_provider_id(provider_id)
     with hold_login_lock():
         _refuse_if_corrupt()
-        store = _read_store()
+        store = _read_store(strict=True)
         loaded = dict(store.logins)
         existed = provider_id in loaded
         if existed:

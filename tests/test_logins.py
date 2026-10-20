@@ -43,6 +43,31 @@ logins.save_login(logins.Login(provider_id='openai-codex', provider_api_key='new
     )
     assert saved.model_defaults == {"other-model": {"TEMPERATURE": 0.3}}
 
+
+def test_save_preserves_the_store_when_the_reload_has_an_io_error(tmp_logins_dir, monkeypatch):
+    logins.save_login(logins.Login("existing", provider_api_key="kept"))
+    path = tmp_logins_dir / "logins.toml"
+    before = path.read_bytes()
+    real_open = Path.open
+    reads = 0
+
+    def failed_reload(target, mode="r", *args, **kwargs):
+        nonlocal reads
+        if target == path and mode == "rb":
+            reads += 1
+            if reads == 2:
+                raise OSError(5, "read failed", str(path))
+        return real_open(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", failed_reload)
+    error = None
+    try:
+        logins.save_login(logins.Login("new", provider_api_key="new-value"))
+    except OSError as exc:
+        error = exc
+    assert path.read_bytes() == before
+    assert error is not None and error.errno == 5
+
 @pytest.fixture
 def tmp_logins_dir(tmp_path: Path, monkeypatch):
     logins.set_config_dir(tmp_path)
