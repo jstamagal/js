@@ -575,10 +575,10 @@ async def task_async(
     timeout: int | None = None,
     context: ToolContext | None = None,
 ) -> str:
-    """Async twin of :func:`task` for the non-blocking REPL: awaits child turns
+    """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
-    dispatch thread. The runtime routes fan-out calls here when a supervisor is
-    live (see ``runtime._dispatch_batch``)."""
+    dispatch thread. The runtime routes fan-out calls here
+    (see ``runtime._dispatch_batch``)."""
     assert context is not None
     action = _job_action(action)
     if action != "run":

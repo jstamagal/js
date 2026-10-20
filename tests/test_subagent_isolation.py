@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import asyncio
+import threading
 import time
 
 from js import runtime
@@ -568,6 +569,48 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
     # The first turn loads the child tool; resume retains it without reloading.
     assert sum(m.get("name") == "tool_discovery" and m["role"] == "tool" for m in history) == 1
+
+
+def test_unsupervised_parent_cancellation_stops_foreground_child(monkeypatch, tmp_path):
+    from js import supervisor
+
+    prompts = prompt_dir(tmp_path, "worker")
+    context = ToolContext(cwd=tmp_path)
+    context.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    entered = threading.Event()
+    cancelled = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr(supervisor, "get_current", lambda: None)
+
+    async def stream(**kwargs):
+        entered.set()
+        try:
+            while not release.is_set():
+                await asyncio.sleep(0.001)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return _fake_stream_result()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+
+    async def drive():
+        call = runtime._PendingToolCall("delegate", "task", ['{"tasks":["work"],"agent_id":"worker"}'])
+        parent = asyncio.create_task(runtime._dispatch_batch(
+            [call], runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+            build_default_registry(), context, asyncio.get_running_loop(),
+        ))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            parent.cancel()
+            stopped = await asyncio.to_thread(cancelled.wait, 0.25)
+        finally:
+            release.set()
+            await asyncio.gather(parent, return_exceptions=True)
+        assert stopped
+        assert parent.cancelled()
+
+    asyncio.run(drive())
 
 
 def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):

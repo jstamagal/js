@@ -1743,18 +1743,16 @@ async def _dispatch_batch(
     an ancestor's worker. Mixed async batches retain model order; pure fan-out
     batches run concurrently with their sync leaves, as before.
     """
-    from . import supervisor
     from .toolkit import meta
 
     progress = progress if progress is not None else _DispatchProgress()
-    current_supervisor = supervisor.get_current()
     fan_out = set()
     async_leaves = set()
     for i, pc in enumerate(tool_calls):
         tool = registry.resolve(pc.name)
         if tool is None or pc.validation_error is not None:
             continue
-        if current_supervisor is not None and meta.is_fan_out_handler(tool.handler):
+        if meta.is_fan_out_handler(tool.handler):
             fan_out.add(i)
         elif inspect.iscoroutinefunction(tool.handler):
             async_leaves.add(i)

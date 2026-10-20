@@ -58,14 +58,18 @@ There are two layers of parallelism:
 
 1. If the assistant emits multiple `task` tool calls in the same turn, the
    runtime dispatches those `task` calls concurrently.
-2. Inside one `task` call, each task string runs concurrently in a thread pool.
+2. Inside one `task` call, each task string runs as a coroutine on the parent's
+   event loop, limited by `SUBAGENT_WORKERS_MAX`.
 
 Result order is stable. Output is returned in the order of the input task list.
 
 If a child fails, the result slot for that child contains `ERROR ...`. Successful
 sibling results are kept. A failing child does not sink its siblings.
 
-Non-task tools in a turn run sequentially.
+Foreground child turns share the parent's event loop in both the REPL and
+one-shot mode, so cancelling the parent cancels its foreground children.
+Synchronous leaf tools run in dispatch threads; read-only groups can run in
+parallel.
 
 ## Worker Session State
 
