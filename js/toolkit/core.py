@@ -834,6 +834,17 @@ class ToolContext(_turn_settings.ContextSettings):
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"
         with self._snapshot_lock:
+            if store != self.snapshot_store:
+                with self._coverage_lock:
+                    self.read_paths.clear()
+                    self.file_hashes.clear()
+                    self.read_ranges.clear()
+                    self.read_line_totals.clear()
+                    self.fully_read_paths.clear()
+                    self.known_content.clear()
+                    self._read_windows.clear()
+                    self._shown_reads.clear()
+                    self._offered_reads.clear()
             if store is None:
                 self.snapshots.clear()
                 self.snapshot_files.clear()

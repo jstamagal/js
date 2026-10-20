@@ -50,3 +50,21 @@ def test_an_overwrite_naming_a_stale_hash_is_refused_with_both_hashes(tmp_path):
     assert result.startswith("ERROR")
     assert stale in result and fs._hash_bytes(b"moved\n") in result
     assert target.read_text(encoding="utf-8") == "moved\n"
+
+
+def test_switching_sessions_restores_only_the_selected_sessions_reads(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_text("old\n", encoding="utf-8")
+    first_session = tmp_path / "first.jsonl"
+    context = _context(tmp_path, first_session)
+    fs.fs_read(str(target), context=context)
+    context.configure_snapshot_store("js", tmp_path / "second.jsonl", state_dir=tmp_path / "state")
+
+    refused = fs.write(str(target), content="wrong\n", overwrite=True, context=context)
+
+    assert refused.startswith("ERROR:")
+    assert target.read_text(encoding="utf-8") == "old\n"
+    context.configure_snapshot_store("js", first_session, state_dir=tmp_path / "state")
+    restored = fs.write(str(target), content="new\n", overwrite=True, context=context)
+    assert not restored.startswith("ERROR:")
+    assert target.read_text(encoding="utf-8") == "new\n"
