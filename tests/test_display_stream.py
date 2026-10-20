@@ -487,3 +487,8 @@ def test_a_code_block_hangs_every_row_it_paints_under_the_text_column():
     shown = "".join(text for kind, text in live.events if kind == "commit")
     rows = [row for row in shown.split("\n") if ANSI.sub("", row)]
     assert all(row.startswith("  ") for row in rows[1:]), rows
+
+
+def test_a_single_newline_in_an_answer_starts_a_new_line():
+    shown = re.sub(r"\x1b\[[0-9;]*m", "", display.render_markdown("first line\nsecond line\n", 60))
+    assert [line.strip() for line in shown.splitlines() if line.strip()] == ["first line", "second line"]

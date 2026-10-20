@@ -604,6 +604,8 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
         for child in token.children or ():
             if child.type == "code_inline":
                 child.content = f" {child.content} "
+            elif child.type == "softbreak":
+                child.type = "hardbreak"
     console.print(document)
     return _rendered_text(console, width).strip("\n") + "\n"
 
