@@ -20,6 +20,7 @@ runs it over any agent root.
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import re
 import tempfile
@@ -310,6 +311,20 @@ def migrate_agent_dir(agent_dir: Path, *, apply: bool = False, keep: Keep | None
     prompts, the global agents dir and this agent's own root. A file that cannot
     be read or is not UTF-8 makes this agent an error and touches nothing."""
     keep = keep if keep is not None else tool_matcher(default_roots(agent_dir.parent))
+    try:
+        fd = os.open(agent_dir, os.O_RDONLY)
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return _migrate_agent_dir(agent_dir, apply=apply, keep=keep)
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
+    finally:
+        os.close(fd)
+
+
+def _migrate_agent_dir(agent_dir: Path, *, apply: bool, keep: Keep) -> Result:
     try:
         result, old, new_body = plan(agent_dir, keep)
     except UnicodeDecodeError as exc:
