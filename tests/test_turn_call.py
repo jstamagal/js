@@ -299,3 +299,11 @@ def test_silent_overflow_recovery_can_be_disabled(tmp_path, monkeypatch):
     turn.caller._limits = CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False})
     assert turn.call().result.text == "kept"
     assert turn.budget.recoveries == []
+
+
+def test_overflow_recovery_uses_registered_round_limit(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_overflow(), _overflow(), _done()])
+    turn.caller._limits = CallLimits.from_settings({"COMPACTION_OVERFLOW_ROUNDS_MAX": 1})
+    with pytest.raises(ai.ProviderAPIError):
+        turn.call()
+    assert len(turn.budget.recoveries) == 1

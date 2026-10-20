@@ -242,7 +242,7 @@ class SilentOverflowError(ai.ProviderAPIError):
 # rejects the request for size. One was never enough: the first compaction
 # targets whatever window we *believe* we have, and if that belief is wrong
 # the retry lands on the wall again.
-MAX_OVERFLOW_ROUNDS = 3
+MAX_OVERFLOW_ROUNDS = _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX")
 
 MICROCOMPACT_CLEARED_MESSAGE = "[old tool result cleared]"
 
@@ -366,7 +366,7 @@ def recover_overflow(
     """Record and announce tool-result clearing after a provider overflow.
     ``log_dir`` is where the flight log goes (None: no log); notices go to
     ``emit``."""
-    keep_recent = max(0, 20 // round_)
+    keep_recent = max(0, get_nonnegative_int(cfg, "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS") // round_)
     flight = _clearing_flight(
         messages, cfg=cfg, system=system,
         trigger={"phase": "overflow_recovery", "round": round_,
@@ -697,12 +697,12 @@ def _run_pre_hook(cfg: Config) -> str:
     hook = _pre_hook_command(cfg)
     if not hook:
         return ""
-    shell_path = os.environ.get("SHELL", "/bin/sh")
+    shell_path = get(cfg, "COMPACTION_HINT_SHELL_PROGRAM") or os.environ.get("SHELL", "/bin/sh")
     cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     try:
         result = _run_capped(
             [shell_path, "-c", hook],
-            timeout=30,
+            timeout=get_int(cfg, "COMPACTION_HINT_TIMEOUT"),
             cwd=str(getattr(cfg, "project_dir", os.getcwd())),
             env=None,
             cap=cap,
@@ -862,7 +862,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(prompt)],
                 tools=None,
-                max_output_tokens=get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=8192),
+                max_output_tokens=get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX")),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=model_client.turn_headers(route.headers, cfg),
@@ -1006,7 +1006,7 @@ async def compact_now(
         if emit is not None:
             emit("pre_compact", phase=phase, forced=forced, focus=focus, model=compact_model,
                  messages=original_len, keep_from=keep_from)
-        # The hook is a blocking subprocess (up to 30 s): off the event loop.
+        # The hook is a blocking subprocess: off the event loop.
         guidance = await asyncio.to_thread(_run_pre_hook, cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
@@ -1177,7 +1177,7 @@ async def maybe_auto_compact_async(
     context.last_prompt_tokens = 0
     context.last_output_tokens = 0
     ac.consecutive += 1
-    if ac.consecutive >= 2:
+    if ac.consecutive >= get_int(cfg, "COMPACTION_CONSECUTIVE_MAX"):
         ac.paused = True
         out.notices.append(msgs.AUTO_COMPACT_PAUSED.said())
     return out

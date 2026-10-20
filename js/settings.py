@@ -139,6 +139,12 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("COMPACTION_CONSECUTIVE_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_TIMEOUT", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_SHELL_PROGRAM", "str", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", "int", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_ROUNDS_MAX", "int", group="compaction"),
     SettingSpec("RETRY_BACKOFF_JITTER", "float", group="runtime"),
     SettingSpec("RETRY_BACKOFF_MAX", "float", group="runtime"),
     SettingSpec("RETRY_BACKOFF_MULTIPLIER", "float", group="runtime"),

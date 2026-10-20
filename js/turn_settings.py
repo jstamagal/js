@@ -121,6 +121,12 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("compaction_consecutive_max", "COMPACTION_CONSECUTIVE_MAX", integer),
+    TurnSetting("compaction_summary_request_tokens_max", "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", integer),
+    TurnSetting("compaction_hint_timeout", "COMPACTION_HINT_TIMEOUT", integer),
+    TurnSetting("compaction_hint_shell_program", "COMPACTION_HINT_SHELL_PROGRAM", text),
+    TurnSetting("compaction_overflow_keep_tool_results", "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", integer),
+    TurnSetting("compaction_overflow_rounds_max", "COMPACTION_OVERFLOW_ROUNDS_MAX", integer),
     TurnSetting("retry_backoff_jitter", "RETRY_BACKOFF_JITTER", number),
     TurnSetting("retry_backoff_max", "RETRY_BACKOFF_MAX", number),
     TurnSetting("retry_backoff_multiplier", "RETRY_BACKOFF_MULTIPLIER", number),

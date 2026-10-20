@@ -99,6 +99,7 @@ class CallLimits:
     stream_idle: float | None
     max_output_escalation: int
     max_output_resumes: int
+    overflow_rounds_max: int = field(default_factory=lambda: _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX"))
     silent_overflow_recovery: bool = field(default_factory=lambda: _settings.default_value("SILENT_OVERFLOW_RECOVERY"))
     signed_reasoning_recovery: bool = field(default_factory=lambda: _settings.default_value("SIGNED_REASONING_RECOVERY"))
 
@@ -107,6 +108,7 @@ class CallLimits:
         return cls(
             silent_overflow_recovery=bool(_settings.knob(settings, "SILENT_OVERFLOW_RECOVERY")),
             signed_reasoning_recovery=bool(_settings.knob(settings, "SIGNED_REASONING_RECOVERY")),
+            overflow_rounds_max=int(_settings.knob(settings, "COMPACTION_OVERFLOW_ROUNDS_MAX")),
             retry=retry.Budget.from_settings(settings),
             stream_idle=retry.idle_seconds(settings),
             max_output_escalation=int(_settings.knob(settings, "OUTPUT_TOKENS_RETRY_MAX") or 0),
@@ -188,7 +190,7 @@ class ModelCaller:
         # Retries, overflow rounds (a provider rejection or a silent
         # overflow), one escalated resend and its fallback, and one resend
         # without signed reasoning.
-        for attempt in range(limits.retry.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 3):
+        for attempt in range(limits.retry.attempts + 1 + limits.overflow_rounds_max + 3):
             t0 = time.time()
             self._sink.clear()
             try:
@@ -208,7 +210,7 @@ class ModelCaller:
                 shown = self._sink.shown
                 window = self._budget.provider_window()
                 silent = silent_overflow(result.usage, window, cut_by_cap=cut_by_cap)
-                if limits.silent_overflow_recovery and silent is not None and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS:
+                if limits.silent_overflow_recovery and silent is not None and self._overflow_rounds < limits.overflow_rounds_max:
                     # The provider took more input than the window holds, so
                     # it cut the input: shed history and ask again. A reply
                     # already shown is kept, and the shed history serves the
@@ -249,7 +251,7 @@ class ModelCaller:
                     continue
                 if (
                     compaction.is_context_overflow_error(e)
-                    and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS
+                    and self._overflow_rounds < limits.overflow_rounds_max
                 ):
                     self._overflow_rounds += 1
                     telemetry.event(
