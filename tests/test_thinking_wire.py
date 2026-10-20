@@ -831,7 +831,9 @@ def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     assert wire.bodies[0]["max_tokens"] == 32000
 
 
-def test_resume_preserves_adjacent_and_empty_text_blocks_before_thinking(claude):
+def test_resume_preserves_adjacent_text_blocks_and_drops_empty_ones_before_thinking(claude):
+    # Anthropic refuses an empty text block, so replay leaves it out; every
+    # thinking block still goes back unchanged and in its order.
     cfg, wire, context = claude
     reply = [
         _SIGNED_BLOCK,
@@ -842,8 +844,9 @@ def test_resume_preserves_adjacent_and_empty_text_blocks_before_thinking(claude)
         {"type": "text", "text": ""},
         {"type": "thinking", "thinking": "", "signature": "S3"},
     ]
+    sent = [block for block in reply if block != {"type": "text", "text": ""}]
     wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
-    wire.original_replies = {"toolu_1": reply}
+    wire.original_replies = {"toolu_1": sent}
     messages = [{"role": "user", "content": "go"}]
     _turn(replace(cfg, max_tool_iterations=1), messages, context)
     memory.persist_messages(cfg.session_file, messages)
@@ -852,7 +855,7 @@ def test_resume_preserves_adjacent_and_empty_text_blocks_before_thinking(claude)
     _turn(cfg, resumed, context)
 
     assert len(wire.bodies) == 2
-    assert _assistant_blocks(wire.bodies[-1]) == [reply]
+    assert _assistant_blocks(wire.bodies[-1]) == [sent]
 
 
 def test_a_tool_continuation_whose_earlier_signature_is_refused_recovers_in_one_retry(claude):

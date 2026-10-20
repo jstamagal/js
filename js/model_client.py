@@ -615,6 +615,17 @@ def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messa
     return out
 
 
+def _without_empty_text_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
+    out: list[ai.messages.Message] = []
+    for message in messages:
+        parts = [part for part in message.parts
+                 if not (isinstance(part, ai.types.messages.TextPart) and not part.text)]
+        if parts:
+            out.append(message if len(parts) == len(message.parts)
+                       else message.model_copy(update={"parts": parts}))
+    return out
+
+
 def _is_message_part(value: Any) -> bool:
     return hasattr(value, "kind")
 
@@ -1583,6 +1594,8 @@ async def _stream_with_model(
     is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
 
     is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
+    if is_anthropic_wire:
+        messages = _without_empty_text_parts(messages)
     output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
     reasoning_params: ai_params.ReasoningParams | None = None
