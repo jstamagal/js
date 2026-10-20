@@ -747,6 +747,406 @@
 
 
 ################################################################################
+#  MODEL CALLS AND RETRIES
+################################################################################
+
+# Seconds before the first retry of a failed model call that named no Retry-
+# After.
+#set RETRY_BACKOFF_START 1
+
+# Each later retry waits this many times longer than the one before.
+#set RETRY_BACKOFF_MULTIPLIER 2
+
+# Longest wait between retries, in seconds, before jitter.
+#set RETRY_BACKOFF_MAX 16
+
+# Up to this many random seconds added to each retry wait.
+#set RETRY_BACKOFF_JITTER 1
+
+# on: a reply that stops short because the context silently overflowed is
+# retried after compaction.
+#set SILENT_OVERFLOW_RECOVERY on
+
+# on: when a provider rejects replayed signed reasoning, the call is retried
+# once without it.
+#set SIGNED_REASONING_RECOVERY on
+
+# Failures of one tool in a turn before the model is told to stop calling it.
+#set TOOL_ERRORS_MAX 3
+
+# /loop with a count gives up after count times this many attempts.
+#set LOOP_ATTEMPTS_MULTIPLIER 3
+
+# Consecutive failed /loop runs before the loop stops.
+#set LOOP_FAILURES_MAX 5
+
+# Longest pause between failed /loop runs, in seconds.
+#set LOOP_BACKOFF_MAX 8
+
+# on: malformed tool arguments are refused instead of repaired.
+#set TOOL_ARGUMENT_STRICT off
+
+# max_reasoning_tokens sent to DeepSeek models when the request sets none.
+#set DEEPSEEK_REASONING_TOKENS_MAX 32000
+
+# Reasoning effort for DeepSeek models when EFFORT is unset.
+#set DEEPSEEK_DEFAULT_EFFORT xhigh
+
+# include_reasoning sent to a Claude proxy when the request sets none.
+#set CLAUDE_PROXY_INCLUDE_REASONING on
+
+# on: Anthropic requests mark the prompt for caching.
+#set ANTHROPIC_PROMPT_CACHE on
+
+# How adaptive thinking is returned by Anthropic models: summarized or
+# omitted.
+#set ANTHROPIC_THINKING_DISPLAY summarized
+
+# Effort sent to an Anthropic model that requires one when EFFORT is unset.
+#set ANTHROPIC_REQUIRED_EFFORT low
+
+# Text verbosity sent with Codex requests: low, medium or high.
+#set CODEX_TEXT_VERBOSITY low
+
+# Reasoning summary asked of Codex models: auto, concise or detailed.
+#set CODEX_REASONING_SUMMARY detailed
+
+# originator header sent with Codex requests.
+#set CODEX_ORIGINATOR pi
+
+# User-Agent sent with Codex requests. Empty = js's own.
+#set CODEX_USER_AGENT ""
+
+# Client version sent with Codex requests. Empty = detected, or the built-in
+# one.
+#set CODEX_CLIENT_VERSION ""
+
+# on: the Codex client version is read from an installed codex CLI.
+#set CODEX_CLIENT_DETECT on
+
+
+################################################################################
+#  COMPACTION
+################################################################################
+
+# Compaction rounds one call may run to recover from a context overflow.
+#set COMPACTION_OVERFLOW_ROUNDS_MAX 3
+
+# Recent tool results an overflow compaction keeps whole, split across its
+# rounds.
+#set COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS 20
+
+# Shell that runs the compaction hint command. Empty = $SHELL, else /bin/sh.
+#set COMPACTION_HINT_SHELL_PROGRAM ""
+
+# Seconds the compaction hint command may run before it is killed.
+#set COMPACTION_HINT_TIMEOUT 30
+
+# Upper bound on COMPACTION_SUMMARY_TOKENS_MAX for the summary request.
+#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 8192
+
+# Automatic compactions in a row before automatic compaction pauses.
+#set COMPACTION_CONSECUTIVE_MAX 2
+
+
+################################################################################
+#  FILE AND SEARCH TOOLS
+################################################################################
+
+# on: a file must be read in the session before it can be edited or
+# overwritten.
+#set FILE_REQUIRE_READ on
+
+# on: write() refuses an existing file unless the call sets overwrite.
+#set WRITE_REQUIRE_OVERWRITE on
+
+# An exact edit whose old text is at least this many characters is applied to
+# an unread file.
+#set EDIT_READ_BYPASS_CHARACTERS 24
+
+# on: an edit whose old text is not found exactly may match after quotes,
+# dashes and whitespace are normalised.
+#set EDIT_FUZZY on
+
+# on: rereading an unchanged range returns a short note instead of the text
+# again.
+#set READ_DEDUPLICATE on
+
+# on: repeating an unchanged file search returns a short note instead of the
+# results again.
+#set SEARCH_DEDUPLICATE on
+
+# on: directory searches do not cross into other mounted file systems.
+#set SEARCH_ONE_FILE_SYSTEM on
+
+# on: a notebook must be read before a cell is edited.
+#set NOTEBOOK_REQUIRE_READ on
+
+# on: editing a code cell clears its outputs and execution count.
+#set NOTEBOOK_CLEAR_OUTPUTS on
+
+
+################################################################################
+#  SHELL, TERMINAL AND HOOKS
+################################################################################
+
+# on: shell commands run with pipefail, so a failing stage fails the pipeline.
+#set SHELL_PIPEFAIL on
+
+# on: js's managed tool directory is put at the front of PATH for shell
+# commands.
+#set SHELL_MANAGED_PATH on
+
+# on: a shell command still running when its wait ends is killed instead of
+# left running.
+#set SHELL_KILL_UNFINISHED off
+
+# Shell the terminal tool starts. Empty = $SHELL, else /bin/sh.
+#set TERMINAL_SHELL_PROGRAM ""
+
+# on: the terminal tool's shell inherits js's environment when not jailed.
+#set TERMINAL_ENVIRONMENT_INHERIT on
+
+# Shell that runs `on` hook commands. Empty = $SHELL, else /bin/sh.
+#set HOOK_SHELL_PROGRAM ""
+
+# Most agents one swarm bus may spawn.
+#set SWARM_SPAWN_MAX 8
+
+# on: parallel subagents split the parent's TOOL_RESULT_MAX, so each reply is
+# capped at its share.
+#set SUBAGENT_RESULT_SHARE on
+
+# on: language servers inherit js's environment when not jailed.
+#set LSP_ENVIRONMENT_INHERIT on
+
+# on: your home directory or / may be a language server's project root.
+#set LSP_ALLOW_HOME_ROOT off
+
+# on: listing or loading the toolbox first adds the shipped example tools.
+#set TOOLBOX_SEED_EXAMPLES on
+
+# on: a toolbox tool that uses an unbound name is refused.
+#set TOOLBOX_REQUIRE_BOUND_NAMES on
+
+
+################################################################################
+#  WEB AND SEARCH
+################################################################################
+
+# Key for serper_search. Empty = the SERPER_API_KEY environment variable.
+#set SERPER_API_KEY ""
+
+# Key for tavily_search. Empty = the TAVILY_API_KEY environment variable.
+#set TAVILY_API_KEY ""
+
+# Key for exa_search. Empty = the EXA_API_KEY environment variable.
+#set EXA_API_KEY ""
+
+# Key for docs_search. Empty = the CONTEXT7_API_KEY environment variable, else
+# the keyless rate limit.
+#set CONTEXT7_API_KEY ""
+
+# Key for jev. Empty = the TYPESAFE_API_KEY environment variable.
+#set TYPESAFE_API_KEY ""
+
+# on: browse runs obscura with --stealth.
+#set BROWSE_STEALTH on
+
+# on: browse may open a private-network IP address.
+#set BROWSE_ALLOW_PRIVATE_NETWORK on
+
+# Browser executable used when Playwright's own browser is missing.
+#set BROWSER_FALLBACK_FILE /opt/chrome-for-testing/chrome-linux64/chrome
+
+
+################################################################################
+#  SCREEN
+################################################################################
+
+# Mark on a tool call that is still running.
+#set EXCHANGE_MARK_RUNNING "…"
+
+# Mark on a tool call that succeeded.
+#set EXCHANGE_MARK_OK "✓"
+
+# Mark on a tool call that failed.
+#set EXCHANGE_MARK_FAILED "✗"
+
+# Rail drawn down the left of a tool call's rows.
+#set EXCHANGE_RAIL "▌"
+
+# Rich style of a tool call's name.
+#set EXCHANGE_HEADER_STYLE "bold"
+
+# Rich style of a tool call's key argument.
+#set EXCHANGE_ARGUMENT_STYLE "bold"
+
+# Characters of a tool argument shown on its one-line row.
+#set ARGUMENT_CHARACTERS_MAX 40
+
+# Shown in place of a newline inside a one-line tool argument.
+#set ARGUMENT_NEWLINE_MARK " ⏎ "
+
+# Marks text cut to fit.
+#set DISPLAY_ELLIPSIS "…"
+
+# Row shown between hunks of a diff.
+#set DIFF_HUNK_GAP "⋯"
+
+# Character of a markdown table's rules.
+#set TABLE_RULE "─"
+
+# Lines of a running shell command's output shown live.
+#set SHELL_LIVE_LINES_MAX 6
+
+# Rich style of a level-two markdown heading.
+#set MARKDOWN_HEADING_TWO_STYLE "underline"
+
+# Rich style of a level-three markdown heading.
+#set MARKDOWN_HEADING_THREE_STYLE "bold"
+
+# Rich style of a level-four markdown heading.
+#set MARKDOWN_HEADING_FOUR_STYLE "italic"
+
+# Padding drawn either side of inline code.
+#set MARKDOWN_INLINE_PADDING " "
+
+# on: a single newline in a reply breaks the line.
+#set MARKDOWN_HARD_BREAKS on
+
+# Frames of the busy spinner, one character each.
+#set SPINNER_FRAMES "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# Lines the full-screen view keeps in scrollback.
+#set SCROLLBACK_LINES_MAX 5000
+
+# hunspell dictionary for prompt spelling suggestions.
+#set SPELLCHECK_LANGUAGE en_US
+
+# Seconds hunspell may take before suggestions are skipped.
+#set SPELLCHECK_TIMEOUT 2
+
+# Clipboard backends tried in order when pasting an image: wayland, x11,
+# kitty.
+#set PASTE_IMAGE_BACKENDS ["wayland", "x11", "kitty"]
+
+# Seconds one clipboard backend may take.
+#set PASTE_IMAGE_TIMEOUT 5
+
+# strftime format of the timestamp on ex-line notes.
+#set NOTE_TIMESTAMP_FORMAT "%Y-%m-%d %H:%M:%S"
+
+
+################################################################################
+#  SESSIONS
+################################################################################
+
+# Session kinds the session list hides unless asked for all: empty, quick,
+# subagent, script.
+#set SESSION_HIDDEN_KINDS ["empty", "quick", "subagent", "script"]
+
+# Run modes whose sessions count as script sessions.
+#set SESSION_SCRIPT_MODES ["commit"]
+
+# A session with at most this many turns can count as quick.
+#set SESSION_QUICK_TURNS_MAX 1
+
+# A session with at most this many tool calls can count as quick.
+#set SESSION_QUICK_TOOL_CALLS_MAX 2
+
+# A session whose last reply is shorter than this can count as quick.
+#set SESSION_QUICK_REPLY_CHARACTERS_MAX 1000
+
+# In the session list, the last reply line starting with this mark is shown as
+# the session's status.
+#set SESSION_STATUS_MARK "📌"
+
+# on: a session's text file is rewritten when its journal changes.
+#set SESSION_TEXT_AUTO_REFRESH on
+
+
+################################################################################
+#  STARTUP AND FILES
+################################################################################
+
+# Instruction files read from ~/.js, in order.
+#set GLOBAL_INSTRUCTION_FILES ["JS.md", "JS.local.md"]
+
+# Instruction files read from the start directory, in order.
+#set PROJECT_INSTRUCTION_FILES ["AGENTS.md", "AGENTS.local.md"]
+
+# on: .env files are read from the start directory and every parent; off: the
+# start directory only.
+#set DOTENV_WALK_UP on
+
+# on: old setting names in jsrc files are rewritten at startup.
+#set JSRC_AUTO_MIGRATE on
+
+# Seconds an entry in ~/.js/tmp may go unmodified before startup removes it.
+#set TMP_AGE_MAX 86400
+
+# API key saved for a local server that needs none.
+#set LOCAL_API_KEY_PLACEHOLDER x
+
+# API key for an endpoint URI that names none.
+#set ENDPOINT_DEFAULT_KEY sk-dummy-key
+
+# Wire shape of an endpoint URI that names none.
+#set ENDPOINT_DEFAULT_SHAPE openai-completions
+
+# on: a stale model catalog is refreshed at startup.
+#set MODEL_CATALOG_AUTO_REFRESH on
+
+# Seconds before the model catalog counts as stale.
+#set MODEL_CATALOG_AGE_MAX 28800
+
+# on: a local server is asked for its model's context window.
+#set MODEL_CONTEXT_PROBE on
+
+
+################################################################################
+#  TOOL DOWNLOADS
+################################################################################
+
+# on: a tool binary js has not installed is looked for on PATH.
+#set TOOL_BINARY_PATH_FALLBACK on
+
+# aria2 --split for tool downloads.
+#set DOWNLOAD_SPLITS_MAX 8
+
+# aria2 --max-connection-per-server for tool downloads.
+#set DOWNLOAD_CONNECTIONS_MAX 8
+
+# aria2 --max-tries for tool downloads.
+#set DOWNLOAD_RETRIES_MAX 5
+
+# aria2 --retry-wait for tool downloads, in seconds.
+#set DOWNLOAD_RETRY_WAIT 1
+
+# User-Agent of tool installer requests.
+#set TOOL_INSTALLER_USER_AGENT js-tool-installer/0.1
+
+
+################################################################################
+#  JAIL
+################################################################################
+
+# Directories the -C jail always hides.
+#set JAIL_BASE_HIDDEN_DIRS ["/home", "/run/user"]
+
+# on: the -C jail hides your home directory.
+#set JAIL_HIDE_OPERATOR_HOME on
+
+# on: the -C jail hides network file systems.
+#set JAIL_HIDE_NETWORK_FILESYSTEMS on
+
+# on: the -C jail removes private directories left by js processes that are
+# gone.
+#set JAIL_CLEAN_PRIVATE_DIRS on
+
+
+################################################################################
 #  YOUR ALIASES AND EVENT HANDLERS
 ################################################################################
 # /save adds your `alias` and `on` lines below this one.
