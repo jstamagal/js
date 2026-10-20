@@ -307,9 +307,12 @@ def write_revision(
     if not body:
         return f"ERROR: no source for {name!r}"
     try:
-        ast.parse(body)
+        tree = ast.parse(body)
     except SyntaxError as exc:
         return f"ERROR: {name!r} does not parse: line {exc.lineno}: {exc.msg}"
+    definitions = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
+        return f"ERROR: source must define a top-level function or class named {name!r}"
 
     global_dir, project_dir = toolbox_dirs(cwd)
     directory = project_dir if scope == "project" else global_dir

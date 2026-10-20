@@ -245,6 +245,22 @@ def test_toolbox_save_accepts_an_explicit_source_with_no_kernel_at_all(ctx, monk
     assert tbmod.discover(Path(ctx.cwd))["adder"].history[0]["note"] == "by hand"
 
 
+def test_toolbox_save_refuses_source_without_the_named_definition(ctx):
+    cwd = Path(ctx.cwd)
+    original = "def adder(a, b):\n    return a + b\n"
+    tbmod.write_revision(cwd, "adder", original)
+    path = tbmod.discover(cwd)["adder"].path
+    before = path.read_bytes()
+
+    result = tbmod.toolbox(action="save", name="adder",
+                           source="def other():\n    return 1\n", context=ctx)
+
+    assert path.read_bytes() == before
+    assert result.startswith("ERROR")
+    assert tbmod.discover(cwd)["adder"].revision == 1
+    assert tbmod._archived_revisions(tbmod.discover(cwd)["adder"]) == []
+
+
 def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx):
     ctx.max_tool_result_bytes = 200
 
