@@ -709,6 +709,22 @@ def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
     assert result.startswith("ERROR:")
 
 
+def test_wiki_upsert_follows_this_contexts_own_upsert(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
+    page = vault / "concepts" / "shared.md"
+    fs.read(str(page), context=context)
+    wiki_write(str(vault), "concept", "first source", slug="shared", source_count=2,
+               overwrite=True, context=context)
+
+    result = wiki_write(str(vault), "concept", "second source", slug="shared", source_count=3,
+                        overwrite=True, context=context)
+
+    assert result.startswith("overwrote"), result
+    assert "second source" in page.read_text()
+
+
 def test_asset_copy_preserves_a_destination_created_after_the_check(tmp_path, monkeypatch):
     vault = _vault(tmp_path)
     (vault / "assets").mkdir()

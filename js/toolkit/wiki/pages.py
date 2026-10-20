@@ -134,7 +134,12 @@ def wiki_write(
                             f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
                             f"distinct {k} that just shares vocabulary.")
             context.snapshot(page)
-            page.write_text(content, encoding="utf-8")
+            data = content.encode("utf-8")
+            page.write_bytes(data)
+            # This context wrote every byte, so its next UPSERT needs no read.
+            written_hash = hashlib.sha256(data).hexdigest()[:16]
+            context.replace_read_coverage(page, written_hash, [], len(content.splitlines()), whole_file=True)
+            context.remember_content(page, written_hash, data)
     except OSError as exc:
         return f"ERROR: {exc}"
     return f"{'overwrote' if existed else 'wrote'} {page} (type: {ptype})"
