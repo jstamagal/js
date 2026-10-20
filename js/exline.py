@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import messages as msgs
-from . import pastes, paths
+from . import pastes, paths, fset
 
 NOTES_FILE = "notes.txt"
 BUFFER_FILE = "buffer.txt"
@@ -45,7 +45,7 @@ def append_note(text: str) -> Path:
     path = paths.notes_dir() / NOTES_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
+        fh.write(f"[{datetime.now().strftime(fset.setting_value("NOTE_TIMESTAMP_FORMAT"))}] {text}\n")
     return path
 
 

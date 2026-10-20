@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("NOTE_TIMESTAMP_FORMAT", "str", group="input"),
     SettingSpec("SPELLCHECK_TIMEOUT", "float", group="input"),
     SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
     SettingSpec("SPINNER_FRAMES", "str", group="display"),
