@@ -223,3 +223,19 @@ def test_patch_miss_names_the_closest_line(tmp_path):
     )
     assert result.startswith("ERROR: Could not find match")
     assert "Closest line is 2:" in result
+
+
+def test_registered_setting_can_disable_fuzzy_edits(tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+    from js.toolkit import fs
+    from js.toolkit.core import ToolContext
+
+    target = tmp_path / "quotes.txt"
+    original = 'say “before”\n'
+    target.write_text(original)
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"EDIT_FUZZY": False})))
+    fs.read(str(target), context=context)
+    fs.patch(str(target), old_string='say "before"', new_string='say "after"', context=context)
+    assert target.read_text() == original

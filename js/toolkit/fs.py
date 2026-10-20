@@ -584,7 +584,7 @@ def fs_read(
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
-    if earlier is not None:
+    if context.read_deduplicate and earlier is not None:
         return (
             f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
             f"(hash {content_hash}); that result is current.{suffix}"
@@ -615,7 +615,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     if not raw_path:
         return "ERROR: file_path is required"
     target = context.resolve_path(raw_path, write=True)
-    if target.exists() and not overwrite:
+    if target.exists() and context.write_require_overwrite and not overwrite:
         return (
             f"ERROR: {raw_path} already exists. To change part of it use patch; "
             "to replace it whole, read it first and pass overwrite=true."
@@ -1017,7 +1017,7 @@ def _widen_over_whitespace(
 # An exact match this long is its own proof: the model reproduced the lines
 # byte for byte and they are in the file now, so no prior read is needed.
 # Shorter or fuzzy matches still need the lines shown by a read.
-_SELF_EVIDENT_MIN_CHARS = 24
+
 
 
 def _apply_edit(
@@ -1040,7 +1040,7 @@ def _apply_edit(
 
     ``stale`` is the changed-since-read diff for the file, or None. It is the
     error for an edit that misses, and for one that is not self-evident; an
-    exact match of _SELF_EVIDENT_MIN_CHARS or more is applied without it and
+    exact match of EDIT_READ_BYPASS_CHARACTERS or more is applied without it and
     without the read ledger.
 
     When ``old`` is not in the text exactly, it is matched in _fuzzy_view of
@@ -1061,7 +1061,7 @@ def _apply_edit(
         )
     haystack, needle, origin = text, old_norm, None
     occurrences = _count_overlapping(text, old_norm)
-    if occurrences == 0:
+    if occurrences == 0 and context.edit_fuzzy:
         haystack, origin = _fuzzy_view(text)
         needle = _fuzzy_view(old_norm)[0]
         occurrences = _count_overlapping(haystack, needle) if needle else 0
@@ -1094,7 +1094,7 @@ def _apply_edit(
             "whitespace, and new_string differs from it only there, so this edit would not "
             "change the file"
         )
-    if fuzzy or len(old_norm) < _SELF_EVIDENT_MIN_CHARS:
+    if fuzzy or len(old_norm) < context.edit_read_bypass_characters:
         if stale:
             return stale
         guard = context.require_read(target, "edit it", content_hash=content_hash)
@@ -1534,7 +1534,7 @@ def fs_search(
     # stamp cannot vouch for a directory-root result: skip the memo for
     # directory roots. A regular-file root's stamp does establish what the hit
     # described (st_ino catches a rename-over that preserves size and mtime).
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    memoized = context.search_deduplicate and not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, stamp))
     cached = context.search_cache.get(cache_key) if memoized else None
@@ -1562,7 +1562,9 @@ def fs_search(
     # some entries are never returned.
     # `--one-file-system` keeps the walk on the filesystem the root is on: a
     # mount point under the root (an NFS share, an automount) is not entered.
-    argv = [rg, "--color=never", "--sort", "path", "--one-file-system"]
+    argv = [rg, "--color=never", "--sort", "path"]
+    if context.search_one_file_system:
+        argv.append("--one-file-system")
     if mode == "files":
         argv.append("--files")
     elif mode == "files_with_matches":
@@ -1968,7 +1970,7 @@ def ast_search(
     # Mirror fs_search: a directory's own stat does not move when a nested file
     # changes, so a directory-root result cannot be vouched for by the root's
     # stamp; only a regular-file root is memoized, keyed on its stamp.
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    memoized = context.search_deduplicate and not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit, stamp))
     cached = context.search_cache.get(cache_key) if memoized and not apply else None

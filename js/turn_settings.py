@@ -121,6 +121,12 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("search_one_file_system", "SEARCH_ONE_FILE_SYSTEM", flag, on_context=True),
+    TurnSetting("search_deduplicate", "SEARCH_DEDUPLICATE", flag, on_context=True),
+    TurnSetting("read_deduplicate", "READ_DEDUPLICATE", flag, on_context=True),
+    TurnSetting("edit_fuzzy", "EDIT_FUZZY", flag, on_context=True),
+    TurnSetting("edit_read_bypass_characters", "EDIT_READ_BYPASS_CHARACTERS", integer, on_context=True),
+    TurnSetting("write_require_overwrite", "WRITE_REQUIRE_OVERWRITE", flag, on_context=True),
     TurnSetting("file_require_read", "FILE_REQUIRE_READ", flag, on_context=True),
     TurnSetting("tool_errors_max", "TOOL_ERRORS_MAX", integer),
     TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),
