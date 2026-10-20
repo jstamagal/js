@@ -204,6 +204,19 @@ def test_commit_snapshot_restores_non_utf8_text(tmp_path, monkeypatch):
     assert legacy.read_bytes() == changed
 
 
+def test_commit_snapshot_preserves_an_untracked_dangling_symlink(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    repo = tmp_path / "links"
+    _init_repo(repo)
+    (repo / "current").symlink_to("missing-target")
+
+    snapshot = cli._snapshot_worktree(repo)
+
+    saved = snapshot / "untracked" / "current"
+    assert saved.is_symlink()
+    assert str(saved.readlink()) == "missing-target"
+
+
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))

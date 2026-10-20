@@ -3171,7 +3171,7 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
         dest = backup_dir / "untracked" / rel
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(repo_dir / rel, dest)
+            shutil.copy2(repo_dir / rel, dest, follow_symlinks=False)
         except OSError:
             continue  # a vanished/unreadable file must not abort the whole snapshot
     _prune_commit_backups(_commit_backup_root())
