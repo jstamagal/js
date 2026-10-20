@@ -76,6 +76,20 @@ def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     assert out["MODEL"] == "file-model"
 
 
+def test_save_preserves_disabled_reasoning(tmp_path):
+    from js import setcmd
+
+    store = settings.seed_defaults()
+    result = setcmd.apply_set(store, "EFFORT", "off")
+    assert result.error is None
+    path = tmp_path / "jsrc"
+
+    settings.save_settings_to_jsrc(path, store)
+
+    loaded = settings.collect_settings([path], env={})
+    assert loaded["EFFORT"] == store["EFFORT"] == "none"
+
+
 def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text(

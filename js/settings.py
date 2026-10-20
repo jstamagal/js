@@ -1018,6 +1018,8 @@ def jsrc_text(name: str, text: str) -> str:
 def _config_line_value(spec: SettingSpec, value: Any) -> str:
     """Render ``value`` as the right-hand side of a `set <key> <value>` line,
     so a saved line reloads to the same value (`jsrc_text`)."""
+    if spec.key == "EFFORT" and value == "none":
+        value = "off"
     return jsrc_text(spec.key, config_value_text(value))
 
 
