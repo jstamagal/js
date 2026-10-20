@@ -436,3 +436,15 @@ def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     # a directive after the broken one still runs (warn path, not silent "")
     out2 = expand_prompt(f"!{{file {path}}} and !{{env AFTER}}", allow_code=True, env={"AFTER": "SURVIVED"})
     assert out2.endswith(" and SURVIVED"), repr(out2)
+
+
+def test_expansion_accepts_subsystems_and_warning_sink(capsys):
+    from js.promptexpand import expand_prompt
+
+    warnings = []
+    result = expand_prompt("!{custom hi} !{missing}",
+                           subsystems={"custom": (False, lambda body, **kwargs: "!{custom again}")},
+                           warn=lambda message, **fields: warnings.append((message, fields)))
+    assert result == "!{custom again} !{missing}"
+    assert len(warnings) == 1
+    assert capsys.readouterr().err == ""

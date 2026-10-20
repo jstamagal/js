@@ -42,6 +42,7 @@ directive without the loader running it. Two ways:
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 import re
 import shutil
 import subprocess
@@ -63,6 +64,9 @@ class PromptExpansionError(ValueError):
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _VARIABLE = re.compile(r"(?P<vbs>\\)?(?P<vtick>`)?%%(?P<variable>[A-Za-z_][A-Za-z0-9_]*)%%(?(vtick)`)")
+
+
+_WARNING: ContextVar = ContextVar("js_expansion_warning", default=None)
 
 
 def session_variables(cfg) -> dict[str, str]:
@@ -113,6 +117,8 @@ def expand_prompt(
     timeout_s: int | None = None,
     max_output_bytes: int | None = None,
     on_error: str = "warn",
+    subsystems: Mapping | None = None,
+    warn=None,
 ) -> str:
     """Expand ``%%VAR%%``, ``{{VAR}}``, inline and fenced subsystem directives.
 
@@ -148,6 +154,11 @@ def expand_prompt(
 
     environ = os.environ if env is None else env
     builtins = variables or {}
+    warning = msgs.warn if warn is None else warn
+    def dispatch(*args):
+        if subsystems is None:
+            return _run_subsystem(*args)
+        return _run_subsystem(*args, subsystems=subsystems)
 
     def _variable(m: re.Match) -> str:
         if m.group("vbs") is not None:
@@ -184,7 +195,7 @@ def expand_prompt(
                 # spaces in because it is nested in a list; dropping the indent
                 # pulls the expansion out of that list and changes the structure
                 # of the prompt the model reads.
-                return m.group("find") + _run_subsystem(
+                return m.group("find") + dispatch(
                     m.group("fsub"),
                     _VARIABLE.sub(_variable, fbody),
                     allow_code,
@@ -197,7 +208,7 @@ def expand_prompt(
             if m.group("itick") is not None or m.group("etick") is not None:
                 return m.group(0)
             if m.group("isub") is not None:
-                return _run_subsystem(
+                return dispatch(
                     m.group("isub"),
                     _VARIABLE.sub(_variable, (m.group("iargs") or "").strip()),
                     allow_code,
@@ -216,10 +227,14 @@ def expand_prompt(
             if on_error == "raise":
                 raise
             # Keep the directive as written, warn, and let startup go on.
-            msgs.warn(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
+            warning(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
             return m.group(0)
 
-    return _DIRECTIVE.sub(_resolve, text)
+    token = _WARNING.set(warning)
+    try:
+        return _DIRECTIVE.sub(_resolve, text)
+    finally:
+        _WARNING.reset(token)
 
 
 # --------------------------------------------------------------------------- #
@@ -233,12 +248,15 @@ def _run_subsystem(
     environ: dict,
     timeout_s: int,
     max_output_bytes: int,
+    *,
+    subsystems: Mapping | None = None,
 ) -> str:
+    subsystems = _SUBSYSTEMS if subsystems is None else subsystems
     key = name.lower()
-    spec = _SUBSYSTEMS.get(key)
+    spec = subsystems.get(key)
     if spec is None:
         raise PromptExpansionError(
-            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(_SUBSYSTEMS)))
+            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(subsystems)))
         )
     is_code, runner = spec
     if is_code and not allow_code:
@@ -261,14 +279,12 @@ def _sub_env(body: str, *, environ: dict, timeout_s: int) -> str:
     return environ.get(name, "")
 
 
-def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
+def _sub_file(body: str, *, environ: dict, timeout_s: int, on_missing=None) -> str:
     path = Path(os.path.expanduser(body.strip()))
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
-        # A missing/unreadable file embeds nothing rather than aborting the
-        # whole prompt, so optional box-info embeds never brick startup.
-        return ""
+    except OSError as exc:
+        return "" if on_missing is None else on_missing(path, exc)
     except ValueError as exc:
         # A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not
         # OSError. Do not embed nothing silently: surface the unreadable
@@ -287,7 +303,7 @@ def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> st
 
 
 def _run_capture(
-    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False
+    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False, warn=None
 ) -> str:
     try:
         proc = _run_capped(
@@ -317,7 +333,7 @@ def _run_capture(
         if not strict and stdout:
             # grep with no match or a script ending on a false test exits
             # nonzero after printing what the prompt wants.
-            msgs.warn(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
+            (warn if warn is not None else _WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
             return stdout.rstrip("\n")
         err = stderr.strip()
         if err:
