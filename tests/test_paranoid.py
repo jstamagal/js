@@ -108,7 +108,7 @@ BAD_SECRET_VALUES = {
 }
 
 
-def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch):
+def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch, capsys):
     from js import settings, setcmd
 
     secret_keys = {spec.key for spec in settings.REGISTRY if spec.secret}
@@ -125,8 +125,7 @@ def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch):
         with pytest.raises(ValueError) as caught:
             settings.parse_extra_arg(f"{key}={bad}")
         assert SENTINEL not in str(caught.value), key
-        warned: list[str] = []
-        with monkeypatch.context() as patch:
-            patch.setattr(settings.msgs, "warn", lambda *a, **k: warned.append(repr((a, k))))
-            settings.apply_env_overrides({}, {f"JS_{key}": bad})
-        assert warned and not any(SENTINEL in w for w in warned), key
+        capsys.readouterr()
+        settings.apply_env_overrides({}, {f"JS_{key}": bad})
+        warned = capsys.readouterr().err
+        assert warned and SENTINEL not in warned, key

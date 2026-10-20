@@ -404,7 +404,7 @@ class ModelCaller:
             })
         output.sink_of(self._telemetry).emit(output.event(
             "call_stats", label=context.net_label, elapsed_s=time.time() - t0, finish=finish, tool_calls=n_calls,
-            tokens=out_tokens, first_token_s=result.first_token_s,
+            tokens=out_tokens, first_token_s=getattr(result, "first_token_s", None),
             prompt_tokens=context.last_prompt_tokens, cached_tokens=context.last_cached_tokens,
             trace=self._trace, suppressed=self._suppress))
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
