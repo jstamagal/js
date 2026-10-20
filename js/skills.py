@@ -311,10 +311,16 @@ def discover_skills(
     # Within a scope the cross-client dir (.agents/skills) is scanned first and
     # the js-native dir last, so native wins a name collision — with a warning,
     # because two same-named skills in one scope is ambiguity, not layering.
+    # Run from $HOME, the project dirs are the global dirs: a project root that
+    # resolves to a global root is skipped, so its skills keep the global label.
+    project_roots = tuple(
+        root for root in (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")
+        if not any(_same_file(root, global_dir) for global_dir in (user_root, global_root))
+    )
     layers = (
         ("builtin", (builtin_root,)),
         ("global", (user_root, global_root)),
-        ("project", (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")),
+        ("project", project_roots),
     )
     selected: dict[str, _SkillRecord] = {}
     for source, roots in layers:

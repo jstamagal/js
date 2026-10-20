@@ -353,3 +353,18 @@ def test_malformed_skill_warns_on_one_line_once(tmp_path, capsys):
     lines = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
     assert len(lines) == 1
     assert str(bad) in lines[0]
+
+
+def test_project_dirs_that_are_the_global_dirs_keep_the_global_label(tmp_path):
+    # Run from home: project_dir/.agents/skills is the shared global root and
+    # project_dir/.js/skills is the js global root.
+    home = tmp_path / "home"
+    _write(home / ".agents" / "skills" / "shared" / "SKILL.md", "---\ndescription: Shared skill\n---\nBody\n")
+    _write(home / ".js" / "skills" / "native" / "SKILL.md", "---\ndescription: Native skill\n---\nBody\n")
+    catalog = discover_skills(
+        home,
+        builtin_dir=tmp_path / "package",
+        global_dir=home / ".js" / "skills",
+        user_dir=home / ".agents" / "skills",
+    )
+    assert {skill.name: skill.source for skill in catalog.skills} == {"shared": "global", "native": "global"}

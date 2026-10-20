@@ -9,7 +9,7 @@ reference implementation, not as the target.
 
 | Stage | Spec | js now |
 |---|---|---|
-| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `js/skills/` (ships in the package), global `~/.agents/skills` then `~/.js/skills`, project `./.agents/skills` then `./.js/skills`. Native wins within a layer; a higher layer shadows a lower one by name. |
+| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `js/skills/` (ships in the package), global `~/.agents/skills` then `~/.js/skills`, project `./.agents/skills` then `./.js/skills`. A project dir that resolves to a global dir (js run from `$HOME`) is skipped, so those skills keep the `global` source and are scanned once. Native wins within a layer; a higher layer shadows a lower one by name. |
 | Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools`, `disable-model-invocation` and `paths`. `js/skills.py` indexes metadata only; bodies read at activation. |
 | **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
 | Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
