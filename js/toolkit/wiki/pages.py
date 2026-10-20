@@ -96,29 +96,6 @@ def wiki_write(
     folder.mkdir(exist_ok=True)
     s = slugify(slug or title)
     page = folder / f"{s}.md"
-    existed = page.exists()
-    if existed and not overwrite:
-        return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
-                f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
-    if existed:
-        guard = context.require_read(page, "overwrite it")
-        if guard:
-            return guard
-
-    # Near-match guard for entity/concept: refuse silently-different slugs that
-    # describe the same thing (e.g. -prompting / -method / -specs variants).
-    # Synthesis can be near-similar legitimately; source has a 1:1 raw mapping
-    # anyway and is allowed.
-    if not page.exists() and not overwrite and not override_dedup and k in ("entity", "concept"):
-        near = _find_near_matches(folder, s)
-        if near:
-            listed = "\n  ".join(str(p) for p in near[:5])
-            return (f"NEAR-MATCH: existing page(s) likely cover this same {k}:\n  {listed}\n"
-                    f"Read the closest one, UPSERT into IT (add the new source link, bump "
-                    f"source_count, merge body) with overwrite=true.\n"
-                    f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
-                    f"distinct {k} that just shares vocabulary.")
-
     ptype = KIND_TYPE[k]
     tag_list = [KIND_TAG[ptype]] + [t.strip() for t in tags.split(",") if t.strip()]
     fm = ["---", f"type: {ptype}", f"tags: {json.dumps(tag_list, ensure_ascii=False)}"]
@@ -134,6 +111,26 @@ def wiki_write(
     content = "\n".join(fm) + "\n\n" + head + "\n\n" + body.strip() + "\n"
     try:
         with vault_lock(vp):
+            existed = page.exists()
+            if existed and not overwrite:
+                return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
+                        f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
+            if existed:
+                guard = context.require_read(page, "overwrite it")
+                if guard:
+                    return guard
+
+            # Entity and concept slugs are checked under the vault lock so
+            # concurrent writers see every page already published.
+            if not existed and not overwrite and not override_dedup and k in ("entity", "concept"):
+                near = _find_near_matches(folder, s)
+                if near:
+                    listed = "\n  ".join(str(p) for p in near[:5])
+                    return (f"NEAR-MATCH: existing page(s) likely cover this same {k}:\n  {listed}\n"
+                            f"Read the closest one, UPSERT into IT (add the new source link, bump "
+                            f"source_count, merge body) with overwrite=true.\n"
+                            f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
+                            f"distinct {k} that just shares vocabulary.")
             page.write_text(content, encoding="utf-8")
     except OSError as exc:
         return f"ERROR: {exc}"

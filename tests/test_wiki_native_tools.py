@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 from js.toolkit import ToolContext
@@ -8,6 +11,7 @@ from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
+from js.toolkit.wiki import pages as wiki_pages_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
 from js.toolkit.wiki.pages import wiki_write
@@ -27,6 +31,33 @@ def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "test@example.com"], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "test"], check=True)
+
+
+def test_concurrent_page_creates_preserve_the_first_writers_content(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    page = vault / "sources" / "shared.md"
+    barrier = threading.Barrier(2)
+    real_lock = wiki_pages_module.vault_lock
+    persisted = []
+
+    @contextmanager
+    def synchronized_lock(path):
+        barrier.wait(timeout=10)
+        with real_lock(path):
+            yield
+            persisted.append(page.read_bytes())
+
+    monkeypatch.setattr(wiki_pages_module, "vault_lock", synchronized_lock)
+
+    def create(body):
+        return wiki_write(str(vault), "source", body, slug="shared", context=_ctx(tmp_path))
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(create, ["first agents contribution", "second agents contribution"]))
+
+    assert len(results) == len(persisted) == 2
+    assert persisted[1] == persisted[0]
+    assert page.read_bytes() == persisted[0]
 
 
 def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
