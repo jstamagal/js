@@ -131,6 +131,7 @@ class ModelRequest:
     extra: Any = None
     sampling: Sampling | None = None
     cache_key: str | None = None
+    settings: dict | None = None
 
 
 @dataclass
@@ -335,6 +336,7 @@ class ModelCaller:
             trace_request_schemas=convo.schemas,
             trace_request_from=convo.sent,
             cache_key=request.cache_key,
+            settings=request.settings,
             stream_idle_seconds=self._limits.stream_idle,
         )
         if self._trace_sink is not None:

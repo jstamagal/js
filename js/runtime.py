@@ -1623,6 +1623,7 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
         extra=routing.provider_extra_params(cfg),
         sampling=sampling,
         cache_key=_cache_key(cfg),
+        settings=getattr(cfg, "settings", None),
     )
 
 

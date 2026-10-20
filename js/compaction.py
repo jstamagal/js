@@ -870,6 +870,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),
                 stream_idle_seconds=idle,
+                settings=settings,
             ), budget)
         except ai.ProviderAPIError as exc:
             if not is_context_overflow_error(exc) or depth >= _SUMMARY_SPLIT_DEPTH or len(head) < 2:

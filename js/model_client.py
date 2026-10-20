@@ -25,6 +25,7 @@ import ai
 import httpx2
 
 from . import codex_auth, codex_provider, messages as msgs, activity, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import settings as _settings
 from .sampling import Sampling
 from .text_bytes import byte_prefix, cap_text
 import ai.types.messages
@@ -1518,6 +1519,7 @@ async def stream_model_async(
     trace_request_from: int = 0,
     cache_key: str | None = None,
     stream_idle_seconds: float | None = None,
+    settings: dict | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
 
@@ -1572,6 +1574,7 @@ async def stream_model_async(
             thinking_budget=thinking_budget,
             cache_key=cache_key,
             stream_idle_seconds=stream_idle_seconds,
+            settings=settings,
         )
     finally:
         try:
@@ -1601,6 +1604,7 @@ async def _stream_with_model(
     thinking_budget: int | None,
     cache_key: str | None,
     stream_idle_seconds: float | None,
+    settings: dict | None,
 ) -> ModelStreamResult:
     # Per-provider params: this is the canonical place to encode quirks. We build
     # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
@@ -1714,7 +1718,7 @@ async def _stream_with_model(
     # `js --model nvidia/deepseek-ai/deepseek-v4-pro-0813 -p foo` returned
     # 400 Unsupported parameter(s): `max_reasoning_tokens`.
     if is_deepseek_wire and reasoning_effort != "none":
-        extra_body.setdefault("max_reasoning_tokens", 32_000)
+        extra_body.setdefault("max_reasoning_tokens", _settings.knob(settings, "DEEPSEEK_REASONING_TOKENS_MAX"))
 
     # Claude omits its thinking text unless the request asks for it. On the
     # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
@@ -1722,7 +1726,7 @@ async def _stream_with_model(
     # which the proxy maps onto the same display. Without it a Claude turn shows
     # no reasoning and the session keeps none to replay.
     if not is_anthropic_wire and reasoning.claude_model(model_name) and reasoning_effort != "none":
-        extra_body.setdefault("include_reasoning", True)
+        extra_body.setdefault("include_reasoning", _settings.knob(settings, "CLAUDE_PROXY_INCLUDE_REASONING"))
 
     # Prompt caching. Every turn resends the whole conversation, so the prefix it
     # shares with the previous turn is the bulk of each request, and the three
@@ -1750,7 +1754,7 @@ async def _stream_with_model(
         sdk_provider_name=sdk_provider_name,
         base_url=provider_base_url,
     )
-    if is_anthropic_wire:
+    if is_anthropic_wire and _settings.knob(settings, "ANTHROPIC_PROMPT_CACHE"):
         cache_params = ai_params.CacheParams()
     elif cache_key and accepts_cache_key:
         cache_params = ai_params.CacheParams(key=cache_key)

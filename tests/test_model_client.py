@@ -1081,3 +1081,14 @@ def test_configured_framing_headers_never_reach_the_request(monkeypatch, provide
     assert sent.get_list("content-type") == ["application/json"]
     assert sent.get_list("transfer-encoding") == []
     assert "elsewhere.invalid" not in sent.get_list("host")
+
+
+def test_registered_deepseek_budget_reaches_wire(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
+    model_client.stream_model(
+        model_id="deepseek-chat", provider_id="deepseek", provider_base_url=None,
+        provider_api_key="x", messages=[ai.user_message("hi")], tools=None,
+        max_output_tokens=64, reasoning_effort=None, on_text=lambda _s: None,
+        settings={"DEEPSEEK_REASONING_TOKENS_MAX": 12000},
+    )
+    assert _pview(factory.kwargs["params"])["extra_body"]["max_reasoning_tokens"] == 12000

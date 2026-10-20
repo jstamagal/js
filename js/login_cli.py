@@ -523,7 +523,8 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
         chunks.append(chunk)
 
     try:
-        run = SimpleNamespace(**turn_settings.project(config.run_settings()))
+        settings = config.run_settings()
+        run = SimpleNamespace(**turn_settings.project(settings))
         result = model_client.stream_model(
             model_id=model_id,
             provider_id=login.provider_id,
@@ -537,6 +538,7 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             on_text=on_text,
             retry_budget=retry.Budget.from_settings(None),
             stream_idle_seconds=retry.idle_seconds(None),
+            settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
         msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")

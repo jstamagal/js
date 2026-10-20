@@ -121,6 +121,9 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("anthropic_prompt_cache", "ANTHROPIC_PROMPT_CACHE", flag),
+    TurnSetting("claude_proxy_include_reasoning", "CLAUDE_PROXY_INCLUDE_REASONING", flag),
+    TurnSetting("deepseek_reasoning_tokens_max", "DEEPSEEK_REASONING_TOKENS_MAX", integer),
     TurnSetting("compaction_consecutive_max", "COMPACTION_CONSECUTIVE_MAX", integer),
     TurnSetting("compaction_summary_request_tokens_max", "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", integer),
     TurnSetting("compaction_hint_timeout", "COMPACTION_HINT_TIMEOUT", integer),
