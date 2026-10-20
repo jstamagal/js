@@ -292,7 +292,7 @@ class TurnBudget:
         before_chars = compaction.history_chars(messages)
         self._status.compacting = True
         try:
-            with stream_transport.net_role("Compacting"):
+            with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
                 result = await compaction.compact_now(
                     cfg, self._convo.system, messages, focus=focus, forced=True,
                     preserve_from=preserve_from, trigger=check.trigger, flight_data=check.flight_data,

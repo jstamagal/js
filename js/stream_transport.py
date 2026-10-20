@@ -178,7 +178,7 @@ class NetCall:
 
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
-        if label == "Compacting":
+        if label == msgs.COMPACTING_ROLE.words():
             return msgs.NET_COMPACTING.said(model=self._model, url=self._url)
         if label:
             entry = msgs.NET_ROLE_CONNECTING_AGENT if agent else msgs.NET_ROLE_CONNECTING

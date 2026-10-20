@@ -1297,6 +1297,8 @@ FSET_VALUE = Message("{name} {value}")
 FSET_EMPTY = Message("{name}")
 
 
+COMPACTING_ROLE = Message("Compacting", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

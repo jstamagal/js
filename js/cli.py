@@ -1165,7 +1165,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
-        with stream_transport.net_role("Compacting"):
+        with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
             outcome = await compaction.maybe_auto_compact_async(
                 active_cfg,
                 state.setdefault("auto_compact", compaction.AutoCompactState()),
@@ -1953,7 +1953,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         focus = ""
     try:
         compact_cfg = _cfg_for_live_state(cfg, state)
-        with stream_transport.net_role("Compacting"):
+        with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
                                                  focus=focus, forced=forced, **_compact_hooks(state, compact_cfg))
     except Exception as e:  # noqa: BLE001
