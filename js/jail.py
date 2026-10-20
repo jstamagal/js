@@ -433,7 +433,7 @@ class Jail:
         # `argv` (its `covered` check), so it keeps that bind's access here too.
         areas += [Bind(p, False) for p in self._path_dirs(os.environ.get("PATH", ""))
                   if not any(_under(p, _real(b.path)) for b in explicit)]
-        return areas
+        return list({area.path: area for area in areas}.values())
 
     def _path_dirs(self, path_value: str) -> list[Path]:
         """PATH directories that sit in a hidden tree or under the host /tmp
@@ -519,6 +519,9 @@ class Jail:
             raise JailError(f"{path} holds a path hidden in the jail (JAIL_HIDE); a tool may not change it")
         if write and not best.rw:
             raise JailError(f"{path} is read-only in the jail (bound from {best.path})")
+        if write and any(not area.rw and area.path != real and _under(area.path, real)
+                         for area in areas):
+            raise JailError(f"{path} holds a read-only path in the jail; a tool may not change it")
         return real
 
     def bound(self, path: Path, setting: object = ()) -> bool:

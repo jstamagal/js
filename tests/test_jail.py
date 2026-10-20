@@ -95,6 +95,44 @@ def test_other_views_of_a_hidden_home_are_hidden():
     assert jail._other_views(Path("/home/op"), mounts) == [Path("/mnt/pool/backup/home/op")]
 
 
+def test_removing_a_parent_preserves_a_read_only_bind(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    protected = root / "parent" / "protected"
+    protected.mkdir(parents=True)
+    key = protected / "data"
+    key.write_text("keep")
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(protected),)
+
+    result = tool("remove", context, path=str(protected.parent), permanent=True)
+
+    assert key.exists()
+    assert key.read_text() == "keep"
+    assert isinstance(result, jail.Refusal)
+
+
+def test_removing_a_parent_obeys_a_writable_bind_override(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    bound = root / "parent" / "bound"
+    bound.mkdir(parents=True)
+    (bound / "data").write_text("remove")
+    private = tmp_path / "private"
+    private.mkdir()
+    active = jail.Jail(root=root, bwrap="bwrap", private=private)
+    active.add(jail.Bind(bound, True))
+    monkeypatch.setattr(jail, "ACTIVE", active)
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(bound),)
+
+    result = tool("remove", context, path=str(bound.parent), permanent=True)
+
+    assert not isinstance(result, jail.Refusal)
+    assert not bound.parent.exists()
+
+
 @needs_bwrap
 def test_read_of_zshrc_is_refused_with_one_line(jailed):
     result = tool("read", jailed, path="~/.zshrc")
