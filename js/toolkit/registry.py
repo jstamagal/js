@@ -578,27 +578,31 @@ def _swarm_tools() -> tuple[Tool, ...]:
 def build_default_registry(
     prompts_root: Path | Sequence[Path] | None = None,
     flags: tuple[str, ...] = ("model_override",),
+    *,
+    suites: Sequence[tuple[str, Sequence[Tool]]] | None = None,
 ) -> ToolRegistry:
-    """Assemble every builtin tool plus the agent tools under ``prompts_root``."""
-    suites = (
-        ("fs", fs.tools()),
-        ("shell", process_net.tools()),
-        ("search", search.tools()),
-        ("jev", jev.tools()),
-        ("terminal", terminal.tools()),
-        ("browser", browser.tools()),
-        ("meta", meta.tools(flags)),
-        ("wiki", wiki.tools()),
-        ("kernel", kernel.tools()),
-        ("toolbox", toolbox.tools()),
-        ("lsp", lsp.tools()),
-        ("notebook", notebook.tools()),
-        ("swarm", _swarm_tools()),
-    )
+    """Assemble the supplied suites and agent roots, using the stock surface by default."""
+    if suites is None:
+        suites = (
+            ("fs", fs.tools()),
+            ("shell", process_net.tools()),
+            ("search", search.tools()),
+            ("jev", jev.tools()),
+            ("terminal", terminal.tools()),
+            ("browser", browser.tools()),
+            ("meta", meta.tools(flags)),
+            ("wiki", wiki.tools()),
+            ("kernel", kernel.tools()),
+            ("toolbox", toolbox.tools()),
+            ("lsp", lsp.tools()),
+            ("notebook", notebook.tools()),
+            ("swarm", _swarm_tools()),
+        )
     base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
     reserved = {tool.name for tool in base_tools}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)
-    all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
+    roots = _default_prompts_root() if prompts_root is None else prompts_root
+    all_tools = base_tools + _agent_tools(roots, reserved)
     return _registry_from_tools(all_tools)
 
 

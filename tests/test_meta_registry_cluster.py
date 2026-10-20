@@ -181,3 +181,13 @@ def test_good_exact_and_glob_selectors_still_resolve(capsys):
     assert "read" in names
     assert "wiki_write" in names and "wiki_convert" in names
     assert capsys.readouterr().err == ""
+
+
+def test_registry_accepts_assembly_suites_without_stock_agents():
+    from js.toolkit import Tool
+    from js.toolkit.registry import build_default_registry
+
+    tool = Tool("custom", "custom tool", lambda **kwargs: "ok", {})
+    registry = build_default_registry(prompts_root=(), suites=(("assembly", (tool,)),))
+    assert tuple(registry.by_name) == ("custom",)
+    assert registry.resolve("custom").source == "assembly"
