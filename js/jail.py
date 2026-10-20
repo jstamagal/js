@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -495,7 +496,28 @@ class Jail:
         """The host path a file tool uses for ``path``. Raises JailError when
         the jail does not show it, or shows it read-only and ``write`` is set."""
         mapped = self.host_path(path, setting)
-        real = _real(mapped) if follow else _real(mapped.parent) / mapped.name
+        pending = deque(Path(os.path.abspath(path)).parts[1:])
+        current = Path("/")
+        links = 0
+        while pending:
+            part = pending.popleft()
+            if part == "..":
+                current = current.parent
+                continue
+            current /= part
+            if not pending and not follow:
+                break
+            try:
+                target = Path(os.readlink(self.host_path(current, setting)))
+            except OSError:
+                continue
+            links += 1
+            if links > 40:
+                raise JailError(f"{path} has too many symbolic links")
+            current = Path("/") if target.is_absolute() else current.parent
+            pending.extendleft(reversed(target.parts[1:] if target.is_absolute() else target.parts))
+        resolved = self.host_path(current, setting)
+        real = _real(resolved) if follow else _real(resolved.parent) / resolved.name
         areas = self._areas(setting)
         # The innermost area containing the path decides, as the innermost
         # mount does inside the jail.
@@ -507,7 +529,7 @@ class Jail:
         # there; a missing path in them is a host path the jail does not show.
         private_miss = (not write and _under(mapped, self.private)
                         and not _under(Path(os.path.abspath(path)), self.private)
-                        and not os.path.lexists(mapped))
+                        and not os.path.lexists(real))
         if best is None or private_miss:
             raise JailError(
                 f"{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths"

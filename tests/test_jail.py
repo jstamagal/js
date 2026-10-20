@@ -331,6 +331,25 @@ def test_tmp_is_private_and_shared_with_the_file_tools(jailed):
     assert "from-tool" in result
 
 
+@pytest.mark.parametrize("source", ("root", "tmp", "js_tmp"))
+@pytest.mark.parametrize("suffix", ("", "/value"))
+def test_symlinks_into_private_tmp_use_the_jail_namespace(jailed, source, suffix):
+    current = jail.active()
+    target = current.tmp / "target"
+    if suffix:
+        target.mkdir()
+        target /= "value"
+    target.write_text("private value")
+    directory = getattr(current, source)
+    (directory / "link").symlink_to("/tmp/target")
+    visible = {
+        "root": current.root / "link",
+        "tmp": Path("/tmp/link"),
+        "js_tmp": paths.user_home() / ".js" / "tmp" / "link",
+    }[source]
+    assert current.confine(Path(str(visible) + suffix)).read_text() == "private value"
+
+
 @needs_bwrap
 def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
     """A /tmp path absent from the jail's private /tmp is outside the jail; the
