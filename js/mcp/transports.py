@@ -372,6 +372,9 @@ class StreamableHTTPTransport:
     def last_event_id(self) -> str | None:
         return self._last_event_id
 
+    def set_protocol_version(self, version: str) -> None:
+        self._protocol_version = version
+
     async def start(self) -> StreamableHTTPTransport:
         if self._closed:
             raise StreamableHTTPTransportError(self._diagnostic("is closed"))

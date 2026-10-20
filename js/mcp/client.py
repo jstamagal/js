@@ -135,6 +135,9 @@ class MCPClient:
                         f"server selected unsupported MCP protocol version "
                         f"{result.protocol_version!r}"
                     )
+                set_version = getattr(peer.transport, "set_protocol_version", None)
+                if set_version is not None:
+                    set_version(result.protocol_version)
                 await peer.notify("notifications/initialized")
                 async with self._lifecycle_lock:
                     if self._closed or self.peer is not peer or peer.closed:

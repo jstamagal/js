@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from js.mcp.client import MCPClient
 from js.mcp.transports import StreamableHTTPTransport, StreamableHTTPTransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -139,9 +140,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def server():
+def server(handler=Handler):
     state = State()
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.state = state
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -156,6 +157,41 @@ def server():
 
 def request(method="test/json", request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method}
+
+
+def test_http_headers_follow_the_negotiated_protocol_version():
+    class NegotiatingHandler(Handler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.state.record("POST", self.headers, body)
+            method = body["method"]
+            if method == "initialize":
+                result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}},
+                          "serverInfo": {"name": "older-server", "version": "1"}}
+            elif self.headers.get("MCP-Protocol-Version") != "2025-03-26":
+                self._body(400, "application/json", b"")
+                return
+            elif method == "notifications/initialized":
+                self._body(202, "application/json", b"")
+                return
+            else:
+                result = {"tools": [{"name": "ready", "inputSchema": {"type": "object"}}]}
+            payload = {"jsonrpc": "2.0", "id": body["id"], "result": result}
+            self._body(200, "application/json", json.dumps(payload).encode())
+
+        def do_GET(self):
+            self._body(405, "application/json", b"")
+
+    async def scenario(url):
+        client = MCPClient(lambda: StreamableHTTPTransport(url))
+        try:
+            await client.initialize(timeout=1)
+            assert [tool["name"] for tool in await client.list_tools(timeout=1)] == ["ready"]
+        finally:
+            await client.close()
+
+    with server(NegotiatingHandler) as (_state, url):
+        run(scenario(url))
 
 
 def test_json_and_sse_post_replies_track_session_and_event_fields():
