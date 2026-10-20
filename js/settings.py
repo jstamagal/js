@@ -460,7 +460,7 @@ def is_key_name(value: object) -> bool:
 # default/auto/unset synonyms. Clearing the setting back to provider-default is
 # `set -EFFORT`, never a magic value here.
 REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
-_REASONING_EFFORT_ERROR = "expected " + "|".join(REASONING_EFFORT_VALUES)
+_REASONING_EFFORT_ERROR = msgs.EXPECTED_REASONING_EFFORT.format(choices="|".join(REASONING_EFFORT_VALUES))
 
 
 def steer_mode(value: Any) -> str:
@@ -563,9 +563,9 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         try:
             words = shlex.split(text)
         except ValueError as exc:
-            return None, f"expected a shell-quoted command: {exc}"
+            return None, msgs.EXPECTED_SHELL_QUOTED_COMMAND.words(exc=exc)
         if not words:
-            return None, "expected a command"
+            return None, msgs.EXPECTED_COMMAND.words()
         return text, None
     if spec.key == "EXTRA_HEADERS" and text:
         try:
@@ -688,7 +688,7 @@ def parse_header_lines(text: str | None) -> dict[str, str]:
         name, sep, value = entry.partition(":")
         name, value = name.strip(), value.strip()
         if not sep or not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
-            raise ValueError(f"not a header (want 'Name: value'): {entry}")
+            raise ValueError(msgs.SETTING_NOT_A_HEADER_WANT_NAME_VALUE.format(entry=entry))
         headers[name] = value
     return headers
 
@@ -750,7 +750,7 @@ def get_dotted(settings: dict, path: tuple[str, ...], default: Any = None) -> An
 def _parse_dotted_key(key: str) -> tuple[str, ...]:
     parts = tuple(p for p in key.split(".") if p)
     if not parts:
-        raise ValueError(f"empty key: {key!r}")
+        raise ValueError(msgs.SETTING_EMPTY_KEY.format(key=key))
     return parts
 
 

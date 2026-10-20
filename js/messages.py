@@ -1479,6 +1479,16 @@ CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl fi
 
 CONFIG_AGENT_AT_IS_UNREADABLE = "agent {agent_id!r} at {candidate} is unreadable: {strerror}"
 
+EXPECTED_REASONING_EFFORT = "expected {choices}"
+
+EXPECTED_SHELL_QUOTED_COMMAND = Message("expected a shell-quoted command: {exc}", banner=False)
+
+EXPECTED_COMMAND = Message("expected a command", banner=False)
+
+SETTING_NOT_A_HEADER_WANT_NAME_VALUE = "not a header (want 'Name: value'): {entry}"
+
+SETTING_EMPTY_KEY = "empty key: {key!r}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
