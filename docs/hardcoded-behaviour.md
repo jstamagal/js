@@ -209,8 +209,8 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/registry.py` | TurnToolSurface.offer_path_skills | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/registry.py` | TurnToolSurface.discover_async / discover / _load | policy | Model-facing text is loaded from `prompts/text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/policy.py` | argument_refusal | policy | Model-facing text is loaded from `prompts/text/toolkit_policy.json`; selection and execution policy are unchanged. | js-2lg.40 |
-| `js/toolkit/discovery.py:202,230` | catalog_result | policy | Builds the model-facing error and hint text in code. | js-2lg.42 |
-| `js/toolkit/discovery.py:37-41` | discovery_tool | policy | Parameter descriptions the model reads are written in the code schema. | js-2lg.42 |
+| `js/toolkit/discovery.py` | catalog_result | policy | Model-facing text is loaded from `prompts/text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
+| `js/toolkit/discovery.py` | discovery_tool | policy | Model-facing text is loaded from `prompts/text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
 | `js/toolkit/fs.py:619-622,637-638` | write | policy | Builds the model-facing overwrite refusal text in code. | js-2lg.45 |
 | `js/toolkit/fs.py:205-221` | _changed_since_read | policy | Builds the changed-on-disk refusal and retry guidance the model reads. | js-2lg.45 |
 | `js/toolkit/fs.py:798-814,1069,1071,1093-1096` | _nearest_hint / _apply_edit | policy | Builds the model-facing miss, ambiguity and closest-line hint text in code. | js-2lg.45 |
