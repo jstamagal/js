@@ -26,12 +26,14 @@ Both tags are optional and order between them does not matter:
 
 from __future__ import annotations
 
+from . import settings as _settings
+
 import re
 from dataclasses import dataclass
 
 # An endpoint reached this way is usually a local box that ignores the key, but
 # most OpenAI-shaped servers still require the header to exist.
-DUMMY_KEY = "sk-dummy-key"
+DUMMY_KEY = _settings.default_value("ENDPOINT_DEFAULT_KEY")
 
 _SHAPES = {
     "openai": "openai-completions",
@@ -70,7 +72,7 @@ class EndpointSpec:
         return pairs
 
 
-def parse(spec: str) -> EndpointSpec:
+def parse(spec: str, *, settings: dict | None = None) -> EndpointSpec:
     text = (spec or "").strip()
     if not text:
         raise EndpointSpecError("empty endpoint spec; expected model[:key][[shape]][[effort]]@url")
@@ -132,12 +134,12 @@ def parse(spec: str) -> EndpointSpec:
         if not model:
             raise EndpointSpecError(f"no model id before ':' in {spec!r}")
     else:
-        model, api_key = left, DUMMY_KEY
+        model, api_key = left, _settings.knob(settings, "ENDPOINT_DEFAULT_KEY")
 
     return EndpointSpec(
         model=model,
         api_key=api_key,
         base_url=base_url,
-        provider_id=_SHAPES[shape or "openai"],
+        provider_id=_SHAPES[shape] if shape else _settings.knob(settings, "ENDPOINT_DEFAULT_SHAPE"),
         reasoning_effort=effort,
     )

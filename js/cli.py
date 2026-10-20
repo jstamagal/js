@@ -4569,7 +4569,7 @@ def _main(argv: list[str] | None = None) -> int:
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
                     ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
-                ), extras=args.extras,
+                ), extras=args.extras, migrate=False,
             )
             return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
                                        settings=loop_settings)
@@ -4599,7 +4599,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # an explicit --extra on the same command line still overrides a field
         # the spec filled in.
         try:
-            args.extras = endpoint_uri.parse(args.url).as_settings() + list(args.extras)
+            endpoint_settings = settings.collect_settings(
+                config_paths=jsrc_paths(
+                    Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
+                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
+                ), extras=args.extras, migrate=False,
+            )
+            args.extras = endpoint_uri.parse(args.url, settings=endpoint_settings).as_settings() + list(args.extras)
         except endpoint_uri.EndpointSpecError as exc:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2

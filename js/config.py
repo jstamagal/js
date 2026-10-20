@@ -362,7 +362,7 @@ def set_invocation(*, extras: list[str] | None = None, presets: list[str] | None
                        ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config)
 
 
-def run_settings(cwd: Path | None = None) -> dict:
+def run_settings(cwd: Path | None = None, *, migrate: bool | None = None) -> dict:
     """The settings a run started in ``cwd`` (default: here) loads: every
     jsrc layer, the environment and this process's command line."""
     paths = jsrc_paths(
@@ -371,7 +371,10 @@ def run_settings(cwd: Path | None = None) -> dict:
         ignore_global_config=_invocation.get("ignore_global_config", False),
         presets=_invocation.get("presets") or None,
     )
-    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None)
+    if migrate is False:
+        with _fset.held():
+            return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None, migrate=False)
+    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None, migrate=migrate)
 
 
 def jsrc_paths(

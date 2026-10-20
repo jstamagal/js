@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
+    SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
     SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
     SettingSpec("MODEL_CATALOG_AGE_MAX", "float", group="runtime"),
     SettingSpec("MODEL_CATALOG_AUTO_REFRESH", "bool", group="runtime"),
@@ -1003,14 +1005,14 @@ def _auto_migrate(paths: list[Path], settings: dict, env: dict[str, str] | None,
 
 
 def load_jsrc_files(paths: list[Path], settings: dict, *, env: dict[str, str] | None = None,
-                    extras: list[str] | None = None) -> list[str]:
+                    extras: list[str] | None = None, migrate: bool | None = None) -> list[str]:
     """Apply each existing jsrc script's settings onto ``settings`` in order,
     each first rewritten from the old setting names when it still holds them
     (`rename.migrate_jsrc_file`). Returns a list of human-readable warnings
     (bad lines) — a single typo never aborts the boot."""
     from .rename import migrate_jsrc_file  # lazy: rename imports this module
 
-    migrate = _auto_migrate(paths, settings, env, extras)
+    migrate = _auto_migrate(paths, settings, env, extras) if migrate is None else migrate
     warnings: list[str] = []
     for path in paths:
         if path.exists():
@@ -1031,6 +1033,7 @@ def collect_settings(
     config_paths: list[Path] | None = None,
     env: dict[str, str] | None = None,
     extras: list[str] | None = None,
+    migrate: bool | None = None,
 ) -> dict:
     """Run precedence: js/jsrc < jsrc files (in order) < env < CLI extras.
 
@@ -1045,7 +1048,7 @@ def collect_settings(
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    load_jsrc_files(paths, settings, env=env, extras=extras)
+    load_jsrc_files(paths, settings, env=env, extras=extras, migrate=migrate)
 
     apply_env_overrides(settings, env=env)
     if extras:
