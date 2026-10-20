@@ -308,12 +308,12 @@ class ConsoleSink:
             self._open[call] = opened
 
     def _on_tool_result(self, *, call: Any, name: str, args: dict | None, result: Any, malformed: bool,
-                        context: ToolContext | None, view: dict | None, traced: bool = True) -> None:
+                        context: ToolContext | None, view: dict | None, traced: bool = True,
+                        screen: Any = None) -> None:
         if not traced:
             return
         opened = self._open.pop(call, None) if call is not None else None
-        shown = view.get("screen", result) if view is not None else result
-        self._trace.result(context, name, shown, args=args, malformed=malformed, opened=opened)
+        self._trace.result(context, name, result if screen is None else screen, args=args, malformed=malformed, opened=opened)
 
     def _on_tools_settle(self) -> None:
         with output.LOCK:

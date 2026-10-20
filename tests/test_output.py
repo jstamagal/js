@@ -168,7 +168,7 @@ def test_tool_result_event_carries_screen_fields_without_rendering(capsys):
     runtime._trace_result(runtime.Telemetry(None, sink=sink), None, "shell",
                           "shell=/bin/sh\nexit=7\n--- stdout ---\nout\n--- stderr ---\nerr\n")
 
-    result = sink.named("tool_result")[0]["view"]["screen"]
+    result = sink.named("tool_result")[0]["screen"]
     assert result.exit_code == 7
     assert result.lines == [("out", False), ("err", True)]
     assert capsys.readouterr() == ("", "")

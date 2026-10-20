@@ -11,7 +11,7 @@ See docs/nonblocking-windows.md.
 The loop's events, and their fields:
 
     tool_call      call, name, args, malformed, context, traced, deferred
-    tool_result    call, name, args, result, malformed, context, view, traced
+    tool_result    call, name, args, result, malformed, context, view, screen, traced
     tools_settle   (none): the run of quiet tool calls ends
     run_line       fields: the run line's "key=value" strings
     call_stats     label, elapsed_s, finish, tool_calls, tokens,

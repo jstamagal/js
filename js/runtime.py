@@ -571,13 +571,14 @@ def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: 
     the screen beside its result (`toolkit.core.view`)."""
     from .toolkit.presentation import tool_output
 
-    view = {**(view or {}), "screen": tool_output(name, result)}
+    screen = tool_output(name, result) if traced else None
     with output.LOCK:
         if exchange is None:
             exchange = _trace_call(telemetry, tool_context, name, args, malformed=malformed,
                                    traced=traced, deferred=True)
         _output(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
-                malformed=malformed, context=tool_context, view=view, traced=traced)
+                malformed=malformed, context=tool_context, view=view, screen=screen,
+                traced=traced)
 
 
 def _repair_jsonish(raw: str) -> dict:
