@@ -137,6 +137,21 @@ def test_history_reports_every_revision_and_what_can_be_restored(ctx):
     assert report.strip().endswith("restorable: r1")
 
 
+def test_discover_records_invalid_utf8_as_broken_and_still_indexes_the_rest(ctx):
+    cwd = Path(ctx.cwd)
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    directory.mkdir(parents=True)
+    (directory / "bad.py").write_bytes(b"def bad():\n    return '\xff'\n")
+    healthy = directory / "good.py"
+    healthy.write_text("def good():\n    return 1\n", encoding="utf-8")
+
+    found = tbmod.discover(cwd)
+
+    assert found["bad"].error
+    assert not found["good"].error
+    assert found["good"].path == healthy
+
+
 def test_discover_records_a_syntax_error_as_broken_and_still_indexes_the_rest(ctx):
     cwd = Path(ctx.cwd)
     directory = tbmod.toolbox_dirs(cwd)[0]

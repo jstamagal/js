@@ -254,7 +254,7 @@ def discover(cwd: Path) -> dict[str, ToolRecord]:
             record = ToolRecord(name=name, path=path, scope=scope)
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError as exc:
+            except (OSError, UnicodeDecodeError) as exc:
                 record.error = f"unreadable: {exc}"
                 found[name] = record
                 continue
