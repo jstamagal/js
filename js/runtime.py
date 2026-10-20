@@ -1926,9 +1926,8 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
         token_state.chars_per_token = chars_per_token
     context.context_budget_state = token_state
     context.vision_enabled = context.config.vision_enabled
-    if event_hooks is not None:
-        # Subagents started through this context answer to its tool_call guards.
-        context.tool_call_hooks = event_hooks
+    # Subagents started through this context answer to this turn's tool_call guards.
+    context.tool_call_hooks = event_hooks
     return token_state
 
 

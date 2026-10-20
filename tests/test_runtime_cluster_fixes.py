@@ -67,6 +67,26 @@ class _Recorder:
         return SimpleNamespace(results=[], hooks=[])
 
 
+def test_reused_context_clears_subagent_hooks_when_turn_has_none(tmp_path, monkeypatch):
+    context = ToolContext(cwd=tmp_path)
+    hooks = _Recorder()
+    inherited = []
+
+    def stream(**kwargs):
+        inherited.append(context.tool_call_hooks)
+        return _result()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    for current_hooks in (hooks, None):
+        runtime.run_turn(
+            _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(None), tool_registry=build_default_registry().select([]),
+            tool_context=context, suppress_output=True, event_hooks=current_hooks,
+        )
+
+    assert inherited == [hooks, None]
+
+
 # --------------------------------------------------------------------------
 # turn_end on cancel
 # --------------------------------------------------------------------------
