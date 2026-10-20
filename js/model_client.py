@@ -7,6 +7,7 @@ This is the canonical provider boundary for the migration.
 
 from __future__ import annotations
 
+
 import asyncio
 import base64
 import contextvars
@@ -77,7 +78,7 @@ class StreamIdleError(ai.ProviderTimeoutError):
 
     def __init__(self, seconds: float, *, provider: str | None = None) -> None:
         super().__init__(
-            f"no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)",
+            msgs.STREAM_IDLE_NO_BYTES.format(seconds=seconds),
             provider=provider, is_retryable=True,
         )
         self.seconds = seconds
@@ -472,7 +473,7 @@ class _CheckedResponsesStream:
                     code = _field(error, "code")
                     body = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
                     raise ai.ProviderAPIError(
-                        _field(error, "message") or "OpenAI Responses stream failed",
+                        _field(error, "message") or msgs.RESPONSES_STREAM_FAILED.words(),
                         provider=self._provider, body=body, code=code,
                         param=_field(error, "param"), error_type=_field(error, "type"),
                         is_retryable=code in {"server_error", "internal_error", "model_error", "rate_limit_exceeded"},

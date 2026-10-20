@@ -1317,6 +1317,10 @@ SUMMARY_RESPONSE_NO_TEXT = Message("summary response did not contain a completed
 
 COMPACTION_FLIGHT_START = Message("model={compact_model} trigger={value} messages={original_len}", banner=False)
 
+STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)"
+
+RESPONSES_STREAM_FAILED = Message("OpenAI Responses stream failed", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
