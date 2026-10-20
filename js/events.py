@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import inspect
+import threading
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from typing import Any
+
+from . import messages as msgs
 
 
 CANONICAL_EVENT_NAMES: tuple[str, ...] = (
@@ -198,3 +204,84 @@ class RefusableOnly:
         if name in REFUSABLE_EVENTS:
             return self._hooks.emit(name, **payload)
         return EventEmission(event=name, payload=dict(payload), hooks=[])
+
+
+# A program that assembles js from its parts can hold each tool call until a
+# decision arrives (from its screen, say). The callable gets the call as the
+# tool_call event carries it ({"id", "name", "arguments"}, the arguments as
+# JSON text). It returns None to let the call run, or the line the model reads
+# as the refused call's result, directly or as an awaitable. js's own command
+# line supplies none.
+Approve = Callable[[dict], "str | None | Awaitable[str | None]"]
+
+
+@dataclass(frozen=True)
+class Approval:
+    """An approval callable and the event loop of the turn that took it. The
+    callable runs on that loop, so it can wait on the screen that loop serves;
+    when that loop no longer runs, it runs on the caller's."""
+
+    approve: Approve
+    loop: asyncio.AbstractEventLoop
+    _pending: set[asyncio.Task] = field(default_factory=set, init=False, repr=False, compare=False)
+    _cancelled: threading.Event = field(default_factory=threading.Event, init=False, repr=False, compare=False)
+    _lock: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+
+    def cancel(self) -> None:
+        """Revoke this turn's pending decisions, including kernel bridge calls."""
+        with self._lock:
+            self._cancelled.set()
+            pending = tuple(self._pending)
+        for task in pending:
+            task.get_loop().call_soon_threadsafe(task.cancel)
+
+    async def _decide(self, call: dict) -> str | None:
+        task = asyncio.current_task()
+        assert task is not None
+        with self._lock:
+            if self._cancelled.is_set():
+                return _failed(call, asyncio.CancelledError())
+            self._pending.add(task)
+        try:
+            decision: Any = self.approve(call)
+            if inspect.isawaitable(decision):
+                decision = await decision
+            if self._cancelled.is_set():
+                return _failed(call, asyncio.CancelledError())
+            if decision is not None and not isinstance(decision, str):
+                raise TypeError("approval must return None or a refusal string")
+            return decision
+        except Exception as exc:  # noqa: BLE001 - a failed decision refuses the call
+            return _failed(call, exc)
+        finally:
+            with self._lock:
+                self._pending.discard(task)
+
+    def _on_own_loop(self) -> bool:
+        return self.loop.is_closed() or not self.loop.is_running()
+
+    async def refusal(self, call: dict) -> str | None:
+        """The refusal for ``call``; None when the call may run. A callable
+        that raises refuses the call."""
+        if self._on_own_loop() or asyncio.get_running_loop() is self.loop:
+            return await self._decide(call)
+        future = asyncio.run_coroutine_threadsafe(self._decide(call), self.loop)
+        try:
+            return await asyncio.wrap_future(future)
+        except Exception as exc:  # noqa: BLE001
+            return _failed(call, exc)
+
+    def refusal_from_thread(self, call: dict) -> str | None:
+        """``refusal`` from a thread that runs no event loop, such as the
+        kernel's tool bridge: this thread waits for the decision."""
+        if self._on_own_loop():
+            return asyncio.run(self._decide(call))
+        future = asyncio.run_coroutine_threadsafe(self._decide(call), self.loop)
+        try:
+            return future.result()
+        except Exception as exc:  # noqa: BLE001 - includes a cancelled turn
+            return _failed(call, exc)
+
+
+def _failed(call: dict, exc: BaseException) -> str:
+    return f"ERROR: {call.get('name')} was not run: the approval failed: {type(exc).__name__}: {msgs.of_error(exc)}"

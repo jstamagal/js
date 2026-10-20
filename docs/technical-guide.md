@@ -51,7 +51,7 @@ persists each completed turn.
 | `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
-| `js/events.py` | event names, `on` handler table, handler refusals |
+| `js/events.py` | event names, `on` handler table, handler refusals, the approval a program passes to `run_turn_async` |
 | `js/hookexec.py` | `exec`: runs a command for the command layer; event JSON on stdin, exit 2 refuses |
 | `js/prompt_commands.py` | `~/.js/commands/NAME.md` as `/NAME`, argument placeholders |
 | `js/pastes.py` | large bracketed pastes kept behind `[paste #N ...]` markers |

@@ -20,7 +20,9 @@ only through what the cell prints, which the kernel tool caps.
 
 The `on` table of the turn that runs the kernel call (ToolContext.tool_call_hooks)
 sees each call as a direct call: its tool_call handlers can refuse it, and
-tool_result fires with the result. The observer the kernel call was dispatched
+tool_result fires with the result. The turn's approval (ToolContext.tool_approval)
+holds each call the handlers let through until it decides, as it holds a
+direct call. The observer the kernel call was dispatched
 with (runtime._cell_call_observer) traces each call and logs it to the flight
 log, as a direct call is.
 
@@ -281,6 +283,10 @@ class ToolBridge:
         with call_scope(call_id, for_model=False):
             hooks = getattr(context, "tool_call_hooks", None)
             refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
+            approval = getattr(context, "tool_approval", None)
+            if refusal is None and approval is not None:
+                refusal = approval.refusal_from_thread(
+                    {"id": call_id, "name": tool.name, "arguments": json.dumps(arguments, default=str)})
             if refusal is not None:
                 if observer is not None:
                     observer(tool.name, arguments, refusal, 0.0, None, refused=True)

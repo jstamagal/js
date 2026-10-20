@@ -280,6 +280,7 @@ async def _run_one_task_async(
                                  mode="subagent", parent=parent_cfg.session_file)
         messages = M.load_replay_messages(cfg.session_file)
         parent_hooks = getattr(parent_context, "tool_call_hooks", None)
+        parent_approval = getattr(parent_context, "tool_approval", None)
         telemetry = Telemetry(debug_log=cfg.debug_log)
         turn_kwargs = {
             "trace_override": False,
@@ -288,6 +289,7 @@ async def _run_one_task_async(
             "suppress_output": True,
             "sampling": sampling,
             "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
+            "approve": parent_approval,
         }
         try:
             await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)

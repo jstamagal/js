@@ -469,6 +469,9 @@ class ToolContext(_turn_settings.ContextSettings):
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
     tool_call_hooks: Any = field(default=None, repr=False)
+    # The approval (js.events.Approval) that holds the calls of this turn, of
+    # the subagents it starts and of its kernel cells; None runs every call.
+    tool_approval: Any = field(default=None, repr=False)
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
     read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)

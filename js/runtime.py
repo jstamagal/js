@@ -1487,6 +1487,8 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     from .toolkit import kernel as kernel_tool
     from .toolkit import process_net
 
+    if tool_context.tool_approval is not None:
+        tool_context.tool_approval.cancel()
     kernel_tool.interrupt_inflight(tool_context)
     process_net.interrupt_inflight(tool_context)
 
@@ -1657,7 +1659,8 @@ def _cache_key(cfg: Config) -> str | None:
 
 
 def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
-                          registry: ToolRegistry, event_hooks: Any) -> context_budget.TokenState:
+                          registry: ToolRegistry, event_hooks: Any,
+                          approve: event_mod.Approve | event_mod.Approval | None = None) -> context_budget.TokenState:
     """Set ``context`` up for this turn and return its token state, which
     persists across the turns of one context."""
     # Delegation inherits this turn's effective settings, not a fresh env load
@@ -1691,6 +1694,13 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     context.vision_enabled = context.config.vision_enabled
     # Subagents started through this context answer to this turn's tool_call guards.
     context.tool_call_hooks = event_hooks
+    # Each turn owns its cancellation scope; child decisions also pass through
+    # the parent's approval on the parent's loop.
+    if isinstance(approve, event_mod.Approval):
+        context.tool_approval = event_mod.Approval(approve.refusal, approve.loop)
+    else:
+        context.tool_approval = (None if approve is None
+                                 else event_mod.Approval(approve, asyncio.get_running_loop()))
     return token_state
 
 
@@ -1904,18 +1914,20 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     for THIS turn; messages, persisted and replayed on every future turn,
     carries the dehydrated stub so base64 is billed once."""
     for index, pc in enumerate(pending_calls):
-        emission = events.emit(
-            "tool_call",
-            id=pc.id,
-            name=_canonical_tool_call_name(pc.name, registry),
-            arguments=_canonical_tool_args(pc.arguments()),
-        )
+        call = {"id": pc.id, "name": _canonical_tool_call_name(pc.name, registry),
+                "arguments": _canonical_tool_args(pc.arguments())}
+        emission = events.emit("tool_call", **call)
         refusal = event_mod.refusal_of(emission)
         if refusal and pc.validation_error is None:
             # An `on tool_call` handler refused it: the call never runs
             # and the model reads the refusal as its result.
             pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
             telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
+        elif pc.validation_error is None and context.tool_approval is not None:
+            refusal = await context.tool_approval.refusal(call)
+            if refusal is not None:
+                pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+                telemetry.event("tool_call_refused", tool=pc.name, via="approval", refusal=refusal)
     # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
     # thread so the shared loop stays free while they execute. Fan-out (task /
     # named-agent) calls are awaited ON the loop instead, so a parent turn
@@ -2035,7 +2047,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              event_hooks: event_mod.EventHooks | event_mod.RefusableOnly | None = None,
              mcp_host: Any = None,
              steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
-             event_sink: Callable[[str, dict], None] | None = None) -> None:
+             event_sink: Callable[[str, dict], None] | None = None,
+             approve: event_mod.Approve | event_mod.Approval | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -2050,6 +2063,12 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     the `events.CANONICAL_EVENT_NAMES` the turn raises, with the turn's usage
     totals added to ``turn_end``, and ``usage`` after each model call charged
     to the session (`js.usage`). Subagent turns do not reach it.
+
+    ``approve`` (`events.Approve`) is awaited for each tool call the
+    `tool_call` handlers let through, one call at a time, before the batch
+    runs. It returns None to let the call run, or the line the model reads as
+    the refused call's result. Subagents started in this turn and tool calls
+    from kernel cells answer to it too. None runs every call.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -2083,7 +2102,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled)
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
-    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks)
+    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks, approve)
+    turn_approval = active_context.tool_approval
     turn_status = active_context.turn_status
 
     events = TurnEvents(event_hooks, event_sink, telemetry, model=model, provider_id=provider_id)
@@ -2178,6 +2198,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         _notice(telemetry, msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
+        if turn_approval is not None:
+            turn_approval.cancel()
         # turn_start is emitted unconditionally, so every exit pairs it with
         # exactly one turn_end: cancellation (CancelledError /
         # KeyboardInterrupt) ends "cancelled", an unexpected Exception ends

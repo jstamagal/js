@@ -1639,3 +1639,67 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
     markers = _marker_lines(lines)
     assert len(markers) == 1 and "slow" in markers[0]
     assert any("async result" in line for line in lines)
+
+
+def test_an_approval_callable_holds_each_call_until_it_decides(monkeypatch, tmp_path):
+    import asyncio
+
+    ran: list[str] = []
+
+    def tool(name: str) -> Tool:
+        return Tool(name=name, description=name, handler=lambda text: ran.append(name) or f"{name} ran",
+                    params={"text": {"type": "string"}}, required=("text",))
+
+    registry = ToolRegistry(tools=(tool("shell"), tool("read")), aliases={"shell": "shell", "read": "read"})
+    calls = [ModelToolCall(id="c1", name="shell", arguments='{"text": "rm"}'),
+             ModelToolCall(id="c2", name="read", arguments='{"text": "a"}')]
+    batch = ModelStreamResult(text="", tool_calls=calls, reasoning="",
+                              usage=ai.types.usage.Usage(input_tokens=5, output_tokens=5),
+                              finish_reason="tool_calls", assistant_message=_make_assistant_msg("", calls))
+    replies = iter([batch, model_text_result("done")])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kw: next(replies))
+    asked: list[dict] = []
+
+    async def approve(call: dict) -> str | None:
+        asked.append(call)
+        decided = asyncio.Event()
+        # The screen decides later, on the same loop the turn runs on.
+        asyncio.get_running_loop().call_later(0.05, decided.set)
+        await decided.wait()
+        assert ran == []
+        return "ERROR: the user refused shell" if call["name"] == "shell" else None
+
+    messages = [{"role": "user", "content": "go"}]
+    asyncio.run(runtime.run_turn_async(
+        offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
+        trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True, approve=approve,
+    ))
+
+    assert [(c["id"], c["name"], json.loads(c["arguments"])) for c in asked] == [
+        ("c1", "shell", {"text": "rm"}), ("c2", "read", {"text": "a"})]
+    assert ran == ["read"]
+    results = {m["tool_call_id"]: m["content"] for m in messages if m.get("role") == "tool"}
+    assert results["c1"].splitlines()[0] == "ERROR: the user refused shell"
+    assert results["c2"] == "read ran"
+
+
+@pytest.mark.parametrize("decision", ["", False, 0, {}, []])
+def test_only_none_is_an_approval(monkeypatch, tmp_path, decision):
+    import asyncio
+
+    ran = []
+    registry = ToolRegistry((Tool("probe", "test", lambda: ran.append(True) or "ran", {}),), {})
+    replies = iter([model_tool_call_result("probe", ['{}']), model_text_result("done")])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kw: next(replies))
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(runtime.run_turn_async(
+        offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
+        tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+        approve=lambda call: decision,
+    ))
+
+    assert ran == []
+    [result] = [message for message in messages if message["role"] == "tool"]
+    assert isinstance(result["content"], str)
