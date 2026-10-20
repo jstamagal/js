@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tracemalloc
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -701,3 +703,29 @@ def test_failed_upsert_preserves_the_complete_existing_page(tmp_path, monkeypatc
     assert result.startswith("ERROR:")
     assert page.read_bytes() == original
     assert list(page.parent.iterdir()) == [page]
+
+
+@pytest.mark.parametrize("suffix", [".txt", ".xlsx"])
+def test_file_conversion_reads_only_a_bounded_prefix(tmp_path, monkeypatch, suffix):
+    document = tmp_path / f"large{suffix}"
+    document.write_bytes(b"x" * (4 * 1024 * 1024))
+
+    def run(cmd, context):
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        for name in ("First", "Second"):
+            os.link(document, outdir / f"large-{name}.csv")
+        return 0, "", ""
+
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda name: name if name == "soffice" else None)
+    monkeypatch.setattr(wiki_convert_module, "run", run)
+    tracemalloc.start()
+    try:
+        result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=1024))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert "x" * 100 in result
+    assert len(result.encode()) <= 1024
+    assert truncation_marker(1024, "TOOL_RESULT_MAX") in result
+    assert peak < 1_000_000

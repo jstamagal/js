@@ -60,12 +60,20 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
     if not sheets:
         return "ERROR soffice: wrote no sheet"
     blocks = []
+    length = 0
     for name, path in sheets:
         try:
-            text = path.read_text("utf-8", errors="replace")
+            with path.open(encoding="utf-8", errors="replace") as stream:
+                text = stream.read(max(0, cap - length) + 1)
         except OSError as exc:
             return f"ERROR: {exc}"
-        blocks.append(f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text)
+        block = f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text
+        if blocks:
+            length += 1
+        blocks.append(block)
+        length += len(block)
+        if length > cap:
+            break
     return cap_text("\n".join(blocks), cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 

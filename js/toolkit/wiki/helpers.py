@@ -86,7 +86,8 @@ def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, 
 
 def read_text(path: Path, cap: int) -> str:
     try:
-        text = path.read_text("utf-8", errors="replace")
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            text = stream.read(cap + 1)
     except OSError as exc:
         return f"ERROR: {exc}"
     return cap_text(text, cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
