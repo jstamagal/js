@@ -199,12 +199,14 @@ test *args:
     scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
+[positional-arguments]
 test-file file:
-    uv run {{ browser-extra }} --extra test pytest -q {{ file }}
+    uv run {{ browser-extra }} --extra test pytest -q "$1"
 
 # run tests by pytest marker. e.g. just test-mark "not ai_provider"
+[positional-arguments]
 test-mark marker:
-    uv run {{ browser-extra }} --extra test pytest -q -m "{{ marker }}"
+    uv run {{ browser-extra }} --extra test pytest -q -m "$1"
 
 # live ai_provider suite — needs configured provider creds or a local
 # OpenAI-compatible endpoint. e.g. AI_GATEWAY_API_KEY=... just test-live
@@ -295,21 +297,24 @@ check: lint deps-fresh
 
 # per-tool byte cost of model-facing descriptions and parameter schemas.
 # forwards args: just tool-bytes --surface shell
+[positional-arguments]
 tool-bytes *args:
-    uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
+    uv run {{ browser-extra }} python -m js.tooldiag "$@"
 
 # move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml and drop
 # tools entries that match no tool, also from existing agent.yaml files. dry
 # run unless --apply; --show prints each agent.yaml. default root: the global
 # agents dir. just migrate-agents --apply ~/.js/agents .js/agents
+[positional-arguments]
 migrate-agents *args:
-    uv run {{ browser-extra }} python scripts/migrate_agents.py {{ args }}
+    uv run {{ browser-extra }} python scripts/migrate_agents.py "$@"
 
 # move the old js config, data and inbox directories into ~/.js, convert the
 # moved agents and file the old sessions by start directory. dry run unless
 # --apply. js does this once by itself on first start.
+[positional-arguments]
 migrate-home *args:
-    uv run python -m js.home {{ args }}
+    uv run python -m js.home "$@"
 
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 
@@ -390,17 +395,21 @@ toolbench-image:
     docker build -t js-toolbench:latest -f bench/toolbench/Dockerfile bench/toolbench
 
 # mine and print the tasks each suite repo yields; no model, no sandbox
+[positional-arguments]
 toolbench-mine *args:
-    uv run python bench/toolbench/run.py --mine {{ args }}
+    uv run python bench/toolbench/run.py --mine "$@"
 
 # prove the plumbing: RepoRacer's fake agents through the sandbox on one task
+[positional-arguments]
 toolbench-smoke *args:
-    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click {{ args }}
+    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click "$@"
 
 # the A/B: default agents (slim vs stock js) on every suite repo
+[positional-arguments]
 toolbench *args:
-    uv run python bench/toolbench/run.py {{ args }}
+    uv run python bench/toolbench/run.py "$@"
 
 # rebuild the summary of a finished run: just toolbench-report bench/toolbench/results/<stamp>
+[positional-arguments]
 toolbench-report dir:
-    uv run python bench/toolbench/run.py --report {{ dir }}
+    uv run python bench/toolbench/run.py --report "$1"
