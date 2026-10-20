@@ -201,6 +201,8 @@ branch the audit was made on; they move as the code changes.
 
 2 findings.
 
+- js-2lg.178: toolkit policy normalizes legacy tool entries; migration
+  retains the same eager meaning for bare selectors.
 - js-2lg.80: toolkit policy supplies schema flags from the configuration;
   the CLI assembles the registry with those flags. The model parameter stays
   exposed only when subagent model selection is unlocked.

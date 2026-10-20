@@ -334,3 +334,9 @@ def removal_decision(context: Any, *, permanent: bool | None, size: int) -> tupl
 def schema_flags(config: Any) -> tuple[str, ...]:
     """Schema features allowed by this configuration's tool policy."""
     return () if getattr(config, "lock_subagent_model", False) else ("model_override",)
+
+
+def legacy_entry(raw: Any) -> str:
+    """An old bare selector means a tool on the agent's eager boot surface."""
+    text = str(raw).strip()
+    return text if ":" in text else f"{text}:eager"

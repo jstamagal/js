@@ -104,8 +104,7 @@ class Result:
 
 def _convert_entry(raw: Any, keep: Keep) -> str | None:
     """Old selector -> noun:modifier; None for an entry that matches no tool."""
-    text = str(raw).strip()
-    entry = text if ":" in text else f"{text}:eager"
+    entry = policy.legacy_entry(raw)
     return entry if keep(entry) else None
 
 
