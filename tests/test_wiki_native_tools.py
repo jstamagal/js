@@ -11,8 +11,8 @@ import pytest
 from js import jail
 from js.capped_process import truncation_marker
 from js.toolkit import ToolContext
-from js.toolkit import wiki as wiki_module
 from js.toolkit import fs
+from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
@@ -197,6 +197,24 @@ def test_wiki_write_sanitizes_boolean_metadata_inputs(tmp_path):
     assert 'tags: ["wiki/concept"]' in content
     assert "source_count: 1" in content
     assert "True" not in content
+
+
+def test_wiki_write_overwrite_can_be_undone(tmp_path):
+    vault = _vault(tmp_path)
+    page = vault / "sources" / "article.md"
+    page.parent.mkdir()
+    original = b"# Article\n\nOriginal research notes.\n"
+    page.write_bytes(original)
+    context = _ctx(tmp_path)
+    fs.fs_read(file_path=str(page), context=context)
+
+    written = wiki_write(str(vault), "source", "Merged notes", slug="article",
+                         overwrite=True, context=context)
+    assert not written.startswith("ERROR"), written
+    assert page.read_bytes() != original
+    fs.undo(str(page), context=context)
+
+    assert page.read_bytes() == original
 
 
 def test_wiki_write_near_match_guard_for_shared_entity_and_concept_pages(tmp_path):

@@ -133,6 +133,7 @@ def wiki_write(
                             f"source_count, merge body) with overwrite=true.\n"
                             f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
                             f"distinct {k} that just shares vocabulary.")
+            context.snapshot(page)
             page.write_text(content, encoding="utf-8")
     except OSError as exc:
         return f"ERROR: {exc}"
