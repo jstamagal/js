@@ -8,6 +8,12 @@ from js import cli
 from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
 
 
+def test_completer_uses_supplied_command_prefix():
+    completer = JsCompleter(commands=lambda: {"set": "keys"}, setting_keys=("MODEL",), command_prefix=":")
+    assert completer.candidates(":se") == ([":set"], 3)
+    assert completer.candidates(":set MO") == (["MODEL"], 2)
+
+
 def _table():
     return cli._command_completions({})
 

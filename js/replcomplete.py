@@ -37,7 +37,6 @@ from . import fset
 from . import events
 from . import settings as _settings
 
-CMDCHAR = "/"
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 # `/set <key> <value>` — keys whose value is a known small enum get their
@@ -59,13 +58,14 @@ def value_candidates(key: str, token: str, enums: Mapping | None = None) -> list
     return _prefix(values, token.lower())
 
 
-def command_candidates(token: str, verbs: Iterable[str], bare_words: Iterable[str] = ()) -> list[str]:
+def command_candidates(token: str, verbs: Iterable[str], bare_words: Iterable[str] = (), *,
+                       command_prefix: str = "/") -> list[str]:
     """First-word completion over the table's verbs. Prefix match; a slashless
     word gets an implicit ``/`` so ``comp`` completes to ``/compact``.
     ``bare_words`` are commands typed without the ``/`` (``exit``); they
     complete as themselves."""
-    word = token[len(CMDCHAR):] if token.startswith(CMDCHAR) else token
-    found = {CMDCHAR + verb for verb in verbs if verb.startswith(word)}
+    word = token[len(command_prefix):] if token.startswith(command_prefix) else token
+    found = {command_prefix + verb for verb in verbs if verb.startswith(word)}
     found.update(bare for bare in bare_words if bare.startswith(token))
     return sorted(found)
 
@@ -140,7 +140,9 @@ class JsCompleter(Completer):
         path_completion: Callable[[str], list[str] | None] | None = None,
         unknown_arguments: Callable[[str, str], list[str]] | None = None,
         value_enums: Mapping | None = None,
+        command_prefix: str = "/",
     ) -> None:
+        self._command_prefix = command_prefix
         self._commands = commands
         self._fset_names = tuple(fset_names)
         self._bare_words = tuple(bare_words)
@@ -157,9 +159,9 @@ class JsCompleter(Completer):
         before = text_before_cursor[: len(text_before_cursor) - len(token)]
         table = self._commands()
         if before.strip() == "":  # nothing but whitespace before -> first word
-            return command_candidates(token, table, self._bare_words), len(token)
+            return command_candidates(token, table, self._bare_words, command_prefix=self._command_prefix), len(token)
         words = before.split()
-        head = words[0].removeprefix(CMDCHAR).lower()
+        head = words[0].removeprefix(self._command_prefix).lower()
         paths = (self._path_completion(token) if self._path_completion is not None
                  else path_candidates(token) if looks_like_path(token) else None)
         if paths is not None:
