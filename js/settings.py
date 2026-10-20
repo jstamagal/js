@@ -140,6 +140,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("VISION", "bool", empty=EMPTY_NONE, group="models"),
     # --- banner ---
     SettingSpec("BANNER", "str", group="startup"),
+    SettingSpec("MOTD_FILE", "str", empty=EMPTY_NONE, group="startup"),
+    SettingSpec("MOTD_DIR", "str", empty=EMPTY_NONE, group="startup"),
     # --- ui ---
     SettingSpec("ui.reasoning", "int"),
     SettingSpec("ui.net", "int"),

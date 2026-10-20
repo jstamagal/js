@@ -6,6 +6,16 @@ DEFAULT_AGENT
     directory id, letters, digits, '_' or '-'. Read once at startup, so a
     `set` here reaches later runs through /save.
 
+MOTD_FILE
+    A message of the day printed when the REPL starts: a file of entries
+    in fortune(6) form, split by lines holding only %, one picked at
+    random. ANSI colours show. Unset = no MOTD. Wins over MOTD_DIR.
+
+MOTD_DIR
+    A directory of art files, such as TheDraw .ANS files; one, picked at
+    random, is shown when the REPL starts. UTF-8, else CP437; a SAUCE
+    record is dropped. Unset = no MOTD.
+
 MODEL
     Default model id; unprefixed ids route through AI Gateway.
 

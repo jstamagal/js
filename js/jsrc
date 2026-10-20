@@ -17,6 +17,8 @@ set -VISION
 
 # --- banner ---
 set BANNER ***
+set -MOTD_FILE
+set -MOTD_DIR
 
 # --- ui ---
 set ui.reasoning 2

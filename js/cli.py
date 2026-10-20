@@ -36,6 +36,7 @@ from . import attach, clipimage, codex_auth
 from . import agent_messages
 from . import compaction
 from . import rename
+from . import motd
 from . import display as display_mod
 from . import dotenv
 from . import endpoint_uri
@@ -3472,6 +3473,19 @@ def _print_skill_catalog() -> None:
     msgs.say(msgs.SKILL_HINT)
 
 
+def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
+    """What the REPL prints into its scrollback when it is up: the MOTD
+    (`js.motd`) raw with its colours reset after, then the startup line,
+    notices and errors."""
+    text = motd.pick(settings.knob(state["settings"], "MOTD_FILE"), settings.knob(state["settings"], "MOTD_DIR"))
+    return "\n".join([
+        *([motd.lines_for_scrollback(text.rstrip("\r\n")) + motd.RESET] if text else []),
+        msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
+        *notices,
+        *(msgs.FAILED.line(error=error) for error in errors),
+    ])
+
+
 def _echoes(line: str, state: dict) -> bool:
     """Whether a typed line shows in the scrollback: not when dispatch
     (`_handle_command`) takes it as a command, a command or alias from the
@@ -4743,11 +4757,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     # variants below share this telemetry object).
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
-    banner = "\n".join([
-        msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
-        *notices,
-        *(msgs.FAILED.line(error=error) for error in [*rc_errors, *key_errors]),
-    ])
+    banner = _startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
     transcript_stack = contextlib.ExitStack()
     _enter_transcript_stdio(transcript_stack, telemetry)
     if not args.blocking:

@@ -139,6 +139,15 @@
 #   example:  set BANNER -!-
 #set BANNER ***
 
+# A message of the day, shown above the startup line when the REPL starts.
+# ANSI colours in it show (TheDraw .ANS, chafa output); cursor moves do not. MOTD_FILE is one file of
+# entries split by lines holding only %, like fortune(6); one is picked at
+# random. MOTD_DIR is a directory of art files; one is picked at random.
+# MOTD_FILE wins when both are set. Unset: no MOTD.
+#   example:  set MOTD_DIR ~/art
+#set -MOTD_FILE
+#set -MOTD_DIR
+
 # The model's thinking, on screen.
 #   0  hidden; you never see it
 #   1  streams in while it thinks, then folds into one line when the answer
