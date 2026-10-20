@@ -231,3 +231,18 @@ def test_an_editor_that_exits_nonzero_leaves_the_buffer_alone(tmp_path, monkeypa
     editor = FakeEditor("original")
     _run("abortive", editor)
     assert editor.text == "original"
+
+
+def test_ex_program_policy_can_refuse_a_program(monkeypatch):
+    editor = FakeEditor("buffer")
+    calls = []
+    monkeypatch.setattr(exline.shutil, "which", lambda name: "/bin/" + name)
+    async def dispatch(line):
+        raise AssertionError(line)
+    def allowed(name):
+        calls.append(name)
+        return False
+    asyncio.run(exline.run_ex("editor", editor, is_command=lambda name: False,
+                              dispatch=dispatch, program_allowed=allowed))
+    assert calls == ["editor"]
+    assert editor.text == "buffer" and editor.sent == []

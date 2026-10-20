@@ -73,6 +73,7 @@ async def run_ex(
     *,
     is_command: Callable[[str], bool],
     dispatch: Callable[[str], Awaitable[None]],
+    program_allowed: Callable[[str], bool] | None = None,
 ) -> None:
     """Run one ex line. ``dispatch`` takes a `/command` line for the table."""
     verb, _, arg = line.strip().removeprefix("/").partition(" ")
@@ -110,7 +111,7 @@ async def run_ex(
                 await editor.run([*editor_argv(), str(notes)])
         elif is_command(verb.lower()):
             await dispatch(f"/{verb} {arg}".rstrip())
-        elif shutil.which(verb):
+        elif (shutil.which(verb) if program_allowed is None else program_allowed(verb)):
             await edit_buffer(editor, [verb, *shlex.split(arg)])
         else:
             output.notice(msgs.EX_UNKNOWN, stderr=False, flush=False, verb=verb)
