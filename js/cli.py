@@ -2244,7 +2244,7 @@ COMMANDS: dict[str, Command] = {
     "on": Command(_cmd_on, "on [[^]event command]", msgs.CMD_ON, complete="events"),
     "alias": Command(_cmd_alias, "alias [name [command]]", msgs.CMD_ALIAS),
     "model": Command(_cmd_model, "model [name]", msgs.CMD_MODEL),
-    "pick-model": Command(lambda arg, state, cfg: _pick_model_into_state(state, cfg), "pick-model", msgs.CMD_PICK_MODEL),
+    "pick-model": Command(lambda arg, state, cfg: _cmd_model("", state, cfg), "pick-model", msgs.CMD_PICK_MODEL),
     "provider": Command(_cmd_provider, "provider [id]", msgs.CMD_PROVIDER,
                         complete="names"),
     "baseurl": Command(_cmd_baseurl, "baseurl [url]", msgs.CMD_BASEURL),

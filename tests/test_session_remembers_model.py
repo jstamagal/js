@@ -100,3 +100,17 @@ def test_an_explicit_model_flag_still_wins_over_the_recorded_one(monkeypatch, tm
     models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem, "--model", "other/model"], lines=["go on"])
 
     assert models == ["other/model"]
+
+
+def test_pick_model_is_remembered_before_the_next_turn(monkeypatch, tmp_path):
+    cli.logins.save_login(cli.logins.Login("ollama", provider_base_url="http://offline.invalid/v1"))
+    monkeypatch.setattr(cli.picker, "pick_model", lambda **kwargs: {
+        "provider_id": "ollama", "provider_base_url": "http://offline.invalid/v1",
+        "model": "picked-model",
+    })
+    _repl(monkeypatch, tmp_path, ["--model", "original-model"], lines=["/pick-model"])
+    session_file = _only_session(tmp_path)
+
+    models = _repl(monkeypatch, tmp_path, ["--session", session_file.stem], lines=["continue"])
+
+    assert models == ["picked-model"]
