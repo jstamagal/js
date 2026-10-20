@@ -76,7 +76,6 @@ class JSONRPCPeer:
         self._notification_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self._notification_task: asyncio.Task[None] | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._write_lock = asyncio.Lock()
         self._closed = False
         self._close_lock = asyncio.Lock()
 
@@ -182,10 +181,7 @@ class JSONRPCPeer:
     async def _send(self, message: dict[str, Any]) -> None:
         if self._closed:
             raise PeerClosedError("JSON-RPC peer is closed")
-        async with self._write_lock:
-            if self._closed:
-                raise PeerClosedError("JSON-RPC peer is closed")
-            await self.transport.send(message)
+        await self.transport.send(message)
 
     async def _send_cancelled(self, request_id: JSONRPCId) -> None:
         await self.notify(

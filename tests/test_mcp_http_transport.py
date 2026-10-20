@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from js.mcp.client import MCPClient
+from js.mcp.protocol import JSONRPCPeer
 from js.mcp.transports import StreamableHTTPTransport, StreamableHTTPTransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -236,6 +237,51 @@ def test_cross_origin_redirects_do_not_forward_credentials(operation):
 
         with server(RedirectHandler) as (_source, url):
             run(scenario(url))
+
+
+def test_server_reply_can_post_while_a_client_request_waits_for_headers():
+    waiting = threading.Event()
+    answered = threading.Event()
+
+    class DuplexHandler(Handler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if "method" not in body:
+                answered.set()
+                self._body(202, "application/json", b"")
+                return
+            if body["method"] != "bootstrap":
+                waiting.set()
+            if body["method"] == "bootstrap" or answered.wait(2):
+                payload = {"jsonrpc": "2.0", "id": body["id"], "result": {"ok": True}}
+                self._body(200, "application/json", json.dumps(payload).encode())
+            else:
+                self._body(504, "application/json", b"")
+
+        def do_GET(self):
+            self.state.gets += 1
+            if self.state.gets > 1:
+                self._body(405, "application/json", b"")
+                return
+            if waiting.wait(2):
+                payload = {"jsonrpc": "2.0", "id": "server-request", "method": "give-input"}
+                self._body(200, "text/event-stream", b"data: " + json.dumps(payload).encode() + b"\n\n")
+            else:
+                self._body(504, "application/json", b"")
+
+    async def scenario(url):
+        transport = StreamableHTTPTransport(url)
+        peer = await JSONRPCPeer.connect(lambda: transport)
+        peer.on_request("give-input", lambda _params: {})
+        try:
+            await peer.request("bootstrap", timeout=3)
+            assert await peer.request("needs-input", timeout=3) == {"ok": True}
+        finally:
+            answered.set()
+            await peer.close()
+
+    with server(DuplexHandler) as (_state, url):
+        run(scenario(url))
 
 
 def test_json_and_sse_post_replies_track_session_and_event_fields():

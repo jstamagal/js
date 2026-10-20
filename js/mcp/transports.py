@@ -368,7 +368,6 @@ class StreamableHTTPTransport:
         self._get_last_event_id: str | None = None
         self._retry_seconds = self._reconnect_backoff
         self._queue: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
-        self._send_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._get_task: asyncio.Task[None] | None = None
         self._post_tasks: set[asyncio.Task[None]] = set()
@@ -415,36 +414,35 @@ class StreamableHTTPTransport:
                 self._diagnostic("was given an invalid JSON message")
             ) from None
         is_request = "method" in message and "id" in message
-        async with self._send_lock:
-            post = _HTTPPost()
-            request_task = asyncio.create_task(
-                asyncio.to_thread(self._run_post, payload, is_request, post), name="mcp-http-post"
-            )
-            self._request_tasks.add(request_task)
-            try:
-                messages, stream = await asyncio.shield(request_task)
-            except asyncio.CancelledError:
-                self._close_active_responses(post)
-                with contextlib.suppress(StreamableHTTPTransportError):
-                    _messages, stream = await asyncio.shield(request_task)
-                    if stream is not None:
-                        self._release(stream)
-                raise
-            finally:
-                self._request_tasks.discard(request_task)
-            if self._closed:
+        post = _HTTPPost()
+        request_task = asyncio.create_task(
+            asyncio.to_thread(self._run_post, payload, is_request, post), name="mcp-http-post"
+        )
+        self._request_tasks.add(request_task)
+        try:
+            messages, stream = await asyncio.shield(request_task)
+        except asyncio.CancelledError:
+            self._close_active_responses(post)
+            with contextlib.suppress(StreamableHTTPTransportError):
+                _messages, stream = await asyncio.shield(request_task)
                 if stream is not None:
                     self._release(stream)
-                raise StreamableHTTPTransportError(self._diagnostic("is closed"))
-            for incoming in messages:
-                self._queue.put_nowait(incoming)
+            raise
+        finally:
+            self._request_tasks.discard(request_task)
+        if self._closed:
             if stream is not None:
-                task = asyncio.create_task(
-                    self._consume_post_stream(stream), name="mcp-http-post-response"
-                )
-                self._post_tasks.add(task)
-                task.add_done_callback(self._post_tasks.discard)
-            self._ensure_get_stream()
+                self._release(stream)
+            raise StreamableHTTPTransportError(self._diagnostic("is closed"))
+        for incoming in messages:
+            self._queue.put_nowait(incoming)
+        if stream is not None:
+            task = asyncio.create_task(
+                self._consume_post_stream(stream), name="mcp-http-post-response"
+            )
+            self._post_tasks.add(task)
+            task.add_done_callback(self._post_tasks.discard)
+        self._ensure_get_stream()
 
     async def receive(self) -> dict[str, Any] | None:
         await self.start()
