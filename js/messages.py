@@ -1493,6 +1493,24 @@ LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF = "not NAME=value with NAME one of
 
 LOGIN_DEFAULT_ = "{key}: {error}"
 
+LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S = "{store} held by another process for {timeout_s:g}s"
+
+LOGIN_STORE_EXISTS_BUT_FAILED_TO_PARSE_AS_TOML = "{path} exists but failed to parse as TOML ({exc}); refusing to overwrite it. Fix or remove the file by hand, then retry."
+
+LOGIN_STORE_MUST_BE_A_STRING_NOT = "{name} must be a string, not {__name__}"
+
+LOGIN_STORE_PROVIDER_ID_MUST_BE_A_NON_EMPTY = "provider_id must be a non-empty string, not {stored_id!r}"
+
+LOGIN_STORE_PROVIDER_HEADERS_MUST_BE_A_TABLE = "provider_headers must be a table"
+
+LOGIN_STORE_DEFAULTS_MUST_BE_A_TABLE = "defaults must be a table"
+
+LOGIN_STORE_MODEL_DEFAULTS_MUST_BE_A_TABLE_OF = "model_defaults must be a table of tables"
+
+LOGIN_STORE_ = "{path}: {exc}"
+
+LOGIN_STORE__911 = "{value}: {exc}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

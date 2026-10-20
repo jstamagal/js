@@ -175,7 +175,7 @@ def hold_login_lock(timeout_s: float | None = None) -> Iterator[None]:
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
-                raise LoginStoreBusyError(f"{store} held by another process for {timeout_s:g}s")
+                raise LoginStoreBusyError(msgs.LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S.format(store=store, timeout_s=timeout_s))
             time.sleep(_LOCK_POLL_S)
         _become_owner(store)
         try:
@@ -211,7 +211,7 @@ async def ahold_login_lock(timeout_s: float | None = None) -> AsyncIterator[None
         deadline = time.monotonic() + timeout_s
         while not _try_flock(fd):
             if time.monotonic() >= deadline:
-                raise LoginStoreBusyError(f"{store} held by another process for {timeout_s:g}s")
+                raise LoginStoreBusyError(msgs.LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S.format(store=store, timeout_s=timeout_s))
             await asyncio.sleep(_LOCK_POLL_S)
         _become_owner(store)
         try:
@@ -441,8 +441,7 @@ def _refuse_if_corrupt() -> None:
             tomllib.load(f)
     except Exception as exc:
         raise LoginsCorruptError(
-            f"{path} exists but failed to parse as TOML ({exc}); refusing to overwrite it. "
-            "Fix or remove the file by hand, then retry."
+            msgs.LOGIN_STORE_EXISTS_BUT_FAILED_TO_PARSE_AS_TOML.format(path=path, exc=exc)
         ) from exc
 
 
@@ -471,7 +470,7 @@ def _optional_str(raw: dict[str, Any], name: str) -> str | None:
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise _BadSection(f"{name} must be a string, not {type(value).__name__}")
+        raise _BadSection(msgs.LOGIN_STORE_MUST_BE_A_STRING_NOT.format(name=name, __name__=type(value).__name__))
     return value
 
 
@@ -502,20 +501,20 @@ def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
     """Build a Login from one TOML table; raises _BadSection on wrong types."""
     stored_id = raw.get("provider_id", provider_id)
     if not isinstance(stored_id, str) or not stored_id.strip():
-        raise _BadSection(f"provider_id must be a non-empty string, not {stored_id!r}")
+        raise _BadSection(msgs.LOGIN_STORE_PROVIDER_ID_MUST_BE_A_NON_EMPTY.format(stored_id=stored_id))
     headers_raw = raw.get("provider_headers")
     if headers_raw is None:
         headers_raw = {}
     if not isinstance(headers_raw, dict):
-        raise _BadSection("provider_headers must be a table")
+        raise _BadSection(msgs.LOGIN_STORE_PROVIDER_HEADERS_MUST_BE_A_TABLE.format())
     strings = {name: _optional_str(raw, name) for name in _STR_FIELDS}
     defaults_raw = raw.get("defaults") or {}
     model_defaults_raw = raw.get("model_defaults") or {}
     if not isinstance(defaults_raw, dict):
-        raise _BadSection("defaults must be a table")
+        raise _BadSection(msgs.LOGIN_STORE_DEFAULTS_MUST_BE_A_TABLE.format())
     if not isinstance(model_defaults_raw, dict) or not all(
             isinstance(v, dict) for v in model_defaults_raw.values()):
-        raise _BadSection("model_defaults must be a table of tables")
+        raise _BadSection(msgs.LOGIN_STORE_MODEL_DEFAULTS_MUST_BE_A_TABLE_OF.format())
     from . import login_defaults
 
     model_defaults = {str(model): login_defaults.checked(values) for model, values in model_defaults_raw.items()}
@@ -618,7 +617,7 @@ def _read_store(*, strict: bool = False) -> _Store:
         if strict:
             if isinstance(exc, OSError):
                 raise
-            raise LoginsCorruptError(f"{path}: {exc}") from exc
+            raise LoginsCorruptError(msgs.LOGIN_STORE_.format(path=path, exc=exc)) from exc
         return _loaded
     _loaded = _parse_store(ident, data)
     return _loaded
@@ -908,7 +907,7 @@ def _read_model_cache_records() -> dict[str, dict[str, Any]]:
         with _cache_path().open("r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError) as exc:
-        raise _CacheUnreadable(f"{_cache_path()}: {exc}") from exc
+        raise _CacheUnreadable(msgs.LOGIN_STORE__911.format(value=_cache_path(), exc=exc)) from exc
     return _coerce_model_cache_records(data)
 
 
