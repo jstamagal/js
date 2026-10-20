@@ -471,7 +471,7 @@ async def _build_body_async(
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
 ) -> dict[str, Any]:
-    settings = getattr(model.provider, "_settings", None)
+    settings = getattr(getattr(model, "provider", None), "_settings", None)
     instructions, input_items = await _messages_to_codex(messages)
     body: dict[str, Any] = {
         "model": model.id,
