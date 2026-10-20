@@ -327,6 +327,9 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.189: skill invocation parsing takes the command and an optional pattern
+  capturing name/request. `ReplAssembly` supplies them to turn detection and
+  expansion. The default remains /skill with the existing syntax.
 - js-2lg.173: model setup takes its answer-to-action table; its questions name
   that table. The shipped answers remain a and p.
 - js-2lg.144: login pickers and text entry take action maps, with hints from

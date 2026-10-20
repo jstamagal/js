@@ -214,7 +214,6 @@ def load_skill(
     return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
 
 
-_USER_COMMAND_RE = re.compile(r"/skill(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
 _USER_SKILL_BLOCK_RE = re.compile(r'<skill name="([^"]+)">\n')
 
 
@@ -233,19 +232,28 @@ class SkillInvocationError(ValueError):
     """A ``/skill`` line that names no skill, or one the catalog lacks."""
 
 
-def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
+
+def match_user_invocation(text: str, *, command: str = "/skill",
+                          pattern: re.Pattern | None = None) -> re.Match | None:
+    """Match an invocation. A supplied pattern captures the name and request."""
+    if pattern is None:
+        pattern = re.compile(re.escape(command) + r"(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
+    return pattern.fullmatch(text.strip())
+
+def expand_user_invocation(catalog: SkillCatalog, text: str, *, command: str = "/skill",
+                           pattern: re.Pattern | None = None) -> str | None:
     """Turn a ``/skill <name> [request]`` line into the user message that carries it.
 
     This is the user's path into a skill, so it loads skills whose frontmatter
     disables model invocation. Returns None when ``text`` is not a ``/skill``
     line; raises SkillInvocationError when it names no known skill.
     """
-    match = _USER_COMMAND_RE.fullmatch(text.strip())
+    match = match_user_invocation(text, command=command, pattern=pattern)
     if match is None:
         return None
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
-        raise SkillInvocationError(msgs.USAGE.said(usage="/skill <name> [request]"))
+        raise SkillInvocationError(msgs.USAGE.said(usage=f"{command} <name> [request]"))
     loaded = load_skill(catalog, name, user=True)
     if loaded is None:
         raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))

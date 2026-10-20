@@ -2368,6 +2368,8 @@ class ReplAssembly:
     refuse_unknown: bool = True
     guard_turn_state: bool = True
     compact_force_focus: str = "up to here"
+    skill_command: str = "/skill"
+    skill_pattern: re.Pattern | None = None
     flush_lines: tuple[str, ...] = ("/flush", "/cancel queued")
     interrupt: Callable | None = None
     blocking_interrupts_max: int = 2
@@ -2407,7 +2409,7 @@ def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     if line in _repl_assembly(state).quit_words:
         state["running"] = False
         return True
-    if not line.startswith("/") or _is_skill_invocation(line):
+    if not line.startswith("/") or _is_skill_invocation(line, state):
         return False
     with _LIVE_STATE_LOCK:
         handled, error = _run_command(line, state, cfg)
@@ -3798,7 +3800,7 @@ def _echoes(line: str, state: dict) -> bool:
     (`_handle_command`) takes it as a command, a command or alias from the
     table or an invalid one; yes for what goes to the model, `/skill`, a
     markdown command and a slash-led message (`/usr/bin/x is broken`)."""
-    if not line.startswith("/") or _is_skill_invocation(line):
+    if not line.startswith("/") or _is_skill_invocation(line, state):
         return True
     verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
     if verb in _commands(state) or verb in (state.get("aliases") or {}):
@@ -3806,26 +3808,26 @@ def _echoes(line: str, state: dict) -> bool:
     return not _is_unknown_command(line)
 
 
-def _is_skill_invocation(line: str) -> bool:
-    """`/skill <name> [request]`: a turn whose user message carries the skill."""
-    words = line.split(maxsplit=1)
-    return len(words) == 2 and words[0] == "/skill"
+def _is_skill_invocation(line: str, state: dict | None = None) -> bool:
+    """An invocation with a skill name is a turn carrying that skill."""
+    assembly = _repl_assembly(state)
+    match = skills.match_user_invocation(line, command=assembly.skill_command, pattern=assembly.skill_pattern)
+    return match is not None and match.group(1) is not None
 
 
 def _expand_skill_line(prompt_text: str, state: dict) -> str:
-    """A `/skill <name> [request]` line becomes the user message carrying that
-    skill; SkillInvocationError (a ValueError) names an unknown or disabled
-    (SKILLS_DISABLED) skill. A
-    `/NAME args` line naming a markdown command (`js.prompt_commands`) becomes
-    that command's text with the arguments filled in."""
-    words = prompt_text.split(maxsplit=1)
-    if not words or not words[0].startswith("/"):
-        return prompt_text
-    if words[0] != "/skill":
+    """Expand the assembly's skill invocation, or a discovered markdown command."""
+    assembly = _repl_assembly(state)
+    match = skills.match_user_invocation(prompt_text, command=assembly.skill_command, pattern=assembly.skill_pattern)
+    if match is None:
+        words = prompt_text.split(maxsplit=1)
+        if not words or not words[0].startswith("/"):
+            return prompt_text
         expanded = prompt_commands.expand(prompt_text, prompt_commands.discover(Path.cwd()))
         return prompt_text if expanded is None else expanded
     catalog = skills.discover_skills(Path.cwd(), disabled=_disabled_skills(state))
-    expanded = skills.expand_user_invocation(catalog, prompt_text)
+    expanded = skills.expand_user_invocation(catalog, prompt_text, command=assembly.skill_command,
+                                            pattern=assembly.skill_pattern)
     return prompt_text if expanded is None else expanded
 
 
