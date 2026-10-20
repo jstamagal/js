@@ -80,3 +80,18 @@ def test_vi_escape_in_the_ex_line_cancels_it():
 
     assert ex == []
     assert lines == []
+
+
+def test_a_long_input_line_wraps_instead_of_scrolling_sideways():
+    from prompt_toolkit.enums import DEFAULT_BUFFER
+    from prompt_toolkit.layout import Window
+    from prompt_toolkit.layout.controls import BufferControl
+
+    app, _scrollback = screen.build_app(
+        prompt="> ", history=InMemoryHistory(), completer=None,
+        on_line=None, on_interrupt=lambda: None, on_eof=lambda: None,
+    )
+    windows = [w for w in app.layout.find_all_windows()
+               if isinstance(w, Window) and isinstance(w.content, BufferControl)
+               and w.content.buffer.name == DEFAULT_BUFFER]
+    assert windows and windows[0].wrap_lines()

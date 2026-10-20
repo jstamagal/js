@@ -730,6 +730,13 @@ def build_app(
             colours = ""
         return _status_style_sheet(colours)
 
+    def _input_height() -> Dimension:
+        try:
+            rows = get_app().output.get_size().rows
+        except Exception:  # noqa: BLE001 - output not attached yet
+            rows = 24
+        return Dimension(min=1, max=max(10, rows // 2))
+
     def _prompt() -> str:
         return prompt() if callable(prompt) else prompt
 
@@ -743,7 +750,8 @@ def build_app(
                                      input_processors=[HighlightIncrementalSearchProcessor()],
                                      search_buffer_control=search_toolbar.control,
                                      lexer=None),
-                       height=Dimension(min=1, max=10), dont_extend_height=True,
+                       # A long line wraps; the box grows to half the screen before it scrolls.
+                       height=_input_height, dont_extend_height=True, wrap_lines=True,
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
                                                                                    else " " * len(_plain(_prompt()))))),
                 ConditionalContainer(
