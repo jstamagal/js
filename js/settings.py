@@ -220,6 +220,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- jail ---
     SettingSpec("JAIL_BIND", "json", group="shell"),
     SettingSpec("JAIL_HIDE", "json", group="shell"),
+    SettingSpec("SILENT_OVERFLOW_RECOVERY", "bool", group="runtime"),
+    SettingSpec("SIGNED_REASONING_RECOVERY", "bool", group="runtime"),
     # --- runtime ---
     SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),

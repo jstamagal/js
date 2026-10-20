@@ -17,7 +17,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import ai
@@ -99,10 +99,14 @@ class CallLimits:
     stream_idle: float | None
     max_output_escalation: int
     max_output_resumes: int
+    silent_overflow_recovery: bool = field(default_factory=lambda: _settings.default_value("SILENT_OVERFLOW_RECOVERY"))
+    signed_reasoning_recovery: bool = field(default_factory=lambda: _settings.default_value("SIGNED_REASONING_RECOVERY"))
 
     @classmethod
     def from_settings(cls, settings: dict | None) -> CallLimits:
         return cls(
+            silent_overflow_recovery=bool(_settings.knob(settings, "SILENT_OVERFLOW_RECOVERY")),
+            signed_reasoning_recovery=bool(_settings.knob(settings, "SIGNED_REASONING_RECOVERY")),
             retry=retry.Budget.from_settings(settings),
             stream_idle=retry.idle_seconds(settings),
             max_output_escalation=int(_settings.knob(settings, "OUTPUT_TOKENS_RETRY_MAX") or 0),
@@ -204,7 +208,7 @@ class ModelCaller:
                 shown = self._sink.shown
                 window = self._budget.provider_window()
                 silent = silent_overflow(result.usage, window, cut_by_cap=cut_by_cap)
-                if silent is not None and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS:
+                if limits.silent_overflow_recovery and silent is not None and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS:
                     # The provider took more input than the window holds, so
                     # it cut the input: shed history and ask again. A reply
                     # already shown is kept, and the shed history serves the
@@ -257,7 +261,7 @@ class ModelCaller:
                     )
                     if await self._recover(e):
                         continue
-                if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
+                if limits.signed_reasoning_recovery and not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
                     signed_reasoning_dropped = True
                     restarted = (memory.restart_thinking_turn(
                         self._convo.messages, require_tool_calls=not model_client.is_modified_thinking_rejection(e))

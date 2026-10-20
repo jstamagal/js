@@ -291,3 +291,11 @@ def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
     assert caller._escalation(_Usage(), 1000, 9000) == 8000
     # window smaller than the escalation: room binds it
     assert caller._escalation(_Usage(), 1000, 5000) == 5000
+
+
+def test_silent_overflow_recovery_can_be_disabled(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_done("kept", input_tokens=5000), _done("resent")],
+                 budget=_Budget(window=4000))
+    turn.caller._limits = CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False})
+    assert turn.call().result.text == "kept"
+    assert turn.budget.recoveries == []

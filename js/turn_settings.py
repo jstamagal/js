@@ -146,6 +146,8 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
     TurnSetting("skills_disabled", "SKILLS_DISABLED", names, on_context=True),
     # --- on the Config only ---
+    TurnSetting("silent_overflow_recovery", "SILENT_OVERFLOW_RECOVERY", flag),
+    TurnSetting("signed_reasoning_recovery", "SIGNED_REASONING_RECOVERY", flag),
     TurnSetting("max_tool_iterations", "TURN_ROUNDS_MAX", integer),
     TurnSetting("max_tool_calls_per_message", "REPLY_TOOL_CALLS_MAX", integer),
     TurnSetting("max_tool_results_per_turn_bytes", "PARALLEL_RESULTS_MAX", integer),
