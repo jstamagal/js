@@ -62,14 +62,14 @@ def wiki_finish_ingest(
         return f"ERROR: no wiki vault at {vp}"
     src = vp / "inbox" / unit
     dest = vp / "Clippings" / unit
-    if not src.exists():
-        return f"ERROR: no inbox unit: {src}"
-    if dest.exists():
-        return f"ERROR: already archived: {dest}"
 
     archived_line = f"archived: inbox/{unit} -> Clippings/{unit}"
     logged_line = f"logged: [{today()}] ingest | {title}"
     with vault_lock(vp):
+        if not src.exists():
+            return f"ERROR: no inbox unit: {src}"
+        if dest.exists():
+            return f"ERROR: already archived: {dest}"
         clippings = vp / "Clippings"
         if clippings.exists() and not clippings.is_dir():
             return f"ERROR: {clippings} exists and is not a directory"

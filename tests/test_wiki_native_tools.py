@@ -11,6 +11,7 @@ from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
+from js.toolkit.wiki import ops as wiki_ops_module
 from js.toolkit.wiki import pages as wiki_pages_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
@@ -581,3 +582,33 @@ def test_wiki_write_accepts_an_absolute_vault_that_is_the_working_directory(tmp_
 
     assert written.startswith("wrote ")
     assert (tmp_path / "concepts" / "x.md").exists()
+
+
+def test_concurrent_ingests_keep_the_completed_archive(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    source = vault / "inbox" / "unit"
+    source.mkdir(parents=True)
+    (source / "raw.txt").write_text("raw source\n")
+    ready = threading.Barrier(2)
+    real_lock = wiki_ops_module.vault_lock
+
+    @contextmanager
+    def contended_lock(path):
+        ready.wait(timeout=5)
+        with real_lock(path):
+            yield
+
+    monkeypatch.setattr(wiki_ops_module, "vault_lock", contended_lock)
+    monkeypatch.setattr(wiki_ops_module, "_commit", lambda *args: "git: no repository")
+
+    def finish(_):
+        return wiki_finish_ingest(str(vault), "unit", "Unit", context=_ctx(tmp_path))
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(finish, range(2)))
+
+    assert not source.exists()
+    assert (vault / "Clippings" / "unit" / "raw.txt").read_text() == "raw source\n"
+    assert sum(result.startswith("ERROR:") for result in results) == 1
+    assert (vault / "log.md").read_text().count("Archived:") == 1
