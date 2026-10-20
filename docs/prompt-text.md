@@ -1,6 +1,6 @@
 # Model-facing text catalogs
 
-`prompts/text/*.json` holds exact text for the parts of js. Each catalog is
+`js/model_text/*.json` holds exact text for the parts of js. Each catalog is
 loaded by `js.prompt_text.load_catalog` and shared with its owning module.
 An assembly can replace catalog entries before importing the owning part;
 shipped files provide the defaults. Agent discovery ignores these catalogs

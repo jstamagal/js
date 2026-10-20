@@ -1,4 +1,4 @@
-"""Exact model-facing text catalogs shipped beside the agent prompts."""
+"""Exact model-facing text catalogs shipped in the js package."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,6 @@ def load_catalog(name: str) -> dict[str, str]:
     Values preserve whitespace. Only callers of templates with replacement fields
     apply ``str.format``; field values are inserted once, without expansion.
     """
-    path = Path(__file__).resolve().parent.parent / "prompts" / "text" / f"{name}.json"
+    path = Path(__file__).resolve().parent / "model_text" / f"{name}.json"
     with path.open(encoding="utf-8") as stream:
         return json.load(stream)
