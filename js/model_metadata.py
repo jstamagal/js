@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import tempfile
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -132,8 +133,9 @@ def _release_dates() -> dict[str, str]:
 def _generate_database(*, output: Path) -> None:
     """Keep release dates from the same upstream payload as the limits."""
     payload = modelsdotdev_sync._load_providers(modelsdotdev_sync.API_URL)
-    staged = output.with_name(output.name + ".refresh")
-    try:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent, prefix=f".{output.name}.") as staging_dir:
+        staged = Path(staging_dir) / output.name
         modelsdotdev_sync._write_database(payload, staged, modelsdotdev_sync.API_URL)
         with closing(sqlite3.connect(staged)) as connection:
             connection.execute(
@@ -148,8 +150,6 @@ def _generate_database(*, output: Path) -> None:
             )
             connection.commit()
         os.replace(staged, output)
-    finally:
-        staged.unlink(missing_ok=True)
 
 
 def _provider_candidates(provider_id: str | None, *, include_sdk: bool = True) -> tuple[str, ...]:
