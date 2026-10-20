@@ -2871,6 +2871,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             stats.write_csv(stats_csv, [row])
 
     for message in reversed(messages):
+        if message.get("role") == "user":
+            break
         if message.get("role") == "assistant" and message.get("content"):
             # In debug, run_turn already streamed the answer live to stdout — a
             # second print here is the double-print bug. Only print when the

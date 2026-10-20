@@ -145,6 +145,18 @@ def test_headless_no_save_resume_leaves_the_saved_session_untouched(tmp_path, mo
     assert session.read_bytes() == before
 
 
+def test_empty_headless_reply_does_not_reprint_a_previous_answer(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {})
+    _model(monkeypatch, ["previous answer", ""])
+    assert cli._run_prompt("first question", session="seeded") == 0
+    capsys.readouterr()
+
+    rc = cli._run_prompt("second question", session="seeded")
+
+    assert rc == 1
+    assert "previous answer" not in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("blocking", [True, False])
 def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch, blocking):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
