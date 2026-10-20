@@ -917,6 +917,8 @@ def fetch(
     json_body: Any = None,
     save: str | None = None,
     context: ToolContext | None = None,
+    *,
+    download_resolver=None,
 ) -> str:
     if context is None:
         return "ERROR: missing ToolContext"
@@ -936,7 +938,8 @@ def fetch(
             return _fetch_file_url(url, raw=raw, save_target=save_target, context=context)
 
         aria_eligible = _aria_eligible(method_name, data, parsed.scheme)
-        aria2c = resolve_binary(ARIA2_EXECUTABLE) if aria_eligible else None
+        resolver = resolve_binary if download_resolver is None else download_resolver
+        aria2c = resolver(ARIA2_EXECUTABLE) if aria_eligible else None
         if save_target is not None and aria2c is not None:
             download_started = time.monotonic()
             download_with_aria2(

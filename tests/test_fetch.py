@@ -438,3 +438,22 @@ def test_an_http_save_streams_to_disk_instead_of_reading_the_body(monkeypatch, t
     assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'blob.bin'} size={len(body)} ")
     assert (tmp_path / "blob.bin").read_bytes() == body
     assert response.reads > 1, "a stream reads in chunks; one read means it buffered"
+
+
+def test_fetch_accepts_a_download_resolver(monkeypatch, tmp_path):
+    selected = []
+    transfers = []
+    def resolve(name):
+        selected.append(name)
+        return "/assembly/aria2c"
+    def download(binary, url, destination, **kwargs):
+        transfers.append(binary)
+        destination.write_bytes(b"payload")
+    monkeypatch.setattr(process_net, "download_with_aria2", download)
+    monkeypatch.setattr(process_net, "_saved_content_type", lambda *args: "text/plain")
+    result = process_net.fetch("https://example.test/file", save="file",
+                               context=ToolContext(cwd=tmp_path), download_resolver=resolve)
+    assert selected == [process_net.ARIA2_EXECUTABLE]
+    assert transfers == ["/assembly/aria2c"]
+    assert (tmp_path / "file").read_bytes() == b"payload"
+    assert not result.startswith("ERROR")
