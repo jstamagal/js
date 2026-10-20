@@ -195,14 +195,14 @@ def _normalize_request(model_id: str, provider_id: str | None) -> tuple[str, str
 
 
 @lru_cache(maxsize=256)
-def accepts_image_input(model_id: str) -> bool | None:
+def accepts_image_input(model_id: str, *, refresh=None) -> bool | None:
     """Whether models.dev records image as an input modality for ``model_id``.
 
     Keyed on the MODEL, not the provider: the same model reached through a proxy,
     a router prefix, or a local server has the same input modalities. Returns None
     when the catalog has never heard of the model, so the caller can fall back.
     """
-    ensure_fresh_catalog()
+    (ensure_fresh_catalog if refresh is None else refresh)()
     wanted = _bare_model_name(model_id)
     if not wanted:
         return None
@@ -677,14 +677,14 @@ def cached_server_context_ceiling(model_id: str, provider_id: str | None = None)
     return None if metadata is None else metadata.training_context_window
 
 
-def context_window(model_id: str, provider_id: str | None = None) -> int | None:
-    ensure_fresh_catalog()
+def context_window(model_id: str, provider_id: str | None = None, *, refresh=None) -> int | None:
+    (ensure_fresh_catalog if refresh is None else refresh)()
     limits = lookup_limits(model_id, provider_id)
     return None if limits is None else limits.context_window
 
 
-def max_output_tokens(model_id: str, provider_id: str | None = None) -> int | None:
-    ensure_fresh_catalog()
+def max_output_tokens(model_id: str, provider_id: str | None = None, *, refresh=None) -> int | None:
+    (ensure_fresh_catalog if refresh is None else refresh)()
     limits = lookup_limits(model_id, provider_id)
     return None if limits is None else limits.max_output_tokens
 

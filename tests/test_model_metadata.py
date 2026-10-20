@@ -341,3 +341,13 @@ def test_registered_setting_can_disable_catalog_refresh(monkeypatch):
     monkeypatch.setattr(model_metadata, "refresh_catalog", refresh)
     assert model_metadata.ensure_fresh_catalog() == current
     assert calls == []
+
+
+def test_capability_lookup_uses_the_callers_catalog_refresh(monkeypatch):
+    refreshes = []
+    def unexpected():
+        raise AssertionError("default refresh used")
+    monkeypatch.setattr(model_metadata, "ensure_fresh_catalog", unexpected)
+    monkeypatch.setattr(model_metadata, "lookup_limits", lambda *args: SimpleNamespace(context_window=1234))
+    assert model_metadata.context_window("model", refresh=lambda: refreshes.append(True)) == 1234
+    assert refreshes == [True]
