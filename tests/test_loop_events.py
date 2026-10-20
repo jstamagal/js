@@ -89,3 +89,16 @@ def test_unmatched_policy_entry_is_an_event(capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["entry"] == rules[0].label
     assert capsys.readouterr() == ("", "")
+
+
+def test_description_warning_is_an_event(monkeypatch, capsys):
+    from js.toolkit import descriptions
+
+    monkeypatch.setattr(descriptions, "_WARNED", set())
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        descriptions._warn_once("invalid marker")
+        descriptions._warn_once("invalid marker")
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["problem"] == "invalid marker"
+    assert capsys.readouterr() == ("", "")
