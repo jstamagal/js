@@ -85,12 +85,12 @@ def _pkce_pair() -> tuple[str, str]:
 def _validate_endpoint(raw: str | None, field: str) -> str:
     parsed = urllib.parse.urlparse((raw or "").strip())
     if parsed.scheme != "https" or not parsed.hostname:
-        raise RuntimeError(f"xAI OAuth discovery returned a non-HTTPS {field}")
+        raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_A_NON_HTTPS.format(field=field))
     host = parsed.hostname.lower()
     if host != "x.ai" and not host.endswith(".x.ai"):
         # The discovery document decides the endpoints, so pin the only thing
         # that must not move: the credential never leaves x.ai.
-        raise RuntimeError(f"xAI OAuth {field} host {host!r} is not on x.ai")
+        raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_HOST_IS_NOT_ON_X.format(field=field, host=host))
     return parsed.geturl()
 
 
@@ -102,13 +102,13 @@ def discover(*, client: httpx.Client | None = None) -> XaiEndpoints:
         response = client.get(DISCOVERY_URL, headers={"Accept": "application/json"})
         body = response.text[:_MAX_RESPONSE_BYTES]
         if response.status_code != 200:
-            raise RuntimeError(f"xAI OAuth discovery failed: HTTP {response.status_code}: {body.strip()[:200]}")
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_DISCOVERY_FAILED_HTTP.format(status_code=response.status_code, value=body.strip()[:200]))
         try:
             payload: Any = json.loads(body)
         except ValueError as exc:
-            raise RuntimeError(f"xAI OAuth discovery returned malformed JSON: {exc}") from exc
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_MALFORMED_JSON.format(exc=exc)) from exc
         if not isinstance(payload, dict):
-            raise RuntimeError("xAI OAuth discovery response was not a JSON object")
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_DISCOVERY_RESPONSE_WAS_NOT_A.format())
         return XaiEndpoints(
             authorize=_validate_endpoint(payload.get("authorization_endpoint"), "authorization_endpoint"),
             token=_validate_endpoint(payload.get("token_endpoint"), "token_endpoint"),
@@ -172,16 +172,16 @@ def _post_token_form(
         )
         body = response.text[:_MAX_RESPONSE_BYTES]
         if response.status_code != 200:
-            raise RuntimeError(f"xAI OAuth token request failed: HTTP {response.status_code}: {body.strip()[:200]}")
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_TOKEN_REQUEST_FAILED_HTTP.format(status_code=response.status_code, value=body.strip()[:200]))
         try:
             payload: Any = json.loads(body)
         except ValueError as exc:
-            raise RuntimeError(f"xAI OAuth token response was malformed JSON: {exc}") from exc
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_MALFORMED_JSON.format(exc=exc)) from exc
         if not isinstance(payload, dict):
-            raise RuntimeError("xAI OAuth token response was not a JSON object")
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_NOT_A.format())
         access = str(payload.get("access_token") or "")
         if not access:
-            raise RuntimeError("xAI OAuth token response omitted access_token")
+            raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_OMITTED_ACCESS_TOKEN.format())
         # A refresh grant may legitimately return no new refresh token; keeping
         # the previous one is what makes the session survive past the first hour.
         refresh = str(payload.get("refresh_token") or "") or (previous.refresh if previous else None)
@@ -241,7 +241,7 @@ def exchange_code_for_token(endpoint: str, code: str, verifier: str, *, client: 
         client=client,
     )
     if not token.refresh:
-        raise RuntimeError("xAI OAuth code exchange omitted refresh_token; the login would expire in an hour")
+        raise RuntimeError(msgs.XAI_OAUTH_XAI_OAUTH_CODE_EXCHANGE_OMITTED_REFRESH_TOKEN.format())
     return token
 
 
@@ -271,8 +271,8 @@ def login_browser(*, timeout_s: float = 300.0, referrer: str = "js") -> Login:
         expected_state=state,
         timeout_s=timeout_s,
         label="xAI OAuth",
-        success_html="<h1>xAI login complete</h1><p>You can close this tab and return to js.</p>",
-        failure_html="<h1>xAI login failed</h1><p>Return to js and try again.</p>",
+        success_html=msgs.XAI_LOGIN_SUCCESS_HTML.format(),
+        failure_html=msgs.XAI_LOGIN_FAILURE_HTML.format(),
         on_ready=open_browser,
     )
     return login_from_token(exchange_code_for_token(endpoints.token, code, verifier))
@@ -366,7 +366,7 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
 
 
 def relogin_error(detail: object) -> RuntimeError:
-    return RuntimeError(f"xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again")
+    return RuntimeError(msgs.XAI_REFRESH_REJECTED.format(detail=detail))
 
 
 _REJECTED_GRANT_MARKERS = ("invalid_grant", "refresh_token_reused", "HTTP 400", "HTTP 401")
@@ -443,19 +443,19 @@ def ensure_fresh_login(login: Login, *, persist: bool = True) -> Login:
         if current is not None and not login_needs_refresh(current):
             return current
         if isinstance(exc, OSError):
-            raise RuntimeError(f"{logins_module.lock_path()} cannot be opened ({exc}); fix it before the xAI login can refresh") from exc
+            raise RuntimeError(msgs.XAI_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE.format(value=logins_module.lock_path(), exc=exc)) from exc
         raise
     try:
         current = _stored_login(login)
         stored = current is not None
         if current is None:
             if logins_module.store_unreadable():
-                raise RuntimeError(f"{logins_module.login_path()} cannot be read; fix it before the xAI login can refresh")
+                raise RuntimeError(msgs.XAI_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE.format(value=logins_module.login_path()))
             current = login  # standalone (unsaved) login: refresh, never persist
         if not login_needs_refresh(current):
             return current
         if logins_module.store_unreadable():
-            raise RuntimeError(f"{logins_module.login_path()} cannot be read; fix it before the xAI login can refresh")
+            raise RuntimeError(msgs.XAI_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE.format(value=logins_module.login_path()))
         token = _refresh_or_relogin(current)
         refreshed = apply_refreshed_token(current, token)
         if persist and stored:

@@ -1593,6 +1593,36 @@ CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT = "OpenAI Codex acce
 
 CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN = "OpenAI Codex requires an OAuth access token; run js --login openai-codex"
 
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_A_NON_HTTPS = "xAI OAuth discovery returned a non-HTTPS {field}"
+
+XAI_OAUTH_XAI_OAUTH_HOST_IS_NOT_ON_X = "xAI OAuth {field} host {host!r} is not on x.ai"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_FAILED_HTTP = "xAI OAuth discovery failed: HTTP {status_code}: {value}"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_MALFORMED_JSON = "xAI OAuth discovery returned malformed JSON: {exc}"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RESPONSE_WAS_NOT_A = "xAI OAuth discovery response was not a JSON object"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_REQUEST_FAILED_HTTP = "xAI OAuth token request failed: HTTP {status_code}: {value}"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_MALFORMED_JSON = "xAI OAuth token response was malformed JSON: {exc}"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_NOT_A = "xAI OAuth token response was not a JSON object"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_OMITTED_ACCESS_TOKEN = "xAI OAuth token response omitted access_token"
+
+XAI_OAUTH_XAI_OAUTH_CODE_EXCHANGE_OMITTED_REFRESH_TOKEN = "xAI OAuth code exchange omitted refresh_token; the login would expire in an hour"
+
+XAI_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the xAI login can refresh"
+
+XAI_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the xAI login can refresh"
+
+XAI_LOGIN_SUCCESS_HTML = "<h1>xAI login complete</h1><p>You can close this tab and return to js.</p>"
+
+XAI_LOGIN_FAILURE_HTML = "<h1>xAI login failed</h1><p>Return to js and try again.</p>"
+
+XAI_REFRESH_REJECTED = "xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
