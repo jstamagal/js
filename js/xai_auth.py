@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from . import messages as msgs
+from . import output
 from . import oauth_loopback
 
 if TYPE_CHECKING:
@@ -354,12 +355,12 @@ def save_refreshed_login(refreshed: Login, *, derived_from: Login) -> bool:
                 derived_from.xai_refresh_token,
                 refreshed.xai_refresh_token,
             ):
-                msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error="login changed underneath the refresh")
+                output.notice(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error="login changed underneath the refresh")
                 return False
             logins_module.save_login(refreshed)
     except (logins_module.LoginsCorruptError, logins_module.LoginStoreBusyError, OSError) as exc:
         logins_module.note_memory_login(refreshed, derived_from=derived_from)
-        msgs.warn(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error=exc)
+        output.notice(msgs.OAUTH_REFRESH_NOT_SAVED, service="xAI", error=exc)
         return False
     return True
 

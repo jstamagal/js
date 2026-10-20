@@ -217,3 +217,23 @@ def test_codex_refresh_save_failure_is_an_event(monkeypatch, capsys):
     assert len(events) == 1
     assert isinstance(dict(events[0].fields)["fields"]["error"], OSError)
     assert capsys.readouterr() == ("", "")
+
+
+def test_xai_refresh_save_failure_is_an_event(monkeypatch, capsys):
+    from dataclasses import replace
+
+    from js import logins, xai_auth
+
+    stored = logins.Login(provider_id="xai-oauth", xai_refresh_token="old")
+    logins.save_login(stored)
+    def unavailable(login):
+        raise OSError("read only")
+
+    monkeypatch.setattr(logins, "save_login", unavailable)
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert xai_auth.save_refreshed_login(replace(stored, xai_refresh_token="new"),
+                                             derived_from=stored) is False
+    assert len(events) == 1
+    assert isinstance(dict(events[0].fields)["fields"]["error"], OSError)
+    assert capsys.readouterr() == ("", "")
