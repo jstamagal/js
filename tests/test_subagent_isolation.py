@@ -843,3 +843,16 @@ def test_one_task_returns_the_worker_text_verbatim(monkeypatch, tmp_path):
     actual = task(["summarize it"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
     assert actual == "/tmp/out/summary.md"
+
+
+def test_registered_setting_can_disable_child_reply_share(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
+    turn_settings.install(parent, SimpleNamespace(**turn_settings.project({"SUBAGENT_RESULT_SHARE": False})))
+    parent.max_tool_result_bytes = 64
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("X" * 500))
+    assert task(["reply"], agent_id="worker", context=parent) == "X" * 500

@@ -327,7 +327,7 @@ async def _run_one_task_async(
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
     budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
-    if budget > 0:
+    if budget > 0 and parent_context.subagent_result_share:
         cap = budget // max(1, total)
         final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
     return final

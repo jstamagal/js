@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("subagent_result_share", "SUBAGENT_RESULT_SHARE", flag, on_context=True),
     TurnSetting("browser_fallback_file", "BROWSER_FALLBACK_FILE", text, on_context=True),
     TurnSetting("terminal_environment_inherit", "TERMINAL_ENVIRONMENT_INHERIT", flag, on_context=True),
     TurnSetting("terminal_shell_program", "TERMINAL_SHELL_PROGRAM", text, on_context=True),
