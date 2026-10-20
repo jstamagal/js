@@ -1,0 +1,6 @@
+{
+  "jev_error_typesafe_sdk_is_not_installed": "ERROR: typesafe-sdk is not installed; run `just sync`",
+  "jev_stable": "stable",
+  "jev_flipped_order_sensitive_do_not_trust": "FLIPPED: order-sensitive, do not trust",
+  "jev_reversed_order_check": "   reversed: {format_flipped}; order check: {verdict}"
+}

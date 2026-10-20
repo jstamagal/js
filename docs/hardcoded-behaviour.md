@@ -229,7 +229,7 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/meta.py` | named_agent_tool / _task_params / tools | policy | Model-facing text is loaded from `prompts/text/toolkit_meta.json`; selection and execution policy are unchanged. | js-2lg.62 |
 | `js/toolkit/task_jobs.py` | started_text / report | policy | Model-facing text is loaded from `prompts/text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
 | `js/toolkit/task_jobs.py` | completion_notes | policy | Model-facing text is loaded from `prompts/text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
-| `js/toolkit/jev.py:113,127` | jev | policy | Builds the install hint (`just sync`) and the order-check verdict text in code. | js-2lg.66 |
+| `js/toolkit/jev.py` | jev | policy | Model-facing text is loaded from `prompts/text/toolkit_jev.json`; selection and execution policy are unchanged. | js-2lg.66 |
 | `js/toolkit/kernel.py:65-72,640,1091` | MISSING_DEPS / get_session / kernel | policy | Model-facing errors name `/set PYTHON_KERNEL on`, `uv sync` and `just` commands. | js-2lg.69 |
 | `js/toolkit/kernel.py:1041-1045,1052-1056,1152-1153,1200-1201,1215-1216` | _died / _busy / kernel | policy | Builds the restart, busy, interrupted and poll guidance the model reads. | js-2lg.69 |
 | `js/toolkit/toolbox.py:519,566-567,573-574,581-586` | toolbox | policy | Builds refusal and guidance text in code, including the `/set` command. | js-2lg.73 |

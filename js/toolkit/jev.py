@@ -13,6 +13,10 @@ from typing import Any
 
 from .core import Tool, ToolContext
 from .descriptions import load_description
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_jev')
+
 
 API_KEY_ENV = "TYPESAFE_API_KEY"
 KINDS = ("noul", "choice", "score")
@@ -111,7 +115,7 @@ def jev(
         with (_client(model, api_key=configured_key) if configured_key else _client(model)) as client:
             response = client.system_one(_state(state), asked)
     except ImportError:
-        return "ERROR: typesafe-sdk is not installed; run `just sync`"
+        return _PROMPTS['jev_error_typesafe_sdk_is_not_installed']
     except Exception as exc:  # noqa: BLE001 - the SDK's errors reach the model as text
         return f"ERROR: {type(exc).__name__}: {exc}"
     answers = getattr(response, "answers", None) or {}
@@ -125,8 +129,8 @@ def jev(
         flipped = answers.get(f"{key}_reversed")
         if flipped is not None:
             stable = _field(flipped, "choice") == _field(answers[key], "choice")
-            verdict = "stable" if stable else "FLIPPED: order-sensitive, do not trust"
-            lines.append(f"   reversed: {_format(flipped)}; order check: {verdict}")
+            verdict = _PROMPTS['jev_stable'] if stable else _PROMPTS['jev_flipped_order_sensitive_do_not_trust']
+            lines.append(_PROMPTS['jev_reversed_order_check'].format(format_flipped=_format(flipped), verdict=verdict))
     return "\n".join(lines)
 
 
