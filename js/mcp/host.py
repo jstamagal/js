@@ -587,7 +587,8 @@ class MCPHost:
 
     async def refresh(self) -> None:
         dirty, self._dirty = self._dirty, {}
-        for server_name in sorted(dirty):
+        pending = sorted(dirty)
+        for index, server_name in enumerate(pending):
             client = self.clients.get(server_name)
             if client is None or "tools" not in dirty[server_name]:
                 continue
@@ -598,6 +599,8 @@ class MCPHost:
             try:
                 tools = await client.list_tools(timeout=self.request_timeout)
             except asyncio.CancelledError:
+                for name in pending[index:]:
+                    self._dirty.setdefault(name, set()).update(dirty[name])
                 raise
             except Exception as exc:
                 self._record_server_error(server, exc)

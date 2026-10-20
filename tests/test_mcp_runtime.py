@@ -188,6 +188,35 @@ def test_discovery_lists_tools_after_recovering_initialization(config):
     asyncio.run(drive())
 
 
+def test_cancelled_discovery_retries_pending_tool_metadata(config):
+    async def drive():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class WaitingClient(FakeClient):
+            async def list_tools(self, *, timeout=None):
+                entered.set()
+                await release.wait()
+                return [{"name": "ready", "inputSchema": {"type": "object"}}]
+
+        host = MCPHost(config, client_factory=WaitingClient)
+        discovery = asyncio.create_task(host.discover(query="mcp"))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            discovery.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await discovery
+            release.set()
+
+            found = await host.discover(query="mcp")
+
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
 def test_host_passes_deadline_to_metadata_calls_remote_calls_and_controls():
     class DeadlineClient(FakeClient):
         def __init__(self, factory, **kwargs):
