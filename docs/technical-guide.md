@@ -39,7 +39,9 @@ persists each completed turn.
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results, dispatch, provider quirks |
-| `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply on screen and in the transcript (`StreamSink`) |
+| `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply as output events (`StreamSink`) |
+| `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
+| `js/console.py` | js's own sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
 | `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
@@ -187,6 +189,14 @@ file of the same name. `turn_budget` takes the context-window lookup as a
 callable, so `runtime._resolve_context_window` stays the one place it is
 resolved, and `turn_call` reaches the model through
 `model_client.stream_model_async` on the module.
+
+The loop writes nothing to the screen itself. Every visible thing it produces
+(tool calls and results, the run line, call stats, the answer and the
+reasoning, notices) is an `OutputEvent` with structured fields, sent to
+`Telemetry.sink`; `js/output.py` lists the events. Without a sink of its own a
+telemetry uses js's console (`js/console.py`), which draws them as js always
+has. A program that sets `Telemetry(None, sink=...)` gets the events and js
+prints nothing.
 
 1. Builds `ai` message and tool parts via `js/model_client`.
 2. Calls `model_client.stream_model(...)`.

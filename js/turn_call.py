@@ -28,6 +28,7 @@ from . import memory
 from . import messages as msgs
 from . import model_client
 from . import model_metadata
+from . import output
 from . import retry
 from . import settings as _settings
 from . import stream_transport
@@ -396,14 +397,10 @@ class ModelCaller:
         net = stream_transport.net_level()
         label = context.net_label
         if (net >= 3 and (label or not self._suppress)) if net is not None else self._trace:
-            elapsed = time.time() - t0
-            tps = (out_tokens / elapsed) if elapsed > 0 else 0.0
-            cache = ""
-            if context.last_prompt_tokens > 0 and context.last_cached_tokens > 0:
-                cache = f"  cache {100.0 * context.last_cached_tokens / context.last_prompt_tokens:.0f}%"
-            ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-            msgs.say(msgs.CALL_STATS, flush=True, label=f"{label}: " if label else "", ms=int(elapsed * 1000),
-                     finish=finish, tool_calls=n_calls, tokens=out_tokens, tps=tps, ttft=ttft, cache=cache)
+            output.sink_of(self._telemetry).emit(output.event(
+                "call_stats", label=label, elapsed_s=time.time() - t0, finish=finish, tool_calls=n_calls,
+                tokens=out_tokens, first_token_s=result.first_token_s,
+                prompt_tokens=context.last_prompt_tokens, cached_tokens=context.last_cached_tokens))
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
                           incomplete_reason=incomplete_reason, ai_tools=ai_tools, usage_stale=usage_stale)
 

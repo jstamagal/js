@@ -73,13 +73,14 @@ def flight_log_dir(cfg) -> Path:
 NOTICE = "compaction_notice"
 
 
-def printing(emit: Callable[..., Any] | None = None) -> Callable[..., Any]:
+def printing(emit: Callable[..., Any] | None = None, *,
+             warn: Callable[..., Any] | None = None) -> Callable[..., Any]:
     """The ``emit`` js's own callers hand compaction: a compaction notice
-    prints as a ``*** Compaction ...`` line on stderr, every other event goes
-    on to ``emit``."""
+    goes to ``warn`` (`msgs.warn` by default) as a ``*** Compaction ...``
+    line on stderr, every other event goes on to ``emit``."""
     def handler(event: str, **payload: Any) -> Any:
         if event == NOTICE:
-            msgs.warn(msgs.FLIGHT_NOTICE, **payload)
+            (warn or msgs.warn)(msgs.FLIGHT_NOTICE, **payload)
             return None
         return None if emit is None else emit(event, **payload)
     return handler

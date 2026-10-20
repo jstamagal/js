@@ -64,6 +64,16 @@ class NetRole:
 
 _sink: NetSink | None = None
 _role: contextvars.ContextVar[NetRole] = contextvars.ContextVar("js_net_role", default=NetRole())
+_output: contextvars.ContextVar[Callable | None] = contextvars.ContextVar("js_net_output", default=None)
+
+
+def set_output(emit: Callable[[int, Any, bool], None]) -> contextvars.Token:
+    """Route this turn's network notices to its output sink."""
+    return _output.set(emit)
+
+
+def reset_output(token: contextvars.Token) -> None:
+    _output.reset(token)
 
 
 def install_sink(sink: NetSink | None) -> None:
@@ -102,10 +112,11 @@ def report_held_failure() -> None:
 def say_or_print(level: int, line: str) -> None:
     """A network line that predates the channel: the channel decides while a
     sink is installed; otherwise it prints to stderr."""
-    if _sink is None:
-        print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr)
+    emit = _output.get()
+    if emit is not None:
+        emit(level, line, True)
     else:
-        say(level, line)
+        draw(level, line, fallback=True)
 
 
 def say_for_caller(level: int, line: str) -> None:
@@ -137,7 +148,18 @@ def say(level: int, line: str) -> None:
     """Print one network line when the channel is at `level` or above. A
     `said()` entry draws through its own format, which decides whether
     `$BANNER` leads it; plain text through NET_LINE's."""
-    if _sink is not None and (net_level() or 0) >= level:
+    emit = _output.get()
+    if emit is not None:
+        emit(level, line, False)
+    else:
+        draw(level, line)
+
+
+def draw(level: int, line: str, *, fallback: bool = False) -> None:
+    """Draw a network notice through the installed channel or its stderr fallback."""
+    if _sink is None and fallback:
+        print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr)
+    elif _sink is not None and (net_level() or 0) >= level:
         try:
             _sink.emit(_net_line(line))
         except Exception:  # noqa: BLE001 — a display failure never fails the request

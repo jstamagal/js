@@ -150,6 +150,26 @@ def test_a_new_call_opens_new_displays():
     assert log.count(("open", False)) == 2
 
 
+def test_stream_channel_end_events_are_emitted_once_per_open_channel():
+    from test_output import _Sink
+
+    telemetry = _telemetry([])
+    telemetry.sink = events = _Sink()
+    sink = StreamSink(telemetry, TurnStatus(), TurnEvents(None, None, telemetry, model="m", provider_id="p"),
+                      settings={"REASONING_DISPLAY": 2}, suppress_output=False)
+    sink.reasoning("thought")
+    sink.text("answer")
+    sink.close()
+    sink.close()
+    sink.close_reasoning()
+    assert len(events.named("answer_end")) == len(events.named("reasoning_end")) == 1
+
+    sink.text("next")
+    sink.close()
+    assert len(events.named("answer_end")) == 2
+    assert len(events.named("reasoning_end")) == 1
+
+
 # --------------------------------------------------------------------------
 # TurnEvents
 # --------------------------------------------------------------------------
