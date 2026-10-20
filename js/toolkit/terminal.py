@@ -202,6 +202,15 @@ def close_terminal_sessions(context: ToolContext) -> None:
     context.terminal_sessions.clear()
 
 
+def _jail_refusal(state: dict[str, Any], session: str, context: ToolContext) -> str | None:
+    if state.get("jail") == jail.shape(context):
+        return None
+    context.terminal_sessions.pop(session, None)
+    _stop_state(state)
+    return (f"ERROR: terminal session {session!r} was started under other jail settings "
+            "(JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again")
+
+
 def _cleanup_live_children() -> None:
     for child in list(_LIVE_CHILDREN):
         try:
@@ -321,13 +330,10 @@ def terminal_session(
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use action=start first"
 
-    if action != "stop" and state.get("jail") != jail.shape(context):
-        # Started under other JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP values:
-        # it could still reach what the jail now hides. It is stopped.
-        sessions.pop(session, None)
-        _stop_state(state)
-        return (f"ERROR: terminal session {session!r} was started under other jail settings "
-                "(JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again")
+    if action != "stop":
+        refusal = _jail_refusal(state, session, context)
+        if refusal is not None:
+            return refusal
 
     if action == "stop":
         sessions.pop(session, None)
@@ -446,6 +452,9 @@ def terminal_snapshot(
     state = context.terminal_sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use terminal_session first"
+    refusal = _jail_refusal(state, session, context)
+    if refusal is not None:
+        return refusal
     raw_output_path = text_or_default(output_path)
     if raw_output_path and Path(raw_output_path).suffix.lower() != ".png":
         return "ERROR: output_path must end in .png"

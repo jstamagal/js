@@ -489,6 +489,29 @@ def test_terminal_snapshot_draws_the_cursor_and_cell_decorations(tmp_path):
     assert render("plain", 0, "plain.png") != render("\x1b[4mplain\x1b[0m", 0, "under.png")
 
 
+def test_terminal_snapshot_stops_session_after_jail_settings_change(tmp_path, monkeypatch):
+    from js import jail
+
+    monkeypatch.setattr(jail, "shape", lambda source: tuple(source.jail_hide or ()))
+    context = ToolContext(cwd=tmp_path)
+    context.jail_hide = ()
+    target = tmp_path / "snapshot.png"
+    try:
+        terminal_session(action="start", command="printf old-view; sleep 300",
+                         wait_ms=0, context=context)
+        child = context.terminal_sessions["main"]["child"]
+        context.jail_hide = (str(tmp_path / "hidden"),)
+
+        result = terminal_snapshot(output_path=str(target), wait_ms=0, context=context)
+
+        assert result.startswith("ERROR:")
+        assert "main" not in context.terminal_sessions
+        assert not child.isalive()
+        assert not target.exists()
+    finally:
+        close_terminal_sessions(context)
+
+
 def test_local_probe_server_returns_empty_favicon(tmp_path):
     target = tmp_path / "index.html"
     target.write_text("<p>clean</p>", encoding="utf-8")
