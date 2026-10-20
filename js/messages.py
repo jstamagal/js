@@ -1425,6 +1425,36 @@ STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
 
 STATUS_RESPONSE_BYTES = Message("{value:,}B", banner=False)
 
+KEY_ACTION_SUBMIT = "Send the input line (emacs mode)."
+
+KEY_ACTION_HISTORY_SEARCH = Message("Search every prompt in the history; pressed again, the next older match.", banner=False)
+
+KEY_ACTION_EX_OPEN = "Open the ex line (vi normal mode)."
+
+KEY_ACTION_EX_RUN = Message("Run the ex line.", banner=False)
+
+KEY_ACTION_EX_CANCEL = Message("Close the ex line without running it.", banner=False)
+
+KEY_ACTION_INTERRUPT = Message("Cancel the running turn and drop queued prompts; with none, clear the line, and pressed again, quit.", banner=False)
+
+KEY_ACTION_EOF = Message("Delete the next character; on an empty line, quit; at the end of a line, pressed twice, quit.", banner=False)
+
+KEY_ACTION_SUSPEND = Message("Suspend js to the shell.", banner=False)
+
+KEY_ACTION_REASONING_TOGGLE = Message("Collapse or expand reasoning blocks.", banner=False)
+
+KEY_ACTION_REDRAW = Message("Redraw the screen.", banner=False)
+
+KEY_ACTION_SCROLL_UP = Message("Scroll the output up a page.", banner=False)
+
+KEY_ACTION_SCROLL_DOWN = Message("Scroll the output down a page.", banner=False)
+
+KEY_ACTION_COMPLETE = Message("Complete the word at the cursor, or cycle completions.", banner=False)
+
+KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
+
+KEY_ESCAPE = Message("Esc", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

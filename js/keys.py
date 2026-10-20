@@ -45,20 +45,20 @@ class Action:
 
 
 ACTIONS: tuple[Action, ...] = (
-    Action("submit", INPUT, (("enter",),), "Send the input line (emacs mode)."),
+    Action("submit", INPUT, (("enter",),), msgs.KEY_ACTION_SUBMIT.format()),
     Action("history_search", INPUT, (("c-r",),),
-           "Search every prompt in the history; pressed again, the next older match."),
-    Action("ex_open", INPUT, ((":",),), "Open the ex line (vi normal mode)."),
-    Action("ex_run", EX, (("enter",),), "Run the ex line."),
-    Action("ex_cancel", EX, (("escape",),), "Close the ex line without running it."),
-    Action("interrupt", SCREEN, (("c-c",),), "Cancel the running turn and drop queued prompts; with none, clear the line, and pressed again, quit."),
-    Action("eof", SCREEN, (("c-d",),), "Delete the next character; on an empty line, quit; at the end of a line, pressed twice, quit."),
-    Action("suspend", SCREEN, (("c-z",),), "Suspend js to the shell."),
-    Action("reasoning_toggle", SCREEN, (("c-o",),), "Collapse or expand reasoning blocks."),
-    Action("redraw", SCREEN, (("c-l",),), "Redraw the screen."),
-    Action("scroll_up", SCREEN, (("pageup",),), "Scroll the output up a page."),
-    Action("scroll_down", SCREEN, (("pagedown",),), "Scroll the output down a page."),
-    Action("complete", SCREEN, (("tab",),), "Complete the word at the cursor, or cycle completions."),
+           msgs.KEY_ACTION_HISTORY_SEARCH.words()),
+    Action("ex_open", INPUT, ((":",),), msgs.KEY_ACTION_EX_OPEN.format()),
+    Action("ex_run", EX, (("enter",),), msgs.KEY_ACTION_EX_RUN.words()),
+    Action("ex_cancel", EX, (("escape",),), msgs.KEY_ACTION_EX_CANCEL.words()),
+    Action("interrupt", SCREEN, (("c-c",),), msgs.KEY_ACTION_INTERRUPT.words()),
+    Action("eof", SCREEN, (("c-d",),), msgs.KEY_ACTION_EOF.words()),
+    Action("suspend", SCREEN, (("c-z",),), msgs.KEY_ACTION_SUSPEND.words()),
+    Action("reasoning_toggle", SCREEN, (("c-o",),), msgs.KEY_ACTION_REASONING_TOGGLE.words()),
+    Action("redraw", SCREEN, (("c-l",),), msgs.KEY_ACTION_REDRAW.words()),
+    Action("scroll_up", SCREEN, (("pageup",),), msgs.KEY_ACTION_SCROLL_UP.words()),
+    Action("scroll_down", SCREEN, (("pagedown",),), msgs.KEY_ACTION_SCROLL_DOWN.words()),
+    Action("complete", SCREEN, (("tab",),), msgs.KEY_ACTION_COMPLETE.words()),
 )
 ACTION_BY_NAME: dict[str, Action] = {action.name: action for action in ACTIONS}
 
@@ -182,8 +182,8 @@ def describe(sequence: KeySequence) -> str:
     """A key sequence as the screen names it: `c-o` is Ctrl-O."""
     def one(key: str) -> str:
         if key.startswith("c-") and len(key) == 3:
-            return "Ctrl-" + key[2:].upper()
-        return {"escape": "Esc"}.get(key, key)
+            return msgs.KEY_CONTROL_PREFIX.words() + key[2:].upper()
+        return {"escape": msgs.KEY_ESCAPE.words()}.get(key, key)
 
     return " ".join(one(key) for key in sequence)
 
