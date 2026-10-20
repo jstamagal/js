@@ -56,7 +56,10 @@ def _question(item: Any) -> dict[str, Any] | str:
     options = item.get("options") or []
     if not isinstance(options, list) or len(options) < 2:
         return f"a {kind} question needs at least two options"
-    asked["criteria"] = _options(options) if kind == "choice" else [str(o) for o in options]
+    criteria = _options(options) if kind == "choice" else [str(o) for o in options]
+    if kind == "choice" and len(criteria) != len(options):
+        return "choice option names must be unique"
+    asked["criteria"] = criteria
     return asked
 
 

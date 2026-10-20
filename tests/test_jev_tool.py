@@ -56,3 +56,16 @@ def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
     out = jev.jev("text", [{"question": "x?"}], context=ToolContext(cwd=tmp_path))
 
     assert out.startswith("ERROR:")
+
+
+def test_jev_refuses_choice_options_with_duplicate_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    seen = []
+    monkeypatch.setattr(jev, "_client", lambda model: _Client({}, seen))
+
+    out = jev.jev("state", [{"question": "Which?", "kind": "choice",
+                             "options": ["yes=first interpretation", " yes =second interpretation"]}],
+                  check_order=True, context=ToolContext(cwd=tmp_path))
+
+    assert out.startswith("ERROR:"), out
+    assert not seen
