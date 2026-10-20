@@ -181,6 +181,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PROVIDER", "str", empty=EMPTY_NONE, aliases=("provider",), group="providers"),
     SettingSpec("BASE_URL", "str", empty=EMPTY_NONE, aliases=("baseurl",), group="providers"),
     SettingSpec("API_KEY", "str", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="providers"),
+    SettingSpec("EXTRA_HEADERS", "str", empty=EMPTY_NONE, group="providers"),
     SettingSpec("EXTRA_PARAMS", "map",
                 empty=EMPTY_NONE, group="providers"),
     # --- limits ---
@@ -367,12 +368,25 @@ _NONNEGATIVE_KNOBS = frozenset({
 })
 
 
+def _unquoted(spec: SettingSpec, text: str) -> str:
+    """A string setting's value written as a JSON string ("a\\nb"), the form
+    `/save` uses for one a jsrc line cannot hold as it is, decoded; any other
+    text as it is."""
+    if spec.type != "str" or len(text) < 2 or not (text.startswith('"') and text.endswith('"')):
+        return text
+    try:
+        decoded = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return text
+    return decoded if isinstance(decoded, str) else text
+
+
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
     VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
     special-casing); the only way to clear a setting back to its default/unset
     state is `set -key` (see `apply_unset` in `js.setcmd`)."""
-    text = raw.strip()
+    text = _unquoted(spec, raw.strip())
     if spec.key == "EFFORT":
         v = text.lower()
         if v not in REASONING_EFFORT_VALUES:
@@ -411,6 +425,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if not words:
             return None, "expected a command"
         return text, None
+    if spec.key == "EXTRA_HEADERS" and text:
+        try:
+            parse_header_lines(text)
+        except ValueError as exc:
+            return None, str(exc)
     if spec.key == "BASE_URL" and text:
         if not text.startswith(("http://", "https://")):
             return None, msgs.EXPECTED_URL.text(value=text)
@@ -494,6 +513,29 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 return None, str(exc)
         return value, None
     return text, None  # str
+
+
+# What an HTTP/1.1 request can carry (RFC 9110): a name is a token, a value
+# is printable ASCII, spaces and tabs.
+_HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_HEADER_VALUE = re.compile(r"[\t\x20-\x7e]*")
+
+
+def parse_header_lines(text: str | None) -> dict[str, str]:
+    """``Name: value`` entries, curl -H style, separated by ';' or newlines,
+    as a dict. Blank entries are skipped. Raises ValueError naming the first
+    entry that has no ':', or a name or value a request cannot carry."""
+    headers: dict[str, str] = {}
+    for entry in (text or "").replace("\n", ";").split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        name, sep, value = entry.partition(":")
+        name, value = name.strip(), value.strip()
+        if not sep or not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
+            raise ValueError(f"not a header (want 'Name: value'): {entry}")
+        headers[name] = value
+    return headers
 
 
 def _validate_alias_profiles(value: Any) -> str | None:
@@ -814,7 +856,12 @@ def _config_line_value(spec: SettingSpec, value: Any) -> str:
         return "on" if value else "off"
     if isinstance(value, (dict, list)):
         return json.dumps(value)
-    return str(value)
+    text = str(value)
+    # One the line cannot hold as it is (a line break, spaces at an end, a
+    # leading quote) goes as a JSON string, which `coerce_value` decodes.
+    if spec.type == "str" and (text != text.strip() or text.startswith('"') or any(c in text for c in "\n\r")):
+        return json.dumps(text)
+    return text
 
 
 def _set_line(spec: SettingSpec, value: Any) -> str:

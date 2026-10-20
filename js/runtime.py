@@ -1573,7 +1573,9 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
         effort=cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override,
         max_out=max_out,
         thinking_budget=getattr(cfg, "thinking_budget", None),
-        headers=getattr(cfg, "provider_headers", None),
+        headers=model_client.with_extra_headers(
+            getattr(cfg, "provider_headers", None), getattr(cfg, "extra_headers", None),
+        ),
         extra=routing.provider_extra_params(cfg),
         sampling=sampling,
         cache_key=_cache_key(cfg),

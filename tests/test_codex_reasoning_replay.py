@@ -91,7 +91,7 @@ class _Client:
 def _install(monkeypatch, client: _Client) -> None:
     monkeypatch.setattr(codex_provider, "_client_version", lambda: "0.145.0")
 
-    def provider(*, provider_base_url, provider_api_key):
+    def provider(*, provider_base_url, provider_api_key, provider_headers=None):
         return codex_provider.OpenAICodexProvider(
             access_token=_fake_jwt(), account_id="acct_1",
             base_url="https://chatgpt.com/backend-api", client=client,

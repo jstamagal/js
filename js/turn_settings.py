@@ -83,6 +83,18 @@ def paths(raw: Any) -> Any:
     return INVALID
 
 
+def header_lines(raw: Any) -> Any:
+    """`Name: value` entries (`settings.parse_header_lines`) as a dict; unset is none."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, str):
+        return INVALID
+    try:
+        return _settings.parse_header_lines(raw)
+    except ValueError:
+        return INVALID
+
+
 def entries(raw: Any) -> Any:
     return raw if isinstance(raw, list) else INVALID
 
@@ -138,6 +150,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("max_output_tokens", "OUTPUT_TOKENS_MAX", optional_integer),
     TurnSetting("model_context_window", "CONTEXT_SIZE", optional_integer),
     TurnSetting("thinking_budget", "THINKING_BUDGET", optional_integer),
+    TurnSetting("extra_headers", "EXTRA_HEADERS", header_lines),
     TurnSetting("trace", "runtime.trace", flag),
     TurnSetting("prefer_inherit", "SUBAGENT_INHERIT_MODEL", flag),
     TurnSetting("lock_subagent_model", "SUBAGENT_MODEL_LOCK", flag),

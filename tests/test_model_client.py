@@ -706,3 +706,109 @@ def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
             reasoning_effort="high", on_text=lambda _text: None,
         ))
     assert Provider.closed
+
+
+def test_extra_headers_go_on_the_turn_request_over_the_login_headers(tmp_path):
+    from js import runtime, turn_settings
+    from js.config import Config
+
+    cfg = Config(
+        agent_id="a", agent_dir=tmp_path, model="m", provider_id=None,
+        provider_base_url="http://x", provider_api_key=None, reasoning_effort=None,
+        debug_log=None, history_file=tmp_path / "h", sessions_dir=tmp_path,
+        session_file=tmp_path / "s.jsonl", prompts_dir=tmp_path,
+        provider_headers={"x-pool": "login", "X-Keep": "1"},
+        **turn_settings.project({"EXTRA_HEADERS": "X-Pool: fofa; X-JS-Scrub: on"}),
+    )
+    request = runtime._turn_request(
+        cfg, model_override=None, provider_id_override=None,
+        provider_base_url_override=None, provider_api_key_override=None,
+        reasoning_effort_override=runtime._UNSET, max_output_override=1, sampling=None,
+    )
+    assert request.headers == {"X-Keep": "1", "X-Pool": "fofa", "X-JS-Scrub": "on"}
+
+
+def test_set_refuses_extra_headers_without_a_colon():
+    from js import settings
+
+    value, error = settings.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], "X-Ok: 1; broken")
+    assert value is None and error
+
+
+@pytest.mark.parametrize("raw", ["X-Pool: fофа", "X(Pool): 1", "X-A: 1\rX-B: 2"])
+def test_set_refuses_extra_headers_a_request_cannot_carry(raw):
+    from js import settings
+
+    value, error = settings.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], raw)
+    assert value is None and error
+def _sent_headers(monkeypatch, *, provider_id, base, headers):
+    """The headers of the one request a turn sends with ``headers``."""
+    import asyncio
+    import json
+
+    import httpx2
+
+    seen = []
+
+    def respond(request):
+        seen.append(request.headers)
+        if provider_id == "anthropic":
+            events = [
+                {"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant",
+                 "model": "claude", "content": [], "stop_reason": None,
+                 "usage": {"input_tokens": 1, "output_tokens": 0}}},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                {"type": "message_stop"},
+            ]
+            body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        else:
+            chunk = {"id": "x", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                     "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}
+            body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, content=body.encode())
+
+    async def drive():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as client:
+            get_provider = model_client.ai.get_provider
+            monkeypatch.setattr(model_client.ai, "get_provider",
+                                lambda *a, **k: get_provider(*a, **k, client=client))
+            await model_client.stream_model_async(
+                model_id="claude" if provider_id == "anthropic" else "m", provider_id=provider_id,
+                provider_base_url=base, provider_api_key="login-key", provider_headers=headers,
+                messages=[ai.user_message("hi")], tools=None, max_output_tokens=64,
+                reasoning_effort=None, on_text=lambda _c: None)
+
+    asyncio.run(drive())
+    assert len(seen) == 1
+    return seen[0]
+
+
+def test_an_extra_authorization_header_never_doubles_the_logins(monkeypatch):
+    sent = _sent_headers(monkeypatch, provider_id=None, base="http://offline.invalid/v1",
+                         headers={"authorization": "Bearer extra", "X-Extra": "1"})
+
+    assert sent.get_list("authorization") == ["Bearer login-key"]
+    assert sent.get_list("x-extra") == ["1"]
+
+
+def test_an_extra_anthropic_version_reaches_the_request(monkeypatch):
+    sent = _sent_headers(monkeypatch, provider_id="anthropic", base=None,
+                         headers={"anthropic-version": "2099-01-01"})
+
+    assert sent.get_list("anthropic-version") == ["2099-01-01"]
+    assert sent.get_list("x-api-key") == ["login-key"]
+
+_FRAMING = {"Content-Length": "1", "Content-Type": "text/plain", "Transfer-Encoding": "chunked",
+            "Host": "elsewhere.invalid"}
+
+
+@pytest.mark.parametrize(("provider_id", "base"), [(None, "http://offline.invalid/v1"), ("anthropic", None)])
+def test_configured_framing_headers_never_reach_the_request(monkeypatch, provider_id, base):
+    sent = _sent_headers(monkeypatch, provider_id=provider_id, base=base, headers=dict(_FRAMING))
+
+    assert sent.get_list("content-length") != ["1"]
+    assert sent.get_list("content-type") == ["application/json"]
+    assert sent.get_list("transfer-encoding") == []
+    assert "elsewhere.invalid" not in sent.get_list("host")
+
+

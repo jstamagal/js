@@ -222,6 +222,28 @@ class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
         return super().stream(view, model, messages, **kwargs)
 
 
+# Headers the request body decides; a configured one is dropped before the
+# SDK sees it.
+_FRAMING_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "host"})
+
+
+def _without_framing(headers: dict[str, str] | None) -> dict[str, str]:
+    return {k: v for k, v in (headers or {}).items() if k.lower() not in _FRAMING_HEADERS}
+
+
+def with_extra_headers(
+    headers: dict[str, str] | None, extra: dict[str, str] | None,
+) -> dict[str, str]:
+    """``headers`` with ``extra`` laid on top. A name in both (compared
+    without case, as HTTP does) takes ``extra``'s value."""
+    merged = dict(headers or {})
+    for name, value in (extra or {}).items():
+        for existing in [key for key in merged if key.lower() == name.lower()]:
+            del merged[existing]
+        merged[name] = value
+    return merged
+
+
 def resolve_model(
     model_id: str,
     *,
@@ -250,7 +272,7 @@ def resolve_model(
                 "openai",
                 base_url=provider_base_url,
                 api_key=provider_api_key or "",
-                headers=dict(provider_headers) if provider_headers else None,
+                headers=_without_framing(provider_headers) or None,
                 protocol=_ReasoningContentProtocol(),
             )
             return ai.Model(id=model_id, provider=provider)
@@ -268,6 +290,7 @@ def resolve_model(
         provider = codex_provider.provider_from_login_or_token(
             provider_base_url=provider_base_url,
             provider_api_key=provider_api_key,
+            provider_headers=provider_headers,
         )
         return ai.Model(id=model_id, provider=provider)
 
@@ -282,6 +305,7 @@ def resolve_model(
     headers = dict(provider_headers or {})
     if provider_def is not None and provider_def.headers:
         headers = {**provider_def.headers, **headers}
+    headers = _without_framing(headers)
     # ai>=0.2.1 flipped the openai SDK's default wire to the Responses API; every
     # chat-completions endpoint js targets through the openai SDK (opencode-go,
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
@@ -687,6 +711,23 @@ def build_tool_result_messages(
     ]
 
 
+def _lay_headers(sdk_client: Any, headers: dict[str, str]):
+    """A request hook that settles each outgoing request's headers once the
+    SDK has added its own: ``headers`` (the login's, EXTRA_HEADERS) replace
+    the SDK's defaults under any spelling, then the SDK's auth header from
+    the login's key replaces any configured one. Each name goes out once."""
+    auth = {name: value for name, value in dict(getattr(sdk_client, "auth_headers", None) or {}).items()
+            if value}
+
+    async def lay(request: Any) -> None:
+        for name, value in headers.items():
+            request.headers[name] = value
+        for name, value in auth.items():
+            request.headers[name] = value
+
+    return lay
+
+
 def _sdk_client(model: ai.Model) -> Any:
     """The OpenAI or Anthropic SDK client of ``model``'s provider, built on
     first use; None for any other provider. Building the first one in a
@@ -728,6 +769,12 @@ async def _open_stream(
                 sdk_client._client, stream_transport.current_call(),
                 on_request=on_request, on_bytes=on_bytes,
             ))
+            headers = dict(getattr(model.provider, "headers", None) or {})
+            if headers:
+                hooks = sdk_client._client.event_hooks["request"]
+                lay = _lay_headers(sdk_client, headers)
+                hooks.append(lay)
+                cleanup.callback(hooks.remove, lay)
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
 

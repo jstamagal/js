@@ -85,6 +85,21 @@ def _account_id_from_token(access_token: str, account_id: str | None = None) -> 
     return decoded_account_id
 
 
+# The headers the Codex request itself depends on: the OAuth token, the
+# account, and the wire framing. Every other header (User-Agent, originator)
+# a user supplies replaces js's own.
+_PROTECTED_HEADERS = frozenset({"authorization", "chatgpt-account-id", "openai-beta", "accept", "content-type",
+                                "content-length", "transfer-encoding", "host"})
+
+
+def _with_own_headers(extra: dict[str, str], own: dict[str, str]) -> dict[str, str]:
+    """``own`` with ``extra`` laid on top, names compared without case as HTTP
+    does: an ``extra`` header wins, except one of `_PROTECTED_HEADERS`."""
+    kept = {k: v for k, v in extra.items() if k.lower() not in _PROTECTED_HEADERS}
+    taken = {name.lower() for name in kept}
+    return {**{k: v for k, v in own.items() if k.lower() not in taken}, **kept}
+
+
 def _codex_headers(access_token: str, account_id: str, *, stream: bool) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -524,6 +539,9 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     _account_id: str = pydantic.PrivateAttr(default="")
     _login: Login | None = pydantic.PrivateAttr(default=None)
     _owns_client: bool = pydantic.PrivateAttr(default=True)
+    # Headers every request also carries (the login's, EXTRA_HEADERS,
+    # PARANOID_MODE's); the OAuth and account headers win over them.
+    _extra_headers: dict[str, str] = pydantic.PrivateAttr(default_factory=dict)
 
     def __init__(
         self,
@@ -630,7 +648,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     async def list_models(self) -> list[str]:
         access, account_id = await self._ensure_access()
         base = _trim_base_url(self.base_url)
-        headers = _codex_headers(access, account_id, stream=False)
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=False))
         errors: list[str] = []
         for path in _MODEL_PATHS:
             try:
@@ -712,7 +730,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     ) -> AsyncGenerator[ai.events.Event]:
         access, account_id = await self._ensure_access()
         body = await _build_body_async(model, messages, tools, params)
-        headers = _codex_headers(access, account_id, stream=True)
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True))
         url = responses_url(self.base_url)
         text_open = False
         # The open reasoning block, keyed by its reasoning item id, and the ids
@@ -928,14 +946,20 @@ def provider_from_login_or_token(
     *,
     provider_base_url: str | None,
     provider_api_key: str | None,
+    provider_headers: dict[str, str] | None = None,
 ) -> OpenAICodexProvider:
+    """The Codex provider for the saved login, else for ``provider_api_key``.
+    Its requests also carry ``provider_headers``."""
     from . import logins
 
     login = logins.load_logins().get(codex_auth.CODEX_PROVIDER_ID)
     if login is not None and login.provider_api_key:
-        return OpenAICodexProvider.from_login(login)
-    return OpenAICodexProvider(
-        access_token=provider_api_key or "",
-        account_id=codex_auth.token_profile(provider_api_key or "")[0] if provider_api_key else None,
-        base_url=provider_base_url,
-    )
+        provider = OpenAICodexProvider.from_login(login)
+    else:
+        provider = OpenAICodexProvider(
+            access_token=provider_api_key or "",
+            account_id=codex_auth.token_profile(provider_api_key or "")[0] if provider_api_key else None,
+            base_url=provider_base_url,
+        )
+    provider._extra_headers = dict(provider_headers or {})
+    return provider

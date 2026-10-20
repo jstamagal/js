@@ -59,6 +59,7 @@ set -KEYBINDS_FILE
 set -PROVIDER
 set -BASE_URL
 set -API_KEY
+set -EXTRA_HEADERS
 set EXTRA_PARAMS {}
 
 # --- limits ---

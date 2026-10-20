@@ -230,7 +230,7 @@ def test_stream_model_drives_codex_provider_end_to_end(monkeypatch):
     # Responses SSE shape is decoded back to text — no executor stub.
     client = _FakeCodexHttpClient()
 
-    def fake_provider_from_login_or_token(*, provider_base_url, provider_api_key):
+    def fake_provider_from_login_or_token(*, provider_base_url, provider_api_key, provider_headers=None):
         return codex_provider.OpenAICodexProvider(
             access_token=_fake_jwt(), account_id="acct_123",
             base_url="https://chatgpt.com/backend-api", client=client,
@@ -964,3 +964,94 @@ def test_a_half_streamed_tool_call_never_reaches_the_caller(monkeypatch):
     with pytest.raises(ai.ProviderResponseError):
         asyncio.run(run())
     assert results == []
+
+
+def test_codex_requests_carry_the_provider_headers(monkeypatch):
+    from js import logins
+
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(logins, "load_logins", lambda: {})
+    real = codex_provider.OpenAICodexProvider.__init__
+
+    def with_fake_client(self, **kwargs):
+        real(self, **{**kwargs, "client": client})
+
+    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
+        provider_headers={"X-JS-Scrub": "on", "X-Pool": "fofa"},
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+    sent = client.stream_calls[0]["headers"]
+    assert sent["X-JS-Scrub"] == "on" and sent["X-Pool"] == "fofa"
+
+
+def test_codex_oauth_authorization_wins_over_an_extra_header_of_any_case(monkeypatch):
+    from js import logins
+
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(logins, "load_logins", lambda: {})
+    real = codex_provider.OpenAICodexProvider.__init__
+
+    def with_fake_client(self, **kwargs):
+        real(self, **{**kwargs, "client": client})
+
+    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    token = _fake_jwt()
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=token,
+        provider_headers={"authorization": "Bearer extra"},
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+    sent = client.stream_calls[0]["headers"]
+    auth = [value for name, value in sent.items() if name.lower() == "authorization"]
+    assert auth == [f"Bearer {token}"]
+
+
+def test_a_user_agent_or_originator_from_extra_headers_is_kept(monkeypatch):
+    from js import logins
+
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(logins, "load_logins", lambda: {})
+    real = codex_provider.OpenAICodexProvider.__init__
+
+    def with_fake_client(self, **kwargs):
+        real(self, **{**kwargs, "client": client})
+
+    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
+        provider_headers={"user-agent": "mine/1", "Originator": "mine"},
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+    sent = {k.lower(): v for k, v in client.stream_calls[0]["headers"].items()}
+    assert sent["user-agent"] == "mine/1" and sent["originator"] == "mine"
+    assert len([k for k in client.stream_calls[0]["headers"] if k.lower() == "user-agent"]) == 1
+
+
+def test_configured_framing_headers_never_reach_a_codex_request(monkeypatch):
+    from js import logins
+
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(logins, "load_logins", lambda: {})
+    real = codex_provider.OpenAICodexProvider.__init__
+
+    def with_fake_client(self, **kwargs):
+        real(self, **{**kwargs, "client": client})
+
+    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
+        provider_headers={"Content-Length": "1", "Transfer-Encoding": "chunked", "Host": "elsewhere.invalid"},
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+    sent = {k.lower(): v for k, v in client.stream_calls[0]["headers"].items()}
+    assert {"content-length", "transfer-encoding", "host"}.isdisjoint(sent)

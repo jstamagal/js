@@ -304,3 +304,35 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_base_url") == "http://127.0.0.1:11434/v1"
     assert captured_kwargs.get("provider_api_key") == "ollama"
     assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
+
+
+_AWKWARD_TEXT = ["a\nb", " leading", "trailing ", '"quoted"', "cost $5 # not a comment", "tab\there"]
+_AWKWARD = {
+    "str": _AWKWARD_TEXT + ["X-A: 1\nX-B: 2", "X-A: \"1\"; X-B: $2"],
+    "int": [0, 7, 123456],
+    "float": [0.25, 3.5],
+    "bool": [True, False],
+    "json": [["a\nb", " x ", "$y # z"], {"k": "line\nbreak \"q\" $v"}],
+    "map": [{"k": "line\nbreak \"q\" $v", "n": 2}],
+}
+
+
+def test_every_setting_survives_save_then_load_with_awkward_values(tmp_path):
+    checked = 0
+    for spec in settings.REGISTRY:
+        for value in _AWKWARD[spec.type]:
+            raw = value if isinstance(value, str) else settings._config_line_value(spec, value)
+            accepted, error = settings.coerce_value(spec, raw)
+            if error is not None or accepted != value:
+                continue  # not a value this setting holds as it is
+            store = settings.seed_defaults()
+            settings.set_dotted(store, spec.path, value)  # as env, an --extra or /load can leave it
+            live = settings.get_dotted(store, spec.path)
+            path = tmp_path / f"{spec.key}-{checked}.jsrc"
+            path.write_text("", encoding="utf-8")
+            settings.save_settings_to_jsrc(path, store)
+            loaded = settings.collect_settings(config_paths=[path], env={})
+            assert settings.get_dotted(loaded, spec.path) == live, (spec.key, value, path.read_text())
+            checked += 1
+    assert checked > len(settings.REGISTRY)
+    assert any(spec.key == "EXTRA_HEADERS" for spec in settings.REGISTRY)

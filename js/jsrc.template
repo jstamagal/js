@@ -113,6 +113,11 @@
 #   example:  set API_KEY sk-...
 #set -API_KEY
 
+# Request headers sent with every model call, on top of the login's own.
+# Like curl -H; several separated by ';' or newlines. Unset: none.
+#   example:  set EXTRA_HEADERS X-JS-Scrub: on; X-Pool: fofa
+#set -EXTRA_HEADERS
+
 # Extra fields js adds to every request body, as JSON. For provider options
 # js has no setting for.
 #   example:  set EXTRA_PARAMS {"include_reasoning": true}

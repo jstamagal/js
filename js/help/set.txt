@@ -176,6 +176,17 @@ BASE_URL
 API_KEY
     Explicit provider API key; unset = env/login default.
 
+EXTRA_HEADERS
+    Request headers every model call carries, on top of the login's saved
+    headers; a name in both takes this value. curl -H form, entries split
+    by ';' or newlines: X-JS-Scrub: on; X-Pool: fofa. Unset = none.
+    Names match in any case, and each goes out once. A header replaces
+    the SDK's own, anthropic-version included, except the auth header a
+    login's key or token sets and content-type, content-length,
+    transfer-encoding and host. On the Codex login, Authorization,
+    chatgpt-account-id, OpenAI-Beta, accept and content-type stay js's
+    own; User-Agent and originator can be replaced.
+
 EXTRA_PARAMS
     Free-form extra params passed through to the provider SDK.
 
