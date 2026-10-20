@@ -374,6 +374,65 @@ def test_interrupted_tool_call_is_never_replayed_and_next_operation_recovers():
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("old_operation", ("tool", "resource"))
+def test_late_failure_from_old_peer_preserves_the_replacement(old_operation):
+    async def drive():
+        old_started = asyncio.Event()
+        release_old = asyncio.Event()
+        new_started = asyncio.Event()
+        release_new = asyncio.Event()
+
+        class DelayedTransport(SpecServerTransport):
+            async def send(self, message):
+                if message.get("method") in {"tools/call", "resources/read"}:
+                    if self.connection == 0:
+                        old_started.set()
+                        await release_old.wait()
+                        return
+                    if message.get("method") == "tools/call":
+                        new_started.set()
+                        await release_new.wait()
+                await super().send(message)
+
+        server = SpecServer()
+
+        def factory():
+            transport = DelayedTransport(server, len(server.connections))
+            server.connections.append(transport)
+            return transport
+
+        client = MCPClient(factory, reconnect_backoff=0)
+        await client.initialize()
+        old_call = asyncio.create_task(
+            client.call_tool("old", timeout=2) if old_operation == "tool"
+            else client.read_resource("file:///old", timeout=2)
+        )
+        new_call = None
+        try:
+            await asyncio.wait_for(old_started.wait(), 1)
+            await server.connections[0].incoming.put(None)
+            assert [tool["name"] for tool in await client.list_tools(timeout=1)] == ["alpha", "beta"]
+            new_call = asyncio.create_task(client.call_tool("new", timeout=2))
+            await asyncio.wait_for(new_started.wait(), 1)
+            release_old.set()
+            if old_operation == "tool":
+                with pytest.raises(MCPClientError):
+                    await old_call
+            else:
+                await old_call
+            release_new.set()
+            result = await new_call
+            assert result.content[0]["text"] == "hello"
+            assert len(server.connections) == 2
+        finally:
+            release_old.set()
+            release_new.set()
+            await asyncio.gather(old_call, *([new_call] if new_call else []), return_exceptions=True)
+            await client.close()
+
+    asyncio.run(drive())
+
+
 def test_reconnect_uses_new_capabilities_before_sending_operation():
     async def drive():
         server = SpecServer()
