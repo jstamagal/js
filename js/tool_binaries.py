@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import messages as msgs
-from . import paths
+from . import paths, settings as _settings
 
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
@@ -163,7 +163,7 @@ def resolve_binary(executable: str) -> str | None:
     managed = TOOLS_DIR / executable
     if managed.is_file() and os.access(managed, os.X_OK):
         return str(managed)
-    return shutil.which(executable)
+    return shutil.which(executable) if _settings.live_value("TOOL_BINARY_PATH_FALLBACK") else None
 
 
 # The purposes warn_urllib_fallback has reported in this process.
@@ -203,11 +203,11 @@ def aria2_argv(
         "--continue=true",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
-        "--split=8",
-        "--max-connection-per-server=8",
+        f"--split={_settings.live_value('DOWNLOAD_SPLITS_MAX')}",
+        f"--max-connection-per-server={_settings.live_value('DOWNLOAD_CONNECTIONS_MAX')}",
         "--min-split-size=1M",
-        "--max-tries=5",
-        "--retry-wait=1",
+        f"--max-tries={_settings.live_value('DOWNLOAD_RETRIES_MAX')}",
+        f"--retry-wait={_settings.live_value('DOWNLOAD_RETRY_WAIT')}",
         f"--connect-timeout={connect_timeout}",
         f"--timeout={socket_timeout}",
         "--file-allocation=none",
@@ -438,11 +438,11 @@ def _download(url: str, destination: Path) -> None:
             url,
             destination,
             timeout_s=120,
-            headers={"User-Agent": "js-tool-installer/0.1"},
+            headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")},
         )
         return
     warn_urllib_fallback("the tool-binary installer")
-    request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         shutil.copyfileobj(response, output)
 
@@ -704,10 +704,10 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
         aria_spec = next((s for s in specs if s.executable == ARIA2_EXECUTABLE), None)
         if aria_spec is not None and _is_current(managed, aria_spec.executable_sha256):
             download_with_aria2(str(managed), url, destination, timeout_s=120,
-                                headers={"User-Agent": "js-tool-installer/0.1"})
+                                headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
         else:
             # Bootstrap is independent of PATH (including unrelated system aria2).
-            request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
             with urllib.request.urlopen(request, timeout=120) as response:
                 with destination.open("wb") as output:
                     shutil.copyfileobj(response, output)

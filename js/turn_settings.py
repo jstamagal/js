@@ -121,6 +121,11 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("download_retry_wait", "DOWNLOAD_RETRY_WAIT", integer),
+    TurnSetting("download_retries_max", "DOWNLOAD_RETRIES_MAX", integer),
+    TurnSetting("download_connections_max", "DOWNLOAD_CONNECTIONS_MAX", integer),
+    TurnSetting("download_splits_max", "DOWNLOAD_SPLITS_MAX", integer),
+    TurnSetting("tool_binary_path_fallback", "TOOL_BINARY_PATH_FALLBACK", flag),
     TurnSetting("model_context_probe", "MODEL_CONTEXT_PROBE", flag),
     TurnSetting("model_catalog_age_max", "MODEL_CATALOG_AGE_MAX", number),
     TurnSetting("model_catalog_auto_refresh", "MODEL_CATALOG_AUTO_REFRESH", flag),

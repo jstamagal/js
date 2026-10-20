@@ -430,3 +430,12 @@ def test_shell_puts_the_managed_binary_directory_first_on_path(tmp_path, monkeyp
 
     assert str(tmp_path / "bin") in result
     assert result.split("--- stdout ---")[-1].strip().startswith(str(tmp_path / "bin"))
+
+
+def test_registered_download_policy_reaches_aria2_arguments(tmp_path):
+    from js import settings
+
+    settings.bind_live_settings({"DOWNLOAD_SPLITS_MAX": 2, "DOWNLOAD_RETRIES_MAX": 1})
+    argv = tool_binaries.aria2_argv("aria2c", "https://example.test/file", tmp_path / "partial", timeout_s=30)
+    assert "--split=2" in argv
+    assert "--max-tries=1" in argv

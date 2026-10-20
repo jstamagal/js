@@ -140,6 +140,12 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("TOOL_INSTALLER_USER_AGENT", "str", group="tools"),
+    SettingSpec("DOWNLOAD_RETRY_WAIT", "int", group="tools"),
+    SettingSpec("DOWNLOAD_RETRIES_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_CONNECTIONS_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_SPLITS_MAX", "int", group="tools"),
+    SettingSpec("TOOL_BINARY_PATH_FALLBACK", "bool", group="tools"),
     SettingSpec("TMP_AGE_MAX", "float", group="runtime"),
     SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
     SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
