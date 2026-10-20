@@ -61,7 +61,9 @@ def stderr_of(monkeypatch, fn):
         return Console(file=buffer, width=100, force_terminal=False,
                        color_system=None, highlight=False)
 
-    monkeypatch.setattr(kmod, "_console", fake_console)
+    from js import kernel_display
+
+    monkeypatch.setattr(kernel_display, "_console", fake_console)
     result = fn()
     return result, buffer.getvalue()
 

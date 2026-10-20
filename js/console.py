@@ -361,6 +361,18 @@ class ConsoleSink:
             line = network_display.LabelledLine(label, line)
         network_display.draw(1 if delay >= 10 else 3, line)
 
+    def _on_kernel_execution(self, *, context: Any, **fields: Any) -> None:
+        from . import kernel_display
+
+        kernel_display.render_execution(context, **fields)
+
+    def _on_kernel_note(self, *, context: Any, kind: str, level: str, content: Any,
+                        style: str, verbose_only: bool) -> None:
+        from . import kernel_display
+
+        getattr(kernel_display, f"render_{kind}")(context, level, content,
+                                                  style=style, verbose_only=verbose_only)
+
     # The streamed reply
 
     def _on_stream_open(self, *, stream: output.Key) -> None:

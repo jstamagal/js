@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-32 findings.
+31 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -36,7 +36,6 @@ branch the audit was made on; they move as the code changes.
 | `js/runtime.py:544-552,651-652,768` | _print_trace/ToolTrace.settle/ToolTrace.result | presentation | The loop writes tool exchanges straight to sys.stdout when no exchange factory is set. | js-2lg.27 |
 | `js/runtime.py:1936-1970,2353-2354` | _trace_banner/_print_run_line | presentation | Prints the run line (model, provider, ctx, tools) to stdout. | js-2lg.27 |
 | `js/runtime.py:2137-2138,2266-2267,2390,2405-2406,2431` | _send_resume_nudge/_take_steer/run_turn_async | presentation | Prints MAX_OUTPUT_RESUMING, STEERED, RETRY_BUDGET_EXHAUSTED, RESPONSE_INCOMPLETE and MAX_ITERATIONS straight to stdout/stderr. | js-2lg.27 |
-| `js/toolkit/kernel.py:184-380` | _console / _drawn / _show / render_execution / _draw_execution / render_event / render_entry / render_note | presentation | The tool draws rich panels and notes on sys.stderr, with a fixed layout and colours. | js-2lg.67 |
 | `js/cli.py:1234-1267` | _set_model_via_route | presentation | The /model routing and state change prints its own confirmation, so another assembly cannot reuse it without that output. | js-2lg.82 |
 | `js/cli.py:1158-1184` | _maybe_auto_compact_async | presentation | The between-turn auto-compaction trigger (status flag, net role, window resolver) is combined with printing its notices. | js-2lg.82 |
 | `js/cli.py:3558-3586,4254-4291` | _do_turn, _blocking_repl | policy | The rule to keep a partial turn or discard an unstarted one on ^C or error (marks, orphan healing, requeued notes) is copied twice and combined with print and msgs.say. | js-2lg.82 |
