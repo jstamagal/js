@@ -555,6 +555,9 @@ class StreamableHTTPTransport:
                     self._diagnostic("notification stream returned an unsupported Content-Type")
                 )
             self._consume_sse(response, self._emit_from_thread)
+        except TimeoutError:
+            # An idle SSE connection can be reopened from its committed id.
+            return
         except StreamableHTTPTransportError:
             raise
         except Exception:  # noqa: BLE001 - wire failures must be credential-safe

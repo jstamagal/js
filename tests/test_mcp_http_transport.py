@@ -110,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"id: event-one\nretry: 1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"first\"}\n\n")
             self.wfile.flush()
             return
-        if self.state.timeout_reconnect and self.state.gets == 1:
+        if self.state.gets <= self.state.timeout_reconnect:
             self.state.stop.wait(0.2)
             return
         notification = self.state.notification
@@ -345,6 +345,23 @@ def test_post_rejects_status_semantics_mismatches(message):
         await transport.close()
 
     with server() as (_state, url):
+        run(scenario(url))
+
+
+def test_repeated_idle_stream_timeouts_preserve_notification_delivery():
+    async def scenario(url):
+        transport = StreamableHTTPTransport(url, timeout=0.05, reconnect_backoff=0, reconnect_attempts=1)
+        try:
+            await transport.send(request())
+            await transport.receive()
+            message = await asyncio.wait_for(transport.receive(), 2)
+            assert message["method"] == "after-idle"
+        finally:
+            await transport.close()
+
+    with server() as (state, url):
+        state.timeout_reconnect = 4
+        state.notification = {"jsonrpc": "2.0", "method": "after-idle"}
         run(scenario(url))
 
 
