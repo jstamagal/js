@@ -33,7 +33,7 @@ from typing import Any, TextIO
 from . import agent_messages, compaction, headless, login_defaults, runtime
 from . import memory as M
 from . import persona as P
-from . import swarm
+from . import swarm, settings as _settings
 from .config import from_env
 from .session_catalog import record_session_start
 from .toolkit.core import ToolContext
@@ -164,8 +164,9 @@ class Runner:
             if name in agent.room.members() or name in self.tasks or (home / "spawned").is_file():
                 raise ValueError(f"{name} is already on the bus")
             spawned = sum(1 for p in self.root.iterdir() if (p / "spawned").is_file()) if self.root.is_dir() else 0
-            if spawned >= swarm.SPAWN_CAP:
-                raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {swarm.SPAWN_CAP}")
+            maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
+            if spawned >= maximum:
+                raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {maximum}")
             child = replace(parent, name=name, opener=opener,
                             session=f"{parent.session}-{name}" if parent.session else None)
             home.mkdir(parents=True, exist_ok=True)

@@ -42,6 +42,8 @@ in an inbox or the log. A member whose process is gone stays silent.
 
 from __future__ import annotations
 
+from . import settings as _settings
+
 import contextlib
 import fcntl
 import json
@@ -62,7 +64,6 @@ COALESCE_S = 0.3
 PULSE_S = 1.0
 ROLLCALL_WAIT_S = 3.0
 CLAIM_TTL_S = 600.0
-SPAWN_CAP = 8
 STOP = "stop"
 TICK = "tick"
 RETIRE = "retire"
@@ -684,15 +685,16 @@ class Agent:
     def spawn(self, name: str, opener: str, argv: list[str] | None = None) -> subprocess.Popen:
         """Start a sibling agent NAME on this bus: this process's own command with
         a new name and session, the opener as its first prompt. Its events land in
-        ROOT/NAME/events.jsonl. At most SPAWN_CAP spawned agents per bus."""
+        ROOT/NAME/events.jsonl. SWARM_SPAWN_MAX bounds spawned agents per bus."""
         check_name(name)
         root = self.room.root
         home = root / name
         if name in self.room.members() or (home / "spawned").is_file():
             raise ValueError(f"{name} is already on the bus")
         spawned = sum(1 for p in root.iterdir() if (p / "spawned").is_file()) if root.is_dir() else 0
-        if spawned >= SPAWN_CAP:
-            raise ValueError(f"this bus already has {spawned} spawned agents; the cap is {SPAWN_CAP}")
+        maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
+        if spawned >= maximum:
+            raise ValueError(f"this bus already has {spawned} spawned agents; the cap is {maximum}")
         home.mkdir(parents=True, exist_ok=True)
         cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
         with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:

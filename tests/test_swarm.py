@@ -382,7 +382,7 @@ def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
                                                                             "--swarm", "/r/twig"]
     with pytest.raises(ValueError):
         a.spawn("twig", "again")  # already on the bus
-    monkeypatch.setattr(swarm, "SPAWN_CAP", 1)
+    swarm._settings.bind_live_settings({"SWARM_SPAWN_MAX": 1})
     with pytest.raises(ValueError):
         a.spawn("moss", "one over the cap")
 
@@ -612,3 +612,17 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
     assert code == 0
     assert timeline.count("turn") == 2
     assert timeline[:4] == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
+
+
+def test_registered_swarm_spawn_limit_prevents_launch(tmp_path, monkeypatch):
+    from js import settings
+
+    agent = swarm.Agent(tmp_path / "bus" / "parent")
+    settings.bind_live_settings({"SWARM_SPAWN_MAX": 0})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("child must not start")
+
+    monkeypatch.setattr(swarm.subprocess, "Popen", forbidden)
+    with pytest.raises(ValueError):
+        agent.spawn("child", "work")
