@@ -11,7 +11,7 @@ import logging
 import ai
 import pytest
 
-from js import model_client, stream_transport
+from js import codex_provider, model_client, stream_transport
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
@@ -220,5 +220,61 @@ def test_owned_iterator_closes_transport_even_if_iterator_teardown_fails():
         assert body.closed == 1
         await owned.aclose()
         assert body.closed == 1
+
+    asyncio.run(drive())
+
+
+def test_codex_keepalive_bytes_reset_the_stream_idle_deadline(monkeypatch):
+    async def drive():
+        handlers = set()
+
+        async def serve(reader, writer):
+            handlers.add(asyncio.current_task())
+            try:
+                head = await reader.readuntil(b"\r\n\r\n")
+                length = next(int(line.split(b":", 1)[1]) for line in head.split(b"\r\n")
+                              if line.lower().startswith(b"content-length:"))
+                await reader.readexactly(length)
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+                for _ in range(8):
+                    writer.write(b": keepalive\n\n")
+                    await writer.drain()
+                    await asyncio.sleep(0.1)
+                for event in (
+                    {"type": "response.output_text.delta", "delta": "OK"},
+                    {"type": "response.completed", "response": {}},
+                ):
+                    writer.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+                await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                pass
+            finally:
+                writer.close()
+                with suppress(ConnectionError):
+                    await writer.wait_closed()
+                handlers.discard(asyncio.current_task())
+
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        base = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        monkeypatch.setattr(
+            codex_provider, "provider_from_login_or_token",
+            lambda **_kwargs: codex_provider.OpenAICodexProvider(
+                access_token="fixture", account_id="acct", base_url=base,
+            ),
+        )
+        try:
+            result = await model_client.stream_model_async(
+                model_id="gpt-5.5", provider_id="openai-codex",
+                provider_base_url=base, provider_api_key="fixture",
+                messages=[ai.user_message("hello")], tools=None,
+                max_output_tokens=None, reasoning_effort=None,
+                on_text=lambda _chunk: None, stream_idle_seconds=0.5,
+            )
+            assert result.text == "OK"
+        finally:
+            server.close()
+            await server.wait_closed()
+            if handlers:
+                await asyncio.gather(*list(handlers))
 
     asyncio.run(drive())

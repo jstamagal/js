@@ -22,7 +22,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import httpx2
+from httpx._client import BoundAsyncStream as HttpxBoundAsyncStream
+from httpx._transports.default import AsyncResponseStream as HttpxAsyncResponseStream
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
@@ -334,7 +337,7 @@ class _OwnedCoreStream:
 
 
 @asynccontextmanager
-async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None,
+async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: NetCall | None = None,
                         on_request: Callable[[], None] | None = None,
                         on_bytes: Callable[[], None] | None = None):
     """Close this model request's byte iterators when its stream scope exits.
@@ -345,9 +348,9 @@ async def own_responses(client: httpx2.AsyncClient, call: NetCall | None = None,
 
         async def own(response: httpx2.Response) -> None:
             stream: AsyncIterable[bytes] = response.stream
-            if isinstance(stream, BoundAsyncStream):
+            if isinstance(stream, (BoundAsyncStream, HttpxBoundAsyncStream)):
                 stream = stream._stream
-            if isinstance(stream, AsyncResponseStream):
+            if isinstance(stream, (AsyncResponseStream, HttpxAsyncResponseStream)):
                 wrapper = _OwnedCoreStream(stream._httpcore_stream, call, on_bytes)
                 stream._httpcore_stream = wrapper
                 cleanup.push_async_callback(wrapper.aclose)

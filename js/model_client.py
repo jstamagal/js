@@ -932,6 +932,18 @@ def _sdk_client(model: ai.Model) -> Any:
     return None
 
 
+def _http_client(model: ai.Model) -> Any:
+    """The provider's HTTP client when it exposes per-request event hooks."""
+    sdk_client = _sdk_client(model)
+    if sdk_client is not None:
+        return sdk_client._client
+    if isinstance(model.provider, codex_provider.OpenAICodexProvider):
+        client = model.provider.client
+        if hasattr(client, "event_hooks"):
+            return client
+    return None
+
+
 @asynccontextmanager
 async def _open_stream(
     *,
@@ -957,10 +969,13 @@ async def _open_stream(
         sdk_client = _sdk_client(model)
         if sdk_client is not None:
             sdk_client.max_retries = 0
+        http_client = _http_client(model)
+        if http_client is not None:
             await cleanup.enter_async_context(stream_transport.own_responses(
-                sdk_client._client, stream_transport.current_call(),
+                http_client, stream_transport.current_call(),
                 on_request=on_request, on_bytes=on_bytes,
             ))
+        if sdk_client is not None:
             headers = dict(getattr(model.provider, "headers", None) or {})
             if headers:
                 hooks = sdk_client._client.event_hooks["request"]
@@ -1032,7 +1047,7 @@ async def _stream_async(
     # response headers but not the SDK's own setup before the request (its
     # first request in a process imports the SDK). For a provider whose
     # requests js does not see, it starts at once.
-    sees_request = _sdk_client(model) is not None
+    sees_request = _http_client(model) is not None
     deadline = asyncio.timeout(None if sees_request else idle)
     try:
         async with deadline:
