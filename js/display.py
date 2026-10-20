@@ -654,8 +654,11 @@ _KEY_ARG_MIN = 16
 
 def short_path(path: str) -> str:
     """`path` under the working directory as a relative path, under the home
-    directory as `~/…`, anything else unchanged."""
-    for base, prefix in ((os.getcwd(), ""), (os.path.expanduser("~"), "~/")):
+    directory as `~/…`, anything else unchanged. Run from the home directory
+    itself, a path there is `~/…`."""
+    home, cwd = os.path.expanduser("~"), os.getcwd()
+    bases = ((home, "~/"),) if cwd.rstrip("/") == home.rstrip("/") else ((cwd, ""), (home, "~/"))
+    for base, prefix in bases:
         if base not in ("", "/") and path.startswith(base.rstrip("/") + "/"):
             return prefix + path[len(base.rstrip("/")) + 1:]
     return path
