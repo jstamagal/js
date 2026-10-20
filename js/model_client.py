@@ -34,7 +34,7 @@ import ai.models
 from ai.models.core import params as ai_params
 from ai.providers import history_utils
 from ai.providers.anthropic.protocol import AnthropicMessagesProtocol
-from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
+from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
 
 
 @dataclass(frozen=True)
@@ -454,6 +454,45 @@ class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
                 yield event
 
 
+
+
+class _CheckedResponsesStream:
+    def __init__(self, stream: Any, provider: str) -> None:
+        self._stream = stream
+        self._provider = provider
+
+    async def __aiter__(self):
+        async with self._stream:
+            async for event in self._stream:
+                kind = _field(event, "type")
+                if kind in {"response.failed", "error"}:
+                    error = (_field(_field(event, "response"), "error")
+                             if kind == "response.failed" else event)
+                    code = _field(error, "code")
+                    body = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
+                    raise ai.ProviderAPIError(
+                        _field(error, "message") or "OpenAI Responses stream failed",
+                        provider=self._provider, body=body, code=code,
+                        param=_field(error, "param"), error_type=_field(error, "type"),
+                        is_retryable=code in {"server_error", "internal_error", "model_error", "rate_limit_exceeded"},
+                    )
+                yield event
+
+
+class _ResponsesProtocol(OpenAIResponsesProtocol):
+    """Keep Responses stream failures intact before SDK event normalization."""
+
+    protocol_class_id: Literal["js_openai_responses"] = "js_openai_responses"
+
+    def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        async def create(**api_kwargs: Any):
+            stream = await client.responses.create(**api_kwargs)
+            return _CheckedResponsesStream(stream, kwargs["provider"])
+
+        view = SimpleNamespace(responses=SimpleNamespace(create=create))
+        return super().stream(view, model, messages, **kwargs)
+
+
 # Headers the request body decides; a configured one is dropped before the
 # SDK sees it.
 _FRAMING_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "host"})
@@ -552,7 +591,9 @@ def resolve_model(
     # the new default.
     protocol = _AnthropicThinkingProtocol() if sdk_provider_id == "anthropic" else None
     transport = provider_def.transport if provider_def is not None else None
-    if sdk_provider_id == "openai" and transport != "custom_responses":
+    if sdk_provider_id == "openai" and transport == "custom_responses":
+        protocol = _ResponsesProtocol()
+    elif sdk_provider_id == "openai":
         custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
         operator_endpoint = provider_def is not None and (
             provider_def.local or not provider_def.established

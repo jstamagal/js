@@ -115,3 +115,23 @@ def test_content_filter_marks_the_reply_incomplete(monkeypatch, provider):
     result = _stream(monkeypatch, provider, respond, [ai.user_message("ping")])
     assert result.incomplete_reason == "content_filter"
     assert result.finish_reason == "incomplete:content_filter"
+
+
+def test_responses_failure_retains_the_provider_error(monkeypatch):
+    error = {"code": "server_error", "message": "fixture failure cause"}
+    event = {"type": "response.failed", "sequence_number": 0, "response": {
+        "id": "reply", "object": "response", "created_at": 1, "model": "test",
+        "status": "failed", "output": [], "error": error,
+    }}
+
+    def respond(request):
+        return httpx2.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    with pytest.raises(ai.ProviderAPIError) as caught:
+        _stream(monkeypatch, "openai-responses", respond, [ai.user_message("ping")])
+    assert caught.value.code == "server_error"
+    assert caught.value.body["response"]["error"] == error
+    assert caught.value.is_retryable
