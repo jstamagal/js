@@ -99,6 +99,37 @@ def test_control_tools_obey_mcp_tool_policy_in_catalog_load_and_surface():
     assert host.tools({"mcp_resource_read", "mcp_resource_list"}) == ()
 
 
+def test_http_transport_uses_configured_request_timeout(monkeypatch):
+    from urllib.request import Request
+
+    server = MCPServer("HTTP", "http", "http", url="http://127.0.0.1:1/mcp")
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), request_timeout=45, client_factory=FakeClient)
+
+    class Response:
+        status = 200
+
+    async def drive():
+        client = await host._ensure_server(server)
+        transport = client._factory()
+
+        def open_request(request, *, timeout):
+            if timeout < 30:
+                raise TimeoutError
+            return Response()
+
+        monkeypatch.setattr(transport._opener, "open", open_request)
+        response = transport._open(Request(server.url))
+        assert response.status == 200
+
+    class FactoryClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self._factory = factory
+
+    host._client_factory = FactoryClient
+    asyncio.run(drive())
+
+
 @pytest.mark.parametrize("failure_stage", ("initialize", "list_tools"))
 def test_failed_server_is_visible_without_hiding_healthy_server_tools(failure_stage):
     class MixedClient(FakeClient):

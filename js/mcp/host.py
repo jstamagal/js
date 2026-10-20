@@ -26,14 +26,14 @@ def normalize_tool_name(name: str) -> str:
     return _NAME_RE.sub("_", str(name).strip().lower().replace("-", "_")).strip("_")
 
 
-def transport_factory(server: MCPServer):
+def transport_factory(server: MCPServer, *, timeout: float = 10.0):
     """Build a fresh transport factory without leaking configured secrets."""
     if server.transport == "stdio":
         return lambda: StdioTransport(
             server.command or "", server.args, env=server.env, name=server.name
         )
     return lambda: StreamableHTTPTransport(
-        server.url or "", headers=server.headers, name=server.name
+        server.url or "", headers=server.headers, name=server.name, timeout=timeout
     )
 
 
@@ -552,7 +552,7 @@ class MCPHost:
             self._event("mcp_progress", server=name, **_redact_value(params, secrets()))
 
         client = self._client_factory(
-            transport_factory(server),
+            transport_factory(server, timeout=self.request_timeout),
             on_tools_changed=lambda _params: changed("tools"),
             on_resources_changed=lambda _params: changed("resources"),
             on_prompts_changed=lambda _params: changed("prompts"),
