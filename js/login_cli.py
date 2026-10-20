@@ -26,6 +26,7 @@ from .logins import (
     save_login,
     test_login,
     test_login_with_metadata,
+    update_login,
 )
 
 _API_SHAPES: list[tuple[str, str, str]] = [
@@ -654,7 +655,7 @@ def _edit_defaults(login: Login) -> None:
             break
         except ValueError as exc:
             msgs.say(msgs.LOGIN_BAD_DEFAULTS, error=exc)
-    save_login(replace(login, defaults=values))
+    update_login(login.provider_id, lambda current: replace(current, defaults=values))
 
 
 def _model_annotation(login: Login | None, model_id: str, tag: str = "") -> str:
@@ -684,14 +685,17 @@ def _model_defaults_editor(provider_id: str, pending: list[Login] | None = None,
             values = {} if raw.strip() == "-" else login_defaults.parse(raw)
         except ValueError:
             return None
-        model_defaults = {k: v for k, v in (login.model_defaults or {}).items() if k != model_id}
-        if values:
-            model_defaults[model_id] = values
-        updated = replace(login, model_defaults=model_defaults)
+        def change(current):
+            model_defaults = {k: v for k, v in (current.model_defaults or {}).items() if k != model_id}
+            if values:
+                model_defaults[model_id] = values
+            return replace(current, model_defaults=model_defaults)
+
         if pending:
+            updated = change(login)
             pending[0] = updated
         else:
-            save_login(updated)
+            updated = update_login(provider_id, change)
         return _model_annotation(updated, model_id, (tags or {}).get(model_id, ""))
 
     return edit
@@ -744,12 +748,15 @@ def _edit_saved_provider(login: Login) -> None:
             parsed = {k.strip(): v.strip() for k, v in (part.split("=", 1) for part in parts)}
             break
         msgs.say(msgs.LOGIN_BAD_HEADERS)
-    save_login(replace(
-        login,
-        provider_base_url=None if base == "-" else base or None,
-        provider_api_key=None if key == "-" else key or login.provider_api_key,
-        provider_headers=parsed,
-    ))
+    changes = {}
+    url = None if base == "-" else base or None
+    if url != login.provider_base_url:
+        changes["provider_base_url"] = url
+    if key:
+        changes["provider_api_key"] = None if key == "-" else key
+    if headers:
+        changes["provider_headers"] = parsed
+    update_login(login.provider_id, lambda current: replace(current, **changes))
 
 
 def _manage_providers() -> int:

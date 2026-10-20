@@ -1694,12 +1694,16 @@ def _save_server(cfg: Config, state: dict) -> str | None:
     if login is None:
         return msgs.SAVE_NO_SERVER.said(provider=turn.provider_id or turn.provider_base_url or turn.model)
     values = login_defaults.saved_layer(turn)
-    model_defaults = dict(login.model_defaults or {})
-    # Merged into what the model already has: a key another layer decides for
-    # this run keeps its stored value.
-    model_defaults[turn.model] = {**model_defaults.get(turn.model, {}), **values}
+    def change(current):
+        model_defaults = dict(current.model_defaults or {})
+        # Merged into what the model already has: a key another layer decides for
+        # this run keeps its stored value.
+        model_defaults[turn.model] = {**model_defaults.get(turn.model, {}), **values}
+        return replace(current, model_defaults={k: v for k, v in model_defaults.items() if v})
+
     try:
-        logins.save_login(replace(login, model_defaults={k: v for k, v in model_defaults.items() if v}))
+        if logins.update_login(login.provider_id, change) is None:
+            return msgs.SAVE_NO_SERVER.said(provider=turn.provider_id or turn.provider_base_url or turn.model)
     except logins.LoginsCorruptError as exc:
         return msgs.SAVE_FAILED.said(error=exc)
     except OSError as exc:

@@ -15,7 +15,7 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
@@ -717,6 +717,18 @@ def save_login(login: Login) -> None:
         loaded[canonical_id] = login
         _write_logins_toml(_serialize(store, loaded))
     forget_memory_login(canonical_id)
+
+
+def update_login(provider_id: str, update: Callable[[Login], Login]) -> Login | None:
+    """Apply a config edit to the current login under the store lock."""
+    with hold_login_lock():
+        _refuse_if_corrupt()
+        current = get_login(provider_id)
+        if current is None:
+            return None
+        updated = update(current)
+        save_login(updated)
+        return updated
 
 
 def _with_overlay_tokens(stored: Login, memory: Login) -> Login:

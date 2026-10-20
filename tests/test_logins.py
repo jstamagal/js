@@ -3,10 +3,45 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from js import logins, model_metadata, paths, runtime
+
+
+def test_provider_edit_keeps_another_process_rotated_tokens(tmp_logins_dir, monkeypatch):
+    from js import login_cli
+
+    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="old-access",
+                                  codex_refresh_token="old-refresh", codex_token_expires=1,
+                                  provider_headers={"X-Old": "value"}))
+    stale = logins.load_logins()["openai-codex"]
+    answers = iter(["", "", "-"])
+
+    def input_during_refresh(*args, **kwargs):
+        if stale.codex_refresh_token == "old-refresh":
+            subprocess.run([sys.executable, "-c", """
+import sys
+from pathlib import Path
+from js import logins
+logins.set_config_dir(Path(sys.argv[1]))
+logins.save_login(logins.Login(provider_id='openai-codex', provider_api_key='new-access',
+                              codex_refresh_token='new-refresh', codex_token_expires=999,
+                              model_defaults={'other-model': {'TEMPERATURE': 0.3}}))
+""", str(tmp_logins_dir)], check=True, timeout=10)
+        return next(answers)
+
+    monkeypatch.setattr(login_cli, "_input", input_during_refresh)
+    login_cli._edit_saved_provider(stale)
+
+    saved = logins.load_logins_fresh()["openai-codex"]
+    assert saved.provider_headers == {}
+    assert (saved.provider_api_key, saved.codex_refresh_token, saved.codex_token_expires) == (
+        "new-access", "new-refresh", 999,
+    )
+    assert saved.model_defaults == {"other-model": {"TEMPERATURE": 0.3}}
 
 @pytest.fixture
 def tmp_logins_dir(tmp_path: Path, monkeypatch):
