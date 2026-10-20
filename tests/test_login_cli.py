@@ -1028,3 +1028,14 @@ def test_refetch_after_an_edit_shows_the_edited_defaults(monkeypatch, tmp_path: 
 
     assert shown[1]["m"] == login_cli._model_annotation(edited, "m")
     assert shown[1]["m"] != shown[0]["m"]
+
+
+def test_registered_local_placeholder_is_used_for_keyless_login(monkeypatch):
+    from js import config
+
+    for name in ("VLLM_API_KEY", "VLLM_BASE_URL", "VLLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    config.set_invocation(extras=["LOCAL_API_KEY_PLACEHOLDER=local-token"])
+    monkeypatch.setattr(login_cli, "_input", lambda _prompt, default=None, **kw: default or "")
+    login = login_cli._collect_api_login("vllm", "openai", providers.provider_for_login("vllm"))
+    assert login.provider_api_key == "local-token"

@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("LOCAL_API_KEY_PLACEHOLDER", "str", group="providers"),
     SettingSpec("JSRC_AUTO_MIGRATE", "bool", group="runtime"),
     SettingSpec("PROJECT_INSTRUCTION_FILES", "json", group="runtime"),
     SettingSpec("GLOBAL_INSTRUCTION_FILES", "json", group="runtime"),

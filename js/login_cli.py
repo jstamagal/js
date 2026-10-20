@@ -439,8 +439,8 @@ def _collect_api_login(
                 msgs.warn(msgs.LOGIN_NO_KEY)
                 return None
             # Keyless local endpoint: the openai wire still demands SOME token.
-            api_key = "x"
-            msgs.say(msgs.LOGIN_PLACEHOLDER_KEY)
+            api_key = config.run_settings()["LOCAL_API_KEY_PLACEHOLDER"]
+            msgs.say(msgs.LOGIN_PLACEHOLDER_KEY, key=api_key)
     elif api_key and existing is not None and api_key == existing.provider_api_key:
         entered = _input(msgs.LOGIN_ASK_KEY_KEEP.text(), secret=True)
         if entered is None:
