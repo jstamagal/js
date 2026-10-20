@@ -266,3 +266,15 @@ def test_skipped_session_records_emit_a_warning(tmp_path, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["path"] == path
     assert capsys.readouterr() == ("", "")
+
+
+def test_ignored_sampling_value_emits_a_warning(tmp_path, capsys):
+    from js import persona
+
+    events = []
+    path = tmp_path / "agent.yaml"
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert persona._coerce_sampling(path, {"temperature": -1}) == {}
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["name"] == f"sampling.temperature in {path}"
+    assert capsys.readouterr() == ("", "")
