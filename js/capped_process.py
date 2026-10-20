@@ -165,8 +165,11 @@ class _StreamCapture:
         with self._lock:
             self._closed = True
             if self._file is not None:
-                with contextlib.suppress(OSError):
+                try:
                     self._file.close()
+                except OSError:
+                    self._spill_failed = True
+                    self._spilled = False
                 self._file = None
 
     def ensure_spilled(self) -> Path | None:

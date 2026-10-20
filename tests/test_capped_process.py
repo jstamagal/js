@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import errno
+import io
 import signal
 import threading
 
@@ -8,6 +10,26 @@ import pytest
 
 from js import capped_process
 from js.capped_process import CappedProcessTimeout, _run_capped
+
+
+def test_a_spill_that_fails_at_close_is_not_advertised_as_complete(monkeypatch, tmp_path):
+    class FullDisk(io.RawIOBase):
+        def writable(self):
+            return True
+
+        def write(self, data):
+            raise OSError(errno.ENOSPC, "disk full")
+
+    sink = io.BufferedWriter(FullDisk())
+    monkeypatch.setattr(capped_process, "open", lambda *args: sink, raising=False)
+    capture = capped_process._StreamCapture(8, tmp_path / "output.log")
+    capture.feed(b"HEADmiddleTAIL")
+
+    capture.close()
+
+    assert capture.ensure_spilled() is None
+    assert capture.read(0, capture.total) == b"HEADTAIL"
+    assert capture.excerpt(0, 8).path is None
 
 
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
