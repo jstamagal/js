@@ -31,6 +31,17 @@ class FakeEditor:
         return subprocess.run(argv, check=False).returncode
 
 
+def test_ex_table_accepts_an_assembly_command():
+    editor = FakeEditor("draft")
+
+    async def clear(arg, editor, dispatch):
+        editor.text = ""
+
+    asyncio.run(exline.run_ex("clear", editor, is_command=lambda verb: False,
+                             dispatch=None, commands={"clear": clear}))
+    assert editor.text == ""
+
+
 def _run(line: str, editor: FakeEditor, dispatched: list[str] | None = None, commands=("set", "quit")):
     async def dispatch(command_line: str) -> None:
         (dispatched if dispatched is not None else []).append(command_line)

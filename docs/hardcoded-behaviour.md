@@ -327,6 +327,8 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.123: `run_ex` takes the verb-handler table and force-form aliases;
+  the extracted default handlers preserve existing edits, writes and dispatch.
 - js-2lg.119: key-file loading, parsing and binding accept the action catalogue;
   blocking-prompt bindings accept handlers. Stock actions and handlers stay default.
 - js-2lg.115: command completion and argument routing accept a command prefix;
