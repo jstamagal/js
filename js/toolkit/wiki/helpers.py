@@ -94,7 +94,15 @@ def read_text(path: Path, cap: int) -> str:
 
 def _existing_asset(src: Path, dest: Path) -> Path | str:
     try:
-        identical = dest.read_bytes() == src.read_bytes()
+        with dest.open("rb") as existing, src.open("rb") as incoming:
+            while True:
+                chunk = existing.read(65536)
+                if chunk != incoming.read(65536):
+                    identical = False
+                    break
+                if not chunk:
+                    identical = True
+                    break
     except OSError as exc:
         return f"ERROR: could not compare {src} with {dest}: {exc}"
     if not identical:

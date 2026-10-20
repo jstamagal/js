@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -647,3 +648,22 @@ def test_binary_classification_ignores_colons_in_the_filename(tmp_path, filename
     result = wiki_convert(str(document), context=_ctx(tmp_path))
 
     assert result.startswith("UNREADABLE/binary:")
+
+
+def test_existing_media_comparison_uses_bounded_memory(tmp_path):
+    vault = _vault(tmp_path)
+    source = tmp_path / "large.mp4"
+    source.write_bytes(b"v" * (4 * 1024 * 1024))
+    assets = vault / "assets"
+    assets.mkdir()
+    destination = assets / source.name
+    shutil.copyfile(source, destination)
+    tracemalloc.start()
+    try:
+        result = wiki_helpers_module.copy_to_assets(source, vault, _ctx(tmp_path))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result == destination
+    assert peak < 1_000_000
