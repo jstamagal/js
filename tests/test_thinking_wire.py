@@ -76,6 +76,39 @@ def _anthropic_events(model: str, *, thought: str = _THOUGHT, signature: str = _
     return events
 
 
+def _reply_events(model: str, *, blocks: list[dict], stop: str) -> list[dict]:
+    """The stream of a reply whose content is ``blocks``, as Anthropic sends it."""
+    events: list[dict] = [
+        {"type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": [],
+            "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 5, "output_tokens": 1}}},
+    ]
+    for n, block in enumerate(blocks):
+        if block["type"] == "thinking":
+            events.append({"type": "content_block_start", "index": n,
+                           "content_block": {"type": "thinking", "thinking": "", "signature": ""}})
+            if block["thinking"]:
+                events.append({"type": "content_block_delta", "index": n,
+                               "delta": {"type": "thinking_delta", "thinking": block["thinking"]}})
+            events.append({"type": "content_block_delta", "index": n,
+                           "delta": {"type": "signature_delta", "signature": block["signature"]}})
+        elif block["type"] == "text":
+            events += [{"type": "content_block_start", "index": n, "content_block": {"type": "text", "text": ""}},
+                       {"type": "content_block_delta", "index": n,
+                        "delta": {"type": "text_delta", "text": block["text"]}}]
+        else:
+            events += [{"type": "content_block_start", "index": n, "content_block": {
+                           "type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}},
+                       {"type": "content_block_delta", "index": n, "delta": {
+                           "type": "input_json_delta", "partial_json": json.dumps(block["input"])}}]
+        events.append({"type": "content_block_stop", "index": n})
+    events += [
+        {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    ]
+    return events
+
+
 class _Wire:
     """A mock Anthropic endpoint: records each request body, answers from a script."""
 
@@ -98,8 +131,9 @@ class _Wire:
                            "The block is bound to a different conversation."}})
         self.bodies.append(json.loads(request.content))
         kwargs = self.script.pop(0) if self.script else {}
-        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"},
-                               content=_sse(_anthropic_events(self.model, **kwargs)))
+        events = (_reply_events(self.model, **kwargs) if "blocks" in kwargs
+                  else _anthropic_events(self.model, **kwargs))
+        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, content=_sse(events))
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(self.respond))
@@ -643,6 +677,49 @@ def test_text_between_signed_thinking_blocks_replays_in_the_order_it_came(monkey
     assert [b["type"] for b in _assistant_blocks(wire.bodies[0])[0]] == ["thinking", "text", "thinking", "tool_use"]
 
 
+def test_a_reply_cut_off_after_its_tool_calls_replays_with_its_blocks_in_order(claude):
+    cfg, wire, context = claude
+    reply = [
+        {"type": "thinking", "thinking": "", "signature": "S1"},
+        {"type": "text", "text": "Reading the first file."},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {"path": "a"}},
+        {"type": "text", "text": "Now the second."},
+        {"type": "thinking", "thinking": "progress note", "signature": "S2"},
+        {"type": "tool_use", "id": "toolu_2", "name": "no_such_tool", "input": {"path": "b"}},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1), messages, context)
+    messages.append({"role": "user", "content": "go on"})
+    _turn(cfg, messages, context)
+
+    assert _assistant_blocks(wire.bodies[1])[-1] == reply
+
+
+def test_a_capped_batch_stores_text_in_the_same_order_as_its_call_offsets(claude):
+    cfg, wire, context = claude
+    reply = [
+        _SIGNED_BLOCK,
+        {"type": "text", "text": "A"},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {"path": "a"}},
+        {"type": "text", "text": "B"},
+        {"type": "tool_use", "id": "toolu_2", "name": "no_such_tool", "input": {"path": "b"}},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1, max_tool_calls_per_message=1), messages, context)
+    record = messages[1]
+    messages.append({"role": "user", "content": "go on"})
+    _turn(cfg, messages, context)
+
+    replayed = _assistant_blocks(wire.bodies[1])[0]
+    assert [b["type"] for b in replayed] == ["thinking", "text", "tool_use", "text"]
+    assert replayed[-1] == {"type": "text", "text": "B"}
+    assert record["content"] == replayed[1]["text"] + "B"
+    assert replayed[1]["text"].startswith("A")
+    assert replayed[2] == reply[2]
+
+
 def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
     session = tmp_path / "session.jsonl"
     answer = {**_signed_call(1), "content": "done"}
@@ -669,3 +746,27 @@ def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
 
     assert wire.bodies[0]["thinking"] == {"type": "enabled", "budget_tokens": 4000}
     assert wire.bodies[0]["max_tokens"] == 32000
+
+
+def test_resume_preserves_adjacent_and_empty_text_blocks_before_thinking(claude):
+    cfg, wire, context = claude
+    reply = [
+        _SIGNED_BLOCK,
+        {"type": "text", "text": "A"},
+        {"type": "text", "text": "B"},
+        {"type": "thinking", "thinking": "next", "signature": "S2"},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {}},
+        {"type": "text", "text": ""},
+        {"type": "thinking", "thinking": "", "signature": "S3"},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    wire.original_replies = {"toolu_1": reply}
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1), messages, context)
+    memory.persist_messages(cfg.session_file, messages)
+    resumed = memory.load_replay_messages(cfg.session_file)
+
+    _turn(cfg, resumed, context)
+
+    assert len(wire.bodies) == 2
+    assert _assistant_blocks(wire.bodies[-1]) == [reply]

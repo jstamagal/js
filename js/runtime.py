@@ -464,7 +464,10 @@ def _assistant_message_with_tool_calls(
     def _place_suffix() -> None:
         nonlocal suffix
         if suffix:
-            parts.append(ai.types.messages.TextPart(text=suffix))
+            if parts and isinstance(parts[-1], ai.types.messages.TextPart):
+                parts[-1] = parts[-1].model_copy(update={"text": parts[-1].text + suffix})
+            else:
+                parts.append(ai.types.messages.TextPart(text=suffix))
             suffix = ""
 
     for part in message.parts:
@@ -2070,6 +2073,8 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             pending_calls,
             diagnostic_suffix=batch_diagnostic_suffix,
         )
+        text = assistant_message.text
+        record["content"] = text
     # The signed parts as this turn replays them, after batch normalization.
     signed_reasoning = (
         model_client.signed_reasoning_parts(assistant_message)
@@ -2077,6 +2082,16 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     )
     if signed_reasoning:
         record["reasoning_parts"] = signed_reasoning
+        record["reasoning_layout"] = [
+            len(part.text) if isinstance(part, ai.types.messages.TextPart) else part.kind
+            for part in assistant_message.parts
+        ]
+        # A signature covers the reply's blocks in their order, so replay puts
+        # each call back before the answer text that followed it.
+        offsets = model_client.tool_call_text_before(assistant_message)
+        for call in record.get("tool_calls", []):
+            if call["id"] in offsets:
+                call["text_before"] = offsets[call["id"]]
     if signed_reasoning or record.get("reasoning_blocks"):
         record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
     existing_metadata = getattr(assistant_message, "provider_metadata", None) or {}
