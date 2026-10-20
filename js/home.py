@@ -55,7 +55,7 @@ from typing import TextIO
 
 from . import agent_migration
 from . import messages as msgs
-from . import paths
+from . import paths, settings as _settings
 from . import session_catalog
 from . import session_store
 from . import session_text
@@ -86,7 +86,7 @@ _DATA_ENTRIES = {
 }
 
 # `~/.js/tmp` entries untouched for this long are removed at startup.
-TMP_MAX_AGE_SECONDS = 24 * 60 * 60
+TMP_MAX_AGE_SECONDS = _settings.default_value("TMP_AGE_MAX")
 
 
 @dataclass(frozen=True)
@@ -649,10 +649,10 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
     return done
 
 
-def sweep_tmp(now: float | None = None) -> list[Path]:
-    """Remove top-level `~/.js/tmp` entries not modified for TMP_MAX_AGE_SECONDS."""
+def sweep_tmp(now: float | None = None, *, settings: dict | None = None) -> list[Path]:
+    """Remove top-level `~/.js/tmp` entries not modified for TMP_AGE_MAX seconds."""
     root = paths.home() / "tmp"
-    cutoff = (time.time() if now is None else now) - TMP_MAX_AGE_SECONDS
+    cutoff = (time.time() if now is None else now) - float(_settings.live_value("TMP_AGE_MAX", settings))
     removed: list[Path] = []
     try:
         entries = list(os.scandir(root))

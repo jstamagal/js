@@ -29,6 +29,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from collections.abc import Iterator, Mapping
 from typing import Any
@@ -139,6 +140,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("TMP_AGE_MAX", "float", group="runtime"),
     SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
     SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
     SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
@@ -925,6 +927,24 @@ def knob_attr(obj: Any, attr: str, key: str) -> Any:
     value when ``obj`` has no such attribute."""
     value = getattr(obj, attr, None)
     return default_value(key) if value is None else value
+
+
+_live_settings: ContextVar[dict | None] = ContextVar("js_live_settings", default=None)
+
+
+def bind_live_settings(settings: dict | None) -> None:
+    """Bind the current invocation or turn's live store in this execution context."""
+    _live_settings.set(settings)
+
+
+def live_value(key: str, settings: dict | None = None) -> Any:
+    """Read explicit settings, the bound turn store, or startup policy without migration."""
+    store = settings if settings is not None else _live_settings.get()
+    if store is None:
+        from . import config
+
+        store = config.run_settings(migrate=False)
+    return knob(store, key)
 
 
 # ---------------------------------------------------------------------------

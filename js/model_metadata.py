@@ -38,6 +38,7 @@ _policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", d
 def bind_settings(settings: dict | None) -> None:
     """Use this invocation or turn's live store for metadata policy."""
     _policy_settings.set(settings)
+    _settings.bind_live_settings(settings)
 
 
 def _policy(key: str):

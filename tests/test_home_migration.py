@@ -605,3 +605,12 @@ def test_the_dry_run_names_the_filing_and_moves_no_session(tmp_path, capsys):
     assert any(_is(msgs.HOME_WOULD_REFILE, line) for line in out)
     assert old.read_bytes() == before
     assert not paths.home().exists()
+
+
+def test_registered_tmp_age_changes_which_entries_are_swept(tmp_path):
+    stale = paths.tmp_dir() / "stale"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("temporary")
+    os.utime(stale, (90, 90))
+    assert home.sweep_tmp(now=100, settings={"TMP_AGE_MAX": 5}) == [stale]
+    assert not stale.exists()

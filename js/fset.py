@@ -204,6 +204,9 @@ def bind_settings(settings: dict | None) -> None:
     """The live settings `$NAME` reads."""
     global _settings
     _settings = settings
+    from . import settings as _s
+
+    _s.bind_live_settings(settings)
 
 
 def _setting(name: str) -> str | None:
