@@ -93,6 +93,24 @@ def test_legacy_directory_snapshot_still_restores(tmp_path):
     assert (target / "nested/file").read_bytes() == b"old"
 
 
+def test_undo_removed_file_replaces_a_symlink_without_changing_its_destination(tmp_path):
+    target = tmp_path / "removed"
+    target.write_bytes(b"original")
+    other = tmp_path / "other"
+    other.write_bytes(b"must survive")
+    other.chmod(0o600)
+    context = _persistent_context(tmp_path, "replacement-link")
+    fs.remove(str(target), permanent=True, context=context)
+    target.symlink_to(other)
+
+    fs.undo(str(target), context=context)
+
+    assert other.read_bytes() == b"must survive"
+    assert stat.S_IMODE(other.stat().st_mode) == 0o600
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original"
+
+
 def test_persisted_tree_rejects_writes_through_symlink(tmp_path):
     target = tmp_path / "tree"
     context = _persistent_context(tmp_path, "unsafe")

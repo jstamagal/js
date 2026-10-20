@@ -739,6 +739,8 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     shutil.rmtree(target)
                 return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink():
+                target.unlink()
             mode = None
             coverage = None
             if isinstance(previous, dict):
