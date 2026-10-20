@@ -183,6 +183,17 @@ def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tm
     assert bare.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
 
 
+@pytest.mark.parametrize("model_id", ["local/$MODEL", "local\nset SHELL_WAIT 47"])
+def test_write_model_id_keeps_the_id_literal(tmp_path, model_id):
+    path = tmp_path / "jsrc"
+
+    settings.write_model_id(path, model_id)
+
+    loaded = settings.collect_settings([path], env={})
+    assert loaded["MODEL"] == model_id
+    assert settings.knob(loaded, "SHELL_WAIT") == settings.default_value("SHELL_WAIT")
+
+
 def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
     jsrc = tmp_path / "jsrc"
     settings.ensure_user_jsrc(jsrc)

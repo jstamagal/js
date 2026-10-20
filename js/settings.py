@@ -1215,4 +1215,4 @@ def ensure_user_jsrc(path: Path) -> bool:
 def write_model_id(path: Path, model_id: str) -> None:
     """Make ``model_id`` the `MODEL` the jsrc at ``path`` sets, in place
     (`_write_jsrc_lines`). Raises OSError."""
-    _write_jsrc_lines(path, {"MODEL": f"set MODEL {model_id}"}, [])
+    _write_jsrc_lines(path, {"MODEL": _set_line(SPEC_BY_KEY["MODEL"], model_id)}, [])
