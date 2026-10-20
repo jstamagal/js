@@ -236,6 +236,8 @@ def browser_probe(
     hold = min(int_or_default(hold_ms, 1600, minimum=0), 30_000)
     width = min(int_or_default(viewport_width, 1280, minimum=100), 3840)
     height = min(int_or_default(viewport_height, 800, minimum=100), 2160)
+    base = context.resolve_path(output_dir, write=True) if output_dir else paths.browser_probes_dir()
+    run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     server: _ThreadingServer | None = None
     url = target
@@ -247,9 +249,6 @@ def browser_probe(
             server, url, _root = _start_local_server(path)
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
-
-    base = context.resolve_path(output_dir, write=True) if output_dir else paths.browser_probes_dir()
-    run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     report: dict[str, Any] = {
         "url": url,

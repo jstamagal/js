@@ -558,6 +558,42 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
     assert events == ["shutdown", "server_close"]
 
 
+def test_browser_output_path_refusal_leaves_no_local_server(tmp_path, monkeypatch):
+    from js import jail
+    from js.toolkit import call_tool
+
+    target = tmp_path / "index.html"
+    target.write_text("<p>local page</p>")
+    context = ToolContext(cwd=tmp_path)
+    live = set()
+
+    class Server:
+        def shutdown(self):
+            live.discard(self)
+
+        def server_close(self):
+            pass
+
+    def start(path):
+        server = Server()
+        live.add(server)
+        return server, "http://127.0.0.1:12345/index.html", path.parent
+
+    def resolve(path, *, write=False):
+        if write:
+            raise jail.JailError("output is outside the jail")
+        return target
+
+    monkeypatch.setattr(browser_module, "_start_local_server", start)
+    monkeypatch.setattr(context, "resolve_path", resolve)
+
+    result = call_tool(build_default_registry().resolve("browser_probe"),
+                       {"target": str(target), "output_dir": "denied"}, context)
+
+    assert result.startswith("ERROR:")
+    assert not live
+
+
 @_needs_chromium
 def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path):
     target = tmp_path / "index.html"
