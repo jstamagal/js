@@ -1976,7 +1976,7 @@ def ast_search(
         # paths out the same way.
         return _ast_records(binary, query, root, language, rewrite_to, limit + 1, context)
 
-    records, rc, stderr, timed_out, parse_error, used_stdin = search(pattern, rewrite)
+    records, rc, stderr, timed_out, parse_error, _used_stdin = search(pattern, rewrite)
     failure = _ast_failure(rc, stderr, timed_out, parse_error)
     if failure is not None:
         return failure
@@ -1991,7 +1991,7 @@ def ast_search(
             )
         body_var = _body_var(header)
         headed = f"{header}\n    $$${body_var}"
-        records, rc, stderr, timed_out, parse_error, used_stdin = search(headed, None)
+        records, rc, stderr, timed_out, parse_error, _used_stdin = search(headed, None)
         failure = _ast_failure(rc, stderr, timed_out, parse_error)
         if failure is not None:
             return failure
@@ -2040,21 +2040,16 @@ def ast_search(
     for target in prepared:
         context.snapshot(target)
     apply_stderr = ""
-    if used_stdin:
-        rc = 0
+    rc = 0
+    try:
+        for target, (source, _updated) in prepared.items():
+            if _read_regular_bytes(target) != source:
+                return f"ERROR: {target} changed while preparing the structural rewrite"
         for target, (_source, updated) in prepared.items():
-            try:
-                target.write_bytes(updated)
-            except OSError as exc:
-                rc = 1
-                apply_stderr = str(exc)
-                break
-    else:
-        argv = _ast_argv(binary, pattern, root, language, rewrite,
-                         excludes=_hidden_globs(Path(context.cwd), context))
-        argv.remove("--json=stream")
-        argv.insert(-2, "--update-all")
-        rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
+            target.write_bytes(updated)
+    except OSError as exc:
+        rc = 1
+        apply_stderr = str(exc)
     context.search_cache.clear()
     if rc != 0:
         detail = apply_stderr.strip()

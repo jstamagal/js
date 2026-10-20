@@ -321,6 +321,28 @@ def test_ast_search_apply_snapshots_all_files_clears_cache_and_undoes(tmp_path):
 
 
 @requires_ast_grep
+def test_ast_apply_only_changes_prepared_files(tmp_path, monkeypatch):
+    first = tmp_path / "a.py"
+    later = tmp_path / "b.py"
+    first.write_text("old(1)\n")
+    later.write_text("other(2)\n")
+    context = ToolContext(cwd=tmp_path)
+    snapshot = context.snapshot
+
+    def snapshot_and_edit(target):
+        snapshot(target)
+        later.write_text("old(2)\n")
+
+    monkeypatch.setattr(context, "snapshot", snapshot_and_edit)
+    ast_search("old($ARG)", path=".", rewrite="new($ARG)", apply=True,
+               max_results=1, context=context)
+
+    assert first.read_text() == "new(1)\n"
+    assert later.read_text() == "old(2)\n"
+    assert later not in context.snapshots
+
+
+@requires_ast_grep
 def test_ast_search_refuses_apply_past_max_results(tmp_path):
     target = tmp_path / "code.py"
     original = "old(1)\nold(2)\n"
