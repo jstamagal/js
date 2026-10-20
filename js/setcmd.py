@@ -11,6 +11,7 @@ its `lines`, config loading collects its `error`s as boot warnings.
 from __future__ import annotations
 
 import copy
+import fnmatch
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -62,33 +63,28 @@ def render_value(spec: _s.SettingSpec, value) -> str:
     return str(value)
 
 
-def show_lines(settings: dict, key: str | None = None) -> CommandResult:
-    """`show [key]` — every knob and its current value, or just one. A knob
-    the store does not hold shows its js/jsrc value, the value that runs."""
-    if key is not None:
-        spec = _s.spec_for(key)
-        if spec is None:
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-        value = _s.knob(settings, spec.key)
-        return CommandResult(
-            handled=True,
-            lines=[
-                f"{spec.key} = {render_value(spec, value)}",
-                f"  {spec.doc}",
-            ],
-        )
+def select(name: str | None) -> tuple[list[_s.SettingSpec], bool] | None:
+    """The settings `set NAME` shows, and whether NAME named one setting.
+    NAME is a setting (any case), a group (`/set compaction`), or a
+    wildcard over the names (`/set *_FILE`). No NAME is every setting.
+    None when NAME matches nothing."""
+    if name is None:
+        return list(_s.REGISTRY), False
+    spec = _s.spec_for(name)
+    if spec is not None:
+        return [spec], True
+    if any(char in name for char in "*?["):
+        pattern = name.upper()
+        found = [spec for spec in _s.REGISTRY if fnmatch.fnmatchcase(spec.key.upper(), pattern)]
+    else:
+        found = [spec for spec in _s.REGISTRY if spec.section.lower() == name.lower()]
+    return (found, False) if found else None
 
-    lines: list[str] = []
-    current_section: str | None = None
-    for spec in _s.REGISTRY:
-        if spec.section != current_section:
-            if current_section is not None:
-                lines.append("")
-            lines.append(f"[{spec.section}]")
-            current_section = spec.section
-        value = _s.knob(settings, spec.key)
-        lines.append(f"  {spec.key} = {render_value(spec, value)}")
-    return CommandResult(handled=True, lines=lines)
+
+def show_lines(settings: dict, key: str | None = None) -> CommandResult:
+    """`set [NAME]`: the settings NAME selects (`select`) and their values. A
+    setting the store does not hold shows its js/jsrc value, the value that runs."""
+    return show_lines_effective(settings, None, key)
 
 
 # ---------------------------------------------------------------------------
@@ -119,34 +115,24 @@ def show_lines_effective(
     overlay: Mapping[str, LiveValue] | None = None,
     key: str | None = None,
 ) -> CommandResult:
-    """Like `show_lines`, but a knob present in ``overlay`` shows its effective
-    value and a ``(live: <source>)`` tag instead of the store value."""
+    """Like `show_lines`, but a setting present in ``overlay`` shows its
+    effective value and a ``live: <source>`` tag instead of the store value."""
     overlay = overlay or {}
-    if key is not None:
-        spec = _s.spec_for(key)
-        if spec is None:
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-        live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
-        return CommandResult(
-            handled=True,
-            lines=[
-                _annotate(f"{spec.key} = {display}", live),
-                f"  {spec.doc}",
-            ],
-        )
-
+    selected = select(key)
+    if selected is None:
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
+    specs, one = selected
     lines: list[str] = []
-    current_section: str | None = None
-    for spec in _s.REGISTRY:
-        if spec.section != current_section:
-            if current_section is not None:
-                lines.append("")
-            lines.append(f"[{spec.section}]")
-            current_section = spec.section
+    width = max(len(spec.key) for spec in specs)
+    for spec in specs:
         live = overlay.get(spec.key)
         display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
-        lines.append(_annotate(f"  {spec.key} = {display}", live))
+        name = spec.key.upper()
+        if one:
+            line = msgs.SETTING_IS.line(colour=False, key=name, value=display)
+        else:
+            line = msgs.SETTING_ROW.line(colour=False, key=name.ljust(width), value=display)
+        lines.append(_annotate(line, live))
     return CommandResult(handled=True, lines=lines)
 
 
@@ -165,7 +151,8 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[f"{spec.key} = {render_value(spec, value)}"],
+            lines=[msgs.SETTING_CHANGED.line(colour=False, key=spec.key.upper(),
+                                             value=render_value(spec, value) if spec.secret else raw.strip())],
             changed_keys=[spec.key],
         )
 
@@ -181,7 +168,7 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[f"{key} = {value}"],
+            lines=[msgs.SETTING_CHANGED.line(colour=False, key=key, value=raw.strip())],
             changed_keys=[key],
         )
 
@@ -229,6 +216,7 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
     if spec is not None:
         key = spec.key
         display = render_value(spec, None if after is missing else after)
+        name = key.upper()
     else:
         prefix_spec = _s.parent_spec(key)
         secret = prefix_spec is not None and prefix_spec.secret
@@ -238,19 +226,20 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
             display = "<set>"
         else:
             display = str(after)
-    entry = msgs.SETTING_VALUE if changed else msgs.SETTING_ALREADY_UNSET
+        name = key
+    entry = msgs.SETTING_CHANGED if changed else msgs.SETTING_IS
     return CommandResult(
         handled=True,
         changed=changed,
-        lines=[entry.text(key=key, value=display)],
+        lines=[entry.line(colour=False, key=name, value=display)],
         changed_keys=[key] if changed else [],
     )
 
 
 def set_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
-    """`set` shows every value, `set key` shows one, `set -key` clears one
-    (back to its ``baseline`` value, see `apply_unset`), `set key value` sets
-    one."""
+    """`set` shows every value, `set NAME` shows what NAME selects
+    (`select`), `set -NAME` clears one (back to its ``baseline`` value, see
+    `apply_unset`), `set NAME value` sets one."""
     parts = arg.split(maxsplit=1)
     if not parts:
         return show_lines(settings)

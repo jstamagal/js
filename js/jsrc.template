@@ -27,7 +27,9 @@
 #   so on.
 #
 #   Inside js:  /set              list every setting and its current value
-#               /show <setting>   one setting, with its help text
+#               /set NAME         one setting's value
+#               /set compaction   one group;  /set *_FILE  names that match
+#               /help set NAME    what a setting does
 #
 ################################################################################
 

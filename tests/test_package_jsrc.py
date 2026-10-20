@@ -88,7 +88,7 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
     capsys.readouterr()
     assert cli._handle_command("/show PYTHON_KERNEL_WAIT", state, cfg) is True
     shown = capsys.readouterr().out.splitlines()[0]
-    assert shown.split("=", 1)[1].split()[0] == "9"
+    assert shown.split(": ", 1)[1].split()[0] == "9"
 
 
 def test_user_jsrc_layers_over_package_jsrc(monkeypatch, tmp_path):
@@ -186,7 +186,7 @@ def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypa
 def _show_value(cfg, state, key: str, capsys) -> str:
     capsys.readouterr()
     assert cli._handle_command(f"/show {key}", state, cfg) is True
-    return capsys.readouterr().out.splitlines()[0].split("=", 1)[1].split()[0]
+    return capsys.readouterr().out.splitlines()[0].split(": ", 1)[1].split()[0]
 
 
 def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, tmp_path, capsys):

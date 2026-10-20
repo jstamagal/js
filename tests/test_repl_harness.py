@@ -8,6 +8,7 @@ import ai
 import pytest
 
 from js import cli, events, setcmd, settings
+from js import messages as msgs
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.sampling import Sampling
@@ -104,24 +105,24 @@ def test_set_commands_parse_power_user_knobs():
 
     trace = setcmd.set_command(live_settings, "runtime.trace on")
     assert trace.error is None
-    assert trace.lines == ["runtime.trace = on"]
+    assert trace.lines == [msgs.SETTING_CHANGED.line(colour=False, key="RUNTIME.TRACE", value="on")]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
 
     reasoning = setcmd.set_command(live_settings, "EFFORT max")
     assert reasoning.error is None
-    assert reasoning.lines == ["EFFORT = max"]
+    assert reasoning.lines == [msgs.SETTING_CHANGED.line(colour=False, key="EFFORT", value="max")]
     assert settings.get_dotted(live_settings, ("EFFORT",)) == "max"
 
     maxout = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 64000")
     assert maxout.error is None
-    assert maxout.lines == ["OUTPUT_TOKENS_MAX = 64000"]
+    assert maxout.lines == [msgs.SETTING_CHANGED.line(colour=False, key="OUTPUT_TOKENS_MAX", value="64000")]
     assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 64000
 
     # RULING A: magic strings die -- "off" is no longer a clear-token for a
     # nullable int knob; `set -key` is the only way to clear one.
     cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
     assert cleared.error is None
-    assert cleared.lines == ["OUTPUT_TOKENS_MAX = <none>"]
+    assert cleared.lines == [msgs.SETTING_CHANGED.line(colour=False, key="OUTPUT_TOKENS_MAX", value="<none>")]
     assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
 
 

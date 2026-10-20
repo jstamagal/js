@@ -8,6 +8,14 @@ from js import setcmd, settings
 from js import messages as msgs
 
 
+def _is(key: str, value: str) -> str:
+    return msgs.SETTING_IS.line(colour=False, key=key, value=value)
+
+
+def _changed(key: str, value: str) -> str:
+    return msgs.SETTING_CHANGED.line(colour=False, key=key, value=value)
+
+
 @pytest.mark.parametrize(
     ("key", "raw", "expected"),
     [
@@ -41,8 +49,7 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     assert changed.error is None
     assert settings.get_dotted(live_settings, spec.path) == expected
     assert shown.error is None
-    assert shown.lines[0] == f"{key} = {setcmd.render_value(spec, expected)}"
-    assert shown.lines[1].strip() == spec.doc
+    assert shown.lines == [_is(key.upper(), setcmd.render_value(spec, expected))]
 
 
 @pytest.mark.parametrize("raw", ['"PATH"', '["PATH",""]', '["PATH",7]'])
@@ -234,17 +241,17 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     rejected = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX off")
 
     assert bool_result.error is None
-    assert bool_result.lines == ["runtime.trace = off"]
+    assert bool_result.lines == [_changed("RUNTIME.TRACE", "off")]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
     assert int_result.error is None
-    assert int_result.lines == ["OUTPUT_TOKENS_MAX = 123"]
+    assert int_result.lines == [_changed("OUTPUT_TOKENS_MAX", "123")]
     assert rejected.error == "OUTPUT_TOKENS_MAX: expected an integer"
     assert rejected.changed is False
     assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 123  # unchanged
 
     cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
     assert cleared.error is None
-    assert cleared.lines == ["OUTPUT_TOKENS_MAX = <none>"]
+    assert cleared.lines == [_changed("OUTPUT_TOKENS_MAX", "<none>")]
     assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
 
 
@@ -257,7 +264,7 @@ def test_subagent_max_workers_rejects_values_below_one():
     assert rejected.error == "SUBAGENT_WORKERS_MAX: expected an integer >= 1"
     assert rejected.changed is False
     assert accepted.error is None
-    assert accepted.lines == ["SUBAGENT_WORKERS_MAX = 1"]
+    assert accepted.lines == [_changed("SUBAGENT_WORKERS_MAX", "1")]
 
 
 @pytest.mark.parametrize("token", ["default", "auto", "none", "unset"])
@@ -269,7 +276,7 @@ def test_magic_strings_store_verbatim_for_string_knobs(token):
     result = setcmd.set_command(live_settings, f"MODEL {token}")
 
     assert result.error is None
-    assert result.lines == [f"MODEL = {token}"]
+    assert result.lines == [_changed("MODEL", token)]
     assert settings.get_dotted(live_settings, ("MODEL",)) == token
 
     cleared = setcmd.set_command(live_settings, "-MODEL")
@@ -285,15 +292,14 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
     unset_spec = settings.SettingSpec(
         "TEMPERATURE",
         "float",
-        "Provider-default sampling temperature.",
         empty=settings.EMPTY_UNSET,
     )
 
-    assert off.lines[0] == "DEBUG_LOG = off"
-    assert none.lines[0] == "PROVIDER = <none>"
+    assert off.lines[0] == _is("DEBUG_LOG", "off")
+    assert none.lines[0] == _is("PROVIDER", "<none>")
     assert setcmd.render_value(unset_spec, None) == "<unset>"
     sampling = setcmd.show_lines(live_settings, "TEMPERATURE")
-    assert sampling.lines[0] == "TEMPERATURE = <unset>"
+    assert sampling.lines[0] == _is("TEMPERATURE", "<unset>")
 
 
 def test_secret_values_are_masked_when_shown():
@@ -303,9 +309,9 @@ def test_secret_values_are_masked_when_shown():
     shown = setcmd.show_lines(live_settings, "API_KEY")
 
     assert changed.error is None
-    assert changed.lines == ["API_KEY = <set>"]
+    assert changed.lines == [_changed("API_KEY", "<set>")]
     assert settings.get_dotted(live_settings, ("API_KEY",)) == "sk-test"
-    assert shown.lines[0] == "API_KEY = <set>"
+    assert shown.lines[0] == _is("API_KEY", "<set>")
 
 
 @pytest.mark.parametrize("key", ["MODEL.foo", "PROVIDER.foo", "FETCH_TIMEOUT.foo"])
@@ -328,10 +334,10 @@ def test_map_sub_key_updates_parent_map_and_shows_parent():
     shown = setcmd.show_lines(live_settings, "EXTRA_PARAMS")
 
     assert changed.error is None
-    assert changed.lines == ["EXTRA_PARAMS.organization = /p"]
+    assert changed.lines == [_changed("EXTRA_PARAMS.organization", "/p")]
     assert settings.get_dotted(live_settings, ("EXTRA_PARAMS", "organization")) == "/p"
     assert shown.error is None
-    assert shown.lines[0] == "EXTRA_PARAMS = organization=/p"
+    assert shown.lines[0] == _is("EXTRA_PARAMS", "organization=/p")
 
 
 @pytest.mark.parametrize("line", ["show MODEL", "on input set COMPACTION_AUTO off", "run something"])

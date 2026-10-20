@@ -582,6 +582,7 @@ def build_app(
     on_ex: Callable[[str, InputEditor], Coroutine] | None = None,
     key_bindings: KeyBindingsBase | None = None,
     keymap: keys.Keymap | None = None,
+    echo: Callable[[str], bool] = lambda line: True,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
@@ -593,7 +594,7 @@ def build_app(
     eof key at an empty input line and ends the app with `app.exit()`; an
     awaitable it returns runs as the key's handler. A sent line's paste
     markers (`js.pastes`) are expanded before ``on_line`` gets it; the
-    scrollback echoes the line as typed."""
+    scrollback echoes the line as typed when ``echo`` of the expanded line is true."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
@@ -611,9 +612,10 @@ def build_app(
         line = input_buffer.text
         input_buffer.append_to_history()
         input_buffer.reset()
-        if line.strip():
+        sent = pastes.expand(line).strip()
+        if sent and echo(sent):
             scrollback.append(display.user_line(line))
-        await on_line(pastes.expand(line).strip())
+        await on_line(sent)
 
     editor = InputEditor(input_buffer, submit)
 

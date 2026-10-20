@@ -61,7 +61,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js" = ["jsrc", "jsrc.template", "tags.yaml", "tool_releases.json", "skills/**/*"]
+"js" = ["jsrc", "jsrc.template", "help/*", "tags.yaml", "tool_releases.json", "skills/**/*"]
 "js.toolkit" = ["tool_descriptions/*.md", "toolbox_examples/*.py"]
 "prompts" = ["*/*"]
 

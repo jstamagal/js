@@ -1,0 +1,519 @@
+# What `/help set NAME` prints: each setting's NAME alone on a line, then
+# its help, indented four spaces. Lines starting with # are comments.
+
+DEFAULT_AGENT
+    Agent a run uses when neither --agent nor --commit names one: a prompt
+    directory id, letters, digits, '_' or '-'. Read once at startup, so a
+    `set` here reaches later runs through /save.
+
+MODEL
+    Default model id; unprefixed ids route through AI Gateway.
+
+OUTPUT_TOKENS_MAX
+    Per-call max_tokens; unset = models.dev metadata when known, else no
+    explicit cap.
+
+CONTEXT_SIZE
+    Override the active model's context window. Unset = local runtime
+    allocation, then models.dev metadata. Beats every other source; for a
+    multi-model setup use CONTEXT_SIZE_PER_MODEL instead.
+
+EFFORT
+    Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables
+    thinking. Any other value is rejected. Clear with `set -EFFORT`.
+
+THINKING_BUDGET
+    Thinking budget in tokens on the Anthropic wire, for the models that
+    take a budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset =
+    derived from EFFORT. Adaptive models and effort off ignore it.
+
+VISION
+    Send image bytes to the active model: on/off; unset = detect from
+    models.dev input modalities, then curated name hints. Clear with `set
+    -VISION`.
+
+BANNER
+    Text that starts each line js prints about its own state, such as `/set`
+    output. $BANNER in a format reads it.
+
+ui.reasoning
+    Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, 3
+    leave visible with token counts. The reasoning_toggle key, Ctrl-O unless
+    KEYBINDS_FILE moves it, folds and unfolds it in the async screen.
+    Display only; session reasoning is always retained.
+
+ui.net
+    Network display in the async screen: 0 nothing, 1 failures, 2 also
+    Connecting/Connected lines and a response byte counter on the status bar
+    until the first token, 3 also retries, catalog refreshes and per-call
+    stream stats.
+
+ui.status_bg
+    Status bar background, #rrggbb. Drawn in truecolor on every terminal.
+
+ui.status_fg
+    Status bar foreground, #rrggbb.
+
+ui.tools
+    Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
+    one row per tool, a command shows its output while it runs and one row
+    after, a patch shows its diff, a failure its error; 2 every call with
+    the first ui.tools_preview_lines result lines; 3 every call whole.
+
+ui.tools_quiet
+    Tools whose calls ui.tools 1 shows as one row and folds: a JSON list of
+    tool names.
+
+ui.shell_quiet
+    Shell commands ui.tools 1 treats as quiet, by first word or first two: a
+    JSON list.
+
+ui.tools_preview_lines
+    Lines of a result, a diff or a program shown before the rest is hidden
+    at ui.tools 1 and 2.
+
+ui.markdown
+    Render assistant Markdown on a terminal: finished blocks are highlighted
+    once, the open block stays live. Off writes the text as it arrives.
+    Output that is not a terminal is always plain text.
+
+theme.accent
+    Tool name and the mark of a running call in a tool exchange, #rrggbb.
+
+theme.ok
+    Mark of a finished call in a tool exchange, #rrggbb.
+
+theme.error
+    Mark of a failed call and error text in a tool exchange, #rrggbb.
+
+theme.warn
+    Standard error lines in a tool exchange, #rrggbb.
+
+theme.dim
+    Arguments, line numbers and metrics in a tool exchange, #rrggbb.
+
+theme.panel
+    Background of an output panel in a tool exchange, #rrggbb.
+
+theme.panel_text
+    Text of an output panel in a tool exchange, #rrggbb.
+
+theme.added
+    Added lines of a diff in a tool exchange, #rrggbb.
+
+theme.removed
+    Removed lines of a diff in a tool exchange, #rrggbb.
+
+theme.code
+    Inline code in an answer, drawn on theme.panel, #rrggbb.
+
+ui.resume_exchanges
+    Exchanges of a resumed session the REPL shows before its prompt, drawn
+    as a turn draws them. 0 shows none.
+
+EDITING_MODE
+    Input line key bindings in the async screen. emacs: Enter sends. vi: a
+    multi-line buffer, where Esc then `:` opens the ex line and `:x` sends.
+
+PASTE_IMAGE_KEY
+    Key that pastes the clipboard image into the input line as [image #N];
+    the image is sent with the line like an @path image. prompt_toolkit key
+    names, space-separated: c-v, escape v. Unset binds no key.
+
+PASTE_COLLAPSE_LINES
+    A bracketed paste of more lines than this shows in the input line as one
+    [paste #N +X lines] marker; the line sends the full text. 0 = no line
+    limit.
+
+PASTE_COLLAPSE_CHARS
+    A bracketed paste of more characters than this shows as one [paste #N X
+    chars] marker; the line sends the full text. 0 = no character limit.
+    Both 0 never collapses a paste.
+
+PASTE_IMAGE_COMMAND
+    Command that prints the clipboard image. Unset = `wl-paste --type
+    image/png` under Wayland, `xclip -selection clipboard -t image/png -o`
+    under X11.
+
+HISTORY_FILE
+    Prompt history: every line sent at a REPL prompt, one JSON object per
+    line with ts, cwd, session, agent and text, shared by every js run.
+    Unset = ~/.js/state/history.jsonl. Read when the REPL starts.
+
+HISTORY_ORDER
+    Order Up offers prompts in. last: every prompt, newest first. cwd: the
+    prompts typed in the current directory first, newest first, then the
+    rest. The history_search key, Ctrl-R, searches all of them either way.
+    Read when the REPL starts.
+
+HISTORY_SIZE
+    Newest prompts loaded from HISTORY_FILE for Up and Ctrl-R. Read when the
+    REPL starts.
+
+KEYBINDS_FILE
+    Key bindings file: `bind KEY... ACTION` and `unbind KEY...` lines over
+    the defaults; a bad line is one error at startup and is skipped. Unset =
+    ~/.js/keys. Actions: submit, history_search, ex_open, ex_run, ex_cancel,
+    interrupt, eof, suspend, reasoning_toggle, redraw, scroll_up,
+    scroll_down, complete. Read when the REPL starts.
+
+tags.file
+    Session tag list: one `name: description` line per tag. Unset =
+    ~/.js/tags.yaml when it exists, else js/tags.yaml, the stock list js
+    ships. A named file that is missing, or no TYPESAFE_API_KEY, means no
+    tagging. Editing the list retags every shown session at the next session
+    end.
+
+tags.threshold
+    Lowest Jev score, 0 to 1, a tag needs to be kept on a session.
+
+tags.max
+    Most tags a session keeps, highest score first.
+
+tags.messages
+    How many of a session's last operator and model messages Jev reads to
+    tag it. Tool output is never sent.
+
+tags.message_chars
+    Longest text sent per message when tagging; longer messages are cut.
+
+tags.model
+    TypeSafe model that judges session tags.
+
+PROVIDER
+    Explicit js provider id, e.g. deepseek, openai-codex, ollama.
+
+BASE_URL
+    Explicit provider base URL; unset = provider default.
+
+API_KEY
+    Explicit provider API key; unset = env/login default.
+
+EXTRA_PARAMS
+    Free-form extra params passed through to the provider SDK.
+
+TURN_ROUNDS_MAX
+    Max tool calls per turn before the loop gives up.
+
+REPLY_TOOL_CALLS_MAX
+    Maximum distinct tool calls accepted from one assistant message;
+    duplicates are collapsed before this ceiling is applied.
+
+SHELL_OUTPUT_MAX
+    Shell output shown per call, stdout and stderr together. Past it, the
+    head and tail are shown and the whole stream is written to a file.
+
+TOOL_RESULT_INLINE_MAX
+    Results larger than this are written to a file and replaced with a
+    preview plus the path, instead of being clipped and lost. 0 = off.
+
+TOOL_RESULT_MAX
+    Hard cap on any tool result string.
+
+FETCH_TIMEOUT
+    fetch() whole-request deadline in seconds, and the per-call timeout for
+    the web-search backends' JSON calls.
+
+SHELL_ENV_KEEP
+    Environment-variable names inherited by shell() without naming them per
+    call in env; a JSON string list.
+
+BROWSE_TIMEOUT
+    browse() page budget in seconds. obscura is told to give up one second
+    earlier so its own graceful navigation-timeout path runs and partial
+    content survives.
+
+DOWNLOAD_TIMEOUT
+    aria2c transfer timeout in seconds for saved, binary, and oversized
+    fetch() responses. Downloads are bounded by size, not by how fast a page
+    renders.
+
+DOWNLOAD_MAX
+    Size ceiling for fetch(save=...) in bytes. 0 = unlimited: a save streams
+    to disk and never lands in memory, so an ISO or a model weight is a
+    normal download. Set a number only to impose a quota.
+
+INLINE_CODE_TIMEOUT
+    Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt
+    expansions.
+
+READ_LINES_MAX
+    Maximum lines returned by read().
+
+FILE_BYTES_MAX
+    Maximum file bytes read by fs tools.
+
+ATTACHMENT_MAX
+    Most bytes of a text file attached to a prompt; a larger file is
+    truncated. TOOL_RESULT_MAX also caps it.
+
+READ_BYTES_MAX
+    Maximum file bytes for a whole-file read(); ignored when the call passes
+    a line or byte range, so ranged reads work on any size file.
+
+PARALLEL_RESULTS_MAX
+    Aggregate cap on all tool results returned by one batch of parallel
+    calls; the largest results are clipped first. 0 = unlimited.
+
+SUBAGENT_DEPTH_MAX
+    Maximum recursive task/subagent depth.
+
+SUBAGENT_WORKERS_MAX
+    Maximum concurrent subagent workers per task call; minimum 1.
+
+SWARM_ACTIVE_MAX
+    How many agents of an in-process swarm may be mid-turn at once; 0 is no
+    cap.
+
+PYTHON_KERNEL
+    Enable the persistent Python kernel and toolbox. Requires the kernel
+    extra.
+
+kernel.verbosity
+    How much of each kernel/toolbox call is rendered to your terminal.
+    quiet: errors and interrupts only. normal: code, output, timing,
+    namespace. verbose: stdout, stderr and display split out, plus kernel
+    lifecycle and toolbox activity. Affects only what you see; the model
+    always receives the full result.
+
+kernel.render_max_lines
+    Line cap per section of that terminal render, so a 4000-line cell cannot
+    scroll the screen away. The hidden count is always shown, and the model
+    still gets the untrimmed output.
+
+SHELL_PROGRAM
+    Program the `shell` tool runs commands with: a name looked up on PATH,
+    or a path. bash and zsh run with `-o pipefail`, so a pipeline fails when
+    any stage fails.
+
+SHELL_WAIT
+    Seconds a `shell` call waits for its command before returning a handle
+    to poll. The command keeps running; nothing is killed by this wait.
+
+PYTHON_KERNEL_WAIT
+    Seconds a `kernel` call waits for a submitted cell before returning a
+    handle to poll. The cell keeps running; nothing is interrupted by this
+    wait.
+
+JAIL_BIND
+    Under `js -C DIR`, more paths the jail shows: a JSON list of entries,
+    absolute or starting with ~. "path" is read-only and "path:rw" read-
+    write. A path that does not exist is skipped. Commands see each at its
+    real path; the file tools may read it, and write it when it is :rw.
+
+DEBUG_LOG
+    Append per-event records to state/<agent>/debug.log.
+
+runtime.trace
+    Pretty-print the tool-call trace line as the model runs.
+
+PARALLEL_TOOLS_MAX
+    Most read-only tool calls of one model response that run at once: read,
+    fs_search, the web searches, a GET fetch. A call that writes runs alone,
+    after the calls before it. 1 runs every call in turn.
+
+RETRY_COUNT_MAX
+    Retries of one model request after a retryable failure: a 429, a 5xx, a
+    dropped or idle stream. Each waits what the provider's Retry-After or
+    retry-after-ms header asks, else 1s, 2s, 4s ... up to 16s. 0 fails on
+    the first error.
+
+RETRY_WAIT_MAX
+    Longest Retry-After wait honoured. A provider asking for longer fails
+    the request at once. 0 honours any wait.
+
+STREAM_IDLE_TIMEOUT
+    Seconds a model request may go without a response byte before it is
+    aborted and retried under RETRY_COUNT_MAX. SSE keep-alive comments count
+    as bytes. 0 waits forever.
+
+OUTPUT_TOKENS_RETRY_MAX
+    A reply cut off by its output-token cap is sent again once with this
+    cap, when it is larger than the one used and not above the model's known
+    output limit. 0 never resends.
+
+OUTPUT_RESUMES_MAX
+    After a reply is cut off by its output-token cap, how many times per
+    turn the partial reply is kept and the model is told to resume. 0 ends
+    the turn on the cutoff.
+
+STEER_MODE
+    What a line typed while a turn runs does. now: it reaches the model at
+    the turn's next tool boundary, as a user message. A turn with no
+    boundary left gets it after it ends, as with batch. batch: every line
+    typed during the turn goes in as ONE message after it ends. one: each
+    line is its own turn, in order.
+
+REQUEST_LOG
+    Append the full request trace to ~/.js/logs/<agent>/<session>.log: the
+    unclipped system prompt, tool-schema JSON, and the messages sent each
+    call. This trace never prints to the terminal, only to the file.
+
+REQUEST_LOG_DIR
+    Directory for the debug autolog; unset = ~/.js/logs/<agent>.
+
+TRANSCRIPT_LOG
+    Append the visible terminal/TUI transcript to
+    ~/.js/logs/transcript/<agent>/<session>.log: what printed to the user,
+    with IRC-style <USER>/<APE> tags for user/assistant turns.
+
+TRANSCRIPT_LOG_DIR
+    Directory for the visible transcript log; unset =
+    ~/.js/logs/transcript/<agent>.
+
+INLINE_CODE
+    Execute !{sh|python|c|node ...} inline directives / ```!lang fences in
+    prompt files and inject their stdout. This runs arbitrary code from
+    prompt files; opt out with --im-a-pussy or set this off.
+
+EXEC_TIMEOUT
+    Seconds an `exec` command, typed or run by an `on` handler, may run
+    before its process group is killed; 0 is no limit. A handler's command
+    holds up the event that ran it for that long.
+
+EXEC_OUTPUT_MAX
+    Bytes of an `exec` command's stdout and stderr kept; the stdout reaches
+    the model as a js-reminder on the next message. 0 keeps all.
+
+COMPACTION_AUTO
+    Automatic cache-aware context compaction.
+
+COMPACTION_LOG_DIR
+    Full compaction flight snapshots; unset = logs/<agent>/compactions.
+
+CONTEXT_SIZE_PER_MODEL
+    Per-model context windows, keyed 'provider/model' or 'model'.
+    'provider/model' is the more specific. For surfaces models.dev has no
+    row for — a subscription endpoint serving the same model id as the
+    public API with a different usable window.
+
+CONTEXT_SIZE_UNKNOWN
+    Window to assume ONLY for models whose size cannot be resolved. Unlike
+    context_window this does not override models that are known, so covering
+    one unknown model no longer shrinks every known one.
+
+COMPACTION_WARN_AT
+    Notify once when context reaches this fraction.
+
+COMPACTION_START_AT
+    Auto-compact at this fullness fraction.
+
+COMPACTION_FORCE_AT
+    Force compact at this fullness fraction.
+
+COMPACTION_HEADROOM_TOKENS
+    Extra input-token headroom reserved by preflight/mid-turn compaction.
+
+COMPACTION_REPLY_RESERVE_TOKENS
+    Ceiling on the reply headroom subtracted before the fullness fractions;
+    the actual reserve is min(model max_output_tokens, this). Stops a model
+    declaring a 128k output cap from eating a third of the window.
+
+COMPACTION_KEEP_RECENT_TOKENS
+    Recent tail budget retained after compaction.
+
+COMPACTION_MIN_SAVINGS_TOKENS
+    Skip compaction unless estimated savings exceeds this.
+
+COMPACTION_KEEP_TOOL_RESULTS
+    Tool results left intact when an over-budget request clears old tool-
+    result bodies before falling back to a summary.
+
+COMPACTION_REATTACH_FILES_MAX
+    Recently read files re-attached after a summary compaction, newest
+    first. 0 = none.
+
+COMPACTION_REATTACH_TOKENS_MAX
+    Estimated tokens all re-attached files may use together.
+
+COMPACTION_REATTACH_FILE_TOKENS_MAX
+    A recently read file larger than this many estimated tokens is named
+    after a compaction but not re-attached.
+
+COMPACTION_CHARS_PER_TOKEN
+    Fallback/self-calibrating character-to-token estimate.
+
+COMPACTION_EXTERNAL_MODEL
+    Model used to write the compaction summary; 'same' = active model.
+
+COMPACTION_SUMMARY_TOKENS_MAX
+    Max tokens for the compaction summary. Capped at 8192.
+
+COMPACTION_SUMMARY_RESULT_CHARS_MAX
+    Longest tool result, in characters, that a summary request carries
+    whole; a longer one keeps its head and tail. 0 = whole results.
+
+COMPACTION_FAILURES_MAX
+    Failed automatic summaries in a row that pause automatic compaction. A
+    successful /compact resumes it.
+
+COMPACTION_CACHE_TTL
+    Prompt-cache lifetime. An over-budget request clears old tool results
+    first when the last request is at least this old; before that it
+    summarizes earlier turns first. 0 = always clear first.
+
+COMPACTION_HINT_COMMAND
+    Optional shell command whose stdout guides compaction.
+
+SUBAGENT_INHERIT_MODEL
+    Subagents inherit the parent's model when true; else use the agent's own
+    primary.
+
+SUBAGENT_MODEL_LOCK
+    When true, the main agent cannot pick a subagent model via the task
+    tool.
+
+TOOL_ALIASES
+    Model-facing tool-name alias profiles: list of {match:string|[...],
+    aliases:{...}}.
+
+HTTP_USER_AGENT
+    User-Agent header fetch and the web-search backends send when a call
+    names none.
+
+TERMINAL_COLUMNS
+    Columns of a terminal_session started without cols.
+
+TERMINAL_ROWS
+    Rows of a terminal_session started without rows.
+
+LSP_SERVERS
+    Language servers the `lsp` tool may start: a JSON list of {name,
+    command, extensions, roots}. For a file, the first entry whose
+    extensions hold its extension and whose command[0] is on PATH is used.
+    roots are the files that mark a workspace root; without one, the nearest
+    directory holding .git is the root.
+
+LSP_TIMEOUT
+    Seconds an `lsp` call waits for its language server: to start, to answer
+    a request, or to publish diagnostics.
+
+NOTEBOOK_OUTPUT_LINES_MAX
+    Lines of each cell output a `read` of an .ipynb shows; the rest is
+    counted. 0 shows only what kind each output is.
+
+MCP_SERVERS
+    Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP
+    uses url/headers.
+
+MCP_AGENT_POLICY
+    Per-agent MCP policy JSON with servers/tools allow and deny glob lists.
+
+MCP_TIMEOUT
+    Seconds an MCP request waits for its server's reply: initialize, list,
+    call or read.
+
+TEMPERATURE
+    Provider-default sampling temperature; unset = do not send.
+
+TOP_P
+    Provider-default nucleus sampling top_p; unset = do not send.
+
+TOP_K
+    Provider-default top_k sampling; unset = do not send.
+
+REPETITION_PENALTY
+    Provider-default repetition penalty; unset = do not send.
+
+PRESENCE_PENALTY
+    Provider-default presence penalty; unset = do not send.

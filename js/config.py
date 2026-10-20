@@ -437,6 +437,7 @@ def from_env(
         extras=extras,
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
+    msgs.set_banner(str(_settings.knob(js_root_settings, "BANNER")))
     sampling_setscript = Sampling.from_mapping({field: jsrc_settings.get(field.upper()) for field in SAMPLING_FIELDS})
     sampling_env = Sampling.from_env(env)
     sampling_cli = _sampling_from_extras(extras)

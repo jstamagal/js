@@ -74,7 +74,6 @@ class SettingSpec:
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
-    doc: str
     env: str | None = None      # an older env var also read; JS_<KEY> wins over it
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
@@ -95,430 +94,208 @@ class SettingSpec:
     def section(self) -> str:
         return self.group or self.path[0]
 
+    @property
+    def doc(self) -> str:
+        """This setting's help: its entry in `js/help/set.txt`, "" when it has none."""
+        return setting_help().get(self.key, "")
 
-# Every knob. Order here is the order `show` uses.
+
+# `/help set NAME` text, one entry per setting.
+SETTING_HELP_FILE = Path(__file__).parent / "help" / "set.txt"
+_help_cache: dict[str, str] | None = None
+
+
+def setting_help() -> dict[str, str]:
+    """NAME -> help text, read once from `SETTING_HELP_FILE`: a NAME alone on
+    a line, then its help indented. `#` lines are comments."""
+    global _help_cache
+    if _help_cache is None:
+        entries: dict[str, list[str]] = {}
+        current: list[str] | None = None
+        for line in SETTING_HELP_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#"):
+                continue
+            if line and not line[0].isspace():
+                current = entries.setdefault(line.strip(), [])
+            elif current is not None:
+                current.append(line.strip())
+        _help_cache = {name: " ".join(" ".join(body).split()) for name, body in entries.items()}
+    return _help_cache
+
+
+# Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
     # --- agent ---
-    SettingSpec("DEFAULT_AGENT", "str",
-                "Agent a run uses when neither --agent nor --commit names one: a prompt "
-                "directory id, letters, digits, '_' or '-'. Read once at startup, so a "
-                "`set` here reaches later runs through /save.", group="model"),
+    SettingSpec("DEFAULT_AGENT", "str", group="models"),
     # --- model ---
-    SettingSpec("MODEL", "str",
-                "Default model id; unprefixed ids route through AI Gateway.", aliases=("model",), group="model"),
+    SettingSpec("MODEL", "str", aliases=("model",), group="models"),
     SettingSpec("OUTPUT_TOKENS_MAX", "int",
-                "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
-                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE, group="model"),
+                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE, group="models"),
     SettingSpec("CONTEXT_SIZE", "int",
-                "Override the active model's context window. Unset = local runtime "
-                "allocation, then models.dev metadata. Beats every other source; for a "
-                "multi-model setup use CONTEXT_SIZE_PER_MODEL instead.",
-                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE, group="model"),
+                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE, group="models"),
     SettingSpec("EFFORT", "str",
-                "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. "
-                "Any other value is rejected. Clear with `set -EFFORT`.",
-                env="JS_REASONING", empty=EMPTY_NONE, group="model"),
+                env="JS_REASONING", empty=EMPTY_NONE, group="models"),
     SettingSpec("THINKING_BUDGET", "int",
-                "Thinking budget in tokens on the Anthropic wire, for the models that take a "
-                "budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset = derived from "
-                "EFFORT. Adaptive models and effort off ignore it.",
-                empty=EMPTY_NONE, group="model"),
-    SettingSpec("VISION", "bool",
-                "Send image bytes to the active model: on/off; unset = detect from "
-                "models.dev input modalities, then curated name hints. Clear with "
-                "`set -VISION`.", empty=EMPTY_NONE, group="model"),
+                empty=EMPTY_NONE, group="models"),
+    SettingSpec("VISION", "bool", empty=EMPTY_NONE, group="models"),
     # --- banner ---
-    SettingSpec("BANNER", "str",
-                "Text that starts each line js prints about its own state, such as "
-                "`/set` output. $BANNER in a format reads it.", group="banner"),
+    SettingSpec("BANNER", "str", group="startup"),
     # --- ui ---
-    SettingSpec("ui.reasoning", "int",
-                "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
-                "3 leave visible with token counts. The reasoning_toggle key, Ctrl-O "
-                "unless KEYBINDS_FILE moves it, folds and unfolds it in the async screen. "
-                "Display only; session reasoning is always retained."),
-    SettingSpec("ui.net", "int",
-                "Network display in the async screen: 0 nothing, 1 failures, 2 also "
-                "Connecting/Connected lines and a response byte counter on the status "
-                "bar until the first token, 3 also retries, catalog refreshes and "
-                "per-call stream stats."),
-    SettingSpec("ui.status_bg", "str",
-                "Status bar background, #rrggbb. Drawn in truecolor on every terminal."),
-    SettingSpec("ui.status_fg", "str",
-                "Status bar foreground, #rrggbb."),
-    SettingSpec("ui.tools", "int",
-                "Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into "
-                "one row per tool, a command shows its output while it runs and one row "
-                "after, a patch shows its diff, a failure its error; 2 every call with "
-                "the first ui.tools_preview_lines result lines; 3 every call whole."),
-    SettingSpec("ui.tools_quiet", "json",
-                "Tools whose calls ui.tools 1 shows as one row and folds: a JSON list of tool names."),
-    SettingSpec("ui.shell_quiet", "json",
-                "Shell commands ui.tools 1 treats as quiet, by first word or first two: a JSON list."),
-    SettingSpec("ui.tools_preview_lines", "int",
-                "Lines of a result, a diff or a program shown before the rest is hidden at ui.tools 1 and 2."),
-    SettingSpec("ui.markdown", "bool",
-                "Render assistant Markdown on a terminal: finished blocks are "
-                "highlighted once, the open block stays live. Off writes the text "
-                "as it arrives. Output that is not a terminal is always plain text."),
-    SettingSpec("theme.accent", "str",
-                "Tool name and the mark of a running call in a tool exchange, #rrggbb."),
-    SettingSpec("theme.ok", "str",
-                "Mark of a finished call in a tool exchange, #rrggbb."),
-    SettingSpec("theme.error", "str",
-                "Mark of a failed call and error text in a tool exchange, #rrggbb."),
-    SettingSpec("theme.warn", "str",
-                "Standard error lines in a tool exchange, #rrggbb."),
-    SettingSpec("theme.dim", "str",
-                "Arguments, line numbers and metrics in a tool exchange, #rrggbb."),
-    SettingSpec("theme.panel", "str",
-                "Background of an output panel in a tool exchange, #rrggbb."),
-    SettingSpec("theme.panel_text", "str",
-                "Text of an output panel in a tool exchange, #rrggbb."),
-    SettingSpec("theme.added", "str",
-                "Added lines of a diff in a tool exchange, #rrggbb."),
-    SettingSpec("theme.removed", "str",
-                "Removed lines of a diff in a tool exchange, #rrggbb."),
-    SettingSpec("theme.code", "str",
-                "Inline code in an answer, drawn on theme.panel, #rrggbb."),
-    SettingSpec("ui.resume_exchanges", "int",
-                "Exchanges of a resumed session the REPL shows before its prompt, "
-                "drawn as a turn draws them. 0 shows none."),
-    SettingSpec("EDITING_MODE", "str",
-                "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
-                "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends.", group="input"),
-    SettingSpec("PASTE_IMAGE_KEY", "str",
-                "Key that pastes the clipboard image into the input line as [image #N]; "
-                "the image is sent with the line like an @path image. prompt_toolkit "
-                "key names, space-separated: c-v, escape v. Unset binds no key.", group="input"),
-    SettingSpec("PASTE_COLLAPSE_LINES", "int",
-                "A bracketed paste of more lines than this shows in the input line "
-                "as one [paste #N +X lines] marker; the line sends the full text. "
-                "0 = no line limit.", group="input"),
-    SettingSpec("PASTE_COLLAPSE_CHARS", "int",
-                "A bracketed paste of more characters than this shows as one "
-                "[paste #N X chars] marker; the line sends the full text. 0 = no "
-                "character limit. Both 0 never collapses a paste.", group="input"),
+    SettingSpec("ui.reasoning", "int"),
+    SettingSpec("ui.net", "int"),
+    SettingSpec("ui.status_bg", "str"),
+    SettingSpec("ui.status_fg", "str"),
+    SettingSpec("ui.tools", "int"),
+    SettingSpec("ui.tools_quiet", "json"),
+    SettingSpec("ui.shell_quiet", "json"),
+    SettingSpec("ui.tools_preview_lines", "int"),
+    SettingSpec("ui.markdown", "bool"),
+    SettingSpec("theme.accent", "str"),
+    SettingSpec("theme.ok", "str"),
+    SettingSpec("theme.error", "str"),
+    SettingSpec("theme.warn", "str"),
+    SettingSpec("theme.dim", "str"),
+    SettingSpec("theme.panel", "str"),
+    SettingSpec("theme.panel_text", "str"),
+    SettingSpec("theme.added", "str"),
+    SettingSpec("theme.removed", "str"),
+    SettingSpec("theme.code", "str"),
+    SettingSpec("ui.resume_exchanges", "int"),
+    SettingSpec("EDITING_MODE", "str", group="input"),
+    SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
+    SettingSpec("PASTE_COLLAPSE_LINES", "int", group="input"),
+    SettingSpec("PASTE_COLLAPSE_CHARS", "int", group="input"),
     SettingSpec("PASTE_IMAGE_COMMAND", "str",
-                "Command that prints the clipboard image. Unset = `wl-paste --type "
-                "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
-                "under X11.",
                 empty=EMPTY_NONE, group="input"),
     # --- history ---
     SettingSpec("HISTORY_FILE", "str",
-                "Prompt history: every line sent at a REPL prompt, one JSON object per "
-                "line with ts, cwd, session, agent and text, shared by every js run. "
-                "Unset = ~/.js/state/history.jsonl. Read when the REPL starts.",
                 empty=EMPTY_NONE, group="history"),
-    SettingSpec("HISTORY_ORDER", "str",
-                "Order Up offers prompts in. last: every prompt, newest first. cwd: "
-                "the prompts typed in the current directory first, newest first, "
-                "then the rest. The history_search key, Ctrl-R, searches all of them "
-                "either way. Read when the REPL starts.", group="history"),
-    SettingSpec("HISTORY_SIZE", "int",
-                "Newest prompts loaded from HISTORY_FILE for Up and Ctrl-R. Read when "
-                "the REPL starts.", group="history"),
+    SettingSpec("HISTORY_ORDER", "str", group="history"),
+    SettingSpec("HISTORY_SIZE", "int", group="history"),
     # --- keys ---
     SettingSpec("KEYBINDS_FILE", "str",
-                "Key bindings file: `bind KEY... ACTION` and `unbind KEY...` lines over "
-                "the defaults; a bad line is one error at startup and is skipped. "
-                "Unset = ~/.js/keys. Actions: submit, history_search, ex_open, ex_run, "
-                "ex_cancel, interrupt, eof, suspend, reasoning_toggle, redraw, "
-                "scroll_up, scroll_down, complete. Read when the REPL starts.",
                 empty=EMPTY_NONE, group="history"),
     # --- tags ---
     SettingSpec("tags.file", "str",
-                "Session tag list: one `name: description` line per tag. Unset = "
-                "~/.js/tags.yaml when it exists, else js/tags.yaml, the stock list js ships. "
-                "A named file that is missing, or no TYPESAFE_API_KEY, means no tagging. "
-                "Editing the list retags every shown session at the next session end.",
                 empty=EMPTY_NONE),
-    SettingSpec("tags.threshold", "float",
-                "Lowest Jev score, 0 to 1, a tag needs to be kept on a session."),
-    SettingSpec("tags.max", "int",
-                "Most tags a session keeps, highest score first."),
-    SettingSpec("tags.messages", "int",
-                "How many of a session's last operator and model messages Jev reads "
-                "to tag it. Tool output is never sent."),
-    SettingSpec("tags.message_chars", "int",
-                "Longest text sent per message when tagging; longer messages are cut."),
-    SettingSpec("tags.model", "str",
-                "TypeSafe model that judges session tags."),
+    SettingSpec("tags.threshold", "float"),
+    SettingSpec("tags.max", "int"),
+    SettingSpec("tags.messages", "int"),
+    SettingSpec("tags.message_chars", "int"),
+    SettingSpec("tags.model", "str"),
     # --- provider ---
-    SettingSpec("PROVIDER", "str",
-                "Explicit js provider id, e.g. deepseek, openai-codex, ollama.", empty=EMPTY_NONE, aliases=("provider",), group="provider"),
-    SettingSpec("BASE_URL", "str",
-                "Explicit provider base URL; unset = provider default.", empty=EMPTY_NONE, aliases=("baseurl",), group="provider"),
-    SettingSpec("API_KEY", "str",
-                "Explicit provider API key; unset = env/login default.", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="provider"),
+    SettingSpec("PROVIDER", "str", empty=EMPTY_NONE, aliases=("provider",), group="providers"),
+    SettingSpec("BASE_URL", "str", empty=EMPTY_NONE, aliases=("baseurl",), group="providers"),
+    SettingSpec("API_KEY", "str", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="providers"),
     SettingSpec("EXTRA_PARAMS", "map",
-                "Free-form extra params passed through to the provider SDK.",
-                empty=EMPTY_NONE, group="provider"),
+                empty=EMPTY_NONE, group="providers"),
     # --- limits ---
-    SettingSpec("TURN_ROUNDS_MAX", "int",
-                "Max tool calls per turn before the loop gives up.", group="limits"),
-    SettingSpec("REPLY_TOOL_CALLS_MAX", "int",
-                "Maximum distinct tool calls accepted from one assistant message; "
-                "duplicates are collapsed before this ceiling is applied.", group="limits"),
-    SettingSpec("SHELL_OUTPUT_MAX", "int",
-                "Shell output shown per call, stdout and stderr together. Past it, the "
-                "head and tail are shown and the whole stream is written to a file.", group="limits"),
-    SettingSpec("TOOL_RESULT_INLINE_MAX", "int",
-                "Results larger than this are written to a file and replaced with a "
-                "preview plus the path, instead of being clipped and lost. 0 = off.", group="limits"),
-    SettingSpec("TOOL_RESULT_MAX", "int",
-                "Hard cap on any tool result string.", group="limits"),
-    SettingSpec("FETCH_TIMEOUT", "int",
-                "fetch() whole-request deadline in seconds, and the per-call timeout for the "
-                "web-search backends' JSON calls.", group="limits"),
-    SettingSpec("SHELL_ENV_KEEP", "json",
-                "Environment-variable names inherited by shell() without naming "
-                "them per call in env; a JSON string list.", group="limits"),
-    SettingSpec("BROWSE_TIMEOUT", "int",
-                "browse() page budget in seconds. obscura is told to give up one "
-                "second earlier so its own graceful navigation-timeout path runs "
-                "and partial content survives.", group="limits"),
-    SettingSpec("DOWNLOAD_TIMEOUT", "int",
-                "aria2c transfer timeout in seconds for saved, binary, and oversized "
-                "fetch() responses. Downloads are bounded by size, not by how fast a "
-                "page renders.", group="limits"),
-    SettingSpec("DOWNLOAD_MAX", "int",
-                "Size ceiling for fetch(save=...) in bytes. 0 = unlimited: a save "
-                "streams to disk and never lands in memory, so an ISO or a model "
-                "weight is a normal download. Set a number only to impose a quota.", group="limits"),
-    SettingSpec("INLINE_CODE_TIMEOUT", "int",
-                "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.", group="limits"),
-    SettingSpec("READ_LINES_MAX", "int",
-                "Maximum lines returned by read().", group="limits"),
-    SettingSpec("FILE_BYTES_MAX", "int",
-                "Maximum file bytes read by fs tools.", group="limits"),
-    SettingSpec("ATTACHMENT_MAX", "int",
-                "Most bytes of a text file attached to a prompt; a larger file is "
-                "truncated. TOOL_RESULT_MAX also caps it.", group="limits"),
-    SettingSpec("READ_BYTES_MAX", "int",
-                "Maximum file bytes for a whole-file read(); ignored when the call "
-                "passes a line or byte range, so ranged reads work on any size file.", group="limits"),
-    SettingSpec("PARALLEL_RESULTS_MAX", "int",
-                "Aggregate cap on all tool results returned by one batch of parallel "
-                "calls; the largest results are clipped first. 0 = unlimited.", group="limits"),
-    SettingSpec("SUBAGENT_DEPTH_MAX", "int",
-                "Maximum recursive task/subagent depth.", group="limits"),
-    SettingSpec("SUBAGENT_WORKERS_MAX", "int",
-                "Maximum concurrent subagent workers per task call; minimum 1.", group="limits"),
+    SettingSpec("TURN_ROUNDS_MAX", "int", group="limits"),
+    SettingSpec("REPLY_TOOL_CALLS_MAX", "int", group="limits"),
+    SettingSpec("SHELL_OUTPUT_MAX", "int", group="limits"),
+    SettingSpec("TOOL_RESULT_INLINE_MAX", "int", group="limits"),
+    SettingSpec("TOOL_RESULT_MAX", "int", group="limits"),
+    SettingSpec("FETCH_TIMEOUT", "int", group="limits"),
+    SettingSpec("SHELL_ENV_KEEP", "json", group="limits"),
+    SettingSpec("BROWSE_TIMEOUT", "int", group="limits"),
+    SettingSpec("DOWNLOAD_TIMEOUT", "int", group="limits"),
+    SettingSpec("DOWNLOAD_MAX", "int", group="limits"),
+    SettingSpec("INLINE_CODE_TIMEOUT", "int", group="limits"),
+    SettingSpec("READ_LINES_MAX", "int", group="limits"),
+    SettingSpec("FILE_BYTES_MAX", "int", group="limits"),
+    SettingSpec("ATTACHMENT_MAX", "int", group="limits"),
+    SettingSpec("READ_BYTES_MAX", "int", group="limits"),
+    SettingSpec("PARALLEL_RESULTS_MAX", "int", group="limits"),
+    SettingSpec("SUBAGENT_DEPTH_MAX", "int", group="limits"),
+    SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
     # --- swarm ---
-    SettingSpec("SWARM_ACTIVE_MAX", "int",
-                "How many agents of an in-process swarm may be mid-turn at once; 0 is no cap.", group="shell"),
+    SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     # --- kernel ---
-    SettingSpec("PYTHON_KERNEL", "bool",
-                "Enable the persistent Python kernel and toolbox. Requires the kernel extra.", group="shell"),
+    SettingSpec("PYTHON_KERNEL", "bool", group="shell"),
     SettingSpec("kernel.verbosity", "str",
-                "How much of each kernel/toolbox call is rendered to your terminal. "
-                "quiet: errors and interrupts only. normal: code, output, timing, "
-                "namespace. verbose: stdout, stderr and display split out, plus kernel "
-                "lifecycle and toolbox activity. Affects only what you see; the model "
-                "always receives the full result.",
                 env="JS_KERNEL_VERBOSITY"),
-    SettingSpec("kernel.render_max_lines", "int",
-                "Line cap per section of that terminal render, so a 4000-line cell "
-                "cannot scroll the screen away. The hidden count is always shown, and "
-                "the model still gets the untrimmed output."),
-    SettingSpec("SHELL_PROGRAM", "str",
-                "Program the `shell` tool runs commands with: a name looked up on "
-                "PATH, or a path. bash and zsh run with `-o pipefail`, so a pipeline "
-                "fails when any stage fails.", group="shell"),
-    SettingSpec("SHELL_WAIT", "int",
-                "Seconds a `shell` call waits for its command before returning a "
-                "handle to poll. The command keeps running; nothing is killed by "
-                "this wait.", group="shell"),
-    SettingSpec("PYTHON_KERNEL_WAIT", "int",
-                "Seconds a `kernel` call waits for a submitted cell before returning "
-                "a handle to poll. The cell keeps running; nothing is interrupted by "
-                "this wait.", group="shell"),
+    SettingSpec("kernel.render_max_lines", "int"),
+    SettingSpec("SHELL_PROGRAM", "str", group="shell"),
+    SettingSpec("SHELL_WAIT", "int", group="shell"),
+    SettingSpec("PYTHON_KERNEL_WAIT", "int", group="shell"),
     # --- jail ---
-    SettingSpec("JAIL_BIND", "json",
-                "Under `js -C DIR`, more paths the jail shows: a JSON list of "
-                "entries, absolute or starting with ~. \"path\" is read-only and "
-                "\"path:rw\" read-write. A path that does not exist is skipped. Commands see "
-                "each at its real path; the file tools may read it, and write it when "
-                "it is :rw.", group="shell"),
+    SettingSpec("JAIL_BIND", "json", group="shell"),
     # --- runtime ---
-    SettingSpec("DEBUG_LOG", "bool",
-                "Append per-event records to state/<agent>/debug.log.", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("runtime.trace", "bool",
-                "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
-    SettingSpec("PARALLEL_TOOLS_MAX", "int",
-                "Most read-only tool calls of one model response that run at once: "
-                "read, fs_search, the web searches, a GET fetch. A call that writes "
-                "runs alone, after the calls before it. 1 runs every call in turn.", group="runtime"),
-    SettingSpec("RETRY_COUNT_MAX", "int",
-                "Retries of one model request after a retryable failure: a 429, a "
-                "5xx, a dropped or idle stream. Each waits what the provider's "
-                "Retry-After or retry-after-ms header asks, else 1s, 2s, 4s ... up to "
-                "16s. 0 fails on the first error.", group="runtime"),
-    SettingSpec("RETRY_WAIT_MAX", "float",
-                "Longest Retry-After wait honoured. A provider asking for longer "
-                "fails the request at once. 0 honours any wait.", group="runtime"),
-    SettingSpec("STREAM_IDLE_TIMEOUT", "float",
-                "Seconds a model request may go without a response byte before it "
-                "is aborted and retried under RETRY_COUNT_MAX. SSE keep-alive "
-                "comments count as bytes. 0 waits forever.", group="runtime"),
-    SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int",
-                "A reply cut off by its output-token cap is sent again once with "
-                "this cap, when it is larger than the one used and not above the "
-                "model's known output limit. 0 never resends.", group="runtime"),
-    SettingSpec("OUTPUT_RESUMES_MAX", "int",
-                "After a reply is cut off by its output-token cap, how many times per "
-                "turn the partial reply is kept and the model is told to resume. 0 "
-                "ends the turn on the cutoff.", group="runtime"),
-    SettingSpec("STEER_MODE", "str",
-                "What a line typed while a turn runs does. now: it reaches the model "
-                "at the turn's next tool boundary, as a user message. A turn with no "
-                "boundary left gets it after it ends, as with batch. batch: every "
-                "line typed during the turn goes in as ONE message after it ends. "
-                "one: each line is its own turn, in order.", group="runtime"),
-    SettingSpec("REQUEST_LOG", "bool",
-                "Append the full request trace to ~/.js/logs/<agent>/<session>.log: the "
-                "unclipped system prompt, tool-schema JSON, and the messages sent each call. "
-                "This trace never prints to the terminal, only to the file.", empty=EMPTY_OFF, group="runtime"),
-    SettingSpec("REQUEST_LOG_DIR", "str",
-                "Directory for the debug autolog; unset = ~/.js/logs/<agent>.", empty=EMPTY_NONE, group="runtime"),
-    SettingSpec("TRANSCRIPT_LOG", "bool",
-                "Append the visible terminal/TUI transcript to "
-                "~/.js/logs/transcript/<agent>/<session>.log: what printed to the user, with "
-                "IRC-style <USER>/<APE> tags for user/assistant turns.", empty=EMPTY_OFF, group="runtime"),
-    SettingSpec("TRANSCRIPT_LOG_DIR", "str",
-                "Directory for the visible transcript log; unset = ~/.js/logs/transcript/<agent>.", empty=EMPTY_NONE, group="runtime"),
-    SettingSpec("INLINE_CODE", "bool",
-                "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
-                "prompt files and inject their stdout. This runs arbitrary code from "
-                "prompt files; opt out with --im-a-pussy or set this off.", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),
+    SettingSpec("RETRY_COUNT_MAX", "int", group="runtime"),
+    SettingSpec("RETRY_WAIT_MAX", "float", group="runtime"),
+    SettingSpec("STREAM_IDLE_TIMEOUT", "float", group="runtime"),
+    SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int", group="runtime"),
+    SettingSpec("OUTPUT_RESUMES_MAX", "int", group="runtime"),
+    SettingSpec("STEER_MODE", "str", group="runtime"),
+    SettingSpec("REQUEST_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("REQUEST_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("INLINE_CODE", "bool", empty=EMPTY_OFF, group="runtime"),
     # --- events ---
-    SettingSpec("EXEC_TIMEOUT", "int",
-                "Seconds an `exec` command, typed or run by an `on` handler, may run "
-                "before its process group is killed; 0 is no limit. A handler's "
-                "command holds up the event that ran it for that long.", group="events"),
-    SettingSpec("EXEC_OUTPUT_MAX", "int",
-                "Bytes of an `exec` command's stdout and stderr kept; the stdout "
-                "reaches the model as a js-reminder on the next message. 0 keeps all.", group="events"),
+    SettingSpec("EXEC_TIMEOUT", "int", group="events"),
+    SettingSpec("EXEC_OUTPUT_MAX", "int", group="events"),
     # --- compact ---
-    SettingSpec("COMPACTION_AUTO", "bool",
-                "Automatic cache-aware context compaction.", empty=EMPTY_OFF, group="compaction"),
-    SettingSpec("COMPACTION_LOG_DIR", "str",
-                "Full compaction flight snapshots; unset = logs/<agent>/compactions.", empty=EMPTY_NONE, group="compaction"),
-    SettingSpec("CONTEXT_SIZE_PER_MODEL", "map",
-                "Per-model context windows, keyed 'provider/model' or 'model'. "
-                "'provider/model' is the more specific. For surfaces models.dev has no row for — a subscription "
-                "endpoint serving the same model id as the public API with a different "
-                "usable window.", empty=EMPTY_NONE, group="context"),
+    SettingSpec("COMPACTION_AUTO", "bool", empty=EMPTY_OFF, group="compaction"),
+    SettingSpec("COMPACTION_LOG_DIR", "str", empty=EMPTY_NONE, group="compaction"),
+    SettingSpec("CONTEXT_SIZE_PER_MODEL", "map", empty=EMPTY_NONE, group="context"),
     SettingSpec("CONTEXT_SIZE_UNKNOWN", "int",
-                "Window to assume ONLY for models whose size cannot be resolved. Unlike "
-                "context_window this does not override models that are known, so covering "
-                "one unknown model no longer shrinks every known one.",
                 empty=EMPTY_NONE, group="context"),
-    SettingSpec("COMPACTION_WARN_AT", "float",
-                "Notify once when context reaches this fraction.", group="compaction"),
-    SettingSpec("COMPACTION_START_AT", "float",
-                "Auto-compact at this fullness fraction.", group="compaction"),
-    SettingSpec("COMPACTION_FORCE_AT", "float",
-                "Force compact at this fullness fraction.", group="compaction"),
-    SettingSpec("COMPACTION_HEADROOM_TOKENS", "int",
-                "Extra input-token headroom reserved by preflight/mid-turn compaction.", group="compaction"),
-    SettingSpec("COMPACTION_REPLY_RESERVE_TOKENS", "int",
-                "Ceiling on the reply headroom subtracted before the fullness fractions; "
-                "the actual reserve is min(model max_output_tokens, this). Stops a model "
-                "declaring a 128k output cap from eating a third of the window.", group="compaction"),
-    SettingSpec("COMPACTION_KEEP_RECENT_TOKENS", "int",
-                "Recent tail budget retained after compaction.", group="compaction"),
-    SettingSpec("COMPACTION_MIN_SAVINGS_TOKENS", "int",
-                "Skip compaction unless estimated savings exceeds this.", group="compaction"),
-    SettingSpec("COMPACTION_KEEP_TOOL_RESULTS", "int",
-                "Tool results left intact when an over-budget request clears old "
-                "tool-result bodies before falling back to a summary.", group="compaction"),
-    SettingSpec("COMPACTION_REATTACH_FILES_MAX", "int",
-                "Recently read files re-attached after a summary compaction, "
-                "newest first. 0 = none.", group="compaction"),
-    SettingSpec("COMPACTION_REATTACH_TOKENS_MAX", "int",
-                "Estimated tokens all re-attached files may use together.", group="compaction"),
-    SettingSpec("COMPACTION_REATTACH_FILE_TOKENS_MAX", "int",
-                "A recently read file larger than this many estimated tokens is "
-                "named after a compaction but not re-attached.", group="compaction"),
-    SettingSpec("COMPACTION_CHARS_PER_TOKEN", "float",
-                "Fallback/self-calibrating character-to-token estimate.", group="compaction"),
-    SettingSpec("COMPACTION_EXTERNAL_MODEL", "str",
-                "Model used to write the compaction summary; 'same' = active model.", group="compaction"),
-    SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int",
-                "Max tokens for the compaction summary. Capped at 8192.", group="compaction"),
-    SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int",
-                "Longest tool result, in characters, that a summary request carries "
-                "whole; a longer one keeps its head and tail. 0 = whole results.", group="compaction"),
-    SettingSpec("COMPACTION_FAILURES_MAX", "int",
-                "Failed automatic summaries in a row that pause automatic compaction. "
-                "A successful /compact resumes it.", group="compaction"),
-    SettingSpec("COMPACTION_CACHE_TTL", "int",
-                "Prompt-cache lifetime. An over-budget request clears old tool results "
-                "first when the last request is at least this old; before that it "
-                "summarizes earlier turns first. 0 = always clear first.", group="compaction"),
+    SettingSpec("COMPACTION_WARN_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_START_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_FORCE_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_HEADROOM_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_REPLY_RESERVE_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_RECENT_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_MIN_SAVINGS_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_TOOL_RESULTS", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILES_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILE_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_CHARS_PER_TOKEN", "float", group="compaction"),
+    SettingSpec("COMPACTION_EXTERNAL_MODEL", "str", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_FAILURES_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_CACHE_TTL", "int", group="compaction"),
     SettingSpec("COMPACTION_HINT_COMMAND", "str",
-                "Optional shell command whose stdout guides compaction.",
                 empty=EMPTY_NONE, group="compaction"),
     # --- subagents ---
     SettingSpec("SUBAGENT_INHERIT_MODEL", "bool",
-                "Subagents inherit the parent's model when true; else use the agent's own primary.",
                 empty=EMPTY_OFF, group="subagents"),
     SettingSpec("SUBAGENT_MODEL_LOCK", "bool",
-                "When true, the main agent cannot pick a subagent model via the task tool.",
                 empty=EMPTY_OFF, group="subagents"),
     # --- tools ---
     SettingSpec("TOOL_ALIASES", "json",
-                "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
                 empty=EMPTY_NONE, group="tools"),
-    SettingSpec("HTTP_USER_AGENT", "str",
-                "User-Agent header fetch and the web-search backends send when a call "
-                "names none.", group="tools"),
-    SettingSpec("TERMINAL_COLUMNS", "int",
-                "Columns of a terminal_session started without cols.", group="tools"),
-    SettingSpec("TERMINAL_ROWS", "int",
-                "Rows of a terminal_session started without rows.", group="tools"),
+    SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
+    SettingSpec("TERMINAL_COLUMNS", "int", group="tools"),
+    SettingSpec("TERMINAL_ROWS", "int", group="tools"),
     # --- lsp ---
-    SettingSpec("LSP_SERVERS", "json",
-                "Language servers the `lsp` tool may start: a JSON list of "
-                "{name, command, extensions, roots}. For a file, the first entry "
-                "whose extensions hold its extension and whose command[0] is on "
-                "PATH is used. roots are the files that mark a workspace root; "
-                "without one, the nearest directory holding .git is the root.", group="lsp"),
-    SettingSpec("LSP_TIMEOUT", "int",
-                "Seconds an `lsp` call waits for its language server: to start, "
-                "to answer a request, or to publish diagnostics.", group="lsp"),
+    SettingSpec("LSP_SERVERS", "json", group="lsp"),
+    SettingSpec("LSP_TIMEOUT", "int", group="lsp"),
     # --- notebook ---
-    SettingSpec("NOTEBOOK_OUTPUT_LINES_MAX", "int",
-                "Lines of each cell output a `read` of an .ipynb shows; the rest "
-                "is counted. 0 shows only what kind each output is.", group="notebook"),
+    SettingSpec("NOTEBOOK_OUTPUT_LINES_MAX", "int", group="notebook"),
     # --- mcp ---
     SettingSpec("MCP_SERVERS", "json",
-                "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
                 empty=EMPTY_NONE, secret=True, group="mcp"),
     SettingSpec("MCP_AGENT_POLICY", "json",
-                "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
                 empty=EMPTY_NONE, group="mcp"),
-    SettingSpec("MCP_TIMEOUT", "float",
-                "Seconds an MCP request waits for its server's reply: initialize, "
-                "list, call or read.", group="mcp"),
+    SettingSpec("MCP_TIMEOUT", "float", group="mcp"),
     # --- sampling ---
     SettingSpec("TEMPERATURE", "float",
-                "Provider-default sampling temperature; unset = do not send.",
                 empty=EMPTY_UNSET, group="sampling"),
     SettingSpec("TOP_P", "float",
-                "Provider-default nucleus sampling top_p; unset = do not send.",
                 empty=EMPTY_UNSET, group="sampling"),
     SettingSpec("TOP_K", "int",
-                "Provider-default top_k sampling; unset = do not send.",
                 empty=EMPTY_UNSET, group="sampling"),
     SettingSpec("REPETITION_PENALTY", "float",
-                "Provider-default repetition penalty; unset = do not send.",
                 empty=EMPTY_UNSET, group="sampling"),
     SettingSpec("PRESENCE_PENALTY", "float",
-                "Provider-default presence penalty; unset = do not send.",
                 empty=EMPTY_UNSET, group="sampling"),
 )
 

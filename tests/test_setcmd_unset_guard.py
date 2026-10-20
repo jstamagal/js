@@ -1,5 +1,5 @@
 """apply_unset mirrors apply_set's guard: children of non-map knobs are not
-unset targets, and the "already unset" message follows the real change.
+unset targets, and the the value as it stands message follows the real change.
 
 ALL-CLAIMS setcmd.py HIGH x2 + MED: `set -MCP_SERVERS.foo` leaked secret
 headers with raw str(after) and mutated nothing-but-said-changed; unsetting
@@ -7,6 +7,7 @@ a child of a scalar knob (MODEL.child) was accepted while setting the
 same path errors.
 """
 
+from js import messages as msgs
 from js import setcmd
 
 
@@ -29,20 +30,20 @@ def test_unset_rejects_children_of_scalar_knob_like_apply_set():
 
 
 def test_unset_message_follows_changed():
-    # restored from baseline: changed, so the value line, not "already unset"
+    # restored from baseline: changed, so the value line, not the value as it stands
     restored = setcmd.apply_unset({}, "model", {"MODEL": "basemodel"})
     assert restored.changed
-    assert "Already unset" not in restored.lines[0]
+    assert restored.lines == [msgs.SETTING_CHANGED.line(colour=False, key="MODEL", value="basemodel")]
 
-    # nothing to do: not changed, "already unset"
+    # nothing to do: not changed, the value as it stands
     same = setcmd.apply_unset({"MODEL": "basemodel"}, "model", {"MODEL": "basemodel"})
     assert not same.changed
-    assert "Already unset" in same.lines[0]
+    assert same.lines == [msgs.SETTING_IS.line(colour=False, key="MODEL", value="basemodel")]
 
-    # absent everywhere: not changed, "already unset"
+    # absent everywhere: not changed, the value as it stands
     absent = setcmd.apply_unset({}, "model", {})
     assert not absent.changed
-    assert "Already unset" in absent.lines[0]
+    assert absent.lines == [msgs.SETTING_IS.line(colour=False, key="MODEL", value="<none>")]
 
 
 def test_unset_of_map_child_still_works():

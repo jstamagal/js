@@ -16,6 +16,7 @@ import shutil
 import sys
 import signal
 import threading
+import textwrap
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -956,7 +957,7 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     eff_sampling = _sampling_for_turn(turn_cfg, prompt_spec, state.get("sampling_cli", Sampling()))
     return _live_settings_overlay(
         state["settings"],
-        live_model=state.get("model"),
+        live_model=turn_cfg.model,
         model_source=state.get("model_source"),
         provider_id=provider_id,
         provider_base_url=turn_cfg.provider_base_url,
@@ -1497,17 +1498,18 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
         _sync_provider_from_live_settings(state, keys)
     if _changed_lock_subagent_model_key(keys) or "PYTHON_KERNEL" in keys:
         _sync_tool_registry_from_live_settings(cfg, state)
-    for out in result.lines:
+    lines = result.lines
+    if "BANNER" in keys:
+        # The answer to `set BANNER` already speaks under the new banner.
+        old = msgs.BANNER
+        msgs.set_banner(str(settings.knob(state["settings"], "BANNER")))
+        lines = [msgs.banner(line[len(old) + 1:]) if line.startswith(old + " ") else line for line in lines]
+    for out in lines:
         print(out)
     if result.error:
         return result.error
     if any(key.startswith("CONTEXT_SIZE") for key in keys):
-        active = _cfg_for_live_state(cfg, state)
-        runtime.install_context_window_overrides(active)
-        window = compaction.configured_context_window(
-            active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
-        )
-        msgs.say(msgs.CONTEXT_WINDOW_SET, window=window, model=active.model)
+        runtime.install_context_window_overrides(_cfg_for_live_state(cfg, state))
     return None
 
 
@@ -1887,7 +1889,23 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _help_set(name: str) -> str | None:
+    """`/help set NAME`: the setting's help text, from `js/help/set.txt`."""
+    if not name:
+        return msgs.USAGE.said(usage="/help set NAME")
+    spec = settings.spec_for(name)
+    if spec is None:
+        return msgs.UNKNOWN_SETTING.said(key=name)
+    msgs.say(msgs.HELP_SETTING, key=spec.key.upper())
+    for line in textwrap.wrap(spec.doc, 72):
+        msgs.say(msgs.HELP_SETTING_LINE, text=line)
+    return None
+
+
 def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
+    topic, _, rest = arg.strip().partition(" ")
+    if topic.lower() == "set":
+        return _help_set(rest.strip())
     rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
     rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
     rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.text(path=command.path, description=command.description))
@@ -2095,7 +2113,7 @@ def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
 _LOAD = Command(_cmd_load, "load <file>", msgs.CMD_LOAD, complete="path")
 
 COMMANDS: dict[str, Command] = {
-    "help": Command(_cmd_help, "help", msgs.CMD_HELP),
+    "help": Command(_cmd_help, "help [set NAME]", msgs.CMD_HELP),
     "set": Command(_cmd_set, "set [key [value]]", msgs.CMD_SET,
                    complete="set"),
     "show": Command(_cmd_show, "show [key]", msgs.CMD_SHOW, complete="keys"),
@@ -2279,14 +2297,21 @@ def _config_owned(raw: str) -> bool:
     return parsed is None or setcmd.config_owns(parsed[0])
 
 
+def _agent_model_applies(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
+    """Whether the active agent's agent.yaml `model:` picks the model: it
+    names one and the operator pinned none (`_apply_agent_model`)."""
+    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
+    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
+    return bool(agent_model) and model is None and not pinned
+
+
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> Config:
     """Apply the active agent's agent.yaml `model:` through the resolver, unless
     the operator pinned a model. -m, a JS_* env var and --extra always pin; a
     jsrc `MODEL` pins only when ``config_pins``."""
-    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
-    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
-    if not agent_model or model is not None or pinned:
+    if not _agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
         return cfg
+    agent_model = prompt_spec.model
     route = routing.resolve_model_route(
         agent_model,
         configured_provider_id=cfg.provider_id,
@@ -3447,6 +3472,19 @@ def _print_skill_catalog() -> None:
     msgs.say(msgs.SKILL_HINT)
 
 
+def _echoes(line: str, state: dict) -> bool:
+    """Whether a typed line shows in the scrollback: not when dispatch
+    (`_handle_command`) takes it as a command, a command or alias from the
+    table or an invalid one; yes for what goes to the model, `/skill`, a
+    markdown command and a slash-led message (`/usr/bin/x is broken`)."""
+    if not line.startswith("/") or _is_skill_invocation(line):
+        return True
+    verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
+    if verb in COMMANDS or verb in (state.get("aliases") or {}):
+        return False
+    return not _is_unknown_command(line)
+
+
 def _is_skill_invocation(line: str) -> bool:
     """`/skill <name> [request]`: a turn whose user message carries the skill."""
     words = line.split(maxsplit=1)
@@ -3673,6 +3711,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         status_colours=lambda: _status_colours(state),
         editing_mode=lambda: settings.knob(state["settings"], "EDITING_MODE"),
+        echo=lambda line: _echoes(line, state),
         on_ex=on_ex,
         key_bindings=merge_key_bindings([
             clipimage.key_bindings(lambda: state["settings"]),
@@ -3760,8 +3799,10 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         "model": model if model is not None else cfg.model,
         # Where state["model"] came from, for the effective /set view. A --model
         # flag never lands in the settings store, so record it here so /set can
-        # annotate `MODEL = ... (live: --model flag)`.
-        "model_source": "--model flag" if model is not None else None,
+        # annotate `MODEL = ... (live: --model flag)`; agent.yaml's `model:` is
+        # recorded the same way.
+        "model_source": "--model flag" if model is not None else (
+            f"agent {cfg.agent_id}" if _agent_model_applies(cfg, prompt_spec, None) else None),
         "provider_id": cfg.provider_id,
         "provider_base_url": cfg.provider_base_url,
         "provider_api_key": cfg.provider_api_key,
@@ -3781,6 +3822,38 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
     return state
 
 
+def _repl_prompt_session(cfg: Config, keymap, completer) -> PromptSession:
+    """The prompt session of the REPL: its history and completer serve both
+    REPLs; the --blocking one reads from it. It erases each sent line, and
+    `_blocking_echo` prints back the ones that are messages."""
+    return PromptSession(
+        history=prompt_history.PromptHistory(
+            cfg.history_file,
+            lambda: _prompt_origin(cfg),
+            cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
+            limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
+            state_root=_paths.state_root(),
+        ),
+        key_bindings=keys_mod.prompt_bindings(keymap),
+        search_ignore_case=True,
+        completer=completer,
+        complete_while_typing=False,  # Tab-triggered, never auto-pops
+        complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
+        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
+        erase_when_done=True,
+    )
+
+
+def _blocking_echo(raw: str, state: dict) -> str | None:
+    """The line the --blocking REPL leaves for a sent line ``raw``: the
+    prompt and the line as typed, or None when it ran as a command
+    (`_echoes`). The prompt session erases its own copy."""
+    line = pastes.expand(raw).strip()
+    if not line or not _echoes(line, state):
+        return None
+    return display_mod.PROMPT + raw
+
+
 def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     """The --blocking REPL: read a line from ``session``, run it as a command
     or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
@@ -3795,7 +3868,10 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
     while state["running"]:
         try:
-            line = pastes.expand(session.prompt(ANSI(display_mod.PROMPT))).strip()
+            raw = session.prompt(ANSI(display_mod.PROMPT))
+            if (echo := _blocking_echo(raw, state)) is not None:
+                print(echo)
+            line = pastes.expand(raw).strip()
             interrupt_armed = False
         except KeyboardInterrupt:
             # One stray ^C at the prompt should not end a session that took real
@@ -4600,21 +4676,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         spell=replcomplete.hunspell_suggest,
         bare_words=QUIT_WORDS,
     )
-    session = PromptSession(
-        history=prompt_history.PromptHistory(
-            cfg.history_file,
-            lambda: _prompt_origin(cfg),
-            cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
-            limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
-            state_root=_paths.state_root(),
-        ),
-        key_bindings=keys_mod.prompt_bindings(keymap),
-        search_ignore_case=True,
-        completer=completer,
-        complete_while_typing=False,  # Tab-triggered, never auto-pops
-        complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
-        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
-    )
+    session = _repl_prompt_session(cfg, keymap, completer)
 
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)

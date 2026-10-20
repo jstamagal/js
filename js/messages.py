@@ -27,7 +27,8 @@ from typing import Any
 
 from . import colors as C
 
-# The banner slot: what starts every line the client says about its own state.
+# The banner slot: what starts every line the client says about its own
+# state. The BANNER setting sets it (`set_banner`).
 BANNER = "***"
 
 INFO = "info"
@@ -82,6 +83,12 @@ class Said(str):
 def banner(text: str) -> str:
     """`text` behind the banner slot."""
     return f"{BANNER} {text}"
+
+
+def set_banner(value: str) -> None:
+    """Make ``value``, the BANNER setting, the banner slot."""
+    global BANNER
+    BANNER = value
 
 
 def _paint(template: str, fields: dict[str, Any], color: str) -> str:
@@ -231,7 +238,6 @@ MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
 SAVE_FAILED = Message("Not saved: {error}", GRAVE)
 SAVED = Message("Saved {lines} to {path}")
-CONTEXT_WINDOW_SET = Message("Context window: {window} for {model} from the next request.")
 NO_ALIASES = Message("No aliases.", banner=False)
 ALIAS_ROW = Message("alias {name} {body}", banner=False)
 NO_ALIAS = Message("No alias {name}.")
@@ -256,6 +262,8 @@ NO_SUCH_SKILL = Message("No skill named {name!r}.")
 SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the input line.")
 HELP_HEADING = Message("Commands:", banner=False)
 HELP_ROW = Message("  {usage} {doc}", banner=False)
+HELP_SETTING = Message("{key}", banner=False)
+HELP_SETTING_LINE = Message("    {text}", banner=False)
 HELP_ALIAS = Message("Alias: {body}")
 HELP_PROMPT_COMMAND = Message("Command file {path}: {description}")
 HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with spaces.")
@@ -296,8 +304,8 @@ UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)
 
 # --- /help: what each command does -------------------------------------------
 
-CMD_HELP = Message("Show this message.")
-CMD_SET = Message("List settings, show one, or change one. set -key clears one.")
+CMD_HELP = Message("Show this message. help set NAME explains a setting.")
+CMD_SET = Message("List settings, a group or a *_FILE wildcard, show one, or change one. set -NAME clears one.")
 CMD_SHOW = Message("List every setting and its effective value.")
 CMD_SAVE = Message("Write your changed settings, handlers and aliases into the global jsrc, in place.")
 CMD_LOAD = Message("Run each line of a file as a command. source is the same command.")
@@ -872,8 +880,9 @@ FLIGHT_NOTICE = Message("Compaction {event} {id}: operation={operation} {detail}
 
 UNKNOWN_SETTING = Message("Unknown setting: {key}")
 EXTRA_UNKNOWN_SETTING = Message("--extra: unknown setting: {key}")
-SETTING_VALUE = Message("{key} = {value}", banner=False)
-SETTING_ALREADY_UNSET = Message("{key} = {value}  Already unset.", banner=False)
+SETTING_IS = Message("The value of {key} is: {value}")
+SETTING_CHANGED = Message("Value of {key} changed to: {value}")
+SETTING_ROW = Message("{key} {value}")
 SETTING_LIVE = Message("{line}  live: {source}", banner=False)
 NO_EVENT_HANDLERS = Message("No event handlers.", banner=False)
 ON_NEEDS_TWO = Message("on needs an event and a handler.")

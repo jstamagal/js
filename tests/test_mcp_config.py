@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from js import messages as msgs
 from js import mcp_config, setcmd, settings
 from js.config import from_env
 
@@ -110,8 +111,8 @@ def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
     shown = setcmd.show_lines(live, "MCP_SERVERS")
     transcript = "\n".join([*changed.lines, *shown.lines])
 
-    assert changed.lines == ["MCP_SERVERS = <set>"]
-    assert shown.lines[0] == "MCP_SERVERS = <set>"
+    assert changed.lines == [msgs.SETTING_CHANGED.line(colour=False, key="MCP_SERVERS", value="<set>")]
+    assert shown.lines[0] == msgs.SETTING_IS.line(colour=False, key="MCP_SERVERS", value="<set>")
     assert ENV_SECRET not in transcript
     assert HEADER_SECRET not in transcript
 

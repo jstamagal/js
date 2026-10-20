@@ -3,8 +3,8 @@
 # This file is the lowest config layer. Precedence, lowest to highest:
 #   js/jsrc (this file) < ~/.js/jsrc < .js/jsrc < .js/jsrc.local
 #   < env vars < --extra
-# `set -key` leaves a setting unset. `/set` with no argument lists every setting
-# and its value; `/show <key>` shows one with its help text.
+# `set -NAME` leaves a setting unset. `/set` with no argument lists every setting
+# and its value; `/help set NAME` says what one does.
 
 # --- model ---
 set DEFAULT_AGENT defaultagent
