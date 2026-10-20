@@ -30,6 +30,7 @@ from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
 from .compaction_flight import NOTICE as NOTICE, flight_log_dir as flight_log_dir, printing as printing
 from . import memory as M
 from . import messages as msgs
+from . import output
 from . import model_client
 from . import model_metadata
 from . import retry
@@ -294,6 +295,18 @@ def microcompact(
     return cleared, reclaimed
 
 
+def _notice(message: msgs.Message, /, *, emit=None, stderr=True, flush=True, **fields) -> None:
+    """Send a compaction message through the attempt's callback or output sink."""
+    flight = ACTIVE_FLIGHT.get()
+    if emit is None and flight is not None:
+        emit = flight.emit
+    notice = output.event("notice", message=message, fields=fields, stderr=stderr, flush=flush)
+    if emit is None:
+        output.emit(notice)
+    else:
+        emit("compaction_output", output=notice)
+
+
 def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger: dict,
                      flight_data: dict, log_dir: Path | None,
                      emit: Callable[..., Any] | None) -> CompactionFlight:
@@ -304,7 +317,7 @@ def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger:
             details=flight_data, directory=log_dir, emit=emit, operation="tool-result-clearing",
         )
     except OSError as exc:
-        msgs.warn(msgs.CLEARING_FLIGHT_FAILED, error=exc)
+        _notice(msgs.CLEARING_FLIGHT_FAILED, emit=emit, error=exc)
         raise
 
 
@@ -708,7 +721,7 @@ def _run_pre_hook(cfg: Config) -> str:
             cap=cap,
         )
     except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.FAILED_WARN, error=f"COMPACTION_HINT_COMMAND failed: {type(exc).__name__}: {exc}")
+        _notice(msgs.FAILED_WARN, error=f"COMPACTION_HINT_COMMAND failed: {type(exc).__name__}: {exc}")
         return ""
     if not isinstance(result, CappedProcessResult):
         result = CappedProcessResult(result[0], result[1], result[2])
@@ -719,7 +732,7 @@ def _run_pre_hook(cfg: Config) -> str:
     if result.stderr_truncated:
         stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
-        msgs.warn(msgs.FAILED_WARN,
+        _notice(msgs.FAILED_WARN,
                   error=f"COMPACTION_HINT_COMMAND exited {result.returncode}: {(stderr or stdout).strip()}")
         return ""
     return stdout.strip()
@@ -878,7 +891,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             middle = len(head) // 2
             if (flight := ACTIVE_FLIGHT.get()) is not None:
                 flight.record("summary_overflow", depth=depth, split_at=middle, error=str(exc), messages=head)
-            msgs.say(msgs.SUMMARY_SPLIT, depth=depth + 1, flush=True)
+            _notice(msgs.SUMMARY_SPLIT, depth=depth + 1, stderr=False, flush=True)
             # The previous summary travels with the older half only, so each
             # request carries at most one summary's worth of extra text.
             left = await summarize_chunk(head[:middle], depth + 1, previous)
@@ -1039,7 +1052,7 @@ async def compact_now(
             if trigger and trigger.get("phase") == "between-turn":
                 owner = context or T.STOCK_CONTEXT
                 if (paused := record_auto_failure(cfg, owner)) is not None:
-                    msgs.warn(paused.message, **paused.fields)
+                    _notice(paused.message, **paused.fields)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)

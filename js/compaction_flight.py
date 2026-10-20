@@ -14,7 +14,7 @@ import traceback
 from typing import Any
 from uuid import uuid4
 
-from . import paranoid, paths
+from . import output, paranoid, paths
 from . import messages as msgs
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
@@ -79,6 +79,14 @@ def printing(emit: Callable[..., Any] | None = None, *,
     goes to ``warn`` (`msgs.warn` by default) as a ``*** Compaction ...``
     line on stderr, every other event goes on to ``emit``."""
     def handler(event: str, **payload: Any) -> Any:
+        if event == "compaction_output":
+            notice = payload["output"]
+            fields = dict(notice.fields)
+            if warn is not None and fields["stderr"]:
+                warn(fields["message"], **fields["fields"])
+            else:
+                output.emit(notice)
+            return None
         if event == NOTICE:
             (warn or msgs.warn)(msgs.FLIGHT_NOTICE, **payload)
             return None

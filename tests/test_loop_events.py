@@ -26,3 +26,23 @@ def test_retry_emits_its_wait_and_failure_without_rendering(capsys):
     fields = dict(events[0].fields)
     assert (fields["n"], fields["attempts"], fields["delay"], fields["error"]) == (1, 2, 12, failure)
     assert capsys.readouterr() == ("", "")
+
+
+def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
+    import pytest
+
+    from js import compaction
+
+    failure = OSError("read only")
+    def unavailable(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(compaction, "CompactionFlight", unavailable)
+    events = []
+    with pytest.raises(OSError):
+        compaction._clearing_flight([], cfg=None, system="", trigger={}, flight_data={},
+                                    log_dir=None, emit=lambda name, **fields: events.append((name, fields)))
+    assert events[0][0] == "compaction_output"
+    notice = events[0][1]["output"]
+    assert dict(notice.fields)["fields"]["error"] is failure
+    assert capsys.readouterr() == ("", "")
