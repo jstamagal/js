@@ -24,6 +24,7 @@ from prompt_toolkit.filters import emacs_insert_mode, vi_insert_mode
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, KeyBindingsBase
 
 from . import messages as msgs
+from . import output
 from . import settings as _settings
 from .toolkit.fs import _detect_visual_mime
 
@@ -180,7 +181,7 @@ async def _say(app, error: ClipboardError) -> None:
     """One line to the operator. The full-screen app routes stdout into its
     scrollback; a prompt session prints above its input line."""
     def show() -> None:
-        msgs.say(error.message, **error.fields)
+        output.notice(error.message, stderr=False, flush=False, **error.fields)
 
     if app.full_screen:
         show()

@@ -159,3 +159,17 @@ def test_ex_write_reports_through_an_event(tmp_path, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["path"] == path
     assert capsys.readouterr() == ("", "")
+
+
+def test_clipboard_failure_is_an_event(capsys):
+    import asyncio
+
+    from js import clipimage, messages
+
+    events = []
+    error = clipimage.ClipboardError(messages.FAILED, error="clipboard unavailable")
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        asyncio.run(clipimage._say(SimpleNamespace(full_screen=True), error))
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"] == error.fields
+    assert capsys.readouterr() == ("", "")

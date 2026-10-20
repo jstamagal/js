@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-29 findings.
+28 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -46,7 +46,6 @@ branch the audit was made on; they move as the code changes.
 | `js/screen.py:671` | _ScreenStdout.isatty | presentation | Reports every captured stream as a terminal. | js-2lg.104 |
 | `js/messages.py:200-218` | for_stream / line_for / say | presentation | Write to the global sys.stdout when no file is passed. | js-2lg.105 |
 | `js/messages.py:248-250` | warn | presentation | Always writes to the global sys.stderr. | js-2lg.105 |
-| `js/clipimage.py:177-181` | _say | presentation | Reports clipboard errors through msgs.say to the global stdout. | js-2lg.130 |
 | `js/settings.py:762` | env_value | presentation | The settings loader prints a warning to stderr itself (msgs.warn) when an env value is invalid. | js-2lg.138 |
 | `js/logins.py:567,573` | _parse_store | presentation | Parsing logins.toml prints warnings to stderr itself, and uses the ENV_SETTING_IGNORED message for a login section. | js-2lg.142 |
 | `js/codex_auth.py:642,647` | save_refreshed_login | presentation | A background token refresh prints warnings to stderr itself. | js-2lg.151 |
