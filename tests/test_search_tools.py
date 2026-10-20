@@ -498,3 +498,16 @@ def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SERPER_API_KEY": "configured-key"})))
     search.serper_search("query", context=context)
     assert calls[0][0].get_header("X-api-key") == "configured-key"
+
+
+def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
+    calls = []
+    def refuse(request, timeout):
+        calls.append(request)
+        raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, io.BytesIO(b""))
+    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
+    monkeypatch.setattr(search.urllib.request, "urlopen", refuse)
+    result = search.docs_search("example", context=ToolContext(cwd=tmp_path), retry_without_auth_on=())
+    assert len(calls) == 1
+    assert calls[0].get_header("Authorization") == "Bearer secret"
+    assert result.startswith("ERROR")

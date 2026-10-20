@@ -333,6 +333,8 @@ def docs_search(
     topic: str | None = "",
     tokens: int | None = 4000,
     context: ToolContext | None = None,
+    *,
+    retry_without_auth_on: tuple[int, ...] = (401, 403),
 ) -> str:
     assert context is not None
     library = text_or_default(library).strip()
@@ -347,7 +349,7 @@ def docs_search(
         "https://context7.com/api/v1/search?query=" + urllib.parse.quote(library),
         headers=headers,
         secrets=_hidden(context, key),
-        retry_without_auth_on=(401, 403) if key is not None else (),
+        retry_without_auth_on=retry_without_auth_on if key is not None else (),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
     )
@@ -384,7 +386,7 @@ def docs_search(
         doc_url,
         headers=headers,
         secrets=_hidden(context, key),
-        retry_without_auth_on=(401, 403) if key is not None else (),
+        retry_without_auth_on=retry_without_auth_on if key is not None else (),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
     )
