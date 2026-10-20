@@ -341,3 +341,5 @@ set MODEL_CONTEXT_PROBE on
 set ENDPOINT_DEFAULT_KEY sk-dummy-key
 
 set ENDPOINT_DEFAULT_SHAPE openai-completions
+
+set DOTENV_WALK_UP on

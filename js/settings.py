@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
     SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
     SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
     SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
