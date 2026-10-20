@@ -326,6 +326,13 @@ branch the audit was made on; they move as the code changes.
 
 24 findings.
 
+Resolution notes (the rows below record the original audit):
+- js-2lg.61: `meta.skill` accepts the user invocation command used in its refusal.
+- js-2lg.86: `cli.ReplAssembly` supplies a session's commands, quit and queue
+  words, turn-state guard, unknown-command policy, forced-compaction phrase,
+  banner renderer, interrupt handler, input bindings, prompt options and idle
+  interrupt count. Defaults retain the audited behavior.
+
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/toolkit/meta.py:70,74` | skill | policy | Model-facing refusal text names the `/skill` REPL command. | js-2lg.61 |

@@ -11,6 +11,19 @@ from js.config import from_env, jsrc_paths
 from repl_driver import repl_state
 
 
+def test_assembly_command_is_dispatched_and_completed():
+    def clear(arg, state, cfg):
+        state["messages"].clear()
+
+    state = {"messages": ["old"], "repl_assembly": cli.ReplAssembly(
+        commands={"clear": cli.Command(clear, "clear", cli.msgs.CMD_RESET)},
+    )}
+    assert cli._handle_command("/clear", state, None)
+    assert state["messages"] == []
+    assert "clear" in cli._command_completions(state)
+    assert "reset" not in cli._command_completions(state)
+
+
 def _launch(cwd):
     """A REPL launch in `cwd`: the config, the state after replaying the jsrc
     files, and the replay's errors."""

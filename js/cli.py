@@ -19,7 +19,7 @@ import signal
 import threading
 import textwrap
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -1642,7 +1642,7 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
             return msgs.NO_ALIAS.said(name=name)
         msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
         return None
-    if name in COMMANDS:
+    if name in _commands(state):
         return msgs.ALIAS_IS_COMMAND.said(name=name)
     aliases[name] = parts[1].strip()
     msgs.say(msgs.ALIAS_ROW, name=name, body=aliases[name])
@@ -1948,7 +1948,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
     model, focus, ok = _split_compact_model(arg)
     if not ok:
         return msgs.USAGE.said(usage="/compact [-m model] [focus]")
-    forced = focus == "up to here"
+    forced = focus == _repl_assembly(state).compact_force_focus
     if forced:
         focus = ""
     try:
@@ -2039,11 +2039,11 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
         return _help_set(rest.strip())
     if topic.lower() == "fset":
         return _help_fset(rest.strip())
-    rows = [(f"/{c.usage}", c.doc.said()) for c in dict.fromkeys(COMMANDS.values())]
+    rows = [(f"/{c.usage}", c.doc.said()) for c in dict.fromkeys(_commands(state).values())]
     rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in (state.get("aliases") or {}).items()]
     rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.said(path=command.path, description=command.description))
              for name, command in prompt_commands.discover(Path.cwd()).items()
-             if name not in COMMANDS and name not in (state.get("aliases") or {})]
+             if name not in _commands(state) and name not in (state.get("aliases") or {})]
     rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
     width = max(len(usage) for usage, _doc in rows)
     msgs.say(msgs.HELP_HEADING)
@@ -2304,7 +2304,7 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
     if parsed is None:
         return True, None
     verb, arg = parsed
-    command = COMMANDS.get(verb)
+    command = _commands(state).get(verb)
     if command is None:
         body = (state.get("aliases") or {}).get(verb)
         if body is None:
@@ -2316,7 +2316,7 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
         expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
         handled, error = _run_command(expanded, state, cfg, depth + 1)
         return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
-    if command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
+    if _repl_assembly(state).guard_turn_state and command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
         return True, msgs.TURN_RUNNING.said(command=f"/{verb}")
     return True, command.run(arg, state, cfg)
 
@@ -2338,6 +2338,56 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
 
 QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
 
+
+def _repl_prompt_options() -> dict:
+    return dict(search_ignore_case=True, complete_while_typing=False,
+                complete_style=CompleteStyle.MULTI_COLUMN, enable_suspend=True, erase_when_done=True)
+
+
+def _repl_input_bindings(settings_store):
+    return [clipimage.key_bindings(settings_store), pastes.key_bindings(settings_store)]
+
+
+def _interrupt_turn_and_queue(sup, drop_pending) -> bool:
+    active = sup.turn_active()
+    if active:
+        n = sup.cancel_kind("turn")
+        msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
+    flushed = drop_pending()
+    if flushed:
+        msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
+    return bool(active or flushed)
+
+
+@dataclass(frozen=True)
+class ReplAssembly:
+    """Commands and input policy supplied to a REPL session."""
+
+    commands: Mapping[str, Command] | None = None
+    quit_words: tuple[str, ...] = QUIT_WORDS
+    refuse_unknown: bool = True
+    guard_turn_state: bool = True
+    compact_force_focus: str = "up to here"
+    flush_lines: tuple[str, ...] = ("/flush", "/cancel queued")
+    interrupt: Callable | None = None
+    blocking_interrupts_max: int = 2
+    banner: Callable | None = None
+    input_bindings: Callable | None = None
+    prompt_options: Callable[[], dict] = _repl_prompt_options
+
+
+DEFAULT_REPL_ASSEMBLY = ReplAssembly()
+
+
+def _repl_assembly(state: dict | None) -> ReplAssembly:
+    return (state or {}).get("repl_assembly", DEFAULT_REPL_ASSEMBLY)
+
+
+def _commands(state: dict | None) -> Mapping[str, Command]:
+    supplied = _repl_assembly(state).commands
+    return COMMANDS if supplied is None else supplied
+
+
 # Orders the async REPL's live-state writes against turn starts. A command holds
 # it for its whole run on its executor thread; a turn takes its cfg snapshot under
 # it, also off the loop thread (_live_cfg_snapshot), so a command that waits on the
@@ -2353,14 +2403,14 @@ def _live_cfg_snapshot(cfg: Config, state: dict) -> Config:
 
 def _handle_command(line: str, state: dict, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
-    if line in QUIT_WORDS:
+    if line in _repl_assembly(state).quit_words:
         state["running"] = False
         return True
     if not line.startswith("/") or _is_skill_invocation(line):
         return False
     with _LIVE_STATE_LOCK:
         handled, error = _run_command(line, state, cfg)
-    if not handled and _is_unknown_command(line):
+    if not handled and _repl_assembly(state).refuse_unknown and _is_unknown_command(line):
         handled, error = True, msgs.UNKNOWN_SLASH_COMMAND.said()
     if isinstance(error, msgs.Said):
         msgs.say_said(error)
@@ -2385,7 +2435,7 @@ def _is_unknown_command(line: str) -> bool:
 def _command_completions(state: dict) -> dict[str, str | None]:
     """Verb -> argument completion source, for every command and alias."""
     table: dict[str, str | None] = {name: None for name in prompt_commands.discover(Path.cwd())}
-    table.update({verb: command.complete for verb, command in COMMANDS.items()})
+    table.update({verb: command.complete for verb, command in _commands(state).items()})
     table.update({name: None for name in state.get("aliases") or {}})
     return table
 
@@ -3712,7 +3762,7 @@ def _print_skill_catalog(state: dict) -> None:
     msgs.say(msgs.SKILL_HINT)
 
 
-def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
+def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
     """What the REPL prints into its scrollback when it is up: the MOTD
     (`js.motd`) raw with its colours reset after, then the startup line,
     notices and errors."""
@@ -3732,6 +3782,11 @@ def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[s
     ])
 
 
+
+def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
+    render = _repl_assembly(state).banner or _default_startup_banner
+    return render(cfg, state, notices, errors)
+
 def _echoes(line: str, state: dict) -> bool:
     """Whether a typed line shows in the scrollback: not when dispatch
     (`_handle_command`) takes it as a command, a command or alias from the
@@ -3740,7 +3795,7 @@ def _echoes(line: str, state: dict) -> bool:
     if not line.startswith("/") or _is_skill_invocation(line):
         return True
     verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
-    if verb in COMMANDS or verb in (state.get("aliases") or {}):
+    if verb in _commands(state) or verb in (state.get("aliases") or {}):
         return False
     return not _is_unknown_command(line)
 
@@ -3768,13 +3823,15 @@ def _expand_skill_line(prompt_text: str, state: dict) -> str:
     return prompt_text if expanded is None else expanded
 
 
-def _is_turn_state_command(line: str) -> bool:
+def _is_turn_state_command(line: str, state: dict | None = None) -> bool:
     """Commands that clear/rotate/compact the live message list. Running one while
     a turn appends to state["messages"] races the single-writer discipline the turn
     queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
     rollback marks) — refuse until the active turn ends."""
     parsed = setcmd.split_command(line) if line.startswith("/") else None
-    return parsed is not None and parsed[0] in COMMANDS and COMMANDS[parsed[0]].turn_state
+    table = _commands(state)
+    return (_repl_assembly(state).guard_turn_state and parsed is not None
+            and parsed[0] in table and table[parsed[0]].turn_state)
 
 
 def _drain_queue(queue: asyncio.Queue) -> int:
@@ -3900,14 +3957,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     async def on_line(line: str) -> None:
         if not line:
             return
-        if line in ("/flush", "/cancel queued"):
+        if line in _repl_assembly(state).flush_lines:
             # Drop pending input without touching the active turn. Handled
             # here (not in _handle_command) because the queue is loop-owned
             # and _handle_command runs on an executor thread.
             flushed = drop_pending()
             msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
             return
-        if _is_turn_state_command(line) and sup.turn_active():
+        if _is_turn_state_command(line, state) and sup.turn_active():
             msgs.say(msgs.TURN_RUNNING, command=line.split()[0])
             return
         handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
@@ -3925,17 +3982,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             msgs.say(msgs.QUEUED, ahead=queue.qsize())
 
     def on_interrupt() -> bool:
-        # ^C cancels the active turn AND drops anything queued behind it —
-        # otherwise the queue keeps draining prompts the operator meant to
-        # abort. True when there was a turn or a queued prompt to stop.
-        active = sup.turn_active()
-        if active:
-            n = sup.cancel_kind("turn")
-            msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
-        flushed = drop_pending()
-        if flushed:
-            msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
-        return bool(active or flushed)
+        handler = _repl_assembly(state).interrupt or _interrupt_turn_and_queue
+        return handler(sup, drop_pending)
 
     async def wind_down() -> None:
         # Cancels the running turn, and any turn the consumer starts from a
@@ -3970,7 +4018,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         await exline.run_ex(
             line,
             editor,
-            is_command=lambda verb: verb in COMMANDS or verb in (state.get("aliases") or {}),
+            is_command=lambda verb: verb in _commands(state) or verb in (state.get("aliases") or {}),
             dispatch=on_line,
         )
 
@@ -3986,8 +4034,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         echo=lambda line: _echoes(line, state),
         on_ex=on_ex,
         key_bindings=merge_key_bindings([
-            clipimage.key_bindings(lambda: state["settings"]),
-            pastes.key_bindings(lambda: state["settings"]),
+            *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state["settings"]),
         ]),
         keymap=state.get("keymap"),
     )
@@ -4047,7 +4094,8 @@ def _prompt_origin(cfg: Config) -> prompt_history.Origin:
 
 def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
                 system: str | None = None, model: str | None = None,
-                live_settings: dict | None = None, tool_registry=None) -> dict:
+                live_settings: dict | None = None, tool_registry=None,
+                assembly: ReplAssembly | None = None) -> dict:
     """The REPL's live state for one session.
 
     ``model`` is a --model flag value; without one the session runs on
@@ -4090,11 +4138,13 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         "compact_incomplete_consecutive": 0,
         "compact_paused": False,
     }
+    if assembly is not None:
+        state["repl_assembly"] = assembly
     event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
     return state
 
 
-def _repl_prompt_session(cfg: Config, keymap, completer) -> PromptSession:
+def _repl_prompt_session(cfg: Config, keymap, completer, *, assembly: ReplAssembly | None = None) -> PromptSession:
     """The prompt session of the REPL: its history and completer serve both
     REPLs; the --blocking one reads from it. It erases each sent line, and
     `_blocking_echo` prints back the ones that are messages."""
@@ -4107,12 +4157,8 @@ def _repl_prompt_session(cfg: Config, keymap, completer) -> PromptSession:
             state_root=_paths.state_root(),
         ),
         key_bindings=keys_mod.prompt_bindings(keymap),
-        search_ignore_case=True,
         completer=completer,
-        complete_while_typing=False,  # Tab-triggered, never auto-pops
-        complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
-        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
-        erase_when_done=True,
+        **(assembly or DEFAULT_REPL_ASSEMBLY).prompt_options(),
     )
 
 
@@ -4130,10 +4176,9 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
     """The --blocking REPL: read a line from ``session``, run it as a command
     or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
     mcp_loop = asyncio.Runner()
-    interrupt_armed = False
+    interrupt_count = 0
     session.key_bindings = merge_key_bindings([
-        clipimage.key_bindings(lambda: state["settings"]),
-        pastes.key_bindings(lambda: state["settings"]),
+        *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state["settings"]),
     ])
     _emit_session_event(state, telemetry, cfg, "session_start")
     if prompt_spec.exchanges and not state["messages"]:
@@ -4144,12 +4189,12 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             if (echo := _blocking_echo(raw, state)) is not None:
                 print(echo)
             line = pastes.expand(raw).strip()
-            interrupt_armed = False
+            interrupt_count = 0
         except KeyboardInterrupt:
             # One stray ^C at the prompt should not end a session that took real
             # work to build; the second one within the same idle stretch does.
-            if not interrupt_armed:
-                interrupt_armed = True
+            interrupt_count += 1
+            if interrupt_count < _repl_assembly(state).blocking_interrupts_max:
                 print()
                 msgs.say(msgs.PRESS_CTRL_C_AGAIN)
                 continue
