@@ -46,3 +46,20 @@ def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
     notice = events[0][1]["output"]
     assert dict(notice.fields)["fields"]["error"] is failure
     assert capsys.readouterr() == ("", "")
+
+
+def test_flight_autolog_failure_goes_to_its_event_callback(tmp_path, capsys):
+    from js.compaction_flight import CompactionFlight
+    from test_config_compaction_layers import _compact_test_cfg
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("file")
+    cfg = _compact_test_cfg(tmp_path, {"REQUEST_LOG_DIR": str(blocked)})
+    events = []
+    flight = CompactionFlight(cfg, "system", [], trigger={}, forced=True, focus="", preserve_from=None,
+                              details={}, directory=tmp_path / "flights",
+                              emit=lambda name, **fields: events.append((name, fields)))
+    flight.close()
+    assert events[0][0] == "compaction_output"
+    assert isinstance(dict(events[0][1]["output"].fields)["fields"]["error"], OSError)
+    assert capsys.readouterr() == ("", "")

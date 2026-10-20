@@ -75,23 +75,10 @@ NOTICE = "compaction_notice"
 
 def printing(emit: Callable[..., Any] | None = None, *,
              warn: Callable[..., Any] | None = None) -> Callable[..., Any]:
-    """The ``emit`` js's own callers hand compaction: a compaction notice
-    goes to ``warn`` (`msgs.warn` by default) as a ``*** Compaction ...``
-    line on stderr, every other event goes on to ``emit``."""
-    def handler(event: str, **payload: Any) -> Any:
-        if event == "compaction_output":
-            notice = payload["output"]
-            fields = dict(notice.fields)
-            if warn is not None and fields["stderr"]:
-                warn(fields["message"], **fields["fields"])
-            else:
-                output.emit(notice)
-            return None
-        if event == NOTICE:
-            (warn or msgs.warn)(msgs.FLIGHT_NOTICE, **payload)
-            return None
-        return None if emit is None else emit(event, **payload)
-    return handler
+    """The console adapter for compaction's callback protocol."""
+    from .console import compaction_events
+
+    return compaction_events(emit, warn=warn)
 
 
 class CompactionFlight:
@@ -160,7 +147,12 @@ class CompactionFlight:
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
                 except OSError as exc:
-                    msgs.warn(msgs.FLIGHT_AUTOLOG_FAILED, error=exc, path=self.path)
+                    notice = output.event("notice", message=msgs.FLIGHT_AUTOLOG_FAILED,
+                                          fields={"error": exc, "path": self.path}, stderr=True, flush=True)
+                    if self.emit is None:
+                        output.emit(notice)
+                    else:
+                        self.emit("compaction_output", output=notice)
 
     def snapshot(self, phase, system, messages):
         if self.stream is None:

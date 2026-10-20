@@ -25,15 +25,13 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-39 findings.
+37 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/turn_budget.py:238,264,294` | TurnBudget.recover_overflow/_clear/_summarize | presentation | Passes compaction.printing() as emit, so flight notices go to stderr and not to the turn's event emit. | js-2lg.8 |
 | `js/turn_budget.py:268,298,301-302` | TurnBudget._clear/_summarize | presentation | Writes COMPACTION_FAILED and the breaker pause notice straight to stderr. | js-2lg.8 |
 | `js/turn_stream.py:128-132,152-157` | StreamSink.reasoning/text | presentation | Without a factory it falls back to StderrReasoning on sys.stderr and a Display on sys.stdout, and always sets the agent speaker label. | js-2lg.12 |
-| `js/compaction_flight.py:76-85` | printing | presentation | Turns every compaction notice into a stderr FLIGHT_NOTICE line. | js-2lg.21 |
-| `js/compaction_flight.py:154-155` | CompactionFlight.record | presentation | Writes FLIGHT_AUTOLOG_FAILED to stderr. | js-2lg.21 |
 | `js/runtime.py:327` | Telemetry.event | presentation | Writes FLIGHT_LOG_FAILED to stderr. | js-2lg.27 |
 | `js/runtime.py:544-552,651-652,768` | _print_trace/ToolTrace.settle/ToolTrace.result | presentation | The loop writes tool exchanges straight to sys.stdout when no exchange factory is set. | js-2lg.27 |
 | `js/runtime.py:1936-1970,2353-2354` | _trace_banner/_print_run_line | presentation | Prints the run line (model, provider, ctx, tools) to stdout. | js-2lg.27 |
