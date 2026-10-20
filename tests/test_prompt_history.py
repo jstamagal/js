@@ -81,6 +81,22 @@ def test_every_session_appends_to_the_same_file(tmp_path):
     assert list(_history(path).load_history_strings()) == ["second", "first"]
 
 
+def test_an_append_after_a_torn_record_keeps_the_new_prompt(tmp_path, monkeypatch):
+    path = tmp_path / "history.jsonl"
+    _write(path, (1.0, "/p", "first"))
+    with path.open("ab") as stream:
+        stream.write(b'{"text":"interrupted')
+    write = os.write
+
+    def short_write(fd, data):
+        return write(fd, data[:7])
+
+    monkeypatch.setattr(ph.os, "write", short_write)
+    _write(path, (2.0, "/p", "next prompt"))
+
+    assert [entry.text for entry in ph.read_entries(path)] == ["first", "next prompt"]
+
+
 def test_up_offers_the_current_directorys_prompts_first_newest_first(tmp_path):
     entries = [
         ph.Entry(1, "/proj", "s", "a", "proj old"),
