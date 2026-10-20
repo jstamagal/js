@@ -988,6 +988,25 @@ def test_codex_requests_carry_the_provider_headers(monkeypatch):
     assert sent["X-JS-Scrub"] == "on" and sent["X-Pool"] == "fofa"
 
 
+def test_codex_extra_params_reach_the_http_body(monkeypatch):
+    client = _FakeCodexHttpClient()
+    monkeypatch.setattr(
+        codex_provider, "provider_from_login_or_token",
+        lambda **_kwargs: _provider_with_client(client),
+    )
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
+        provider_extra={"extra_body": {"text": {"verbosity": "high"}}, "service_tier": "priority"},
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+
+    body = client.stream_calls[0]["json"]
+    assert body["text"] == {"verbosity": "high"}
+    assert body["service_tier"] == "priority"
+
+
 def test_codex_oauth_authorization_wins_over_an_extra_header_of_any_case(monkeypatch):
     from js import logins
 
