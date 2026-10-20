@@ -1218,6 +1218,27 @@ def test_separated_flag_credentials_and_wrapper_context_delivery():
     asyncio.run(drive())
 
 
+def test_remote_context_argument_preserves_explicit_null(config):
+    from js.toolkit.core import call_tool_async
+
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        client = FakeClient(None)
+        host.clients["Alpha Server"] = client
+        host.remote_tools["alpha_server__nullable"] = ("Alpha Server", "nullable", {
+            "inputSchema": {
+                "type": "object",
+                "properties": {"context": {"type": ["string", "null"]}},
+                "required": ["context"],
+            },
+        })
+        tool = host.tools({"alpha_server__nullable"})[0]
+        await call_tool_async(tool, {"context": None}, ToolContext(cwd=None))
+        assert client.calls == [("nullable", {"context": None})]
+
+    asyncio.run(drive())
+
+
 def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
     from js.mcp.host import MAX_PUBLIC_TOOL_NAME, MCPHost
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer

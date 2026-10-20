@@ -784,13 +784,7 @@ class MCPHost:
             properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
             required = schema.get("required") if isinstance(schema.get("required"), list) else []
 
-            declares_context = "context" in properties
-
-            async def call(context=None, **kwargs: Any) -> ToolResult:
-                if declares_context and context is not None:
-                    # The schema's own context property must reach the server;
-                    # it binds to this wrapper parameter, not kwargs.
-                    kwargs["context"] = context
+            async def call(**kwargs: Any) -> ToolResult:
                 current = self.remote_tools.get(name)
                 if current is None or not self.config.allows_tool(name):
                     return ToolResult.text(f"ERROR: MCP tool {name!r} is no longer available", is_error=True)
