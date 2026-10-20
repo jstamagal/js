@@ -223,8 +223,8 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/search.py` | browse | policy | Model-facing text is loaded from `prompts/text/toolkit_search.json`; selection and execution policy are unchanged. | js-2lg.53 |
 | `js/toolkit/terminal.py` | _observe | policy | Model-facing text is loaded from `prompts/text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
 | `js/toolkit/terminal.py` | _jail_refusal / _draw_screen | policy | Model-facing text is loaded from `prompts/text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
-| `js/toolkit/browser.py:93-95,251-254` | _frame_metrics / browser_probe | policy | Builds the install-hint text in code. | js-2lg.58 |
-| `js/toolkit/browser.py:412-422` | browser_probe | policy | Builds the "reading" guidance paragraph the model reads. | js-2lg.58 |
+| `js/toolkit/browser.py` | _frame_metrics / browser_probe | policy | Model-facing text is loaded from `prompts/text/toolkit_browser.json`; selection and execution policy are unchanged. | js-2lg.58 |
+| `js/toolkit/browser.py` | browser_probe | policy | Model-facing text is loaded from `prompts/text/toolkit_browser.json`; selection and execution policy are unchanged. | js-2lg.58 |
 | `js/toolkit/meta.py:670-673` | named_agent_tool | policy | Writes the fallback model-facing description of an agent tool in code. | js-2lg.62 |
 | `js/toolkit/meta.py:678,685-694,700-701` | named_agent_tool / _task_params / tools | policy | Parameter descriptions the model reads are written in the code schemas. | js-2lg.62 |
 | `js/toolkit/task_jobs.py:220-230,237-255` | started_text / report | policy | Builds the background-task handle text and guidance the model reads. | js-2lg.63 |

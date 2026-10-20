@@ -20,6 +20,10 @@ from .. import jail, paths, settings as _settings
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_browser')
+
 
 GL_ARGS = (
     "--use-angle=vulkan",
@@ -91,7 +95,7 @@ def _frame_metrics(png: bytes) -> tuple[dict[str, Any], Any]:
     try:
         from PIL import Image
     except ImportError as exc:
-        raise RuntimeError("browser_probe image analysis requires js[browser]; run uv sync --inexact --extra browser") from exc
+        raise RuntimeError(_PROMPTS['frame_metrics_browser_probe_image_analysis_requires_js']) from exc
 
     image = Image.open(io.BytesIO(png)).convert("RGB")
     counts = Counter(
@@ -249,8 +253,7 @@ def browser_probe(
         from playwright.sync_api import sync_playwright
     except ImportError:
         return (
-            "ERROR: browser_probe requires the optional Playwright backend; "
-            "install js[browser] (Playwright does not publish musllinux wheels)"
+            _PROMPTS['browser_probe_error_browser_probe_requires_the_optional']
         )
 
     target = text_or_default(target).strip()
@@ -410,14 +413,10 @@ def browser_probe(
     ]
     failed = "error" in report and not report["frames"]
     report["reading"] = (
-        "The probe failed before it captured a frame; do not infer page, WebGL, or "
-        "visual state from the empty measurements."
+        _PROMPTS['browser_probe_the_probe_failed_before_it_captured']
         if failed
         else (
-            "Frame paths are PNGs; use read on them when available. "
-            "dominant_color_share and unique_colors describe each frame. "
-            "changed_pct_from_previous is the percent of pixels moving by more than "
-            "eight RGB levels after each interaction. These are measurements, not verdicts."
+            _PROMPTS['browser_probe_frame_paths_are_pngs_use_read']
         )
     )
     prefix = "ERROR: browser probe failed\n" if failed else ""
