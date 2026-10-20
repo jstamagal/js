@@ -195,3 +195,12 @@ def refusal(outcome: ExecOutcome, tool: str) -> str:
             if line:
                 return line if line.startswith("ERROR") else f"ERROR: {line}"
     return _PROMPTS['refusal_error_an_on_tool_call_handler'].format(tool=tool)
+
+
+def apply_refusal(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
+    """Record a blocking handler outcome on a refusable event."""
+    if (call is None or outcome.returncode != REFUSE_STATUS
+            or call.emission.event not in events.REFUSABLE_EVENTS):
+        return False
+    call.refusal = refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+    return True

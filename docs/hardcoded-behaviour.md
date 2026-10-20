@@ -102,6 +102,8 @@ branch the audit was made on; they move as the code changes.
 
 2 findings.
 
+- js-2lg.84: hookexec applies the blocking-status rule to the active handler
+  call; /exec forwards the outcome and leaves refusal policy to that layer.
 - js-2lg.43: REMOVE_TRASH and TRASH_BYTES_MAX register the previous trash
   default and 512 MiB cap, inherited by tool contexts. Tool policy decides
   the removal mode and refusal; fs measures and carries out that decision.

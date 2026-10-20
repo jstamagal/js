@@ -2089,9 +2089,7 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
     else:
         if outcome.returncode is None:
             failure = msgs.EXEC_TIMED_OUT.said(command=command, seconds=timeout)
-        elif (call is not None and outcome.returncode == hookexec.REFUSE_STATUS
-              and call.emission.event in events.REFUSABLE_EVENTS):
-            call.refusal = hookexec.refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+        elif hookexec.apply_refusal(call, outcome):
             return None
         elif outcome.returncode != 0:
             detail = next((line.strip() for line in (outcome.stderr or outcome.stdout).splitlines()
