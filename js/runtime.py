@@ -298,8 +298,9 @@ class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
     trace_sink: object = None  # a .write()-able sink for the full request trace, or None
     transcript_log: object = None  # visible transcript sink; never raises
-    # Where the turn's output events go (`output.Sink`); None means js's
-    # console (`console.ConsoleSink`), which the three factories below steer.
+    # Where the turn's output events go (`output.Sink`); None means js's own:
+    # the transcript record, then the console, which the three factories
+    # below steer.
     sink: Any = None
     # Builds the reasoning display for a screen that owns the terminal; None
     # means reasoning is written to sys.stderr.
@@ -311,8 +312,8 @@ class Telemetry:
     # it has shown: `open(text)` when the call starts, `close(text)` when it
     # ends. None means the exchange is written to sys.stdout as it happens.
     exchange_factory: Callable[[], Any] | None = None
-    # js's console for this telemetry, made on the first event it draws.
-    console: Any = field(default=None, init=False, repr=False)
+    # js's own sink for this telemetry, made on its first event (`output.sink_of`).
+    own_sink: Any = field(default=None, init=False, repr=False)
 
     def settle_tools(self) -> None:
         settle_tool_trace(self)

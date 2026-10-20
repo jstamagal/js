@@ -230,3 +230,80 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
     capsys.readouterr()
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
     assert all(f"TOOL_LINE_{n}" in log for n in range(30)), log
+
+
+def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(monkeypatch, tmp_path, capsys):
+    import asyncio
+    import re
+
+    from tool_loading import after_loading
+
+    from js import output
+    from js.model_client import ModelToolCall
+    from js.toolkit import ToolContext
+    from test_output import _offline_config, _reply
+
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+
+    def respond(**kwargs):
+        if not any(part.kind == "tool_result" and part.tool_call_id == "r1"
+                   for message in kwargs["messages"] for part in message.parts):
+            return _reply(tool_calls=[ModelToolCall(id="r1", name="read", arguments='{"file_path":"notes.txt"}')])
+        kwargs["on_text"]("the answer")
+        return _reply("the answer")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(respond, "read"))
+
+    class Silent:
+        def emit(self, event):
+            pass
+
+    def record(console) -> str:
+        path = tmp_path / f"{console}.log"
+        log = transcript.open_transcript_sink([path])
+        telemetry = runtime.Telemetry(None, transcript_log=log)
+        if console == "silent":
+            telemetry.sink = output.Fanout(transcript.TranscriptSink(telemetry), Silent())
+        asyncio.run(runtime.run_turn_async(
+            _offline_config(tmp_path, trace=True, settings={}), "system",
+            [{"role": "user", "content": "read notes.txt"}], telemetry, tool_context=ToolContext(cwd=tmp_path)))
+        log.close()
+        return re.sub(r"\[\d\d:\d\d\] ", "", path.read_text(encoding="utf-8"))
+
+    drawn = record("js")
+    assert capsys.readouterr().out
+    assert record("silent") == drawn
+    assert capsys.readouterr().out == ""
+    assert "alpha" in drawn and "<APE> the answer" in drawn
+
+
+def test_transcript_notices_and_statistics_do_not_depend_on_console_rendering(capsys):
+    import io
+
+    from js import messages, output
+
+    class Silent:
+        def emit(self, event):
+            pass
+
+    def record(silent):
+        contents = io.StringIO()
+        log = transcript.TranscriptLogSink([contents], [])
+        log._stamp = lambda: "[00:00] "
+        telemetry = runtime.Telemetry(None, transcript_log=log)
+        if silent:
+            telemetry.sink = output.Fanout(transcript.TranscriptSink(telemetry), Silent())
+        with cli._transcript_stdio(telemetry):
+            runtime._output(telemetry, "run_line", fields=["model=offline", "tools=3"])
+            runtime._output(telemetry, "call_stats", label="", elapsed_s=1, finish="stop",
+                            tool_calls=0, tokens=10, first_token_s=0.1, prompt_tokens=20,
+                            cached_tokens=10)
+            runtime._notice(telemetry, messages.STEERED, flush=True)
+            runtime._notice(telemetry, messages.RESPONSE_INCOMPLETE, stderr=True, reason="length")
+        return contents.getvalue()
+
+    drawn = record(False)
+    assert drawn
+    assert capsys.readouterr().out
+    assert record(True) == drawn
+    assert capsys.readouterr() == ("", "")

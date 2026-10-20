@@ -3,7 +3,8 @@ a view.
 
 A turn emits `OutputEvent`s instead of writing to stdout; a `Sink` renders
 them. `Telemetry.sink` is the sink a turn emits to; without one, `sink_of`
-gives js's own, the console (`js/console.py`). See docs/nonblocking-windows.md.
+gives js's own: the transcript record (`js/transcript.py`), then the console
+(`js/console.py`). See docs/nonblocking-windows.md.
 
 The loop's events, and their fields:
 
@@ -95,26 +96,40 @@ class Key:
     __slots__ = ("__weakref__",)
 
 
+class Fanout:
+    """A sink that hands each event to its sinks, in order."""
+
+    def __init__(self, *sinks: Sink) -> None:
+        self.sinks = sinks
+
+    def emit(self, event: OutputEvent) -> None:
+        with LOCK:
+            for sink in self.sinks:
+                sink.emit(event)
+
+
 def sink_of(telemetry: Any) -> Sink:
-    """The sink ``telemetry`` emits to: its ``sink``, else js's own console,
-    made once per telemetry."""
+    """The sink ``telemetry`` emits to: its ``sink``, else js's own, made once
+    per telemetry: the transcript record (`transcript.TranscriptSink`), then
+    the console (`console.ConsoleSink`)."""
     sink = getattr(telemetry, "sink", None)
     if sink is not None:
         return sink
-    console = getattr(telemetry, "console", None)
-    if console is not None:
-        return console
+    own = getattr(telemetry, "own_sink", None)
+    if own is not None:
+        return own
     from .console import ConsoleSink
+    from .transcript import TranscriptSink
 
     with LOCK:
-        console = getattr(telemetry, "console", None)
-        if console is None:
-            console = ConsoleSink(telemetry)
+        own = getattr(telemetry, "own_sink", None)
+        if own is None:
+            own = Fanout(TranscriptSink(telemetry), ConsoleSink(telemetry))
             try:
-                telemetry.console = console
+                telemetry.own_sink = own
             except AttributeError:
                 pass
-    return console
+    return own
 
 
 class StdoutSink:

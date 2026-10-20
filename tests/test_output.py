@@ -129,6 +129,35 @@ def test_custom_sink_receives_retry_and_network_lines_without_using_the_screen(m
     assert capsys.readouterr() == ("", "")
 
 
+def test_fanout_sinks_receive_parallel_events_in_the_same_order():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    from js import output
+
+    entered, release = threading.Event(), threading.Event()
+    first, second = _Sink(), _Sink()
+
+    class PauseFirst:
+        def emit(self, event):
+            first.emit(event)
+            if event.name == "first":
+                entered.set()
+                assert release.wait(timeout=5)
+
+    fanout = output.Fanout(PauseFirst(), second)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(fanout.emit, OutputEvent("first"))
+        assert entered.wait(timeout=5)
+        two = pool.submit(fanout.emit, OutputEvent("second"))
+        wait([two], timeout=0.1)
+        release.set()
+        one.result()
+        two.result()
+
+    assert [e.name for e in first.events] == [e.name for e in second.events]
+
+
 def _offline_config(tmp_path, *, trace: bool, settings: dict):
     from js.config import Config
 

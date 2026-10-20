@@ -9,12 +9,18 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
+import sys
 import threading
+import weakref
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from . import display as _display
+from . import fset
+from . import messages as msgs
+from . import toolkit as _toolkit
 
 def strip_ansi(text: str) -> str:
     """``text`` without terminal escapes, the ones `display.clean` removes,
@@ -227,6 +233,106 @@ class TranscriptTee:
             return bool(self._primary.isatty())
         except Exception:
             return False
+
+
+class TranscriptSink:
+    """The transcript log's record of a turn's output events: every traced tool
+    call whole as it finishes, the streamed answer, and the lines selected by
+    transcript stdio capture. It writes to the
+    telemetry's ``transcript_log``, the one it had when the answer's turn
+    began; a log without a method for a record (`ToolRecordsOnly` has no
+    answer) skips that record. What the console draws does not change what is
+    recorded."""
+
+    def __init__(self, telemetry: Any) -> None:
+        self._telemetry = telemetry
+        # Per turn: [the log its answer goes to, an answer is being written].
+        self._streams: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+    def emit(self, event: Any) -> None:
+        handler = getattr(self, f"_on_{event.name}", None)
+        if handler is not None:
+            handler(**dict(event.fields))
+
+    def _plain(self, text: str, *, stderr: bool = False) -> None:
+        log = getattr(self._telemetry, "transcript_log", None)
+        stream = sys.stderr if stderr else sys.stdout
+        seen = set()
+        while stream is not None and id(stream) not in seen:
+            seen.add(id(stream))
+            if isinstance(stream, TranscriptTee) and stream._sink_getter() is log and log is not None:
+                log.write_plain(text, source=f"tee:{id(stream)}")
+                return
+            stream = getattr(stream, "_primary", None)
+
+    def _on_run_line(self, *, fields: list[str]) -> None:
+        parts = msgs.RUN_LINE.runs(fields="".join(
+            _display.FIELD_BREAK + _display.clean(field) for field in fields))
+        for row in _display.field_rows(parts, _display.block_width()):
+            self._plain(fset.to_ansi(row) + "\n")
+
+    def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
+                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int) -> None:
+        tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
+        cache = ""
+        if prompt_tokens > 0 and cached_tokens > 0:
+            cache = f"  cache {100.0 * cached_tokens / prompt_tokens:.0f}%"
+        ttft = f"  ttft {int(first_token_s * 1000)}ms" if first_token_s is not None else ""
+        self._plain(msgs.CALL_STATS.line(
+            label=f"{label}: " if label else "", ms=int(elapsed_s * 1000),
+            finish=finish, tool_calls=tool_calls, tokens=tokens, tps=tps, ttft=ttft, cache=cache) + "\n")
+
+    def _on_notice(self, *, message: msgs.Message, fields: dict, stderr: bool, flush: bool) -> None:
+        self._plain(message.line(**fields) + "\n", stderr=stderr)
+
+    def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
+        from . import stream_transport
+
+        if fallback and stream_transport._sink is None:
+            self._plain(stream_transport._net_line(line) + "\n", stderr=True)
+
+    def _on_tool_result(self, *, name: str, args: dict | None, result: Any, malformed: bool,
+                        context: Any, traced: bool = True, **_fields: Any) -> None:
+        if not traced:
+            return
+        write_plain = getattr(getattr(self._telemetry, "transcript_log", None), "write_plain", None)
+        if not callable(write_plain):
+            return
+        settings = getattr(getattr(context or _toolkit.STOCK_CONTEXT, "config", None), "settings", None)
+        level = _display.tools_level(settings)
+        if level <= 0:
+            return
+        # Every call whole, at every level.
+        if level < 3:
+            record = _display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
+        else:
+            record = _display.render_exchange(name, args, result, level=level,
+                                              preview=_display.preview_lines(settings),
+                                              malformed=malformed, settings=settings)
+        write_plain(_display.for_transcript(record))
+
+    def _on_stream_open(self, *, stream: Any) -> None:
+        self._streams[stream] = [getattr(self._telemetry, "transcript_log", None), False]
+
+    def _on_answer(self, *, stream: Any, text: str, suppressed: bool, **_fields: Any) -> None:
+        if suppressed:
+            return
+        if stream not in self._streams:
+            self._on_stream_open(stream=stream)
+        record = self._streams[stream]
+        record[1] = True
+        write_chunk = getattr(record[0], "write_assistant_chunk", None)
+        if callable(write_chunk):
+            write_chunk(text)
+
+    def _on_answer_end(self, *, stream: Any, suppressed: bool) -> None:
+        record = self._streams.get(stream)
+        if record is None or suppressed or not record[1]:
+            return
+        record[1] = False
+        end_stream = getattr(record[0], "end_assistant_stream", None)
+        if callable(end_stream):
+            end_stream()
 
 
 def open_transcript_sink(paths: list[Path]) -> TranscriptLogSink | None:

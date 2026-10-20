@@ -41,7 +41,8 @@ persists each completed turn.
 | `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results, dispatch, provider quirks |
 | `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply as output events (`StreamSink`) |
 | `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
-| `js/console.py` | js's own sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
+| `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
+| `js/transcript.py` | the transcript log (`TranscriptLogSink`), its stdout tee, and its record of output events (`TranscriptSink`) |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
 | `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
@@ -194,8 +195,12 @@ The loop writes nothing to the screen itself. Every visible thing it produces
 (tool calls and results, the run line, call stats, the answer and the
 reasoning, notices) is an `OutputEvent` with structured fields, sent to
 `Telemetry.sink`; `js/output.py` lists the events. Without a sink of its own a
-telemetry uses js's console (`js/console.py`), which draws them as js always
-has. A program that sets `Telemetry(None, sink=...)` gets the events and js
+telemetry uses js's: the transcript record (`transcript.TranscriptSink`), which
+writes each tool call whole and the answer to the transcript log, then the
+console (`js/console.py`), which draws them as js always has. The run line,
+call stats and notices are recorded from events while transcript stdio capture
+is active; command output continues through its tee on stdout and stderr.
+A program that sets `Telemetry(None, sink=...)` gets the events and js
 prints nothing. Beside the text the model gets, read, patch, write, remove and
 shell hand the screen their result as fields with `toolkit.core.view` (path,
 text before and after, line numbers, exit code, stdout and stderr); the

@@ -1,8 +1,8 @@
 """js's console: the sink that draws a turn's output events on stdout, or on
 the screen when the telemetry's factories are set (`Telemetry.display_factory`,
-`reasoning_factory`, `exchange_factory`). It also writes the tool records and
-the streamed answer to the transcript log, and mutes the transcript's stdout
-tee while it draws them, so each is recorded once."""
+`reasoning_factory`, `exchange_factory`). The transcript log records the tool
+calls and the answer from the same events (`transcript.TranscriptSink`), so
+the console mutes the transcript's stdout tee while it draws them."""
 
 from __future__ import annotations
 
@@ -27,12 +27,6 @@ def _tool_settings(tool_context: ToolContext | None) -> Any:
     """Live settings for the display dials; `/fset TOOLS_DISPLAY 3` reaches the next exchange."""
     context = tool_context or T.STOCK_CONTEXT
     return getattr(getattr(context, "config", None), "settings", None)
-
-
-def _write_transcript(telemetry: Any, text: str) -> None:
-    write_plain = getattr(getattr(telemetry, "transcript_log", None), "write_plain", None)
-    if callable(write_plain):
-        write_plain(display.for_transcript(text))
 
 
 def _print_trace(telemetry: Any, text: str) -> None:
@@ -95,7 +89,7 @@ class ToolTrace:
     a run: each tool's calls in it share one row. On a screen that can redraw
     (`Telemetry.exchange_factory`) a row is drawn when its first call starts
     and redrawn as calls join it; on plain stdout the run is written when it
-    ends. Every finished call is written to the transcript on its own."""
+    ends."""
 
     def __init__(self, telemetry: Any) -> None:
         self._telemetry = telemetry
@@ -214,8 +208,6 @@ class ToolTrace:
         with output.LOCK:
             if opened is not None:
                 opened.done.set()
-            # The transcript is the record: every call whole, at every level.
-            _write_transcript(self._telemetry, whole if whole is not None else finished)
             fold = opened.fold if opened is not None else None
             quiet = (level == 1 and not malformed and self._factory() is not None
                      and display.call_kind(name, args, settings) == "quiet")
@@ -272,7 +264,8 @@ def _print_run_line(fields: list[str]) -> None:
 @dataclass
 class _Stream:
     """The Displays one turn's streamed reply is drawn in, and the transcript
-    log it is written to: the one the telemetry had when the turn began."""
+    log whose tee is muted while they draw: the one the telemetry had when
+    the turn began."""
 
     transcript: Any = None
     answer: display.Display | None = None
@@ -318,7 +311,8 @@ class ConsoleSink:
     # Lines
 
     def _on_run_line(self, *, fields: list[str]) -> None:
-        _print_run_line(fields)
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            _print_run_line(fields)
 
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
                        first_token_s: float | None, prompt_tokens: int, cached_tokens: int) -> None:
@@ -327,16 +321,22 @@ class ConsoleSink:
         if prompt_tokens > 0 and cached_tokens > 0:
             cache = f"  cache {100.0 * cached_tokens / prompt_tokens:.0f}%"
         ttft = f"  ttft {int(first_token_s * 1000)}ms" if first_token_s is not None else ""
-        msgs.say(msgs.CALL_STATS, flush=True, label=f"{label}: " if label else "", ms=int(elapsed_s * 1000),
-                 finish=finish, tool_calls=tool_calls, tokens=tokens, tps=tps, ttft=ttft, cache=cache)
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            msgs.say(msgs.CALL_STATS, flush=True, label=f"{label}: " if label else "", ms=int(elapsed_s * 1000),
+                     finish=finish, tool_calls=tool_calls, tokens=tokens, tps=tps, ttft=ttft, cache=cache)
 
     def _on_notice(self, *, message: msgs.Message, fields: dict, stderr: bool, flush: bool) -> None:
-        msgs.say(message, file=sys.stderr if stderr else None, flush=flush, **fields)
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            msgs.say(message, file=sys.stderr if stderr else None, flush=flush, **fields)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
         from . import stream_transport
 
-        stream_transport.draw(level, line, fallback=fallback)
+        if fallback and stream_transport._sink is None:
+            with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+                stream_transport.draw(level, line, fallback=fallback)
+        else:
+            stream_transport.draw(level, line, fallback=fallback)
 
     # The streamed reply
 
@@ -359,10 +359,6 @@ class ConsoleSink:
         if suppressed:
             return
         shown = self._shown(stream)
-        if shown.transcript is not None:
-            write_chunk = getattr(shown.transcript, "write_assistant_chunk", None)
-            if callable(write_chunk):
-                write_chunk(text)
         with _muted_tee(shown.transcript):
             if shown.answer is None:
                 self._on_tools_settle()
@@ -379,10 +375,6 @@ class ConsoleSink:
         if shown is None:
             return
         if not suppressed and shown.answer is not None:
-            if shown.transcript is not None:
-                end_stream = getattr(shown.transcript, "end_assistant_stream", None)
-                if callable(end_stream):
-                    end_stream()
             with _muted_tee(shown.transcript):
                 shown.answer.finish()
         shown.answer = None
