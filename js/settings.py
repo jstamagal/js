@@ -139,6 +139,23 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
+    SettingSpec("MARKDOWN_INLINE_PADDING", "str", group="display"),
+    SettingSpec("EXCHANGE_ARGUMENT_STYLE", "str", group="display"),
+    SettingSpec("EXCHANGE_HEADER_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_FOUR_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_THREE_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_TWO_STYLE", "str", group="display"),
+    SettingSpec("SHELL_LIVE_LINES_MAX", "int", group="display"),
+    SettingSpec("ARGUMENT_CHARACTERS_MAX", "int", group="display"),
+    SettingSpec("DIFF_HUNK_GAP", "str", group="display"),
+    SettingSpec("DISPLAY_ELLIPSIS", "str", group="display"),
+    SettingSpec("ARGUMENT_NEWLINE_MARK", "str", group="display"),
+    SettingSpec("TABLE_RULE", "str", group="display"),
+    SettingSpec("EXCHANGE_RAIL", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_FAILED", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_OK", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_RUNNING", "str", group="display"),
     SettingSpec("LOOP_BACKOFF_MAX", "int", group="runtime"),
     SettingSpec("LOOP_FAILURES_MAX", "int", group="runtime"),
     SettingSpec("LOOP_ATTEMPTS_MULTIPLIER", "int", group="runtime"),

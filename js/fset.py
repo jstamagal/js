@@ -193,6 +193,13 @@ def held() -> Iterator[None]:
         _overrides.update(saved)
 
 
+def setting_value(name: str):
+    """A registered setting from the bound live store, or its shipped default."""
+    from . import settings as _s
+
+    return _s.knob(_settings, name)
+
+
 def bind_settings(settings: dict | None) -> None:
     """The live settings `$NAME` reads."""
     global _settings

@@ -502,9 +502,9 @@ def _markdown_styles(colours: Theme) -> dict[str, str]:
         "markdown.block_quote": colours.dim,
         "markdown.list": colours.highlight,
         "markdown.item.number": colours.highlight,
-        "markdown.h2": f"underline {colours.highlight}",
-        "markdown.h3": f"bold {colours.highlight}",
-        "markdown.h4": f"italic {colours.highlight}",
+        "markdown.h2": f"{fset.setting_value('MARKDOWN_HEADING_TWO_STYLE')} {colours.highlight}",
+        "markdown.h3": f"{fset.setting_value('MARKDOWN_HEADING_THREE_STYLE')} {colours.highlight}",
+        "markdown.h4": f"{fset.setting_value('MARKDOWN_HEADING_FOUR_STYLE')} {colours.highlight}",
         "markdown.link": colours.highlight,
         "markdown.link_url": f"underline {colours.dim}",
         "markdown.table.border": colours.separator,
@@ -538,7 +538,7 @@ class _FoldingTable(TableElement):
             return
         for index, row in enumerate(rows):
             if index:
-                yield Text("\u2500" * min(options.max_width, 3), "markdown.table.border")
+                yield Text(fset.setting_value("TABLE_RULE") * min(options.max_width, 3), "markdown.table.border")
             for column, cell in enumerate(row):
                 heading = headings[column] if column < len(headings) else Text("")
                 yield Text.assemble(heading, " ", cell, overflow="fold") if heading.plain else cell
@@ -603,8 +603,9 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
     for token in document.parsed:
         for child in token.children or ():
             if child.type == "code_inline":
-                child.content = f" {child.content} "
-            elif child.type == "softbreak":
+                padding = _setting(settings, "MARKDOWN_INLINE_PADDING")
+                child.content = f"{padding}{child.content}{padding}"
+            elif child.type == "softbreak" and _setting(settings, "MARKDOWN_HARD_BREAKS"):
                 child.type = "hardbreak"
     console.print(document)
     return _rendered_text(console, width).strip("\n") + "\n"
@@ -952,7 +953,6 @@ _UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
     "post_task": ("body",),
     "finish_task": ("result",),
 }
-_ARG_VALUE_CHARS = 40
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
 _SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
@@ -1015,7 +1015,10 @@ def for_transcript(rendered: str) -> str:
     """`rendered` as the transcript log records it: plain text without the
     rail, every exchange header opening with `TOOL_MARKER` whatever mark the
     screen drew."""
-    return _HEADER_MARK.sub(f"{TOOL_MARKER} ", _RAILED.sub("", _SGR.sub("", rendered)))
+    rail = re.compile(rf"^{re.escape(fset.setting_value('EXCHANGE_RAIL'))} ?", re.M)
+    marks = "|".join(re.escape(fset.setting_value(key)) for key in ("EXCHANGE_MARK_RUNNING", "EXCHANGE_MARK_OK", "EXCHANGE_MARK_FAILED"))
+    header = re.compile(rf"^(?:{marks}) +", re.M)
+    return header.sub(f"{TOOL_MARKER} ", rail.sub("", _SGR.sub("", rendered)))
 
 
 @dataclass
@@ -1175,16 +1178,16 @@ def key_argument(name: str, args: dict | None, room: int, whole: bool = False) -
         return ""
     lines = clean(args[key]).strip().split("\n")  # type: ignore[index]
     if whole:
-        return " ⏎ ".join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
+        return fset.setting_value("ARGUMENT_NEWLINE_MARK").join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
     text = lines[0].strip()
-    more = "…" if len(lines) > 1 else ""
+    more = fset.setting_value("DISPLAY_ELLIPSIS") if len(lines) > 1 else ""
     if key in _PATH_ARGS:
         text = short_path(text)
     if len(text) + len(more) <= room:
         return text + more
     if key in _PATH_ARGS:
-        return "…" + text[-(room - 1):]
-    return text[:room - 1] + "…"
+        return fset.setting_value("DISPLAY_ELLIPSIS") + text[-(room - 1):]
+    return text[:room - 1] + fset.setting_value("DISPLAY_ELLIPSIS")
 
 
 def _single_line(value: Any, whole: bool = False) -> str:
@@ -1199,10 +1202,11 @@ def _single_line(value: Any, whole: bool = False) -> str:
             text = str(value)
     text = clean(text)
     if whole:
-        return text.replace("\n", " ⏎ ")
+        return text.replace("\n", fset.setting_value("ARGUMENT_NEWLINE_MARK"))
     first, _, rest = text.partition("\n")
-    if rest or len(first) > _ARG_VALUE_CHARS:
-        first = first[:_ARG_VALUE_CHARS - 1] + "…"
+    maximum = int(fset.setting_value("ARGUMENT_CHARACTERS_MAX"))
+    if rest or len(first) > maximum:
+        first = first[:maximum - 1] + fset.setting_value("DISPLAY_ELLIPSIS")
     return first
 
 
@@ -1297,8 +1301,10 @@ class _Block:
         give."""
         th = self.theme
         args = args if isinstance(args, dict) else {}
-        row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
-                            (f" {clean(name)} ", f"bold {th.accent} on {th.panel}"))
+        mark = fset.setting_value({MARK: "EXCHANGE_MARK_RUNNING", OK: "EXCHANGE_MARK_OK", FAIL: "EXCHANGE_MARK_FAILED"}[self.state])
+        style = fset.setting_value("EXCHANGE_HEADER_STYLE")
+        row = Text.assemble((f"{mark} ", f"{style} {self.colour()}"),
+                            (f" {clean(name)} ", f"{style} {th.accent} on {th.panel}"))
         if malformed:
             row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
@@ -1306,7 +1312,7 @@ class _Block:
             whole = self.whole and _BODY_ARG.get(name) != _key_name(name, args)
             about = key_argument(name, args, 10 ** 6, whole)
         if about:
-            row.append(" " + about, "bold")
+            row.append(" " + about, fset.setting_value("EXCHANGE_ARGUMENT_STYLE"))
         if rest is None:
             rest = _other_arguments(name, args, self.whole)
         if rest:
@@ -1370,7 +1376,7 @@ class _Block:
         if not self.rows:
             return ""
         console = _render_console(self.width)
-        rail = Text.assemble((RAIL + " ", self.colour()))
+        rail = Text.assemble((fset.setting_value("EXCHANGE_RAIL") + " ", self.colour()))
         for row in self.rows:
             console.print(rail + row, soft_wrap=True)
         return console.file.getvalue()  # type: ignore[attr-defined]
@@ -1516,7 +1522,7 @@ def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text
         hunk = _HUNK.match(line)
         if hunk is not None:
             if rows:
-                rows.append(("", Text("⋯", colours.dim)))
+                rows.append(("", Text(fset.setting_value("DIFF_HUNK_GAP"), colours.dim)))
             old, new = int(hunk.group(1)), int(hunk.group(2))
         elif line.startswith(("--- ", "+++ ")) and not old and not new:
             continue
@@ -1536,7 +1542,6 @@ def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text
 # result, which only acknowledges it.
 _SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task": "result"}
 # Rows of a running command's output kept on screen.
-LIVE_LINES = 6
 
 
 def _last_line(output: ToolOutput) -> str:
@@ -1681,7 +1686,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
         if level >= 2:
             _program(block, name, args, level, preview)
         if live:
-            tail = [clean(line) for line in live][-LIVE_LINES:]
+            tail = [clean(line) for line in live][-int(_setting(settings, "SHELL_LIVE_LINES_MAX")):]
             block.panel([Text(line, colours.panel_text) for line in tail])
         return block.render()
     output = tool_output(name, result)
