@@ -33,9 +33,9 @@ directive without the loader running it. Two ways:
   * a backslash immediately before ANY form -- ``\!{sh ...}``, ``\{{VAR}}``,
     ``\``` ``!sub`` -- emits the directive verbatim, minus the one escape
     backslash. This is the universal escape and the only one for fenced blocks.
-  * an inline ``!{...}`` / ``{{...}}`` wrapped in a markdown backtick code span --
+  * an inline ``!{...}`` / ``{{...}}`` inside a markdown backtick code span --
     e.g. ```` `!{sh ...}` ```` -- is left literal, backticks and all. An
-    ergonomic shortcut for prose; only a FULLY wrapped span is protected (a lone
+    ergonomic shortcut for prose; only a closed span is protected (a lone
     leading backtick still expands).
 """
 
@@ -75,18 +75,15 @@ def session_variables(cfg) -> dict[str, str]:
         "CURRENT_SESSION_MODEL": getattr(cfg, "model", ""),
     }
 
-# One combined scanner: fenced block | inline | env shorthand | built-in. Matched in this
-# order so a ```!fence wins over the inline form. re.sub replaces each match
+# One combined scanner: fenced block | code span | inline | env shorthand | built-in.
+# Explicit ```!fences win over code spans. re.sub replaces each match
 # independently and never re-scans the replacement (single pass / injection-safe).
 #
 # A leading backslash escapes any form: when present the
 # whole match is emitted verbatim minus that backslash (see _resolve) -- the only
-# escape that reaches the fenced block. The inline / env / built-in forms additionally carry
-# an optional leading backtick (itick / etick / vtick); the trailing ``(?(name)`)``
-# matches a closing backtick ONLY when the leading one was captured, so a directive
-# fully wrapped in a backtick code span is matched as a unit and emitted literally,
-# while a directive with no backticks -- or only a stray leading one -- backtracks
-# to the unwrapped form and expands.
+# escape that reaches the fenced block. A code span consumes matching complete
+# backtick runs, keeping every directive inside it literal. The built-in scanner
+# also recognizes adjacent backticks when substituting inside subsystem bodies.
 #
 # The fenced form additionally must OPEN A LINE, like a real markdown fence: the
 # lookbehind admits only the start of the text or a position straight after a newline
@@ -97,6 +94,7 @@ def session_variables(cfg) -> dict[str, str]:
 _DIRECTIVE = re.compile(
     r"(?:"
     r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
+    r"|(?P<literal_span>(?<![\\`])(?P<span_ticks>`+)(?!`).*?(?<!`)(?P=span_ticks)(?!`))"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r"|" + _VARIABLE.pattern +
@@ -158,6 +156,8 @@ def expand_prompt(
         return builtins.get(m.group("variable"), m.group(0))
 
     def _resolve(m: re.Match) -> str:
+        if m.group("literal_span") is not None:
+            return m.group(0)
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
         # Each branch carries its own escape group because the fenced branch has to
         # sit behind a line-start lookbehind that a shared leading group would break.

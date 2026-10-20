@@ -71,6 +71,16 @@ def test_backtick_wrapped_code_directive_not_evaluated():
     assert expand_prompt(text, allow_code=False) == text
 
 
+def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
+    marker = tmp_path / "executed"
+    text = f"``example `tick`: !{{sh touch {marker}}} end``"
+
+    actual = expand_prompt(text, allow_code=True)
+
+    assert not marker.exists()
+    assert actual == text
+
+
 def test_backtick_wrapped_readonly_directive_not_blanked():
     # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
     text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
