@@ -244,10 +244,13 @@ def _run_subsystem(
     is_code, runner = spec
     if is_code and not allow_code:
         raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.said(name=name))
-    if is_code:
-        # Code subsystems run against the real process environment, always.
-        return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
-    return runner(body, environ=environ, timeout_s=timeout_s)
+    try:
+        if is_code:
+            # Code subsystems run against the real process environment, always.
+            return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
+        return runner(body, environ=environ, timeout_s=timeout_s)
+    except OSError as exc:
+        raise PromptExpansionError(f"!{{{name}}}: {type(exc).__name__}: {exc}") from exc
 
 
 # ---- read-only subsystems (always on) ----

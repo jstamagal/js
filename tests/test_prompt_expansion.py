@@ -156,6 +156,25 @@ def test_failed_code_run_degrades_to_literal(capsys):
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
+@pytest.mark.parametrize("on_error", ["warn", "raise"])
+def test_directive_execution_permission_errors_follow_failure_policy(tmp_path, monkeypatch, capsys, on_error):
+    shell = tmp_path / "sh"
+    shell.write_text("#!/bin/sh\n", encoding="utf-8")
+    shell.chmod(0o600)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    text = "!{sh printf hello} then !{env AFTER}"
+
+    if on_error == "raise":
+        with pytest.raises(PromptExpansionError) as failure:
+            expand_prompt(text, allow_code=True, env={"AFTER": "continued"}, on_error=on_error)
+        assert isinstance(failure.value.__cause__, PermissionError)
+    else:
+        assert expand_prompt(text, allow_code=True, env={"AFTER": "continued"}) == (
+            "!{sh printf hello} then continued"
+        )
+        assert capsys.readouterr().err
+
+
 def test_nonzero_exit_with_output_uses_the_output_and_warns(capsys):
     """grep with no match, or a script ending on a false test, exits nonzero
     after printing what the prompt wants."""
