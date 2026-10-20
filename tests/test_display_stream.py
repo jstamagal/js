@@ -227,29 +227,32 @@ def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one():
     assert "ORPHAN_RESULT" not in out
 
 
-def test_clean_is_linear_on_unterminated_string_openers(monkeypatch):
-    """`\\x1b]` with no terminator made the lazy regex rescan to the end from
-    every opener (quadratic). Count terminator searches instead of timing."""
+def test_clean_is_linear_on_unterminated_string_openers():
+    """`\\x1b]` with no terminator once made clean rescan to the end from
+    every opener (quadratic): 200,000 of them would take minutes."""
+    assert display.clean("\x1b]" * 200_000 + "\x07tail") == "tail"
+
+
+# One of every class of sequence the escape parser knows, some cut short.
+_SEQUENCES = ["\x1b[31m", "\x1b[?25l", "\x1b[1;2:3m", "\x1b[ q", "\x9b2J", "\x1b(0", "\x1b#8", "\x1bc",
+              "\x1b7", "\x1b]0;title\x07", "\x1b]8;;http://x\x1b\\", "\x9d2;t\x9c", "\x1bPq#0;2;0\x1b\\",
+              "\x90$qm\x9c", "\x1bX sos \x1b\\", "\x1b^pm\x07", "\x1b_apc\x9c", "\x98sos\x9c", "\x1b",
+              "\x1b[", "\x1b]", "\x1bP", "\x18", "\x1a", "\x85", "\x7f", "\r", "\x00"]
+_TEXT = ["plain", " ", "\n", "\t", "漢字", "😀", "é", "[", "]", "\\", ";", "0"]
+
+
+def test_cleaning_in_any_chunking_is_cleaning_the_whole():
     import random
 
-    calls = []
-    real_close = display._STRING_CLOSE
-
-    class Counting:
-        def search(self, text, pos=0):
-            calls.append(pos)
-            return real_close.search(text, pos)
-
-    monkeypatch.setattr(display, "_STRING_CLOSE", Counting())
-    display.clean("\x1b]" * 20000)
-    assert len(calls) <= 1
-    monkeypatch.undo()
-
-    random.seed(7)
-    alpha = ["\x1b]", "\x1bP", "\x07", "\x1b\\", "\x9c", "\x9d", "a", "\n", "\x1b", "["]
-    for _ in range(20000):
-        sample = "".join(random.choice(alpha) for _ in range(random.randint(0, 10)))
-        assert display._strip_string_sequences(sample) == display._STRING_SEQ.sub("", sample), repr(sample)
+    rng = random.Random(9)
+    for _ in range(3000):
+        text = "".join(rng.choice(_SEQUENCES if rng.random() < 0.4 else _TEXT) for _ in range(rng.randint(0, 12)))
+        whole = display.clean(text)
+        assert "\x1b" not in whole and not any(0x80 <= ord(char) <= 0x9f for char in whole), repr(text)
+        cuts = sorted(rng.sample(range(len(text) + 1), min(len(text) + 1, rng.randint(0, 6))))
+        cleaner = display.StreamCleaner()
+        pieces = [text[start:end] for start, end in zip([0, *cuts], [*cuts, len(text)], strict=True)]
+        assert "".join(cleaner.feed(piece) for piece in pieces) + cleaner.flush() == whole, (repr(text), cuts)
 
 
 def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
@@ -377,6 +380,19 @@ def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
         block.append(text[start:start + 10])
     assert sum(wrapped) < 8 * len(text), (sum(wrapped), len(text))
     assert transcript.strip_ansi(scroll.buffer.text).count("paragraph") == 200
+
+
+def test_a_folded_row_and_its_hint_stay_inside_the_window_with_wide_text(monkeypatch):
+    from prompt_toolkit.utils import get_cwidth
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    scroll = screen.Scrollback()
+    shell = "shell=bash\nexit=0\n--- stdout ---\n完成了\n"
+    folded = display.render_exchange("shell", {"command": "echo " + "汉字" * 9}, shell, level=1)
+    whole = display.render_exchange("shell", {"command": "echo " + "汉字" * 9}, shell, level=3)
+    span = scroll.exchange_open(folded)
+    scroll.exchange_close(span, folded, expanded=whole)
+    assert all(get_cwidth(row) < 40 for row in ANSI.sub("", scroll.buffer.text).split("\n")), scroll.buffer.text
 
 
 def test_a_word_carried_to_a_narrower_row_is_cut_to_fit_it(monkeypatch):

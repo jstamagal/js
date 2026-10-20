@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
@@ -110,14 +111,18 @@ from .toolkit import ToolContext
 
 class _ShortHelpAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        parser._print_message(msgs.SHORT_HELP.text(), sys.stdout)
+        parser._print_message(msgs.SHORT_HELP.words(), sys.stdout)
         parser.exit()
 
 
 def _error_text(e: BaseException) -> str:
+    """``e`` for a failure line: a provider's own one-line message as it is,
+    any other error after its kind; a `said()` entry inside either keeps its
+    format (`msgs.of_error`)."""
+    said = msgs.of_error(e)
     if isinstance(e, routing.ProviderNotLoggedInError):
-        return str(e)
-    return f"{type(e).__name__}: {e}"
+        return said
+    return msgs.ERROR_OF_KIND.said(kind=type(e).__name__, error=said)
 
 
 def _registry_for(cfg) -> object:
@@ -480,7 +485,7 @@ def _print_session_list(*, json_lines: bool) -> int:
             print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
         return 0
 
-    headings = tuple(msgs.LIST_HEADINGS.text().split())
+    headings = tuple(msgs.LIST_HEADINGS.words().split())
     now = time.time()
     rows = []
     for record in records:
@@ -494,7 +499,7 @@ def _print_session_list(*, json_lines: bool) -> int:
                 session_query.when_text(record["mtime"], now),
                 str(record["size"]),
                 str(record["user_turns"]),
-                (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).text(),
+                (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).words(),
                 record["cwd"] or "-",
                 identity or "-",
             )
@@ -1184,14 +1189,14 @@ def _maybe_auto_compact(cfg: Config, state: dict) -> None:
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if not canonical_id:
-        raise ValueError(msgs.NO_PROVIDER_SET.text())
+        raise ValueError(msgs.NO_PROVIDER_SET.said())
     saved = logins.load_logins().get(canonical_id)
     if saved is not None:
         return saved
     provider_def = providers.provider_for_login(canonical_id)
     resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
     if provider_def.requires_api_key and not resolved_api_key:
-        raise ValueError(msgs.PROVIDER_NEEDS_KEY.text(provider=canonical_id))
+        raise ValueError(msgs.PROVIDER_NEEDS_KEY.said(provider=canonical_id))
     return logins.Login(
         provider_id=canonical_id,
         sdk_provider_id=provider_def.effective_sdk_provider_id,
@@ -1426,7 +1431,9 @@ def _run_migrate_config() -> int:
             deleted.append(key)
             lines.append(f"# deleted: set {key} {value}")
         else:
-            lines.append(f"set {rename.renamed_key(key) or key} {rename.renamed_value(key, str(value))}")
+            new = rename.renamed_key(key) or key
+            verb = "fset" if rename.is_fset(new) else "set"
+            lines.append(f"{verb} {new} {settings.jsrc_text(new, rename.renamed_value(key, str(value)))}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     msgs.say(msgs.MIGRATE_WROTE, path=target, legacy=legacy)
@@ -1518,13 +1525,9 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
         _sync_provider_from_live_settings(state, keys)
     if _changed_lock_subagent_model_key(keys) or "PYTHON_KERNEL" in keys:
         _sync_tool_registry_from_live_settings(cfg, state)
-    lines = result.lines
     if "BANNER" in keys:
-        # The answer to `set BANNER` already speaks under the new banner.
-        old = msgs.BANNER
         msgs.set_banner(str(settings.knob(state["settings"], "BANNER")))
-        lines = [msgs.banner(line[len(old) + 1:]) if line.startswith(old + " ") else line for line in lines]
-    for out in lines:
+    for out in result.lines:
         print(out)
     if result.error:
         return result.error
@@ -1700,7 +1703,7 @@ def _save_server(cfg: Config, state: dict) -> str | None:
         return msgs.SAVE_FAILED.said(error=exc)
     except OSError as exc:
         return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
-    msgs.say(msgs.SAVED_SERVER, settings=login_defaults.render(values) or msgs.NONE_VALUE.text(),
+    msgs.say(msgs.SAVED_SERVER, settings=login_defaults.render(values) or msgs.NONE_VALUE.said(),
              model=turn.model, provider=login.provider_id)
     return None
 
@@ -1839,10 +1842,10 @@ def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
 
 def _cost_text(tally: usage_mod.Tally) -> str:
     if not tally.priced:
-        return msgs.COST_UNPRICED.text()
+        return msgs.COST_UNPRICED.said()
     dollars = usage_mod.format_dollars(tally.cost)
     if tally.unpriced_calls:
-        return msgs.COST_PARTLY_PRICED.text(cost=dollars, calls=msgs.plural(tally.unpriced_calls, "call"))
+        return msgs.COST_PARTLY_PRICED.said(cost=dollars, calls=msgs.plural(tally.unpriced_calls, "call"))
     return dollars
 
 
@@ -2006,12 +2009,12 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
         return _help_set(rest.strip())
     if topic.lower() == "fset":
         return _help_fset(rest.strip())
-    rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
-    rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
-    rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.text(path=command.path, description=command.description))
+    rows = [(f"/{c.usage}", c.doc.said()) for c in dict.fromkeys(COMMANDS.values())]
+    rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in (state.get("aliases") or {}).items()]
+    rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.said(path=command.path, description=command.description))
              for name, command in prompt_commands.discover(Path.cwd()).items()
              if name not in COMMANDS and name not in (state.get("aliases") or {})]
-    rows += [("@path/to/file", msgs.HELP_ATTACH.text()), ("exit", msgs.HELP_EXIT.text())]
+    rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
     width = max(len(usage) for usage, _doc in rows)
     msgs.say(msgs.HELP_HEADING)
     for usage, doc in rows:
@@ -2487,8 +2490,8 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
         if resolved is None or not Path(resolved).is_dir():
             agents_dir = _paths.global_agents_dir()
             agent_id = getattr(cfg, "agent_id", "?")
-            return msgs.NO_SUCH_AGENT.text(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
-    return str(exc)
+            return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
+    return msgs.of_error(exc)
 
 
 def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
@@ -2643,12 +2646,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     if bus is not None:
         # On a bus the agent gets send/who, reads its inbox at every tool
         # boundary, and sleeps on the inbox instead of exiting after the turn.
-        # SIGTERM (the runner stopping the swarm) ends it like ^C: the session
-        # is persisted and the exit code says interrupted.
         active_registry = swarm_mod.with_bus_tools(active_registry)
         (tool_context or runtime.T.STOCK_CONTEXT).swarm = bus
-        with contextlib.suppress(ValueError):  # not the main thread: no signal hook
-            signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
         if model is not None
@@ -2775,6 +2774,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                              trace_override=debug or bool(debug_file) or cfg.trace,
                              tool_context=tool_context, **turn_kwargs)
 
+    # On a bus, SIGTERM (the runner stopping the swarm) ends the run like ^C:
+    # the session is persisted and the exit code says interrupted. The
+    # handler this run replaces is put back when it ends.
+    previous_sigterm = None
+    if bus is not None:
+        with contextlib.suppress(ValueError):  # not the main thread: no signal hook
+            previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     try:
         try:
             if debug:
@@ -2800,7 +2806,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 trace = bool(getattr(cfg, "trace", False))
                 visible_transcript = telemetry.transcript_log
                 visible_display = telemetry.display_factory
-                telemetry.transcript_log = None
+                # The answer is recorded once it is reprinted below; the tool
+                # calls are recorded as they finish.
+                telemetry.transcript_log = (transcript_mod.ToolRecordsOnly(visible_transcript)
+                                            if visible_transcript is not None else None)
                 if trace:
                     answer_sink = capture
                     telemetry.display_factory = (
@@ -2832,6 +2841,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             if trace_sink is not None:
                 trace_sink.close()
             telemetry.trace_sink = None
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
 
     if stats_json or stats_csv:
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
@@ -3192,7 +3203,7 @@ def _run_commit(target: str | None,
         survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
     survey = survey_out.getvalue().rstrip()
     if survey_rc != 0:
-        detail = survey_err.getvalue().strip() or survey or msgs.SURVEY_EXITED.text(code=survey_rc)
+        detail = survey_err.getvalue().strip() or survey or msgs.SURVEY_EXITED.said(code=survey_rc)
         msgs.warn(msgs.SURVEY_FAILED, path=target_dir, error=detail)
         return 1
 
@@ -3507,7 +3518,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         else:
             _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
             _requeue_notes(state, notes)
-        M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
+        M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
 
 
 def _steer_mode(state: dict) -> str:
@@ -3753,15 +3764,33 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     )
 
 
-def _resume_view(state: dict, width: int) -> str:
-    """The last RESUME_EXCHANGES exchanges of the session, drawn at `width`."""
+def _show_resume(state: dict, telemetry: runtime.Telemetry, width: int) -> None:
+    """Draw the last RESUME_EXCHANGES exchanges of the session the way a turn
+    draws them: its text printed, its tool calls through the turn's tool trace,
+    so a resumed row folds, carries its whole form and unfolds as a live one
+    does. ``telemetry``'s exchange factory is the screen's, when there is one."""
     live = state.get("settings") or {}
     count = settings.knob(live, "RESUME_EXCHANGES")
-    return display_mod.render_exchanges(
-        state["messages"], count if isinstance(count, int) else 0, width=width,
-        level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
-        markdown=display_mod.markdown_enabled(live), settings=live,
-    )
+    replay = runtime.Telemetry(None)
+    replay.exchange_factory = getattr(telemetry, "exchange_factory", None)
+    context = SimpleNamespace(config=SimpleNamespace(settings=live))
+    for kind, part in display_mod.resume_parts(state["messages"], count if isinstance(count, int) else 0,
+                                               width=width, markdown=display_mod.markdown_enabled(live)):
+        if kind == "text":
+            runtime.settle_tool_trace(replay)
+            print(msgs.for_stream(part), end="", flush=True)
+            continue
+        name, args, result = part
+        if result is None:
+            # A call the session holds no result for is drawn as it was left, running.
+            runtime.settle_tool_trace(replay)
+            print(msgs.for_stream(display_mod.render_exchange(
+                name, args, None, level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
+                settings=live)), end="")
+            continue
+        opened = runtime._trace_call(replay, context, name, args)
+        runtime._trace_result(replay, context, name, result, args=args, exchange=opened)
+    runtime.settle_tool_trace(replay)
 
 
 async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
@@ -3922,7 +3951,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
                 if banner:
                     print(banner)
                 _emit_session_event(state, telemetry, cfg, "session_start")
-                print(_resume_view(state, screen.ScreenLive(loop, scrollback, app).width()), end="")
+                _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
                 await app.run_async()
             finally:
                 # Whatever still runs ends while stdout is the scrollback, so
@@ -4186,7 +4215,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             else:
                 _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
                 _requeue_notes(state, notes)
-            M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
+            M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
     _emit_session_event(state, telemetry, cfg, "session_end")
     mcp_loop.run(_close_session_mcp_host(state))
     model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
@@ -4296,7 +4325,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     def _bench() -> str:
         benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
         if not benches:
-            return msgs.PRINTONLY_NO_BENCHMARKS.text()
+            return msgs.PRINTONLY_NO_BENCHMARKS.said()
         blocks = []
         for bm in benches:
             body = expand_prompt(
@@ -4315,7 +4344,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         initialize() injects them: expanded, in order, one block per message."""
         exchanges = raw_spec.exchanges if raw_spec is not None else ()
         if not exchanges:
-            return msgs.PRINTONLY_NO_EXCHANGES.text()
+            return msgs.PRINTONLY_NO_EXCHANGES.said()
         blocks = []
         for exchange in exchanges:
             for role in ("user", "agent"):
@@ -4349,11 +4378,11 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     chunks: list[str] = []
     for ch in sections:
         try:
-            body = builders[ch]()
+            body = msgs.words_of(builders[ch]())
         except Exception as e:  # noqa: BLE001 — a failed section is reported, never kills the run
             error = f"{type(e).__name__}: {e}"
             msgs.warn(msgs.PRINTONLY_SECTION_FAILED, section=_PRINTONLY_TITLES[ch], error=error)
-            body = msgs.PRINTONLY_SECTION_FAILED.text(section=_PRINTONLY_TITLES[ch], error=error)
+            body = msgs.PRINTONLY_SECTION_FAILED.plain(section=_PRINTONLY_TITLES[ch], error=error)
         chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
 
     text = "\n\n".join(chunks)
@@ -4407,57 +4436,57 @@ def _main(argv: list[str] | None = None) -> int:
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
     parser = msgs.ArgumentParser(add_help=False)
-    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help=msgs.OPT_HELP.text())
-    parser.add_argument("--help-full", action="help", help=msgs.OPT_HELP_FULL.text())
-    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.text())
-    parser.add_argument("--logout", metavar="PROVIDER", help=msgs.OPT_LOGOUT.text())
-    parser.add_argument("-p", "--prompt", nargs="?", const="-", help=msgs.OPT_PROMPT.text())
-    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help=msgs.OPT_FILE.text())
-    parser.add_argument("-a", "--agent", help=msgs.OPT_AGENT.text())
-    parser.add_argument("-m", "--model", help=msgs.OPT_MODEL.text())
+    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help=msgs.OPT_HELP.words())
+    parser.add_argument("--help-full", action="help", help=msgs.OPT_HELP_FULL.words())
+    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.words())
+    parser.add_argument("--logout", metavar="PROVIDER", help=msgs.OPT_LOGOUT.words())
+    parser.add_argument("-p", "--prompt", nargs="?", const="-", help=msgs.OPT_PROMPT.words())
+    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help=msgs.OPT_FILE.words())
+    parser.add_argument("-a", "--agent", help=msgs.OPT_AGENT.words())
+    parser.add_argument("-m", "--model", help=msgs.OPT_MODEL.words())
     parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
-                        help=msgs.OPT_URL.text())
-    parser.add_argument("-C", dest="cd", metavar="DIR", help=msgs.OPT_CD.text())
-    parser.add_argument("-d", "--debug", action="store_true", help=msgs.OPT_DEBUG.text())
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help=msgs.OPT_DEBUG_FILE.text())
+                        help=msgs.OPT_URL.words())
+    parser.add_argument("-C", dest="cd", metavar="DIR", help=msgs.OPT_CD.words())
+    parser.add_argument("-d", "--debug", action="store_true", help=msgs.OPT_DEBUG.words())
+    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help=msgs.OPT_DEBUG_FILE.words())
     session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", nargs="?", const="", metavar="NAME", help=msgs.OPT_SESSION.text())
-    session_group.add_argument("--session-key", metavar="KEY", help=msgs.OPT_SESSION_KEY.text())
-    parser.add_argument("-n", "--no-save", action="store_true", help=msgs.OPT_NO_SAVE.text())
-    parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.text())
-    parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.text())
-    parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.text())
-    parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.text())
-    parser.add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.text())
-    parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.text())
-    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.text())
-    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.text())
-    parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.text())
+    session_group.add_argument("-s", "--session", nargs="?", const="", metavar="NAME", help=msgs.OPT_SESSION.words())
+    session_group.add_argument("--session-key", metavar="KEY", help=msgs.OPT_SESSION_KEY.words())
+    parser.add_argument("-n", "--no-save", action="store_true", help=msgs.OPT_NO_SAVE.words())
+    parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.words())
+    parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.words())
+    parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.words())
+    parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.words())
+    parser.add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.words())
+    parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.words())
+    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.words())
+    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.words())
+    parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.words())
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
-                        help=msgs.OPT_EXTRA.text())
+                        help=msgs.OPT_EXTRA.words())
     parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
-                        help=msgs.OPT_PRESET.text())
-    parser.add_argument("--ignore-local", action="store_true", help=msgs.OPT_IGNORE_LOCAL.text())
-    parser.add_argument("--ignore-global", action="store_true", help=msgs.OPT_IGNORE_GLOBAL.text())
-    parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.text())
-    parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.text())
-    parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.text())
-    parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.text())
-    parser.add_argument("--swarm", metavar="ROOT/NAME", help=msgs.OPT_SWARM.text())
-    parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.text())
-    parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.text())
-    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.text())
-    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.text())
-    parser.add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.text())
-    parser.add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.text())
-    parser.add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.text())
+                        help=msgs.OPT_PRESET.words())
+    parser.add_argument("--ignore-local", action="store_true", help=msgs.OPT_IGNORE_LOCAL.words())
+    parser.add_argument("--ignore-global", action="store_true", help=msgs.OPT_IGNORE_GLOBAL.words())
+    parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.words())
+    parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.words())
+    parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.words())
+    parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.words())
+    parser.add_argument("--swarm", metavar="ROOT/NAME", help=msgs.OPT_SWARM.words())
+    parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.words())
+    parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.words())
+    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.words())
+    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.words())
+    parser.add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.words())
+    parser.add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.words())
+    parser.add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.words())
     parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
-                        help=msgs.OPT_IM_A_PUSSY.text())
+                        help=msgs.OPT_IM_A_PUSSY.words())
     parser.add_argument("-i", "--no-shell-history", dest="no_shell_history", action="store_true",
-                        help=msgs.OPT_NO_SHELL_HISTORY.text())
+                        help=msgs.OPT_NO_SHELL_HISTORY.words())
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
-                        help=msgs.OPT_PRINTONLY.text())
-    parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.text())
+                        help=msgs.OPT_PRINTONLY.words())
+    parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
     args = parser.parse_args(argv)
     if args.loop is not None:
         from . import loop_controller
@@ -4958,8 +4987,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             transcript_stack.close()
         _queue_switch(state, blocking=False)
         return code
-    print(banner)
-    print(_resume_view(state, display_mod.terminal_width() - 1), end="")
+    print(msgs.for_stream(banner))
+    _show_resume(state, telemetry, display_mod.terminal_width() - 1)
     try:
         _blocking_repl(cfg, state, telemetry, session, prompt_spec)
     finally:

@@ -131,11 +131,11 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
             return m.group(0)
         body = m.group("body")
         if "{{#if" in body or "{{#unless" in body:
-            _warn_once(msgs.DESCRIPTION_NESTED_BLOCK.text(label=label))
+            _warn_once(msgs.DESCRIPTION_NESTED_BLOCK.said(label=label))
             return m.group(0)
         names = m.group("names").split()
         if not names:
-            _warn_once(msgs.DESCRIPTION_BLOCK_NAMES_NO_TOOL.text(label=label))
+            _warn_once(msgs.DESCRIPTION_BLOCK_NAMES_NO_TOOL.said(label=label))
             return m.group(0)
         keep = any(n in active for n in names)
         if m.group("kind") == "unless":
@@ -146,5 +146,5 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
     # A marker surviving where every BALANCED block (escaped ones still match the
     # block regex) has been stripped is a genuinely unpaired open/close tag.
     if _STRAY_MARKER.search(_NAME_BLOCK.sub("", text)):
-        _warn_once(msgs.DESCRIPTION_UNBALANCED.text(label=label))
+        _warn_once(msgs.DESCRIPTION_UNBALANCED.said(label=label))
     return rendered.strip()

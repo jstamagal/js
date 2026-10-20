@@ -12,7 +12,13 @@ from js import paths
 from js.capped_process import _StreamCapture
 from js.toolkit import ToolContext
 from js.toolkit import fs
-from js.toolkit.process_net import shell
+from js.toolkit.core import for_model
+from js.toolkit.process_net import shell as _shell
+
+
+def shell(*args, **kwargs):
+    """The shell tool's result as the model receives it (`for_model`)."""
+    return for_model(_shell(*args, **kwargs))
 
 # The facts a marker carries, in order: the limit that cut the output, the
 # stream, the omitted byte range, the stream's total, the file with all of it,

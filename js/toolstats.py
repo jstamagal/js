@@ -165,13 +165,13 @@ def latest_session(data_dir: Path, agent: str | None) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.text())
-    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.text())
-    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.text())
-    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.text())
-    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.text())
-    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.text())
-    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.text())
+    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.words())
+    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.words())
+    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.words())
+    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.words())
+    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.words())
+    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.words())
+    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.words())
     args = parser.parse_args(argv)
 
     if args.latest:
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.path:
         path = Path(args.path)
     else:
-        parser.error(msgs.TOOLSTATS_NEEDS_PATH.text())
+        parser.error(msgs.TOOLSTATS_NEEDS_PATH.words())
     summary = summarize(path)
     for item in args.extra:
         key, _, value = item.partition("=")

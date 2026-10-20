@@ -9,6 +9,7 @@ import asyncio
 import io
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -389,9 +390,13 @@ def test_a_swarm_agent_sleeps_after_its_turn_and_wakes_on_a_message(tmp_path, mo
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     out = io.StringIO()
 
+    before = signal.getsignal(signal.SIGTERM)
     code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"), events=headless.JsonEvents(out))
 
     assert code == 0
+    # The run's SIGTERM handler is gone once it ends: a later SIGTERM to this
+    # process is not turned into ^C.
+    assert signal.getsignal(signal.SIGTERM) is before
     assert len(turns) == 2
     assert "ping" in turns[1][-1] and "[#1 b -> you" in turns[1][-1]
     kinds = [json.loads(line)["type"] for line in out.getvalue().splitlines()]

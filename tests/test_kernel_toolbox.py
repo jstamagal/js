@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -232,7 +233,7 @@ def test_toolbox_save_accepts_an_explicit_source_with_no_kernel_at_all(ctx, monk
 def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx):
     ctx.max_tool_result_bytes = 200
 
-    capped = kmod.cap_for_model("x" * 5000, ctx)
+    capped = kmod.cap_for_model("x" * 5000, ctx).model
 
     assert len(capped.encode("utf-8")) <= 200
     assert "[truncated: TOOL_RESULT_MAX (200) reached]" in capped
@@ -248,18 +249,44 @@ def test_per_call_verbosity_beats_the_config_knob_which_beats_normal(ctx):
     assert kmod.resolve_verbosity(ctx, "") == "normal"
 
 
-def test_the_render_clips_long_output_and_says_how_many_lines_it_hid(ctx, monkeypatch):
-    ctx.kernel_render_max_lines = 5
-
-    _result, screen = stderr_of(monkeypatch, lambda: kmod.render_execution(
+def _long_cell(ctx):
+    return lambda: kmod.render_execution(
         ctx, level="normal", code="print(1)",
         stdout="\n".join(f"line {i}" for i in range(40)),
         stderr="", display="", error="", elapsed=0.1, cell=1,
-        added=[], removed=[], namespace=["f"], images=[], interrupted=False))
+        added=[], removed=[], namespace=["f"], images=[], interrupted=False)
 
-    assert "line 4" in screen
-    assert "line 5" not in screen
-    assert msgs.KERNEL_MORE_LINES.text(count=35) in screen
+
+def test_on_the_screen_the_render_folds_long_output_and_says_how_many_lines_it_hid(ctx, monkeypatch):
+    import sys
+
+    ctx.kernel_render_max_lines = 5
+    folds = []
+
+    class Screen(io.StringIO):
+        def isatty(self):
+            return False
+
+        def write_folded(self, folded, whole):
+            folds.append((folded, whole))
+
+    monkeypatch.setattr(sys, "stderr", Screen())
+    _long_cell(ctx)()
+
+    (folded, whole), = folds
+    assert "line 4" in folded and "line 5" not in folded
+    assert msgs.KERNEL_MORE_LINES.words(count=35) in folded
+    assert all(f"line {i}" in whole for i in range(40))
+
+
+def test_off_the_screen_the_render_prints_every_line(ctx, monkeypatch):
+    # Nothing off the screen can unfold a capped render, so it prints whole.
+    ctx.kernel_render_max_lines = 5
+
+    _result, screen = stderr_of(monkeypatch, _long_cell(ctx))
+
+    assert all(f"line {i}" in screen for i in range(40))
+    assert msgs.KERNEL_MORE_LINES.words(count=35) not in screen
 
 
 def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
@@ -1059,3 +1086,31 @@ def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     assert result.startswith("ERROR: the kernel died during execution (cell 1)")
     assert result.splitlines()[-1] == "NAMESPACE (none)"
     assert session.namespace == {}
+
+
+def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, monkeypatch):
+    import sys
+
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    kmod.render_event(ctx, "normal", "toolbox saved")
+    assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
+
+
+def test_a_kernel_render_is_drawn_one_column_short_of_the_window(ctx, monkeypatch):
+    import sys
+
+    from js import display
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    monkeypatch.setattr(sys, "stderr", Terminal())
+    kmod.render_execution(ctx, level="normal", code="print(1)", stdout="out\n", stderr="", display="",
+                          error="", elapsed=0.1, cell=1, added=[], removed=[], namespace=["f"], images=[],
+                          interrupted=False)
+    rows = re.sub(r"\x1b\[[0-9;]*m", "", sys.stderr.getvalue()).splitlines()
+    assert rows and all(display.cells(row) <= 39 for row in rows), rows

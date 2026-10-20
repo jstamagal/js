@@ -596,7 +596,7 @@ def toolbox(
         _kernel.render_event(context, level, problem, style="COLOR_ERROR")
         return problem
     if started_now:
-        _kernel.render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd),
+        _kernel.render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd),
                              verbose_only=True)
     loaded, problems = load_into_kernel(session, cwd)
     if loaded:

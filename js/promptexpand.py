@@ -239,11 +239,11 @@ def _run_subsystem(
     spec = _SUBSYSTEMS.get(key)
     if spec is None:
         raise PromptExpansionError(
-            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.text(name=name, known=", ".join(sorted(_SUBSYSTEMS)))
+            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(_SUBSYSTEMS)))
         )
     is_code, runner = spec
     if is_code and not allow_code:
-        raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.text(name=name))
+        raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.said(name=name))
     if is_code:
         # Code subsystems run against the real process environment, always.
         return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
@@ -255,7 +255,7 @@ def _run_subsystem(
 def _sub_env(body: str, *, environ: dict, timeout_s: int) -> str:
     name = body.strip()
     if not _NAME.fullmatch(name):
-        raise PromptExpansionError(msgs.DIRECTIVE_ENV_NEEDS_NAME.text(body=body))
+        raise PromptExpansionError(msgs.DIRECTIVE_ENV_NEEDS_NAME.said(body=body))
     return environ.get(name, "")
 
 
@@ -296,9 +296,9 @@ def _run_capture(
             cap=max_output_bytes,
         )
     except FileNotFoundError:
-        raise PromptExpansionError(msgs.DIRECTIVE_NOT_ON_PATH.text(label=label, program=argv[0])) from None
+        raise PromptExpansionError(msgs.DIRECTIVE_NOT_ON_PATH.said(label=label, program=argv[0])) from None
     except subprocess.TimeoutExpired:
-        raise PromptExpansionError(msgs.DIRECTIVE_TIMED_OUT.text(label=label, seconds=timeout_s)) from None
+        raise PromptExpansionError(msgs.DIRECTIVE_TIMED_OUT.said(label=label, seconds=timeout_s)) from None
     if not isinstance(proc, CappedProcessResult):
         proc = CappedProcessResult(proc[0], proc[1], proc[2])
     stdout = _decode_capped(
@@ -319,8 +319,8 @@ def _run_capture(
             return stdout.rstrip("\n")
         err = stderr.strip()
         if err:
-            raise PromptExpansionError(msgs.DIRECTIVE_EXITED.text(label=label, code=proc.returncode, stderr=err))
-        raise PromptExpansionError(msgs.DIRECTIVE_EXITED_SILENT.text(label=label, code=proc.returncode))
+            raise PromptExpansionError(msgs.DIRECTIVE_EXITED.said(label=label, code=proc.returncode, stderr=err))
+        raise PromptExpansionError(msgs.DIRECTIVE_EXITED_SILENT.said(label=label, code=proc.returncode))
     return stdout.rstrip("\n")
 
 

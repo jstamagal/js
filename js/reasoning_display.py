@@ -6,7 +6,7 @@ from typing import Protocol
 
 from . import fset
 from . import messages as msgs
-from .display import StreamCleaner, clean, terminal_width
+from .display import TAB, StreamCleaner, clean, cut_points, terminal_width
 
 
 class ReasoningDisplay(Protocol):
@@ -21,6 +21,25 @@ def grey(text: str) -> str:
     code = fset.fg("COLOR_REASONING")
     rendered = "\n".join(f"{code}{line}{fset.RESET}" if line else line for line in text.split("\n"))
     return rendered
+
+
+def settled_rows(line: str, held: int, width: int, *, whole: bool) -> tuple[list[str], int]:
+    """The rows of ``line`` (one line, tabs expanded) from ``held``, 0 or the
+    end of a row already shown, wrapped to ``width``, that more text on the
+    line cannot change, and where the text still to wrap starts; every row
+    when the line has ended (``whole``). The spaces at a break are the
+    break: they end no row and start none."""
+    cuts = cut_points(line[held:], width)
+    rows: list[str] = []
+    start = held
+    for end in cuts if whole else cuts[:-1]:
+        row = line[start:held + end]
+        if start:
+            row = row.lstrip(" ")
+        if row or not start:
+            rows.append(row.rstrip(" "))
+        start = held + end
+    return rows, start
 
 
 class StderrReasoning:
@@ -47,7 +66,9 @@ class StderrReasoning:
         self._shown = 0  # how much of it, tabs expanded, is on the stream
 
     def _write_heading(self, heading: str) -> None:
-        self._emit(grey(heading + "\n") if self.tty else fset.plain(heading) + "\n")
+        """A heading from its format, in COLOR_REASONING around the format's own
+        colours; plain on a stream that is not a terminal."""
+        self._emit(fset.tint("COLOR_REASONING", heading) + "\n" if self.tty else fset.plain(heading) + "\n")
 
     def _write(self, text: str) -> None:
         """Cleaned reasoning text: as it arrives off a terminal; on one,
@@ -68,22 +89,9 @@ class StderrReasoning:
         now; all of them when the line has ended (``whole``), else all but
         the last, which may grow. What is shown is never wrapped again, so a
         resize changes only the rows still to come."""
-        width = terminal_width() - 1
-        rest = self._line[self._shown:]
-        rows: list[str] = []
-        used = 0
-        while len(rest) - used > width:
-            cut = rest.rfind(" ", used, used + width + 1)
-            if cut <= used:
-                break
-            rows.append(rest[used:cut].rstrip())
-            used = cut + 1
-        if whole:
-            rows.append(rest[used:])
-            used = len(rest)
+        rows, self._shown = settled_rows(self._line.expandtabs(TAB), self._shown, terminal_width() - 1, whole=whole)
         if rows:
             self._emit(grey("\n".join(rows) + "\n"))
-            self._shown += used
         if whole:
             self._line, self._shown = "", 0
 
@@ -119,6 +127,10 @@ class StderrReasoning:
 
     def answer_started(self) -> None:
         if self.started and not self.closed:
+            held = self._cleaner.flush()  # the text of a string sequence never ended
+            if held:
+                self._write(held)
+                self.last_newline = held.endswith("\n")
             self._end_line()
             self.closed = True
 

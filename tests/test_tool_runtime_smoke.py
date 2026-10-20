@@ -14,7 +14,7 @@ from js import capped_process, model_client, runtime, setcmd, settings, toolkit 
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
-from js.toolkit.core import ToolResult, call_tool
+from js.toolkit.core import ToolResult, call_tool, for_model
 import ai
 
 
@@ -1326,7 +1326,7 @@ def test_shell_output_capped_while_streaming(tmp_path):
     # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
     # The capped reader must hold memory at the cap while draining to EOF.
     context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context)
+    out = for_model(process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context))
     assert "exit=0" in out
     assert len(out) <= context.max_bash_output_bytes + 200
 
@@ -1344,7 +1344,7 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
 
 def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
+    out = for_model(process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context))
     assert "[truncated: TOOL_RESULT_INLINE_MAX" in out
     spill = re.search(r"(/\S+?\.log)", out)
     assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000

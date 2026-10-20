@@ -57,8 +57,8 @@ def _calls(*labels: str, name: str = "sleeper") -> list[runtime._PendingToolCall
     return [runtime._PendingToolCall(label, name, [json.dumps({"label": label})]) for label in labels]
 
 
-def _dispatch(calls, registry, context, *, trace: bool = False, progress=None):
-    telemetry = runtime.Telemetry(None)
+def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, telemetry=None):
+    telemetry = telemetry if telemetry is not None else runtime.Telemetry(None)
     records = runtime._dispatch_tool_calls(
         calls, telemetry, 256 * 1024, trace, runtime.ToolErrorTracker(),
         registry, context, progress,
@@ -317,7 +317,7 @@ def test_parallel_exchanges_print_whole(capsys, tmp_path):
         assert sum(" row " in row for row in body) == 3
 
 
-def test_parallel_reads_at_ui_tools_one_share_a_row_that_names_each_file(capsys, tmp_path):
+def _parallel_reads(tmp_path):
     context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
 
@@ -330,14 +330,55 @@ def test_parallel_reads_at_ui_tools_one_share_a_row_that_names_each_file(capsys,
     paths = [f"src/module_{name}.py" for name in "abcd"]
     calls = [runtime._PendingToolCall(f"c{i}", "read", [json.dumps({"file_path": path})])
              for i, path in enumerate(paths)]
+    return calls, registry, context, paths
 
-    _dispatch(calls, registry, context, trace=True)
 
-    traces = [line for line in _shown_rows(capsys)
-              if line.startswith((display.MARK, display.OK, display.FAIL))]
+def _on_screen():
+    """A telemetry whose tool exchanges draw on a scrollback, and that scrollback."""
+    from js import screen
+
+    scroll = screen.Scrollback()
+    scroll.toggle_key = ""
+
+    class Exchange:
+        def open(self, rendered):
+            self.span = scroll.exchange_open(rendered)
+
+        def update(self, rendered, expanded=None):
+            scroll.exchange_update(self.span, rendered, expanded)
+
+        def close(self, rendered, expanded=None):
+            scroll.exchange_close(self.span, rendered, expanded)
+
+    telemetry = runtime.Telemetry(None)
+    telemetry.exchange_factory = Exchange
+    return telemetry, scroll
+
+
+def test_parallel_reads_at_ui_tools_one_share_a_row_on_the_screen_that_names_each_file(tmp_path):
+    calls, registry, context, paths = _parallel_reads(tmp_path)
+    telemetry, scroll = _on_screen()
+
+    _dispatch(calls, registry, context, trace=True, telemetry=telemetry)
+
+    scroll.flush()
+    rows = [re.sub(r"\x1b\[[0-9;]*m", "", line).removeprefix(display.RAIL).removeprefix(" ")
+            for line in scroll.buffer.text.splitlines()]
+    traces = [line for line in rows if line.startswith((display.MARK, display.OK, display.FAIL))]
     assert len(traces) == 1
     for path in paths:
         assert traces[0].count(path.rsplit("/", 1)[1]) == 1
+
+
+def test_parallel_reads_on_plain_stdout_are_each_shown_whole(capsys, tmp_path):
+    calls, registry, context, paths = _parallel_reads(tmp_path)
+
+    _dispatch(calls, registry, context, trace=True)
+
+    rows = _shown_rows(capsys)
+    traces = [line for line in rows if line.startswith((display.MARK, display.OK, display.FAIL))]
+    assert len(traces) == len(paths)
+    assert sum(row.count("same size") for row in rows) == 20 * len(paths)
 
 
 def test_which_calls_are_read_only():

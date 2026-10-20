@@ -5,9 +5,12 @@
 # palette; every message's format is named after its js/messages.py entry.
 
 REASONING_DISPLAY
-    Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, 3
-    leave visible with token counts. The reasoning_toggle key, Ctrl-O unless
-    KEYBINDS_FILE moves it, folds and unfolds it in the async screen.
+    Reasoning display: 0 hidden; 1, the default, streams, then folds to
+    `N tok reasoning` when the answer starts; 2 leave visible; 3 leave
+    visible with the provider's token count. The count is the provider's or none.
+    The reasoning_toggle key, Ctrl-O unless KEYBINDS_FILE moves it, folds
+    and unfolds it in the async screen. Folding is the screen's: in js -p
+    and the blocking REPL, 1 to 3 print the text and then the count line.
     Display only; session reasoning is always retained.
 
 NET_DISPLAY
@@ -20,7 +23,10 @@ TOOLS_DISPLAY
     Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
     one row per tool, a command shows its output while it runs and one row
     after, a patch shows its diff, a failure its error; 2 every call with
-    the first TOOLS_PREVIEW_LINES result lines; 3 every call whole.
+    the first TOOLS_PREVIEW_LINES result lines; 3 every call whole. At 1 and
+    2 in the async screen, the reasoning_toggle key, Ctrl-O, unfolds every
+    folded row and preview to its whole form and folds it back. Folding is
+    the screen's: anywhere else every call is shown whole.
 
 TOOLS_QUIET
     Tools whose calls TOOLS_DISPLAY 1 shows as one row and folds: a JSON
@@ -32,7 +38,9 @@ SHELL_QUIET
 
 TOOLS_PREVIEW_LINES
     Lines of a result, a diff or a program shown before the rest is hidden
-    at TOOLS_DISPLAY 1 and 2.
+    at TOOLS_DISPLAY 1 and 2. Only the screen hides them, as a fold the
+    reasoning_toggle key, Ctrl-O, unfolds; anywhere else nothing can unfold
+    it, so the whole result is shown.
 
 MARKDOWN
     Render assistant Markdown on a terminal: finished blocks are highlighted
@@ -55,8 +63,10 @@ KERNEL_VERBOSITY
 
 KERNEL_LINES_MAX
     Line cap per section of the kernel's terminal render, so a 4000-line
-    cell cannot scroll the screen away. The hidden count is always shown,
-    and the model still gets the untrimmed output.
+    cell cannot scroll the screen away. Only the screen caps it, as a fold
+    the reasoning_toggle key, Ctrl-O, unfolds to the whole render; anywhere
+    else nothing can unfold it, so it prints whole. The hidden count is
+    shown, and the model still gets the untrimmed output.
 
 THEME
     The built-in theme: a palette, colours and formats under the entries set

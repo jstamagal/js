@@ -36,7 +36,7 @@ from ..tool_binaries import (
     resolve_binary,
     warn_urllib_fallback,
 )
-from .core import Tool, ToolContext
+from .core import Tool, ToolContext, ToolOutput
 from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
@@ -263,11 +263,13 @@ def _render_stream(name: str, excerpt, keep_ansi: bool, knob: str) -> str:
     return f"{head}{marker}\n{tail}" if tail else f"{head}{marker}"
 
 
-def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) -> tuple[str, str]:
-    """stdout and stderr to report, from the last reported byte when
-    ``since_last``, else from the start. Past the budget each shows its head
-    and tail with a marker naming the bytes between them and the file holding
-    the whole stream."""
+def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool
+                ) -> tuple[tuple[str, str], tuple[str, str] | None]:
+    """stdout and stderr to report to the model, from the last reported byte
+    when ``since_last``, else from the start. Past the budget each shows its
+    head and tail with a marker naming the bytes between them and the file
+    holding the whole stream. With them, when either was cut, both whole, read
+    back from memory or the spill file, for the operator; else None."""
     streams = (job.process.stream("stdout"), job.process.stream("stderr"))
     totals = tuple(stream.total for stream in streams)
     starts = job.delivered if since_last else (0, 0)
@@ -298,12 +300,14 @@ def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) 
             knob = f"TOOL_RESULT_INLINE_MAX ({context.max_tool_result_inline_bytes})"
         budget = max(0, min(budget - 1, budget * room // used - 64))
         rendered = render(budget)
-    return rendered
+    whole = tuple(_clean(stream.read(start, total), job.keep_ansi)
+                  for stream, start, total in zip(streams, starts, totals))
+    return rendered, (whole if whole != rendered else None)  # type: ignore[return-value]
 
 
 def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,
                      allowed: set[str], safe_env: dict[str, str], context: Any, *,
-                     since_last: bool, preface: str = "") -> str:
+                     since_last: bool, preface: str = "") -> str | ToolOutput:
     parts = [preface] if preface else []
     parts += [f"shell={job.shell_path}", f"exit={result.returncode}"]
     if description:
@@ -317,31 +321,40 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
             f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
             "names not allowed by SHELL_ENV_KEEP or the env parameter are unset"
         )
-    stdout, stderr = _job_output(job, context, "\n".join(parts), since_last=since_last)
-    if stdout:
-        parts.append(f"--- stdout ---\n{stdout}")
-    if stderr:
-        parts.append(f"--- stderr ---\n{stderr}")
-    if not stdout and not stderr:
-        parts.append("(no output)")
-    return "\n".join(parts)
+    (stdout, stderr), whole = _job_output(job, context, "\n".join(parts), since_last=since_last)
+
+    def text(stdout: str, stderr: str) -> str:
+        rows = list(parts)
+        if stdout:
+            rows.append(f"--- stdout ---\n{stdout}")
+        if stderr:
+            rows.append(f"--- stderr ---\n{stderr}")
+        if not stdout and not stderr:
+            rows.append("(no output)")
+        return "\n".join(rows)
+
+    return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
 
 
-def _render_running(job: _ShellJob, waited: float, context: Any) -> str:
+def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOutput:
     head = (
         f"command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). "
         f"It keeps running. Poll it with action=\"poll\", handle=\"{job.id}\" for new output, "
         f"action=\"wait\", handle=\"{job.id}\", timeout=N to block for it, "
         f"or action=\"kill\", handle=\"{job.id}\" to stop it."
     )
-    stdout, stderr = _job_output(job, context, head, since_last=True)
-    parts = [head]
-    if stdout:
-        parts.append(f"--- stdout so far ---\n{stdout}")
-    if stderr:
-        parts.append(f"--- stderr so far ---\n{stderr}")
-    parts.append(f"HANDLE {job.id} RUNNING")
-    return "\n".join(parts)
+    (stdout, stderr), whole = _job_output(job, context, head, since_last=True)
+
+    def text(stdout: str, stderr: str) -> str:
+        parts = [head]
+        if stdout:
+            parts.append(f"--- stdout so far ---\n{stdout}")
+        if stderr:
+            parts.append(f"--- stderr so far ---\n{stderr}")
+        parts.append(f"HANDLE {job.id} RUNNING")
+        return "\n".join(parts)
+
+    return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
 
 
 def shell(

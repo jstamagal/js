@@ -334,7 +334,7 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
             found = True
             break
     if not found:
-        raise ValueError(msgs.SESSION_BRANCH_NO_MESSAGE.text(path=parent_file, message=message))
+        raise ValueError(msgs.SESSION_BRANCH_NO_MESSAGE.said(path=parent_file, message=message))
     branch = session_store.reserve(parent_file.parent)
     with branch.open("a", encoding="utf-8") as stream:
         stream.writelines(kept)

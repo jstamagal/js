@@ -10,7 +10,13 @@ import time
 
 from js.toolkit import ToolContext
 from js.toolkit import process_net
-from js.toolkit.process_net import shell
+from js.toolkit.core import for_model
+from js.toolkit.process_net import shell as _shell
+
+
+def shell(*args, **kwargs):
+    """The shell tool's result as the model receives it (`for_model`)."""
+    return for_model(_shell(*args, **kwargs))
 
 
 def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:

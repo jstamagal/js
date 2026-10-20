@@ -89,7 +89,7 @@ def key_error(key: str) -> str | None:
     canonical = _canonical(key)
     if canonical in _KEY_NAMES or len(canonical) == 1:
         return None
-    return msgs.KEYS_BAD_KEY.text(key=key)
+    return msgs.KEYS_BAD_KEY.said(key=key)
 
 
 def _same(a: KeySequence, b: KeySequence) -> bool:
@@ -137,16 +137,16 @@ def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
             break
     if verb == "bind":
         if len(words) < 2:
-            return keymap, msgs.KEYS_BIND_USAGE.text()
+            return keymap, msgs.KEYS_BIND_USAGE.said()
         *sequence, action = words
         if action not in ACTION_BY_NAME:
-            return keymap, msgs.KEYS_UNKNOWN_ACTION.text(action=action)
+            return keymap, msgs.KEYS_UNKNOWN_ACTION.said(action=action)
     elif verb == "unbind":
         if not words:
-            return keymap, msgs.KEYS_UNBIND_USAGE.text()
+            return keymap, msgs.KEYS_UNBIND_USAGE.said()
         sequence, action = words, None
     else:
-        return keymap, msgs.KEYS_UNKNOWN_VERB.text(verb=verb)
+        return keymap, msgs.KEYS_UNKNOWN_VERB.said(verb=verb)
     for key in sequence:
         if (error := key_error(key)) is not None:
             return keymap, error
@@ -174,7 +174,7 @@ def load(path: Path) -> tuple[Keymap, list[str]]:
     except FileNotFoundError:
         return default_keymap(), []
     except (OSError, UnicodeError) as exc:
-        return default_keymap(), [msgs.KEYS_UNREADABLE.text(path=path, error=exc)]
+        return default_keymap(), [msgs.KEYS_UNREADABLE.said(path=path, error=exc)]
     return parse(text, path)
 
 

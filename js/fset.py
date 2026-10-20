@@ -50,6 +50,7 @@ PACKAGE_FSET = Path(__file__).with_name("fset")
 THEMES_DIR = Path(__file__).with_name("themes")
 
 RESET = "\x1b[0m"
+FG_DEFAULT = "\x1b[39m"  # the foreground back to the default, the background kept
 BOLD = "\x1b[1m"
 
 # Every colour role; `js/help/fset.txt` says what each paints.
@@ -367,6 +368,21 @@ def bg(name: str) -> str:
     return f"\x1b[48;2;{_rgb(colour)}m" if colour else ""
 
 
+def tint(name: str, text: str) -> str:
+    """``text``, which may carry colour of its own, in colour entry ``name``
+    wherever its own colour is reset."""
+    code = fg(name)
+    if not code or not text:
+        return text
+    return code + text.replace(RESET, RESET + code) + RESET
+
+
+def strong(name: str, text: str) -> str:
+    """``text`` in bold and colour entry ``name``, closed by a reset; no
+    colour under NO_COLOR or when ``name`` resolves to none."""
+    return f"{BOLD}{fg(name)}{text}{RESET}" if text else text
+
+
 def paint(name: str, text: str) -> str:
     """``text`` in colour entry ``name``."""
     code = fg(name)
@@ -400,10 +416,12 @@ def escape(text: str) -> str:
 Run = tuple[str, str]
 
 
-def runs(fmt: str, args: list[str], *, hole: str = "", whole: str = "") -> list[Run]:
+def runs(fmt: str, args: list[str | list[Run]], *, hole: str = "", whole: str = "") -> list[Run]:
     """Format ``fmt`` with ``args`` in its `%s` holes, as runs. A hole takes
     the `%Cnn` colour in force where it stands; where none is, colour entry
-    ``hole`` (a severity), then ``whole``. Text takes the colour in force,
+    ``hole`` (a severity), then ``whole``. A hole given runs (a message inside
+    another) keeps each run's own colour, and takes that one where a run has
+    none. Text takes the colour in force,
     else ``whole``; `$BANNER` the colour in force, else COLOR_SYSTEM.
     Trailing spaces are trimmed. Never raises."""
     values = iter(args)
@@ -425,7 +443,10 @@ def runs(fmt: str, args: list[str], *, hole: str = "", whole: str = "") -> list[
         if token == "%%":
             add(current or base, "%")
         elif token == "%s":
-            add(current or (hex_for(hole) or "" if hole else "") or base, str(next(values, "")))
+            colour = current or (hex_for(hole) or "" if hole else "") or base
+            value = next(values, "")
+            for own, text in value if isinstance(value, list) else [("", str(value))]:
+                add(own or colour, text)
         elif token.startswith("%C"):
             slot = match.group(1)
             if slot is None:
@@ -469,6 +490,18 @@ def mark_gap() -> int:
 def colour_on() -> bool:
     """Whether js draws colour at all: not under NO_COLOR (no-color.org)."""
     return not no_color()
+
+
+def split_lines(parts: list[Run]) -> list[list[Run]]:
+    """Runs cut at each newline into the runs of each line."""
+    lines: list[list[Run]] = [[]]
+    for colour, text in parts:
+        for index, piece in enumerate(text.split("\n")):
+            if index:
+                lines.append([])
+            if piece:
+                lines[-1].append((colour, piece))
+    return lines
 
 
 def to_plain(parts: list[Run]) -> str:

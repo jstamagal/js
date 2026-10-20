@@ -46,7 +46,7 @@ class ClipboardError(Exception):
     the operator sees."""
 
     def __init__(self, message: msgs.Message, **fields: object) -> None:
-        super().__init__(message.text(**fields))
+        super().__init__(message.said(**fields))
         self.message = message
         self.fields = fields
 

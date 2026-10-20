@@ -74,11 +74,11 @@ def _registry(names: list[str]) -> ToolRegistry | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.text())
+    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.words())
     parser.add_argument(
         "--surface",
         default=None,
-        help=msgs.OPT_TOOLDIAG_SURFACE.text(),
+        help=msgs.OPT_TOOLDIAG_SURFACE.words(),
     )
     args = parser.parse_args(argv)
     names = parse_surface(args.surface or "")

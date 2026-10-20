@@ -150,7 +150,7 @@ class Config(_turn_settings.ConfigSettings):
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)
         if unknown:
-            raise ValueError(msgs.UNKNOWN_SETTING.text(key=", ".join(unknown)))
+            raise ValueError(msgs.UNKNOWN_SETTING.said(key=", ".join(unknown)))
 
 
 # A settings store holds each setting under its name. A flat name's value is
@@ -194,16 +194,16 @@ def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
 
 def _relative_session_path(session: str) -> Path:
     if not session or "\\" in session:
-        raise ValueError(msgs.SESSION_NAME_UNSAFE.text(session=session))
+        raise ValueError(msgs.SESSION_NAME_UNSAFE.said(session=session))
     components = session.split("/")
     if any(not component or component in {".", ".."} for component in components):
-        raise ValueError(msgs.SESSION_NAME_TRAVERSAL.text(session=session))
+        raise ValueError(msgs.SESSION_NAME_TRAVERSAL.said(session=session))
 
     raw_path = Path(session)
     if raw_path.is_absolute():
-        raise ValueError(msgs.SESSION_NAME_ABSOLUTE.text(session=session))
+        raise ValueError(msgs.SESSION_NAME_ABSOLUTE.said(session=session))
     if raw_path.suffix and raw_path.suffix != ".jsonl":
-        raise ValueError(msgs.SESSION_NAME_SUFFIX.text(session=session))
+        raise ValueError(msgs.SESSION_NAME_SUFFIX.said(session=session))
     return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
 
 

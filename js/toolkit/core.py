@@ -247,6 +247,41 @@ class Output(str):
 
 
 @dataclass(frozen=True)
+class ToolOutput:
+    """A tool's result in two parts: ``model``, what the model receives, cut
+    to its limits, and ``whole``, everything the call produced, which is what
+    the operator sees on the screen, on stdout and in the transcript. A tool
+    returns one when it cuts its own result for the model; any other result
+    is both at once (`as_output`)."""
+
+    model: Any
+    whole: Any = None
+
+    def shown(self) -> Any:
+        """What the operator sees: ``whole``, or ``model`` when nothing was cut."""
+        return self.model if self.whole is None else self.whole
+
+    def each(self, change: Callable[[Any], Any]) -> ToolOutput:
+        """``change`` made to both parts, as a jail path rewrite or a notice is."""
+        return ToolOutput(change(self.model), None if self.whole is None else change(self.whole))
+
+
+def as_output(result: Any) -> ToolOutput:
+    """``result`` as a `ToolOutput`."""
+    return result if isinstance(result, ToolOutput) else ToolOutput(result)
+
+
+def each_part(result: Any, change: Callable[[Any], Any]) -> Any:
+    """``change`` made to ``result``, or to both parts of a `ToolOutput`."""
+    return result.each(change) if isinstance(result, ToolOutput) else change(result)
+
+
+def for_model(result: Any) -> Any:
+    """What the model receives of ``result``: a `ToolOutput`'s ``model``."""
+    return result.model if isinstance(result, ToolOutput) else result
+
+
+@dataclass(frozen=True)
 class ToolResult:
     """A provider-facing mixed tool result plus a safe persistence descriptor."""
 
@@ -1067,19 +1102,25 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
         return _jail.Refusal(f"ERROR: {exc}")
-    output = isinstance(result, Output)
     notices = context.consume_snapshot_notices()
-    if notices and isinstance(result, str):
+    if notices:
         rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
-        result = f"{result}\n{rendered}"
-    result = _as_jail_shows(result)
-    return Output(result) if output and not isinstance(result, Output) else result
+        result = each_part(result, lambda text: _with_notices(text, rendered))
+    return each_part(result, _as_jail_shows)
+
+
+def _with_notices(result: Any, notices: str) -> Any:
+    """A text result with the snapshot notices after it; an `Output` stays one."""
+    if not isinstance(result, str):
+        return result
+    text = f"{result}\n{notices}"
+    return Output(text) if isinstance(result, Output) else text
 
 
 def _as_jail_shows(result: Any) -> Any:
     """``result`` with host paths into the jail's /tmp and ~/.js/tmp named as
     the jail shows them. The path field of an image marker stays the host
-    path: the model client reads the image from it."""
+    path: the model client reads the image from it. An `Output` stays one."""
     if _jail.active() is None or not isinstance(result, str) or isinstance(result, _jail.Refusal):
         return result
     if result.startswith(_IMAGE_RESULT_PREFIX):
@@ -1087,13 +1128,15 @@ def _as_jail_shows(result: Any) -> Any:
         shown = f"{prefix}\t{host}\t{_jail.shown(rest)}"
     else:
         shown = _jail.shown(result)
-    return result if shown == result else shown
+    if shown == result:
+        return result
+    return Output(shown) if isinstance(result, Output) else shown
 
 
 async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Invoke either a native sync handler or a cancelable async handler."""
     result = call_tool(tool, args, context)
-    return _as_jail_shows(await result) if inspect.isawaitable(result) else result
+    return each_part(await result, _as_jail_shows) if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:

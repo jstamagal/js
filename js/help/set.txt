@@ -140,8 +140,9 @@ TOOL_RESULT_INLINE_MAX
     preview plus the path, instead of being clipped and lost. 0 = off.
 
 TOOL_RESULT_MAX
-    Hard cap on the text of any tool result. Images and audio do not count;
-    TOOL_MEDIA_MAX caps them.
+    Hard cap on the text of any tool result the model receives. Images and
+    audio do not count; TOOL_MEDIA_MAX caps them. What you see of a call, on
+    the screen, on stdout and in the transcript, is its whole result.
 
 TOOL_MEDIA_MAX
     Cap on each image or audio block in a tool result, such as an MCP

@@ -9,7 +9,6 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
-import re
 import threading
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -17,21 +16,12 @@ from pathlib import Path
 
 from . import display as _display
 
-# What survives the escape patterns: a lone or unterminated ESC (an escape split
-# across writes, or cut off) and the C1 controls, 8-bit openers included.
-_RESIDUAL = re.compile(r"[\x1b\x80-\x9f]")
-
-
 def strip_ansi(text: str) -> str:
-    """``text`` without terminal escapes: OSC/DCS/SOS/PM/APC strings, CSI and
-    two-byte escapes, the same set `display.clean` removes, then any ESC or C1
-    control left over, so no write (even one split mid-escape) puts an escape
-    into the log. Other control bytes stay, so the log keeps carriage returns
-    and tabs as they were shown."""
-    text = _display._strip_string_sequences(text)
-    text = _display._CSI.sub("", text)
-    text = _display._ESC.sub("", text)
-    return _RESIDUAL.sub("", text)
+    """``text`` without terminal escapes, the ones `display.clean` removes,
+    so no write puts an escape into the log. Other control bytes stay, so the
+    log keeps carriage returns and tabs as they were shown."""
+    cleaner = _display.StreamCleaner(controls=True)
+    return cleaner.feed(text) + cleaner.flush()
 
 
 class TranscriptLogSink:
@@ -48,6 +38,18 @@ class TranscriptLogSink:
         self._plain_at_line_start = True
         self._speaker_at_line_start: dict[str, bool] = {}
         self._mute = threading.local()
+        # One escape cleaner per stream, each plain source (`plain:NAME`) and
+        # each speaker, so an escape cut between two writes is still taken
+        # whole and one stream's open escape never swallows another's text.
+        self._cleaners: dict[str, _display.StreamCleaner] = {}
+
+    def _cleaned(self, stream: str, text: str) -> str:
+        cleaner = self._cleaners.setdefault(stream, _display.StreamCleaner(controls=True))
+        return cleaner.feed(text)
+
+    def _flushed(self, stream: str) -> str:
+        cleaner = self._cleaners.pop(stream, None)
+        return cleaner.flush() if cleaner is not None else ""
 
     def _stamp(self) -> str:
         return datetime.now().strftime("[%H:%M] ")
@@ -70,21 +72,24 @@ class TranscriptLogSink:
         except Exception:
             self._disable_locked()
 
-    def write_plain(self, text: str) -> None:
-        """Write non-speaker visible text, line-prefixed with a cheap timestamp."""
+    def write_plain(self, text: str, *, source: str = "") -> None:
+        """Write non-speaker visible text, line-prefixed with a cheap timestamp.
+        ``source`` names the stream it came from: each has its own cleaner."""
         if not text or self.is_muted():
             return
-        clean = strip_ansi(str(text))
         with self._lock:
-            for part in clean.splitlines(keepends=True):
-                if self._plain_at_line_start:
-                    self._write_locked(self._stamp())
-                    self._plain_at_line_start = False
-                if part.endswith("\n"):
-                    self._write_locked(part)
-                    self._plain_at_line_start = True
-                else:
-                    self._write_locked(part)
+            self._plain_locked(self._cleaned(f"plain:{source}", str(text)))
+
+    def _plain_locked(self, clean: str) -> None:
+        for part in clean.splitlines(keepends=True):
+            if self._plain_at_line_start:
+                self._write_locked(self._stamp())
+                self._plain_at_line_start = False
+            if part.endswith("\n"):
+                self._write_locked(part)
+                self._plain_at_line_start = True
+            else:
+                self._write_locked(part)
 
     def write_turn(self, speaker: str, text: str) -> None:
         self._write_speaker_chunk(speaker, text)
@@ -105,23 +110,26 @@ class TranscriptLogSink:
     def _write_speaker_chunk(self, speaker: str, text: str) -> None:
         if not text:
             return
-        clean = strip_ansi(str(text))
-        prefix = f"<{speaker}> "
         with self._lock:
-            at_line_start = self._speaker_at_line_start.get(speaker, True)
-            for part in clean.splitlines(keepends=True):
-                if at_line_start:
-                    self._write_locked(self._stamp() + prefix)
-                    at_line_start = False
-                if part.endswith("\n"):
-                    self._write_locked(part)
-                    at_line_start = True
-                else:
-                    self._write_locked(part)
-            self._speaker_at_line_start[speaker] = at_line_start
+            self._speaker_locked(speaker, self._cleaned(speaker, str(text)))
+
+    def _speaker_locked(self, speaker: str, clean: str) -> None:
+        prefix = f"<{speaker}> "
+        at_line_start = self._speaker_at_line_start.get(speaker, True)
+        for part in clean.splitlines(keepends=True):
+            if at_line_start:
+                self._write_locked(self._stamp() + prefix)
+                at_line_start = False
+            if part.endswith("\n"):
+                self._write_locked(part)
+                at_line_start = True
+            else:
+                self._write_locked(part)
+        self._speaker_at_line_start[speaker] = at_line_start
 
     def end_speaker_stream(self, speaker: str) -> None:
         with self._lock:
+            self._speaker_locked(speaker, self._flushed(speaker))
             if not self._speaker_at_line_start.get(speaker, True):
                 self._write_locked("\n")
                 self._speaker_at_line_start[speaker] = True
@@ -151,11 +159,34 @@ class TranscriptLogSink:
 
     def close(self) -> None:
         with self._lock:
+            for stream in list(self._cleaners):
+                if stream.startswith("plain:"):
+                    self._plain_locked(self._flushed(stream))
+                else:
+                    self._speaker_locked(stream, self._flushed(stream))
             for speaker in list(self._speaker_at_line_start):
                 if not self._speaker_at_line_start.get(speaker, True):
                     self._write_locked("\n")
                     self._speaker_at_line_start[speaker] = True
             self._disable_locked()
+
+
+class ToolRecordsOnly:
+    """A transcript as a run sees it that records its answer and user line
+    itself afterwards (plain `js -p`): the tool calls go in, whole, as they
+    finish; the streamed answer does not, so it is not recorded twice."""
+
+    def __init__(self, sink: TranscriptLogSink) -> None:
+        self._sink = sink
+
+    def write_plain(self, text: str, *, source: str = "") -> None:
+        self._sink.write_plain(text, source=source)
+
+    def mute_tee(self):
+        return self._sink.mute_tee()
+
+    def flush(self) -> None:
+        self._sink.flush()
 
 
 class TranscriptTee:
@@ -172,7 +203,7 @@ class TranscriptTee:
             pass
         sink = self._sink_getter()
         if sink is not None:
-            sink.write_plain(text)
+            sink.write_plain(text, source=f"tee:{id(self)}")
 
     def write_unlogged(self, text: str) -> None:
         """Write display-only material without feeding any nested transcript tee."""

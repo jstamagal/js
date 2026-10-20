@@ -218,3 +218,14 @@ def test_printonly_everything_includes_exchanges(offline_agent, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "First user turn for ape." in out
+
+
+def test_an_empty_section_speaks_through_its_format(offline_agent, capsys):
+    from js import paths
+
+    (offline_agent / ".js" / "agents" / "potest" / "01-benchmark.md").unlink()
+    jsrc = paths.global_config_file()
+    jsrc.parent.mkdir(parents=True, exist_ok=True)
+    jsrc.write_text("fset PRINTONLY_NO_BENCHMARKS CUSTOM_NO_BENCHES\n", encoding="utf-8")
+    cli._printonly_run("b", agent="potest")
+    assert "CUSTOM_NO_BENCHES" in capsys.readouterr().out

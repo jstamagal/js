@@ -274,3 +274,33 @@ def test_migrate_writes_display_and_colour_settings_as_fset_lines_that_reload(tm
     assert settings.load_jsrc_files([target], loaded) == []
     assert settings.knob(loaded, "TOOLS_DISPLAY") == 3
     assert fset.hex_for("COLOR_TOOL") == "#112233"
+
+
+def test_a_migrated_value_keeps_a_literal_dollar(tmp_path, monkeypatch):
+    from js import settings
+
+    legacy = tmp_path / "config.toml"
+    target = tmp_path / "jsrc"
+    legacy.write_text('BANNER = "$MODEL"\n', encoding="utf-8")
+    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: legacy)
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: target)
+
+    assert cli._run_migrate_config() == 0
+    loaded = settings.seed_defaults()
+    settings.load_jsrc_files([target], loaded)
+    assert settings.knob(loaded, "BANNER") == "$MODEL"
+
+
+def test_a_migrated_map_child_keeps_its_quotes_as_they_were(tmp_path, monkeypatch):
+    from js import settings
+
+    legacy = tmp_path / "config.toml"
+    target = tmp_path / "jsrc"
+    legacy.write_text('[provider.extra]\nnote = "\\"quoted\\" text"\n', encoding="utf-8")
+    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: legacy)
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: target)
+
+    assert cli._run_migrate_config() == 0
+    loaded = settings.seed_defaults()
+    settings.load_jsrc_files([target], loaded)
+    assert settings.knob(loaded, "EXTRA_PARAMS")["note"] == '"quoted" text'

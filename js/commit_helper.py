@@ -132,10 +132,10 @@ def _git(
 
 
 def _git_failure_message(exc: GitCommandError) -> str:
-    detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_EXIT.text(code=exc.returncode)
+    detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_EXIT.said(code=exc.returncode)
     if exc.kind == "not-a-repo":
-        return msgs.GIT_NOT_A_REPO.text(repo=exc.repo)
-    return msgs.GIT_FAILED.text(repo=exc.repo, argv=" ".join(exc.argv), detail=detail)
+        return msgs.GIT_NOT_A_REPO.said(repo=exc.repo)
+    return msgs.GIT_FAILED.said(repo=exc.repo, argv=" ".join(exc.argv), detail=detail)
 
 
 def _printable(text: str) -> str:
@@ -231,9 +231,9 @@ def _branch_name(repo: str | Path | None = None) -> str:
         return current
     short = _git("rev-parse", "--short", "HEAD", check=False, repo=repo)
     if short.returncode == 0 and short.stdout.strip():
-        return msgs.SURVEY_DETACHED.text(sha=short.stdout.strip())
+        return msgs.SURVEY_DETACHED.said(sha=short.stdout.strip())
     symbolic = _git("symbolic-ref", "--short", "HEAD", check=False, repo=repo)
-    return symbolic.stdout.strip() or msgs.SURVEY_NO_COMMITS.text()
+    return symbolic.stdout.strip() or msgs.SURVEY_NO_COMMITS.said()
 
 
 def _tracked_rows(rows: list[StatusRow]) -> list[StatusRow]:
@@ -433,7 +433,7 @@ def _extract_repo(argv: list[str]) -> tuple[Path | None, list[str], str | None]:
         arg = rest[0]
         if arg in ("-C", "--repo"):
             if len(rest) < 2:
-                return repo, rest, msgs.COMMIT_HELPER_USAGE.text(usage=f"{arg} <dir> <survey|stage|commit ...>")
+                return repo, rest, msgs.COMMIT_HELPER_USAGE.said(usage=f"{arg} <dir> <survey|stage|commit ...>")
             repo = _repo_path(rest[1])
             rest = rest[2:]
             continue

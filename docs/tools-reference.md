@@ -739,7 +739,10 @@ rich — code, output, elapsed, the namespace, save/load activity. stderr so
 Set the baseline with `fset KERNEL_VERBOSITY <level>` (or `JS_KERNEL_VERBOSITY`);
 override one call with the tool's `verbosity` parameter. `fset
 KERNEL_LINES_MAX <n>` (default 24) caps each rendered section so a
-4000-line cell cannot scroll the screen away; the hidden count is always shown.
+4000-line cell cannot scroll the screen away; the hidden count is shown. The
+cap is a fold on the screen, which Ctrl-O unfolds to the whole render; off the
+screen (`js -p`, the blocking REPL) nothing can unfold it, so the render prints
+whole.
 
 Verbosity governs the terminal render only. The model always receives the full,
 identically-shaped result — a display setting that could silently delete the

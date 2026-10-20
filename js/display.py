@@ -24,13 +24,14 @@ import re
 import shutil
 import sys
 import time
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from rich.cells import cell_len
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
-from rich.markdown import Markdown
+from rich.markdown import Markdown, TableElement
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.theme import Theme as _RichTheme
@@ -39,106 +40,265 @@ from . import fset
 from . import messages as msgs
 from . import settings as _settings
 
-# String sequences (OSC, DCS, SOS, PM, APC) run to BEL or ST, 7- or 8-bit.
-_STRING_SEQ = re.compile(r"(?:\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f]).*?(?:\x07|\x1b\\|\x9c)", re.DOTALL)
-_CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
-# Any other escape: ESC, intermediates, one final byte (ESC c, ESC ( 0, ESC 7).
-_ESC = re.compile(r"\x1b[ -/]*[0-~]")
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
-_STRING_OPEN = re.compile(r"\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f]")
-_STRING_CLOSE = re.compile(r"\x07|\x1b\\|\x9c")
+
+# The states of the DEC/ECMA-48 escape parser (Paul Williams, "A parser for
+# DEC's ANSI-compatible video terminals"). Only ground prints.
+GROUND, ESCAPE, ESCAPE_INTERMEDIATE = "ground", "escape", "escape_intermediate"
+CSI_ENTRY, CSI_PARAM, CSI_INTERMEDIATE, CSI_IGNORE = "csi_entry", "csi_param", "csi_intermediate", "csi_ignore"
+DCS_ENTRY, DCS_PARAM, DCS_INTERMEDIATE = "dcs_entry", "dcs_param", "dcs_intermediate"
+DCS_PASSTHROUGH, DCS_IGNORE = "dcs_passthrough", "dcs_ignore"
+OSC_STRING, SOS_PM_APC_STRING = "osc_string", "sos_pm_apc_string"
+_STRINGS = frozenset({DCS_ENTRY, DCS_PARAM, DCS_INTERMEDIATE, DCS_PASSTHROUGH, DCS_IGNORE, OSC_STRING,
+                      SOS_PM_APC_STRING})
+
+# Ground: the next byte that is not printed as it is (C0 but newline and tab,
+# DEL, C1). A string: the next byte that can end it (BEL, CAN, SUB, ESC, C1).
+_GROUND_STOP = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_STRING_STOP = re.compile(r"[\x07\x18\x1a\x1b\x80-\x9f]")
+# Ground, for a cleaner that keeps the other controls: ESC and C1 only.
+_ESCAPE_STOP = re.compile(r"[\x1b\x80-\x9f]")
+_UNPRINTED = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+# Where ESC and each C1 introducer lead, from any state.
+_AFTER_ESC = {"[": CSI_ENTRY, "]": OSC_STRING, "P": DCS_ENTRY, "X": SOS_PM_APC_STRING, "^": SOS_PM_APC_STRING,
+              "_": SOS_PM_APC_STRING}
+_C1 = {"\x9b": CSI_ENTRY, "\x9d": OSC_STRING, "\x90": DCS_ENTRY, "\x98": SOS_PM_APC_STRING,
+       "\x9e": SOS_PM_APC_STRING, "\x9f": SOS_PM_APC_STRING}
 
 
-def _strip_string_sequences(text: str) -> str:
-    """``_STRING_SEQ.sub("", text)`` in linear time. The lazy regex rescans to
-    the end of the text from every unterminated opener: quadratic, 2.4 s for
-    40 KB of ``\\x1b]``, re-run on the whole live answer every refresh. Here the
-    first opener with no terminator after it ends the scan, because no later
-    opener can have one either; the text from it on is kept for the later
-    passes to scrub, as before."""
-    out: list[str] = []
-    pos = 0
-    while True:
-        opened = _STRING_OPEN.search(text, pos)
-        if opened is None:
-            break
-        closed = _STRING_CLOSE.search(text, opened.end())
-        if closed is None:
-            break
-        out.append(text[pos:opened.start()])
-        pos = closed.end()
-    out.append(text[pos:])
-    return "".join(out)
+def _sequence_step(state: str, char: str) -> str:
+    """The state after ``char`` in one of the non-string sequence states.
+    A character past 7-bit ASCII ends the sequence."""
+    code = ord(char)
+    if code >= 0xA0:
+        return GROUND
+    if code < 0x20 or code == 0x7F:
+        return state  # executed or ignored: the sequence goes on
+    if state == ESCAPE:
+        if char in _AFTER_ESC:
+            return _AFTER_ESC[char]
+        return ESCAPE_INTERMEDIATE if code <= 0x2F else GROUND
+    if state == ESCAPE_INTERMEDIATE:
+        return ESCAPE_INTERMEDIATE if code <= 0x2F else GROUND
+    if code >= 0x40:
+        return GROUND  # the final byte of a CSI
+    if state == CSI_IGNORE:
+        return CSI_IGNORE
+    if code <= 0x2F:
+        return CSI_INTERMEDIATE
+    if state == CSI_INTERMEDIATE or char == ":" or (state == CSI_PARAM and code >= 0x3C):
+        return CSI_IGNORE
+    return CSI_PARAM
 
 
-def clean(text: str) -> str:
-    """Model and tool output as text, never as terminal control sequences.
-
-    Removes OSC/DCS-style strings, CSI sequences and other escapes, then every
-    C0/C1 control byte except newline and tab."""
-    text = _strip_string_sequences(text)
-    text = _CSI.sub("", text)
-    text = _ESC.sub("", text)
-    return _CONTROL.sub("", text)
-
-
-# The end of a chunk that may be the start of an escape sequence the next
-# chunk finishes: a lone ESC, an unfinished CSI, or an unterminated string.
-_OPEN_ESCAPE = re.compile(r"(?:\x1b(?:\[[0-?]*[ -/]*|[\]PX^_][^\x07\x1b]*(?:\x1b)?)?|[\x90\x98\x9d-\x9f][^\x07\x9c]*|\x9b[0-?]*)$")
+def _dcs_step(state: str, char: str) -> str:
+    """The state after ``char`` inside a DCS, before its passthrough."""
+    code = ord(char)
+    if code < 0x20 or code == 0x7F or state in (DCS_PASSTHROUGH, DCS_IGNORE):
+        return state
+    if code >= 0x40:
+        return DCS_PASSTHROUGH
+    if code <= 0x2F:
+        return DCS_INTERMEDIATE
+    if state == DCS_INTERMEDIATE or char == ":" or (state == DCS_PARAM and code >= 0x3C):
+        return DCS_IGNORE
+    return DCS_PARAM
 
 
 class StreamCleaner:
-    """`clean()` for text that arrives in chunks, such as a model's stream: an
-    escape sequence cut between two chunks is held until it is whole, so no
-    piece of it is ever measured, wrapped or shown. Model and tool text is
-    cleaned here, at intake."""
+    """Model and tool text as text, never as terminal control sequences: the
+    DEC/ECMA-48 escape parser, kept across chunks. Ground text is passed on
+    (newline and tab with it; every other C0 and C1 control dropped); CSI,
+    other escapes and the strings (OSC, DCS, SOS, PM, APC, ended by ST or
+    BEL) are dropped whole wherever a chunk cuts them. A string still open
+    when the text ends is not a control sequence: its text comes back from
+    `flush`. Model and tool text is cleaned here, at intake, and `clean` is
+    this run over one whole text, so any chunking cleans the same. With
+    ``controls``, ground keeps every C0 control but ESC, and DEL: the
+    transcript keeps carriage returns as they were shown."""
 
-    def __init__(self) -> None:
-        self._held = ""
+    def __init__(self, *, controls: bool = False) -> None:
+        self.state = GROUND
+        self._string: list[str] = []  # the text of a string still open
+        self._controls = controls
+        self._ground_stop = _ESCAPE_STOP if controls else _GROUND_STOP
 
     def feed(self, text: str) -> str:
-        text = self._held + text
-        match = _OPEN_ESCAPE.search(text)
-        self._held = match.group(0) if match and match.group(0) else ""
-        return clean(text[:len(text) - len(self._held)])
+        out: list[str] = []
+        pos, size = 0, len(text)
+        while pos < size:
+            state = self.state
+            if state == GROUND:
+                stop = self._ground_stop.search(text, pos)
+                end = stop.start() if stop else size
+                out.append(text[pos:end])
+                pos = end
+                if stop is None:
+                    break
+                char = text[pos]
+                pos += 1
+                if char == "\x1b":
+                    self.state = ESCAPE
+                elif char in _C1:
+                    self._open(_C1[char])
+                continue
+            if state in _STRINGS:
+                stop = _STRING_STOP.search(text, pos)
+                end = stop.start() if stop else size
+                piece = text[pos:end]
+                if state in (DCS_ENTRY, DCS_PARAM, DCS_INTERMEDIATE):
+                    for index, char in enumerate(piece):
+                        self._string.append(char)
+                        state = _dcs_step(state, char)
+                        if state == DCS_PASSTHROUGH or state == DCS_IGNORE:
+                            self._string.append(piece[index + 1:])
+                            break
+                    self.state = state
+                else:
+                    self._string.append(piece)
+                pos = end
+                if stop is None:
+                    break
+                char = text[pos]
+                pos += 1
+                # BEL, ST, CAN or SUB end the string; ESC or another C1 ends it
+                # and starts what it starts.
+                self._string = []
+                if char == "\x1b":
+                    self.state = ESCAPE
+                elif char in _C1:
+                    self._open(_C1[char])
+                else:
+                    self.state = GROUND
+                continue
+            char = text[pos]
+            pos += 1
+            if char == "\x1b":
+                self.state = ESCAPE
+            elif char in _C1:
+                self._open(_C1[char])
+            elif char in "\x18\x1a" or 0x80 <= ord(char) <= 0x9F:
+                self.state = GROUND
+            else:
+                following = _sequence_step(state, char)
+                if following in _STRINGS:
+                    self._open(following)
+                elif following == GROUND and ord(char) >= 0xA0:
+                    # Not part of a sequence: the sequence ends and it prints.
+                    self.state = GROUND
+                    out.append(char)
+                else:
+                    self.state = following
+        return "".join(out)
+
+    def _open(self, state: str) -> None:
+        self.state, self._string = state, []
 
     def flush(self) -> str:
-        """The stream ended: an escape sequence still open is dropped, never
-        shown in pieces."""
-        self._held = ""
-        return ""
+        """The text has ended: an escape sequence still open is dropped, and
+        the text of a string never ended is passed on."""
+        held = "".join(self._string) if self.state in _STRINGS else ""
+        self.state, self._string = GROUND, []
+        return held if self._controls else _UNPRINTED.sub("", held)
+
+
+def clean(text: str) -> str:
+    """Model and tool output as text, never as terminal control sequences
+    (`StreamCleaner` over the whole text)."""
+    cleaner = StreamCleaner()
+    return cleaner.feed(text) + cleaner.flush()
 
 
 # Transcript marker for a tool exchange: typeable ASCII, one per exchange, so a
 # grep of a saved transcript finds every exchange the screen showed.
 TOOL_MARKER = ">"
 
-# What `field_lines` breaks a rendered line at: put before each field in
+# What `field_rows` breaks a line at: put before each field in
 # place of its separator before the line is rendered.
 FIELD_BREAK = "\x00"
 
 
-def field_lines(rendered: str, width: int, sep: str = "  ") -> list[str]:
-    """``rendered``, a line whose fields each follow a `FIELD_BREAK`, as rows
-    of at most ``width`` columns, broken only between two fields; the rows
-    after the first start under the first field. A field wider than the row
-    has a row of its own. A line with no field is one row."""
-    head, *fields = rendered.split(FIELD_BREAK)
-    if not fields:
-        return [head]
-    lead = cell_len(fset.plain(head))
-    rows = [head + fields[0]]
-    used = lead + cell_len(fset.plain(fields[0]))
-    for field in fields[1:]:
-        size = cell_len(fset.plain(field))
-        if used + len(sep) + size <= width:
-            rows[-1] += sep + field
-            used += len(sep) + size
-        else:
-            rows.append(" " * lead + field)
-            used = lead + size
+def _slice_runs(parts: list[fset.Run], start: int, end: int) -> list[fset.Run]:
+    """The runs covering characters ``start``..``end`` of their plain text."""
+    out: list[fset.Run] = []
+    position = 0
+    for colour, text in parts:
+        low, high = max(start - position, 0), min(end - position, len(text))
+        if low < high:
+            out.append((colour, text[low:high]))
+        position += len(text)
+    return out
+
+
+def field_rows(parts: list[fset.Run], width: int, sep: str = "  ") -> list[list[fset.Run]]:
+    """Runs whose fields each follow a `FIELD_BREAK` as rows of runs at most
+    ``width`` columns wide, broken between two fields; the rows after the
+    first start under the first field. A field wider than its row breaks at
+    the column and goes on under the first field. A line with no field is
+    word-wrapped. Wrapping works on the plain text; the colours ride along."""
+    parts = [(colour, text.expandtabs(TAB)) for colour, text in parts]
+    plain = fset.to_plain(parts)
+    pieces = plain.split(FIELD_BREAK)
+    spans: list[tuple[int, int]] = []
+    position = 0
+    for piece in pieces:
+        spans.append((position, position + len(piece)))
+        position += len(piece) + len(FIELD_BREAK)
+    if len(pieces) == 1:
+        rows, start = [], 0
+        for index, end in enumerate(cut_points(plain, width)):
+            if index:
+                # The spaces at a break are the break: they start no row.
+                start = end - len(plain[start:end].lstrip(" "))
+                if start >= end:
+                    continue
+            rows.append(_slice_runs(parts, start, len(plain[:end].rstrip(" ")) if end < len(plain) else end))
+            start = end
+        return rows
+    head_low, head_high = spans[0]
+    head = plain[head_low:head_high]
+    rows: list[list[fset.Run]] = []
+    start = 0
+    head_cuts = cut_points(head, width) if head else [0]
+    for end in head_cuts:
+        # The text before the first field wraps like any line.
+        rows.append(_slice_runs(parts, head_low + start, head_low + end))
+        start = end
+    used = cells(head[head_cuts[-2]:] if len(head_cuts) > 1 else head)
+    lead = used if used < width // 2 else 0
+    for index, (low, high) in enumerate(spans[1:]):
+        field = plain[low:high]
+        size = cells(field)
+        gap = len(sep) if index else 0
+        if used + gap + size > width and used > lead:
+            rows.append([("", " " * lead)] if lead else [])
+            used, gap = lead, 0
+        room = width - used - gap
+        if gap:
+            rows[-1].append(("", " " * gap))
+        if size <= room:
+            rows[-1] += _slice_runs(parts, low, high)
+            used += gap + size
+            continue
+        # Wider than what is left of the row: it breaks at the column.
+        start = 0
+        cuts = cut_points(field, max(room, 1), max(width - lead, 1), words=False)
+        for number, end in enumerate(cuts):
+            if number:
+                rows.append([("", " " * lead)] if lead else [])
+            rows[-1] += _slice_runs(parts, low + start, low + end)
+            start = end
+        used = (lead if len(cuts) > 1 else used + gap) + cells(field[cuts[-2] if len(cuts) > 1 else 0:])
     return rows
+
+
+def drawn_rows(parts: list[fset.Run], width: int, base: str = "") -> list[str]:
+    """Runs word-wrapped to ``width`` columns (`field_rows`), each row as
+    drawn text; a run with no colour of its own in colour entry ``base``."""
+    colour = fset.hex_for(base) if base else None
+    parts = [(own or colour or "", text) for own, text in parts]
+    return [fset.to_ansi(row) for row in field_rows(parts, width)]
 
 
 # The two voices of a conversation hang off their marks: column 0 holds only
@@ -147,7 +307,7 @@ def field_lines(rendered: str, width: int, sep: str = "  ") -> list[str]:
 def _speaker(mark_entry: str, colour: str) -> tuple[str, int]:
     mark = fset.lookup(mark_entry) or ""
     spaces = fset.mark_gap()
-    return f"{fset.BOLD}{fset.paint(colour, mark)}{' ' * spaces}", cell_len(mark) + spaces
+    return f"{fset.strong(colour, mark)}{' ' * spaces}", cells(mark) + spaces
 
 
 def user_speaker() -> tuple[str, int]:
@@ -181,9 +341,15 @@ def hang(text: str, mark: str, indent: int, *, first: bool = True) -> str:
     return "\n".join(rows)
 
 
+# Columns between tab stops.
+TAB = 8
+
+
 def cells(text: str) -> int:
-    """Terminal columns ``text`` takes, colour escapes not counted."""
-    return sum(get_cwidth(char) for char in fset.plain(text))
+    """Terminal columns ``text`` takes on one line from column 0: colour
+    escapes not counted, a tab out to the next stop, a wide character two.
+    Every measure in js goes through here."""
+    return sum(get_cwidth(char) for char in fset.plain(text).expandtabs(TAB))
 
 
 def cut_points(plain: str, room: int, rest: int | None = None, *, words: bool = True) -> list[int]:
@@ -224,7 +390,7 @@ def wrap_words(text: str, width: int) -> str:
     last space that fits, or at the column when no space does. The spaces at
     a break are the break: they end no row and start none."""
     out: list[str] = []
-    for line in text.split("\n"):
+    for line in text.expandtabs(TAB).split("\n"):
         start = 0
         cuts = cut_points(line, width)
         for index, end in enumerate(cuts):
@@ -242,14 +408,15 @@ def user_line(text: str) -> str:
     """One user message as the conversation shows it, word-wrapped to the
     text column."""
     mark, indent = user_speaker()
-    text = wrap_words(text, block_width() - indent)
-    body = "\n".join(f"{fset.BOLD}{fset.paint('COLOR_USER', line)}" if line else "" for line in text.split("\n"))
+    text = wrap_words(clean(text), block_width() - indent)
+    body = "\n".join(fset.strong("COLOR_USER", line) if line else "" for line in text.split("\n"))
     return hang(body, mark, indent) + "\n"
 
 
 def echo_user(text: str) -> None:
-    """Print `user_line(text)` where the answer will follow."""
-    sys.stdout.write(user_line(text))
+    """Print `user_line(text)` where the answer will follow, plain on a
+    stream that is not a terminal."""
+    sys.stdout.write(msgs.for_stream(user_line(text)))
     sys.stdout.flush()
 
 
@@ -284,12 +451,16 @@ def block_width() -> int:
     return terminal_width() - 1
 
 
-def _render_console(width: int, styles: dict[str, str] | None = None) -> Console:
+def _render_console(width: int, styles: dict[str, str] | None = None, style: str | None = None) -> Console:
+    """A console that renders into a string at ``width``: 24-bit colour, none
+    under NO_COLOR, ``style`` under everything it draws."""
     return Console(
         theme=_RichTheme(styles) if styles else None,
+        style=style,
         file=io.StringIO(),
         force_terminal=True,
         color_system="truecolor",
+        no_color=not fset.colour_on(),
         width=width,
         highlight=False,
         markup=False,
@@ -298,10 +469,29 @@ def _render_console(width: int, styles: dict[str, str] | None = None) -> Console
     )
 
 
-def _rendered_text(console: Console) -> str:
+def _rendered_text(console: Console, width: int | None = None) -> str:
+    """What ``console`` drew, trailing spaces off each line. With ``width``, a
+    line wider than that in `cells` (rich measures some emoji narrower than
+    the screen does) is cut again to fit, its colours kept."""
     out = console.file.getvalue()  # type: ignore[attr-defined]
-    lines = [line.rstrip(" ") for line in out.split("\n")]
+    lines: list[str] = []
+    for line in out.split("\n"):
+        if width is not None and cells(line) > width:
+            text = Text.from_ansi(line)
+            text.rstrip()
+            if text.cell_len and cells(text.plain) > width:
+                lines += [_ansi_of(piece) for piece in text.divide(cut_points(text.plain, width)[:-1])]
+                continue
+            line = _ansi_of(text)
+        lines.append(line.rstrip(" "))
     return "\n".join(lines)
+
+
+def _ansi_of(text: Text) -> str:
+    """``text`` as ANSI, one line, nothing added."""
+    console = _render_console(max(cells(text.plain), 1) + 8)
+    console.print(text, end="", soft_wrap=True)
+    return console.file.getvalue()  # type: ignore[attr-defined]
 
 
 def _markdown_styles(colours: Theme) -> dict[str, str]:
@@ -323,18 +513,99 @@ def _markdown_styles(colours: Theme) -> dict[str, str]:
     }
 
 
+class _FoldingTable(TableElement):
+    """A Markdown table whose cells wrap: rich's own cuts a long cell short
+    with an ellipsis, and an answer is never cut. A table too wide for the
+    width even with its cells wrapped, where rich would drop columns, is
+    drawn a row at a time instead: each cell on its own line after its
+    column's heading, a rule between rows; a table with no data row, its
+    headings a line each."""
+
+    def __rich_console__(self, console: Console, options: Any) -> Any:
+        rows = [[cell.content for cell in row.cells] for row in (self.body.rows if self.body else [])]
+        headings: list[Text] = []
+        if self.header is not None and self.header.row is not None:
+            for column in self.header.row.cells:
+                heading = column.content.copy()
+                heading.stylize("markdown.table.header")
+                headings.append(heading)
+        if _shows_every_cell(console, options, headings, rows):
+            yield _table(headings, rows, len(rows[0]) if rows else 0)
+            return
+        if not rows:
+            # Headings and no data row: the headings, a line each.
+            yield from headings
+            return
+        for index, row in enumerate(rows):
+            if index:
+                yield Text("\u2500" * min(options.max_width, 3), "markdown.table.border")
+            for column, cell in enumerate(row):
+                heading = headings[column] if column < len(headings) else Text("")
+                yield Text.assemble(heading, " ", cell, overflow="fold") if heading.plain else cell
+
+
+def _table(headings: list[Text], rows: list[list[Text]], columns: int) -> Any:
+    """A Markdown table as rich lays it out, its cells folding."""
+    from rich import box
+    from rich.table import Table
+
+    table = Table(box=box.SIMPLE, pad_edge=False, style="markdown.table.border", show_edge=True,
+                  collapse_padding=True, show_header=bool(headings))
+    for heading in headings or [Text("")] * columns:
+        table.add_column(heading, overflow="fold")
+    for row in rows:
+        table.add_row(*row)
+    return table
+
+
+# Private-use characters, one per cell of a table being checked.
+_PROBE_BASE = 0xF0000
+
+
+def _shows_every_cell(console: Console, options: Any, headings: list[Text], rows: list[list[Text]]) -> bool:
+    """Whether the table of ``headings`` and ``rows`` drawn at ``options``'
+    width shows every cell whole: rich leaves out a column it has no room for.
+    The table is drawn once more with each cell's text spelled in a character
+    of its own, every character the width it stands for and the spaces kept,
+    so the layout is the same; every cell must come back whole."""
+    cells_ = [*headings, *(cell for row in rows for cell in row)]
+    if len(cells_) > 0xFFFD:
+        return False
+
+    def probe(index: int, cell: Text) -> Text:
+        mark = chr(_PROBE_BASE + index)
+        return Text("".join(char if char.isspace() else mark * max(get_cwidth(char), 1) for char in cell.plain))
+
+    probed = iter(probe(index, cell) for index, cell in enumerate(cells_))
+    probe_headings = [next(probed) for _heading in headings]
+    probe_rows = [[next(probed) for _cell in row] for row in rows]
+    columns = len(rows[0]) if rows else len(headings)
+    table = _table(probe_headings, probe_rows, columns)
+    drawn = Counter(char for line in console.render_lines(table, options, pad=False)
+                    for segment in line for char in segment.text if not char.isspace())
+    return all(drawn[chr(_PROBE_BASE + index)]
+               == sum(max(get_cwidth(char), 1) for char in cell.plain if not char.isspace())
+               for index, cell in enumerate(cells_))
+
+
+class _Markdown(Markdown):
+    """rich's Markdown with tables that wrap their cells."""
+
+    elements = {**Markdown.elements, "table_open": _FoldingTable}
+
+
 def render_markdown(source: str, width: int, settings: Any = None) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
     before or after, ending in one newline. Inline code is a chip: its text in
     COLOR_CODE on COLOR_PANEL, a space of padding each side."""
-    console = _render_console(width, _markdown_styles(theme(settings)))
-    document = Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
+    console = _render_console(width, _markdown_styles(theme(settings)), fset.hex_for("COLOR_AGENT"))
+    document = _Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
     for token in document.parsed:
         for child in token.children or ():
             if child.type == "code_inline":
                 child.content = f" {child.content} "
     console.print(document)
-    return _rendered_text(console).strip("\n") + "\n"
+    return _rendered_text(console, width).strip("\n") + "\n"
 
 
 def _block_starts(source: str) -> list[int]:
@@ -410,7 +681,8 @@ class Display:
     once; the last block stays live until the next block starts or `finish()`.
     Redraws are at most one per `refresh_s`; text that arrives between two is
     drawn when the interval ends, whether or not more text follows.
-    Without one it writes `clean(text)` as it arrives, no cursor movement.
+    Without one it writes the text as it arrives, no cursor movement. Either
+    way the text comes in through one `StreamCleaner`.
     """
 
     def __init__(
@@ -420,8 +692,10 @@ class Display:
         live: LiveSurface | None = None,
         flush: Callable[[], None] | None = None,
         refresh_s: float = 0.1,
+        colour: bool = True,
     ) -> None:
         self._write = write
+        self._colour = colour  # the stream takes colour escapes
         self._flush = flush or (lambda: None)
         self.live = live
         self.refresh_s = refresh_s
@@ -434,6 +708,7 @@ class Display:
         self._committed_any = False
         self._speaker: tuple[str, int] | None = None
         self._spoke = False
+        self._cleaner = StreamCleaner()
 
     @classmethod
     def for_stream(cls, stream: Any, *, markdown: bool = True) -> Display:
@@ -444,7 +719,7 @@ class Display:
         except Exception:  # noqa: BLE001 - a closed or foreign stream is not a terminal
             tty = False
         live = TtyLive(redraw, flush, commit_write=stream.write) if (markdown and tty) else None
-        return cls(stream.write, live=live, flush=flush)
+        return cls(stream.write, live=live, flush=flush, colour=tty and fset.colour_on())
 
     @property
     def pretty(self) -> bool:
@@ -453,8 +728,9 @@ class Display:
     def speaker(self, mark: str, indent: int) -> None:
         """Hang the stream off `mark`: its first row starts with it and every
         other row starts `indent` columns in."""
-        self._speaker, self._spoke = (mark, indent), False
+        self._speaker, self._spoke = (mark if self._colour else fset.plain(mark), indent), False
         self._word, self._spaces, self._row_used, self._row_start = "", 0, 0, True
+        self._word_cells = 0
 
     def _width(self) -> int:
         assert self.live is not None
@@ -473,21 +749,45 @@ class Display:
     def _hang_plain(self, text: str) -> str:
         """``text`` flowed under the speaker's mark, word-wrapped to the text
         column: a word is held until the space or newline after it shows
-        whether it fits on the row."""
+        whether it fits on the row, and a word as wide as a whole row goes
+        out a row at a time as it grows. A tab is spaces to the next stop."""
         if self._speaker is None:
             return text
+        mark, indent = self._speaker
+        room = block_width() - indent
         out: list[str] = []
         for char in text:
             if char == "\n":
                 out.append(self._flush_word())
-                out.append("\n")
+                out.append(self._held_spaces() + "\n")
                 self._row_used, self._spaces, self._row_start = 0, 0, True
-            elif char == " ":
+            elif char in " \t":
                 out.append(self._flush_word())
-                self._spaces += 1
+                self._spaces += 1 if char == " " else TAB - (self._row_used + self._spaces) % TAB
             else:
+                cell = get_cwidth(char)
+                if self._word_cells + cell > room:
+                    # The held word fills a row by itself: it goes out now.
+                    out.append(self._flush_word())
+                    out.append("\n" + " " * indent)
+                    self._row_used, self._spaces = 0, 0
                 self._word += char
+                self._word_cells += cell
         return "".join(out)
+
+    def _held_spaces(self) -> str:
+        """The spaces held after the row's last word, as many as the row has
+        room for, and none held any longer."""
+        if self._speaker is None:
+            return ""
+        room = block_width() - self._speaker[1]
+        spaces = " " * min(self._spaces, max(room - self._row_used, 0)) if not self._row_start else ""
+        self._spaces = 0
+        return spaces
+
+    def _paint(self, text: str) -> str:
+        """Answer text in COLOR_AGENT, on a stream that takes colour."""
+        return fset.paint("COLOR_AGENT", text) if self._colour else text
 
     def _flush_word(self) -> str:
         """The held word placed on the current row, or on a new one under
@@ -502,21 +802,24 @@ class Display:
             self._spoke, self._row_start = True, False
         word = self._word
         size = cells(word)
-        if not out and self._row_used + self._spaces + size > room:
-            out, self._row_used, self._spaces = "\n" + " " * indent, 0, 0
+        if self._row_used + self._spaces + size > room and (not out or self._spaces):
+            # It does not fit after what the row holds, its leading spaces
+            # included: those stay on this row, the word starts the next.
+            out += " " * min(self._spaces, max(room - self._row_used, 0)) + "\n" + " " * indent
+            self._row_used, self._spaces = 0, 0
         if self._row_used + self._spaces + size > room:
             # A word wider than the row (a run of wide characters with no
             # space) breaks at the column, one pass over it.
             cuts = cut_points(word, room - self._row_used - self._spaces, room, words=False)
             start = 0
             for end in cuts[:-1]:
-                out += " " * self._spaces + word[start:end] + "\n" + " " * indent
+                out += " " * self._spaces + self._paint(word[start:end]) + "\n" + " " * indent
                 start, self._row_used, self._spaces = end, 0, 0
             word = word[start:]
             size = cells(word)
-        out += " " * self._spaces + word
+        out += " " * self._spaces + self._paint(word)
         self._row_used += self._spaces + size
-        self._spaces, self._word = 0, ""
+        self._spaces, self._word, self._word_cells = 0, "", 0
         return out
 
     def chunk(self, field: str, text: str) -> None:
@@ -525,15 +828,15 @@ class Display:
         if field != self.field:
             self.finish()
             self.field = field
+        cleaned = self._cleaner.feed(text)
         if self.live is None:
-            cleaned = clean(text)
             if cleaned:
                 self._write(self._hang_plain(cleaned))
                 self._last_char = cleaned[-1]
                 self._wrote = True
                 self._flush()
             return
-        self._source += text
+        self._source += cleaned
         wait = self._refreshed + self.refresh_s - time.monotonic()
         if wait <= 0:
             self._cancel_trailing()
@@ -553,7 +856,7 @@ class Display:
         the caller has wrapped."""
         self._trailing = None
         if self.live is not None:
-            self._draw_live(clean(self._source))
+            self._draw_live(self._source)
             self._refreshed = time.monotonic()
 
     def _cancel_trailing(self) -> None:
@@ -571,7 +874,7 @@ class Display:
 
     def _refresh(self) -> None:
         assert self.live is not None
-        value = clean(self._source)
+        value = self._source
         starts = _block_starts(value)
         if len(starts) > 1:
             # markdown-it numbers lines by "\n" only; splitlines() would also
@@ -592,14 +895,20 @@ class Display:
     def finish(self) -> None:
         """Commit whatever is open and end the stream on a fresh line."""
         self._cancel_trailing()
+        held = self._cleaner.flush()  # the text of a string sequence never ended
+        if held and self.live is not None:
+            self._source += held
+        elif held:
+            self._write(self._hang_plain(held))
+            self._last_char, self._wrote = held[-1], True
         if self.live is not None:
-            value = clean(self._source)
+            value = self._source
             if value.strip():
                 self._commit(value)
             self._source = ""
             self._committed_any = False
         elif self._wrote:
-            held = self._flush_word() if self._speaker is not None else ""
+            held = self._flush_word() + self._held_spaces() if self._speaker is not None else ""
             if held:
                 self._write(held)
             if self._last_char != "\n":
@@ -666,6 +975,8 @@ _HEADER_MARK = re.compile(rf"^[{MARK}{OK}{FAIL}] +", re.M)  # the mark and the c
 # Columns a body sits in from the rail, and a panel's inner padding.
 _INDENT = 1
 _PAD = 1
+# Columns a wrapped header row sits in from the rail: past the mark.
+_HANG = 2
 
 
 @dataclass(frozen=True)
@@ -832,7 +1143,6 @@ _KEY_ARGS: dict[str, tuple[str, ...]] = {
     "task": ("agent_id",),
 }
 _PATH_ARGS = ("file_path", "path")
-_KEY_ARG_MIN = 16
 
 
 def short_path(path: str) -> str:
@@ -854,14 +1164,16 @@ def _key_name(name: str, args: dict | None) -> str | None:
     return next((key for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
 
 
-def key_argument(name: str, args: dict | None, room: int) -> str:
+def key_argument(name: str, args: dict | None, room: int, whole: bool = False) -> str:
     """The call's key argument on one line of at most `room` cells: a path
     is shortened and keeps its tail, anything else its head; "" when the call
-    has none."""
+    has none. With ``whole`` every line of it, a newline shown as ⏎."""
     key = _key_name(name, args)
     if key is None:
         return ""
     lines = clean(args[key]).strip().split("\n")  # type: ignore[index]
+    if whole:
+        return " ⏎ ".join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
     text = lines[0].strip()
     more = "…" if len(lines) > 1 else ""
     if key in _PATH_ARGS:
@@ -873,7 +1185,9 @@ def key_argument(name: str, args: dict | None, room: int) -> str:
     return text[:room - 1] + "…"
 
 
-def _single_line(value: Any) -> str:
+def _single_line(value: Any, whole: bool = False) -> str:
+    """An argument's value on one line: its head, cut at 40 columns, or with
+    ``whole`` all of it, a newline shown as ⏎."""
     if isinstance(value, str):
         text = value
     else:
@@ -882,13 +1196,15 @@ def _single_line(value: Any) -> str:
         except (TypeError, ValueError):
             text = str(value)
     text = clean(text)
+    if whole:
+        return text.replace("\n", " ⏎ ")
     first, _, rest = text.partition("\n")
     if rest or len(first) > _ARG_VALUE_CHARS:
         first = first[:_ARG_VALUE_CHARS - 1] + "…"
     return first
 
 
-def _other_arguments(name: str, args: dict) -> str:
+def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
     """What the header shows after the key argument, dim: a `read`'s range, a
     `write`'s length, a `patch`'s edit count, then every remaining argument as
     `(key=value, …)`."""
@@ -903,8 +1219,11 @@ def _other_arguments(name: str, args: dict) -> str:
         notes.append(_count(len(args["content"].rstrip("\n").split("\n")), "line"))
     if name == "patch" and isinstance(args.get("edits"), list):
         notes.append(_count(len(args["edits"]), "edit"))
-    left_out = {_key_name(name, args), _BODY_ARG.get(name), *_UNLISTED_ARGS.get(name, ())}
-    rest = [f"{clean(str(key))}={_single_line(value)}" for key, value in args.items()
+    # The whole form leaves out only what it shows elsewhere: the key
+    # argument, the body, a message's text.
+    shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, ())
+    left_out = {_key_name(name, args), _BODY_ARG.get(name), *shown_elsewhere}
+    rest = [f"{clean(str(key))}={_single_line(value, whole)}" for key, value in args.items()
             if key not in left_out and value is not None and value != ""]
     if rest:
         notes.append("(" + ", ".join(rest) + ")")
@@ -942,7 +1261,7 @@ def _fit(text: Text, room: int) -> list[Text]:
     """`text` as rows of at most `room` cells: a long line breaks at the
     column, as a terminal wraps it, and keeps all of itself."""
     text = text.copy()
-    text.expand_tabs(8)
+    text.expand_tabs(TAB)
     cuts = cut_points(text.plain, room, words=False)[:-1]
     return list(text.divide(cuts)) if cuts else [text]
 
@@ -954,48 +1273,67 @@ class _Block:
     of `state`: running, finished or failed."""
 
     def __init__(self, width: int, colours: Theme, state: str = MARK) -> None:
-        self.width = max(width, 24)
+        self.width = max(width, 10)
         self.inner = self.width - _RAIL
         self.theme = colours
         self.state = state
         self.rows: list[Text] = []
+        self.whole = False  # TOOLS_DISPLAY 3: the header shows every argument whole
 
     def colour(self) -> str:
         return {MARK: self.theme.warn, OK: self.theme.ok, FAIL: self.theme.error}[self.state]
 
     def header(self, name: str, args: dict | None, *, malformed: bool = False,
                about: str | None = None, rest: str | None = None,
-               tail: str = "", tail_style: str = "") -> None:
-        """`mark [name] key-argument  other-arguments[  tail]` on one row: the
-        name in COLOR_TOOL on the panel gray. `about` and `rest` replace what the arguments
-        would give."""
+               tail: str | list[fset.Run] = "", tail_style: str = "") -> None:
+        """`mark [name] key-argument  other-arguments`, the name in COLOR_TOOL
+        on the panel gray; a row too long wraps under the name, nothing is
+        cut. `tail`, the call's last word, sits on its own row below, behind
+        TOOL_RESULT_LEAD. `about` and `rest` replace what the arguments would
+        give."""
         th = self.theme
         args = args if isinstance(args, dict) else {}
         row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
                             (f" {clean(name)} ", f"bold {th.accent} on {th.panel}"))
-        if len(tail) > self.inner // 2:
-            tail = tail[:self.inner // 2 - 1] + "…"
-        reserve = len(tail) + 2 if tail else 0
         if malformed:
-            row.append(" " + msgs.TOOL_ARGS_UNPARSED.body(), th.error)
+            row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
-            about = key_argument(name, args, max(self.inner - row.cell_len - reserve - 1, _KEY_ARG_MIN))
+            # A program shown whole in its own panel keeps only its first line here.
+            whole = self.whole and _BODY_ARG.get(name) != _key_name(name, args)
+            about = key_argument(name, args, 10 ** 6, whole)
         if about:
             row.append(" " + about, "bold")
         if rest is None:
-            rest = _other_arguments(name, args)
+            rest = _other_arguments(name, args, self.whole)
         if rest:
             row.append("  " + rest, th.dim)
-        row.truncate(max(self.inner - reserve, 8), overflow="ellipsis")
+        self._hanging(row)
         if tail:
-            row.append("  " + tail, tail_style or th.dim)
-            row.truncate(self.inner, overflow="ellipsis")
-        self.rows.append(row)
+            self._hanging(fset.to_rich(msgs.TOOL_RESULT_LEAD.body_runs(), th.dim) + Text(" ")
+                          + _piece(tail, tail_style or th.dim),
+                          lead=_HANG)
+
+    def _hanging(self, text: Text, lead: int = 0) -> None:
+        """``text`` as rows: the first ``lead`` columns in, the rest under the
+        text that follows the mark."""
+        text = text.copy()
+        text.expand_tabs(TAB)
+        cuts = cut_points(text.plain, self.inner - lead, self.inner - _HANG - lead)
+        pieces = text.divide(cuts[:-1]) if text.plain else []
+        for index, piece in enumerate(pieces):
+            if index:
+                # The spaces at a break are the break: they start no row.
+                piece = piece[len(piece.plain) - len(piece.plain.lstrip(" ")):]
+                if not piece.plain:
+                    continue
+            if index < len(pieces) - 1:
+                piece.rstrip()
+            self.rows.append(Text(" " * (lead if index == 0 else _HANG + lead)) + piece)
 
     def _panel_row(self, piece: Text) -> None:
         row = Text(" " * _PAD, style=f"{self.theme.panel_text} on {self.theme.panel}")
         row.append_text(piece)
-        row.pad_right(self.inner - _INDENT - row.cell_len)
+        row.pad_right(self.inner - _INDENT - cells(row.plain))
         self.rows.append(Text(" " * _INDENT) + row)
 
     def panel(self, lines: list[Text]) -> None:
@@ -1019,10 +1357,10 @@ class _Block:
                 lead = head if index == 0 else Text(" " * sign)
                 self._panel_row(Text.assemble((label, self.theme.dim), "  ", lead, piece))
 
-    def note(self, text: str, style: str = "") -> None:
-        row = Text(" " * (_INDENT + _PAD) + text, style or self.theme.dim)
-        row.truncate(self.inner, overflow="ellipsis")
-        self.rows.append(row)
+    def note(self, text: str | list[fset.Run], style: str = "") -> None:
+        """A dim row of `text`, plain text or a message's colour runs,
+        wrapped under itself when it is long."""
+        self._hanging(_piece(text, style or self.theme.dim), lead=_INDENT + _PAD)
 
     def render(self) -> str:
         if not self.rows:
@@ -1034,8 +1372,13 @@ class _Block:
         return console.file.getvalue()  # type: ignore[attr-defined]
 
 
-def _hidden(count: int) -> str:
-    return msgs.TOOL_MORE_LINES.body(count=count)
+def _piece(text: str | list[fset.Run], style: str) -> Text:
+    """Plain text, or a message's colour runs, as rich text on ``style``."""
+    return fset.to_rich(text, style) if isinstance(text, list) else Text(text, style)
+
+
+def _hidden(count: int) -> list[fset.Run]:
+    return msgs.TOOL_MORE_LINES.body_runs(count=count)
 
 
 def _names(settings: Any, key: str) -> frozenset[str]:
@@ -1203,7 +1546,8 @@ def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> 
     if not isinstance(body, str) or not body.strip():
         return
     lines = clean(body).rstrip("\n").split("\n")
-    if name != "write" and len(lines) == 1:
+    if name != "write" and len(lines) == 1 and _key_name(name, args) == _BODY_ARG.get(name):
+        # A one-line program is the header's key argument already.
         return
     hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
     lines = lines[:len(lines) - hidden]
@@ -1248,7 +1592,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
         block.header(name, args, malformed=malformed)
         _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows))
         if output.tries is not None:
-            block.note(msgs.TOOL_TRIES_LEFT.body(left=output.tries[0], allowed=output.tries[1]), colours.error)
+            block.note(msgs.TOOL_TRIES_LEFT.body_runs(left=output.tries[0], allowed=output.tries[1]), colours.error)
         return
     if kind == "quiet":
         block.header(name, args, malformed=malformed)
@@ -1282,10 +1626,15 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     colours = block.theme
     block.header(name, args, malformed=malformed)
     _program(block, name, args, level, preview)
+    said = args.get(_SAID_ARG.get(name, ""))
+    if isinstance(said, str) and said.strip():
+        # What the call itself said, which TOOLS_DISPLAY 1 shows in place of the result.
+        lines = [Text(line, colours.panel_text) for line in clean(said).strip("\n").split("\n")]
+        _capped(block, lines, preview if level == 2 else len(lines), lambda rows: block.panel(rows))
     limit = preview if level == 2 else max(len(output.lines), 1)
     note_style = colours.error if output.failed else ""
     if not output.lines:
-        block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.body(), note_style)
+        block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.body_runs(), note_style)
         return
     read = _read_view(output, args) if name == "read" else None
     diff = _diff_view(output, colours) if name == "patch" else None
@@ -1322,8 +1671,9 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     args = args if isinstance(args, dict) else {}
     if result is None:
         block = _Block(width or block_width(), colours, MARK)
+        block.whole = level >= 3
         block.header(name, args, malformed=malformed,
-                     tail=msgs.TOOL_RUNNING.body(elapsed=elapsed) if elapsed else "")
+                     tail=msgs.TOOL_RUNNING.body_runs(elapsed=elapsed) if elapsed else "")
         if level >= 2:
             _program(block, name, args, level, preview)
         if live:
@@ -1332,6 +1682,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
         return block.render()
     output = tool_output(name, result)
     block = _Block(width or block_width(), colours, FAIL if output.failed else OK)
+    block.whole = level >= 3
     if level == 1:
         _finished_brief(block, name, args, output, call_kind(name, args, settings), preview, malformed)
     else:
@@ -1365,37 +1716,48 @@ def _call_args(call: dict) -> tuple[str, dict]:
     return str(function.get("name") or "?"), args if isinstance(args, dict) else {}
 
 
-def render_exchanges(messages: list[dict], count: int, *, width: int,
-                     level: int, preview: int, markdown: bool = True,
-                     settings: Any = None) -> str:
-    """The last `count` exchanges of `messages` as a turn prints them: the
-    user's line as `user_line` draws it, each tool exchange at TOOLS_DISPLAY
-    `level`, the answer hung off the agent's mark as Markdown at `width` (plain
-    text when `markdown` is off). An exchange starts at a user message that was
-    not steered into a turn."""
+def resume_parts(messages: list[dict], count: int, *, width: int,
+                 markdown: bool = True) -> Iterator[tuple[str, Any]]:
+    """The last `count` exchanges of `messages` in the order a turn drew
+    them: ("text", rendered) for the user's line (`user_line`) and the answer
+    hung off the agent's mark as Markdown at `width` (plain text when
+    `markdown` is off), ("call", (name, args, result)) for each tool call,
+    result None when none came back. An exchange starts at a user message
+    that was not steered into a turn."""
     starts = [i for i, message in enumerate(messages)
               if message.get("role") == "user" and not message.get("steered")]
     if count <= 0 or not starts:
-        return ""
+        return
     tail = messages[starts[-min(count, len(starts))]:]
     results = {message.get("tool_call_id"): message for message in tail
                if message.get("role") == "tool" and message.get("tool_call_id")}
-    out: list[str] = []
     for message in tail:
         role = message.get("role")
         text = clean(_content_text(message.get("content"))).strip("\n")
         if role == "user":
-            out.append(user_line(text))
+            yield "text", user_line(text)
         elif role == "assistant":
             if text.strip():
                 mark, indent = agent_speaker()
                 body = render_markdown(text, width - indent) if markdown else wrap_words(text, width - indent) + "\n"
-                out.append(hang(body, mark, indent))
+                yield "text", hang(body, mark, indent)
             for call in message.get("tool_calls") or []:
                 name, args = _call_args(call)
                 result = results.get(call.get("id"))
-                out.append(render_exchange(
-                    name, args, None if result is None else _content_text(result.get("content")),
-                    level=level, preview=preview, width=width, settings=settings,
-                ))
+                yield "call", (name, args, None if result is None else _content_text(result.get("content")))
+
+
+def render_exchanges(messages: list[dict], count: int, *, width: int,
+                     level: int, preview: int, markdown: bool = True,
+                     settings: Any = None) -> str:
+    """`resume_parts` as one string, each tool exchange at TOOLS_DISPLAY
+    `level` on its own."""
+    out: list[str] = []
+    for kind, part in resume_parts(messages, count, width=width, markdown=markdown):
+        if kind == "text":
+            out.append(part)
+        else:
+            name, args, result = part
+            out.append(render_exchange(name, args, result, level=level, preview=preview, width=width,
+                                       settings=settings))
     return "".join(out)

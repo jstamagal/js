@@ -257,7 +257,7 @@ on, then clears the in-process messages.
 
 Reasoning streams in and folds to one line, `N tok reasoning`, when the answer
 starts: `REASONING_DISPLAY` 1, the default. `0` hides it, `2` leaves it visible,
-and `3` also puts the provider's token count on the open block. Off the screen (`js -p`, the blocking REPL) nothing can unfold a block, so reasoning never folds there: levels 1 to 3 print its text, and the count line after it when the provider gives one. In the standard async screen, **Ctrl-O** toggles retained reasoning
+and `3` also puts the provider's token count on the open block. Off the screen (`js -p`, the blocking REPL) nothing can unfold a block, so reasoning never folds there: levels 1 to 3 print its text, and the count line after it when the provider gives one. In the standard async screen, **Ctrl-O** toggles retained reasoning and folded tool rows
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
@@ -328,15 +328,17 @@ first line of a command, a URL). Exchanges stack with no blank row between.
   `git status | head`). Any other shell command shows the last lines of its
   output while it runs, once it has run for a second, and becomes one row with
   its last line when it ends. A `patch` shows its diff, a `send` the message
-  sent, any other tool its result, each cut at `TOOLS_PREVIEW_LINES` lines.
+  sent, any other tool its result, each cut at `TOOLS_PREVIEW_LINES` lines on
+  the screen, where Ctrl-O shows the rest.
   A failed call shows its error.
 - `2` shows every call on its own with its program and the first
   `TOOLS_PREVIEW_LINES` lines of the result.
 - `3` shows every call with its whole result.
 
-On the REPL screen an exchange is redrawn in place as it changes. Elsewhere a
-call is printed once, when it finishes, and a run of quiet calls when the run
-ends. The colours are /fset `COLOR_*` entries (`/fset COLOR_TOOL #1fb4ff`); `/fset THEME bitchx` picks a built-in theme. In
+On the REPL screen an exchange is redrawn in place as it changes, and Ctrl-O
+unfolds a folded row or preview. Elsewhere (`js -p`, a pipe) nothing can unfold
+a row, so every call is printed whole when it finishes, at every level but 0.
+A saved transcript keeps every call whole too. The colours are /fset `COLOR_*` entries (`/fset COLOR_TOOL #1fb4ff`); `/fset THEME bitchx` picks a built-in theme. In
 a saved transcript every call is recorded on its own and its header starts
 with `>`, so `grep '] > shell'` finds every shell call made at `TOOLS_DISPLAY` 1 or
 higher (the `]` keeps `<USER>` lines out). Tool output, tool arguments and

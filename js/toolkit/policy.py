@@ -77,40 +77,40 @@ def load_tools_config(path: Path | None = None) -> ToolsConfig:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise ToolPolicyError(msgs.POLICY_UNREADABLE.text(path=path, error=' '.join(str(exc).split()))) from exc
+        raise ToolPolicyError(msgs.POLICY_UNREADABLE.said(path=path, error=' '.join(str(exc).split()))) from exc
     if data is None:
         return ToolsConfig(path=path)
     if not isinstance(data, dict):
-        raise ToolPolicyError(msgs.POLICY_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_NOT_A_MAPPING.said(path=path))
     unknown = sorted(str(key) for key in data if key not in ("tags", "ban", "skills"))
     if unknown:
-        raise ToolPolicyError(msgs.POLICY_UNKNOWN_KEYS.text(path=path, keys=', '.join(unknown)))
+        raise ToolPolicyError(msgs.POLICY_UNKNOWN_KEYS.said(path=path, keys=', '.join(unknown)))
 
     tags: dict[str, tuple[Any, ...]] = {}
     raw_tags = data.get("tags") or {}
     if not isinstance(raw_tags, dict):
-        raise ToolPolicyError(msgs.POLICY_TAGS_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_TAGS_NOT_A_MAPPING.said(path=path))
     for name, entries in raw_tags.items():
         if not isinstance(name, str) or not name.strip():
-            raise ToolPolicyError(msgs.POLICY_TAG_NAME_EMPTY.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_NAME_EMPTY.said(path=path, name=name))
         if name in INTRINSIC_TAGS:
-            raise ToolPolicyError(msgs.POLICY_TAG_INTRINSIC.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_INTRINSIC.said(path=path, name=name))
         if not isinstance(entries, list):
-            raise ToolPolicyError(msgs.POLICY_TAG_NOT_A_LIST.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_NOT_A_LIST.said(path=path, name=name))
         tags[name] = tuple(entries)
 
     bans: dict[str, tuple[str, ...]] = {}
     raw_bans = data.get("ban") or {}
     if not isinstance(raw_bans, dict):
-        raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_MAPPING.said(path=path))
     for tool_name, patterns in raw_bans.items():
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
-            raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_LIST.text(path=path, tool=tool_name))
+            raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_LIST.said(path=path, tool=tool_name))
         bans[str(tool_name).strip().lower()] = tuple(patterns)
 
     raw_skills = data.get("skills") or []
     if not isinstance(raw_skills, list) or not all(isinstance(s, str) and s.strip() for s in raw_skills):
-        raise ToolPolicyError(msgs.POLICY_SKILLS_NOT_A_LIST.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_SKILLS_NOT_A_LIST.said(path=path))
     return ToolsConfig(tags=tags, bans=bans, skills=tuple(s.strip() for s in raw_skills), path=path)
 
 
@@ -130,22 +130,22 @@ class Entry:
 
 def parse_entry(raw: Any, where: str) -> Entry:
     if not isinstance(raw, str):
-        raise ToolPolicyError(msgs.POLICY_ENTRY_NOT_A_STRING.text(where=where, entry=raw))
+        raise ToolPolicyError(msgs.POLICY_ENTRY_NOT_A_STRING.said(where=where, entry=raw))
     text = raw.strip()
     noun, sep, rest = text.partition(":")
     noun, rest = noun.strip().lower(), rest.strip()
     if not sep or not noun or not rest:
-        raise ToolPolicyError(msgs.POLICY_ENTRY_SHAPE.text(where=where, entry=text))
+        raise ToolPolicyError(msgs.POLICY_ENTRY_SHAPE.said(where=where, entry=text))
     if noun == "tag":
         name, _, modifier = rest.partition(":")
         name, modifier = name.strip(), modifier.strip()
         if modifier and name not in INTRINSIC_TAGS:
-            raise ToolPolicyError(msgs.POLICY_TAG_MODIFIER.text(where=where, entry=text))
+            raise ToolPolicyError(msgs.POLICY_TAG_MODIFIER.said(where=where, entry=text))
         if modifier and modifier not in MODIFIERS:
-            raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
+            raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.said(where=where, entry=text))
         return Entry(text, "tag", modifier or "eager", tag=name)
     if rest not in MODIFIERS:
-        raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
+        raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.said(where=where, entry=text))
     return Entry(text, noun, rest)
 
 
@@ -154,7 +154,7 @@ def parse_entries(raw: Any, where: str) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ToolPolicyError(msgs.POLICY_TOOLS_NOT_A_LIST.text(where=where))
+        raise ToolPolicyError(msgs.POLICY_TOOLS_NOT_A_LIST.said(where=where))
     return tuple(parse_entry(item, where).text for item in raw)
 
 
@@ -195,10 +195,10 @@ def expand(entries: Iterable[Any], config: ToolsConfig, where: str) -> tuple[Rul
             if entry.tag not in config.tags:
                 known = ", ".join(sorted((*config.tags, *INTRINSIC_TAGS)))
                 raise ToolPolicyError(
-                    msgs.POLICY_UNKNOWN_TAG.text(where=where, entry=entry.text, config=config.where, known=known))
+                    msgs.POLICY_UNKNOWN_TAG.said(where=where, entry=entry.text, config=config.where, known=known))
             if entry.tag in stack:
                 cycle = " > ".join(f"tag:{name}" for name in (*stack, entry.tag))
-                raise ToolPolicyError(msgs.POLICY_TAG_CYCLE.text(config=config.where, cycle=cycle))
+                raise ToolPolicyError(msgs.POLICY_TAG_CYCLE.said(config=config.where, cycle=cycle))
             walk(config.tags[entry.tag], f"{config.where} tags.{entry.tag}",
                  (*via, entry.text), (*stack, entry.tag))
 
@@ -302,12 +302,12 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
     order = {"eager": 0, "lazy": 1, "ban": 2, None: 3}
     rows = sorted(decisions, key=lambda d: (order[d.modifier], d.tool.name))
     width = max((len(d.tool.name) for d in rows), default=4)
-    lines = [msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=msgs.worded(msgs.TOOL_CHAIN_TOOL.said()), width=width,
-                                      state=msgs.worded(msgs.TOOL_CHAIN_STATE.said()),
-                                      decided=msgs.worded(msgs.TOOL_CHAIN_DECIDED_BY.said()))]
+    lines = [msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=msgs.TOOL_CHAIN_TOOL.said(), width=width,
+                                      state=msgs.TOOL_CHAIN_STATE.said(),
+                                      decided=msgs.TOOL_CHAIN_DECIDED_BY.said())]
     for d in rows:
         state = d.modifier or "-"
-        decided = d.rule.label if d.rule is not None else msgs.worded(msgs.NONE_VALUE.said())
+        decided = d.rule.label if d.rule is not None else msgs.NONE_VALUE.said()
         lines.append(msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=d.tool.name, width=width, state=state, decided=decided))
     shown = {d.tool.name.lower() for d in rows if d.modifier in ("eager", "lazy")}
     for name, patterns in sorted(bans.items()):

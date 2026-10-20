@@ -1547,7 +1547,47 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
 
 
-def test_trace_at_level_two_shows_the_first_lines_then_shown_over_total(capsys):
+def test_trace_at_level_two_shows_the_first_lines_on_the_screen_then_shown_over_total():
+    from js import screen
+
+    scroll = screen.Scrollback()
+    scroll.toggle_key = ""
+
+    class Exchange:
+        def open(self, rendered):
+            self.span = scroll.exchange_open(rendered)
+
+        def update(self, rendered, expanded=None):
+            scroll.exchange_update(self.span, rendered, expanded)
+
+        def close(self, rendered, expanded=None):
+            scroll.exchange_close(self.span, rendered, expanded)
+
+    telemetry = runtime.Telemetry(None)
+    telemetry.exchange_factory = Exchange
+    registry = _trace_registry()
+    calls = [
+        runtime._PendingToolCall("c1", "big", ["{}"]),
+        runtime._PendingToolCall("c2", "boom", ["{}"]),
+    ]
+
+    runtime._dispatch_tool_calls(
+        calls, telemetry, 256 * 1024, True,
+        runtime.ToolErrorTracker(), registry, _tools_context(2),
+    )
+
+    scroll.flush()
+    lines = [ANSI_RE.sub("", line).removeprefix(display.RAIL).removeprefix(" ")
+             for line in scroll.buffer.text.splitlines()]
+    assert len(_marker_lines(lines)) == 2
+    shown = "\n".join(lines)
+    assert all(f"line {index} with some words in it" in shown for index in range(3))
+    assert "line 3 with some words in it" not in shown
+    # A short error is shown whole.
+    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
+
+
+def test_trace_at_level_two_on_plain_stdout_shows_every_line(capsys):
     registry = _trace_registry()
     calls = [
         runtime._PendingToolCall("c1", "big", ["{}"]),
@@ -1562,9 +1602,7 @@ def test_trace_at_level_two_shows_the_first_lines_then_shown_over_total(capsys):
     lines = _trace_lines(capsys)
     assert len(_marker_lines(lines)) == 2
     shown = "\n".join(lines)
-    assert all(f"line {index} with some words in it" in shown for index in range(3))
-    assert "line 3 with some words in it" not in shown
-    # A short error is shown whole.
+    assert all(f"line {index} with some words in it" in shown for index in range(200))
     assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
 
 

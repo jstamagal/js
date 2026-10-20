@@ -4,7 +4,9 @@ and keep the models.dev catalog local."""
 import json
 import os
 import shutil
+import signal
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import UTC, datetime
 
@@ -97,10 +99,30 @@ def fresh_model_catalog(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def fresh_fset():
-    """Each test starts with no /fset entry set and no live settings bound."""
-    from js import fset
+def stop_signals_stay_as_they_were():
+    """A test that leaves its own SIGINT or SIGTERM handler behind changes
+    how this worker stops: GNU `timeout` signals the whole process group, and
+    a handler that turns SIGTERM into ^C makes a timed-out run read as an
+    interrupt. Each test ends with the handlers it started with."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    yield
+    for sig, handler in before.items():
+        if signal.getsignal(sig) is not handler and handler is not None:
+            signal.signal(sig, handler)
 
+
+@pytest.fixture(autouse=True)
+def fresh_fset(monkeypatch):
+    """Each test starts with no /fset entry set, no live settings bound,
+    colour on whatever NO_COLOR the invoking shell has, and the banner it
+    ends with put back."""
+    from js import fset, messages
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(messages, "BANNER", messages.BANNER)
     yield
     fset.reset()
     fset.bind_settings(None)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 from types import SimpleNamespace
 
 from js import display, runtime
+from js import messages as msgs
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
 
@@ -35,7 +37,15 @@ MARKS = (display.MARK, display.OK, display.FAIL)
 
 
 def _headers(lines: list[str]) -> list[str]:
-    return [line for line in lines if line.startswith(MARKS)]
+    """Each exchange's header with the call's last word, on the row under
+    it, joined on."""
+    headers: list[str] = []
+    for line in lines:
+        if line.startswith(MARKS):
+            headers.append(line)
+        elif headers and line.lstrip().startswith(msgs.TOOL_RESULT_LEAD.text().strip()):
+            headers[-1] += " " + line.strip()
+    return headers
 
 
 def test_clean_strips_osc_csi_and_control_bytes_but_keeps_newline_and_tab():
@@ -99,16 +109,16 @@ def test_level_one_line_carries_the_key_argument_and_fits_the_width():
     ]
     for name, args, shown in cases:
         lines = _plain(_shown(name, result, 1, args=args, width=80))
-        assert len(lines) == 1 and shown in lines[0], lines
+        assert len(_headers(lines)) == 1 and shown in lines[0], lines
     assert "git log" not in _plain(_shown("shell", result, 1, args=cases[2][1]))[0]
 
     deep = "/srv/" + "/".join(f"directory{n}" for n in range(20)) + "/target_file.py"
     long_command = "rg --no-heading " + "x" * 200
     for name, args, kept in (("read", {"file_path": deep}, "target_file.py"),
                              ("shell", {"command": long_command}, "rg --no-heading")):
-        line = _plain(_shown(name, result, 1, args=args, width=60))[0]
-        assert len(line) <= 60, line
-        assert kept in line
+        lines = _plain(_shown(name, result, 1, args=args, width=60))
+        assert all(len(line) <= 60 for line in lines), lines
+        assert kept in "".join(line.strip() for line in lines)
 
 
 def test_command_is_capped_by_lines_at_level_two_and_whole_at_level_three():
@@ -249,26 +259,67 @@ def _traced(calls, *, level: int = 1) -> tuple[list[str], str]:
     return _headers(_plain(out.getvalue())), log.getvalue()
 
 
-def test_a_run_of_quiet_calls_is_one_row_and_a_call_that_is_not_quiet_ends_it():
-    diff = "patched /w/c.py (1 replacement, hash abc)\n--- a\n+++ b\n@@ -1,1 +1,1 @@\n-old\n+new"
-    headers, transcript = _traced([
-        ("read", {"file_path": "/w/alpha.py"}, "1|a"),
-        ("read", {"file_path": "/w/beta.py"}, "1|b"),
-        ("read", {"file_path": "/w/gamma.py"}, "1|c"),
-        ("patch", {"file_path": "/w/c.py", "old_string": "old", "new_string": "new"}, diff),
-        ("read", {"file_path": "/w/delta.py"}, "1|d"),
-    ])
+def _traced_on_screen(calls) -> list[str]:
+    """Trace `(name, args, result)` calls one after another on the screen's
+    scrollback; returns the header rows it shows."""
+    from js import screen
+
+    scroll = screen.Scrollback()
+    scroll.toggle_key = ""
+
+    class Exchange:
+        def open(self, rendered):
+            self.span = scroll.exchange_open(rendered)
+
+        def update(self, rendered, expanded=None):
+            scroll.exchange_update(self.span, rendered, expanded)
+
+        def close(self, rendered, expanded=None):
+            scroll.exchange_close(self.span, rendered, expanded)
+
+    telemetry = runtime.Telemetry(None)
+    telemetry.exchange_factory = Exchange
+    context = ToolContext(cwd="/tmp")
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
+    for name, args, result in calls:
+        opened = runtime._trace_call(telemetry, context, name, args)
+        runtime._trace_result(telemetry, context, name, result, args=args, exchange=opened)
+    runtime.settle_tool_trace(telemetry)
+    scroll.flush()
+    return _headers(_plain(scroll.buffer.text))
+
+
+_QUIET_RUN = [
+    ("read", {"file_path": "/w/alpha.py"}, "1|alpha_text"),
+    ("read", {"file_path": "/w/beta.py"}, "1|beta_text"),
+    ("read", {"file_path": "/w/gamma.py"}, "1|gamma_text"),
+    ("patch", {"file_path": "/w/c.py", "old_string": "old", "new_string": "new"},
+     "patched /w/c.py (1 replacement, hash abc)\n--- a\n+++ b\n@@ -1,1 +1,1 @@\n-old\n+new"),
+    ("read", {"file_path": "/w/delta.py"}, "1|delta_text"),
+]
+
+
+def test_a_run_of_quiet_calls_is_one_row_on_the_screen_and_a_call_that_is_not_quiet_ends_it():
+    headers = _traced_on_screen(_QUIET_RUN)
 
     assert len(headers) == 3
     assert all(name in headers[0] for name in ("alpha.py", "beta.py", "gamma.py"))
     assert "patch" in headers[1]
     assert "delta.py" in headers[2] and "alpha.py" not in headers[2]
-    # The transcript records every call on its own.
+
+
+def test_plain_stdout_shows_every_call_whole_and_the_transcript_records_each():
+    # Plain stdout has no key to unfold a folded row, so nothing folds there.
+    headers, transcript = _traced(_QUIET_RUN)
+
+    assert len(headers) == 5
+    log = _plain(transcript)
+    assert all(any(text in row for row in log) for text in ("alpha_text", "beta_text", "gamma_text", "delta_text"))
     assert len(re.findall(rf"{re.escape(display.TOOL_MARKER)} read\b", transcript)) == 4
 
 
 def test_a_failed_quiet_call_is_shown_with_its_error_outside_the_fold():
-    headers, _ = _traced([
+    headers = _traced_on_screen([
         ("read", {"file_path": "/w/alpha.py"}, "1|a"),
         ("read", {"file_path": "/w/missing.py"}, "ERROR: no such file: /w/missing.py"),
         ("read", {"file_path": "/w/beta.py"}, "1|b"),
@@ -856,3 +907,63 @@ def test_a_wrapped_diff_row_never_reads_as_another_diff_row():
         removed = next(row for row in rows if "- old" in row)
         sign = removed.index("- old")
         assert [row for row in rows if row[sign:sign + 1] == "-"] == [removed], level
+
+
+def test_a_wrapped_header_starts_no_row_with_its_break_space():
+    for width in range(14, 40):
+        out = display.render_exchange("shell", {"command": "aaaa bbbb cccc  dddd eeee"}, None, level=1, width=width)
+        rows = SGR.sub("", out).rstrip("\n").split("\n")
+        for row in rows[1:]:
+            text = row.removeprefix(display.RAIL)
+            assert text.strip() and not text.startswith(" " * 4), (width, rows)
+
+
+def test_a_line_with_no_field_starts_no_row_with_its_break_space():
+    for width in range(3, 17):
+        rows = [display.fset.to_plain(row) for row in display.field_rows([("", "aaaa bbbb  cccc")], width)]
+        assert all(row.strip() and not row.startswith(" ") for row in rows), (width, rows)
+
+
+def test_the_expand_hint_does_not_split_a_wrapped_header(monkeypatch):
+    from js import screen
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 80)
+    args = {"command": 'bd update js-why.3 --actor="Claude Opus 5.5" --status closed --notes "Panels '
+                       'double-space: blank bar after every line (diffs and live shell output) fixed"'}
+    result = "shell=/bin/bash\nexit=0\n--- stdout ---\nUpdated issue: js-why.3"
+    folded = display.render_exchange("shell", args, result, level=1)
+    whole = display.render_exchange("shell", args, result, level=3)
+    scroll = screen.Scrollback()
+    scroll.toggle_key = "c-o"
+    span = scroll.exchange_open(folded)
+    scroll.exchange_close(span, folded, whole)
+    scroll.flush()
+    folded_rows = SGR.sub("", folded).rstrip("\n").split("\n")
+    shown = SGR.sub("", scroll.buffer.text).rstrip("\n").split("\n")
+    assert len(folded_rows) > 2
+    assert shown[:len(folded_rows)] == folded_rows
+    assert "c-o" in " ".join(shown[len(folded_rows):])
+
+
+def test_a_row_shown_whole_already_carries_no_expand_hint():
+    closed: list[str | None] = []
+
+    class Exchange:
+        def open(self, rendered):
+            pass
+
+        def update(self, rendered, expanded=None):
+            pass
+
+        def close(self, rendered, expanded=None):
+            closed.append(expanded)
+
+    telemetry = runtime.Telemetry(None)
+    telemetry.exchange_factory = Exchange
+    context = ToolContext(cwd="/tmp")
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 2})
+    args = {"command": "ls"}
+    opened = runtime._trace_call(telemetry, context, "shell", args)
+    runtime._trace_result(telemetry, context, "shell", "shell=/bin/bash\nexit=0\n--- stdout ---\na\nb",
+                          args=args, exchange=opened)
+    assert closed == [None]

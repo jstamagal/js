@@ -119,19 +119,19 @@ def _friendly_provider_error(
     detail = _detail(exc)
 
     if isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc):
-        return FriendlyProviderError(msgs.PROVIDER_NO_AUTH_METHOD.text(provider=provider))
+        return FriendlyProviderError(msgs.PROVIDER_NO_AUTH_METHOD.said(provider=provider))
 
     if isinstance(exc, ValueError) and str(exc).startswith("unknown provider id:"):
         unknown = str(exc).partition(":")[2].strip()
         if unknown.startswith(("'", '"')) and len(unknown) >= 2:
             provider = unknown[1:-1]
-        return FriendlyProviderError(msgs.PROVIDER_UNKNOWN.text(provider=provider))
+        return FriendlyProviderError(msgs.PROVIDER_UNKNOWN.said(provider=provider))
 
     if isinstance(exc, ai.ProviderAuthenticationError):
-        return FriendlyProviderError(msgs.PROVIDER_AUTH_FAILED.text(provider=provider, detail=detail))
+        return FriendlyProviderError(msgs.PROVIDER_AUTH_FAILED.said(provider=provider, detail=detail))
 
     if isinstance(exc, ai.ProviderNotConfiguredError):
-        return FriendlyProviderError(msgs.PROVIDER_NOT_CONFIGURED.text(provider=provider, detail=detail))
+        return FriendlyProviderError(msgs.PROVIDER_NOT_CONFIGURED.said(provider=provider, detail=detail))
 
     # Keep request failures intact: runtime and summary recovery consume the
     # SDK type, retryability and structured overflow fields. The SDK diagnostic

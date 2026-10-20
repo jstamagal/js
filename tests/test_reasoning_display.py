@@ -487,3 +487,79 @@ def test_stderr_reasoning_shows_every_word_once_when_the_window_is_resized(monke
         view.answer_started()
         rows = transcript.strip_ansi(stream.getvalue()).splitlines()
         assert [w for row in rows[1:] for w in row.split()] == words, (first, then, rows)
+
+
+def test_a_folded_heading_as_wide_as_the_window_stays_one_column_short(monkeypatch):
+    scroll = screen.Scrollback()
+    scroll.toggle_key = "c-o"
+    block = scroll.reasoning(1)
+    block.append("thinking")
+    block.finish(1_000)
+    wide = len(transcript.strip_ansi(scroll.buffer.text).rstrip("\n"))
+    monkeypatch.setattr(display, "terminal_width", lambda: wide)
+    block.finish(1_000)
+    rows = transcript.strip_ansi(scroll.buffer.text).rstrip("\n").split("\n")
+    assert all(len(row) < wide for row in rows), rows
+
+
+def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkeypatch):
+    monkeypatch.setattr(screen, "SCROLLBACK_LINES", 10)
+    scroll = screen.Scrollback()
+    scroll.toggle_key = "c-o"
+    for n in range(5):
+        scroll.append(f"early {n}\n")
+    scroll.flush()
+    block = scroll.reasoning(1)
+    block.append("".join(f"thought {n}\n" for n in range(30)))
+    block.finish(42)
+    assert "early 0" in scroll.buffer.text
+
+    assert scroll.toggle_reasoning()
+    unfolded = transcript.strip_ansi(scroll.buffer.text)
+    assert "early 0" in unfolded and all(f"thought {n}\n" in unfolded for n in range(30))
+    assert scroll.toggle_reasoning()
+    assert "early 0" in scroll.buffer.text
+
+
+def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
+    # A long line streamed in small chunks costs work in step with its length.
+    monkeypatch.setattr(display, "terminal_width", lambda: 80)
+    measured = [0]
+    cut_points = display.cut_points
+
+    def counting(plain, *args, **kwargs):
+        measured[0] += len(plain)
+        return cut_points(plain, *args, **kwargs)
+
+    monkeypatch.setattr(display, "cut_points", counting)
+
+    def stream(words: int) -> int:
+        measured[0] = 0
+        line = " ".join(f"word{n}" for n in range(words))
+        block = screen.Scrollback().reasoning(2)
+        for start in range(0, len(line), 4):
+            block.append(line[start:start + 4])
+        assert block._body() == display.wrap_words(line, display.block_width())
+        return measured[0]
+
+    assert stream(2000) < 3 * stream(1000)
+
+
+def test_a_space_at_a_reasoning_break_ends_its_row_and_starts_none(monkeypatch):
+    from js.reasoning_display import StderrReasoning
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("js.reasoning_display.terminal_width", lambda: 5)
+    stream = Terminal()
+    view = StderrReasoning(2, stream)
+    view.append("aaaa bbbb cccc\n")
+    assert transcript.strip_ansi(stream.getvalue()).splitlines()[1:] == ["aaaa", "bbbb", "cccc"]
+
+    monkeypatch.setattr(display, "terminal_width", lambda: 5)
+    block = screen.Scrollback().reasoning(2)
+    for char in "aaaa bbbb cccc":
+        block.append(char)
+    assert block._body().split("\n") == ["aaaa", "bbbb", "cccc"]

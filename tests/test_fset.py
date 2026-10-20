@@ -102,6 +102,34 @@ def test_an_old_display_setting_line_renames_to_an_fset_line():
     assert rename_old_names("set model.id x")[0] == "set MODEL x"
 
 
+def test_tool_row_and_reasoning_pieces_draw_through_their_formats():
+    from js import display, screen, transcript
+
+    for name in ("REASONING_HEADING", "REASONING_COUNT", "REASONING_EXPAND", "TOOL_RESULT_LEAD",
+                 "TOOL_MORE_LINES", "TOOL_RUNNING"):
+        assert fset.set_entry(name, f"<{name}>") is None
+    scroll = screen.Scrollback()
+    block = scroll.reasoning(1)
+    block.append("thinking")
+    block.finish(12)
+    shown = transcript.strip_ansi(scroll.buffer.text)
+    assert "<REASONING_COUNT>" in shown and "<REASONING_HEADING>" in shown and "<REASONING_EXPAND>" in shown
+
+    shell = "shell=bash\nexit=0\n--- stdout ---\n" + "\n".join(f"line {n}" for n in range(30)) + "\n"
+    folded = display.render_exchange("shell", {"command": "make"}, shell, level=1, width=60)
+    assert "<TOOL_RESULT_LEAD>" in transcript.strip_ansi(folded)
+    capped = display.render_exchange("web_thing", {"q": "x"}, "\n".join(f"r{n}" for n in range(30)), level=2,
+                                     width=60, preview=3)
+    assert "<TOOL_MORE_LINES>" in transcript.strip_ansi(capped)
+    running = display.render_exchange("shell", {"command": "make"}, None, level=1, width=60, elapsed="3s")
+    assert "<TOOL_RUNNING>" in transcript.strip_ansi(running)
+
+
+def test_mark_gap_takes_only_ascii_digits():
+    live = settings.seed_defaults()
+    assert setcmd.fset_command(live, "MARK_GAP ²").error
+
+
 def test_tool_chain_headings_draw_through_their_formats():
     from js.toolkit import policy
 
@@ -254,8 +282,3 @@ def test_a_theme_file_reads_its_lines_as_a_jsrc_does(tmp_path):
     path = tmp_path / "theme"
     path.write_text('fset\tMARK_GAP\t2\nfset MARK_USER ""\nfset MODEL_SET "two\\nlines %s"\n', encoding="utf-8")
     assert fset.read_file(path) == {"MARK_GAP": "2", "MARK_USER": "", "MODEL_SET": "two\nlines %s"}
-
-
-def test_mark_gap_takes_only_ascii_digits():
-    live = settings.seed_defaults()
-    assert setcmd.fset_command(live, "MARK_GAP ²").error

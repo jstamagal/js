@@ -79,7 +79,7 @@ def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask) -> list[str]:
     stops instead of going on to the next question. Returns the names saved."""
     saved: list[str] = []
     for name, use in missing_keys(environ, env_file):
-        answer = ask(msgs.INSTALL_ASK_KEY.text(name=name, use=use))
+        answer = ask(msgs.INSTALL_ASK_KEY.words(name=name, use=use))
         if answer is None:
             raise Cancelled
         value = answer.strip()
@@ -135,13 +135,13 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
         saved = logins.load_logins()
         if saved:
             cache = logins.load_model_cache()
-            rows = ", ".join(msgs.INSTALL_LOGIN_ROW.text(provider=provider_id,
+            rows = ", ".join(msgs.INSTALL_LOGIN_ROW.words(provider=provider_id,
                                                          models=msgs.plural(len(cache.get(provider_id, [])), "model"))
                              for provider_id in sorted(saved))
             msgs.say(msgs.INSTALL_LOGINS, logins=rows)
-            answer = ask(msgs.INSTALL_ASK_MODEL.text())
+            answer = ask(msgs.INSTALL_ASK_MODEL.words())
         else:
-            answer = ask(msgs.INSTALL_ASK_PROVIDER.text())
+            answer = ask(msgs.INSTALL_ASK_PROVIDER.words())
         choice = (answer or "").strip().lower()
         if not choice:
             return None

@@ -65,7 +65,7 @@ class AmbiguousSession(ValueError):
 
     def __init__(self, session: str, found: list[Path]) -> None:
         self.found = found
-        super().__init__(msgs.SESSION_AMBIGUOUS.text(session=session, paths=", ".join(str(p) for p in found)))
+        super().__init__(msgs.SESSION_AMBIGUOUS.said(session=session, paths=", ".join(str(p) for p in found)))
 
 
 def slug(directory: Path | str) -> str:
@@ -136,7 +136,7 @@ def reserve(folder: Path, make_name: Callable[[], str] = generated_name) -> Path
         except FileExistsError:
             continue
         return path
-    raise RuntimeError(msgs.SESSION_NOT_RESERVED.text(directory=folder))
+    raise RuntimeError(msgs.SESSION_NOT_RESERVED.said(directory=folder))
 
 
 def _named(folder: Path, relative: Path) -> Path | None:

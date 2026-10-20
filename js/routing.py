@@ -43,7 +43,7 @@ class ProviderNotLoggedInError(ValueError):
 
 
 def not_logged_in_message(provider_id: str) -> str:
-    return msgs.PROVIDER_NOT_LOGGED_IN.text(provider=provider_id)
+    return msgs.PROVIDER_NOT_LOGGED_IN.said(provider=provider_id)
 
 
 def unconfigured_model_message(model: str) -> str:
@@ -52,7 +52,7 @@ def unconfigured_model_message(model: str) -> str:
     prefix_provider, _ = providers.parse_model_prefix(str(model))
     if prefix_provider is not None:
         return not_logged_in_message(prefix_provider)
-    return msgs.MODEL_UNCONFIGURED.text(model=model)
+    return msgs.MODEL_UNCONFIGURED.said(model=model)
 
 
 def _saved_login(provider_id: str | None):

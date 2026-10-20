@@ -192,3 +192,41 @@ def test_transcript_file_gets_no_osc(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "\x1b" not in text
     assert "hi there" in text and "tool out" in text
+
+
+def test_an_escape_open_on_one_stream_hides_nothing_another_stream_writes():
+    import io
+
+    log = io.StringIO()
+    sink = transcript.TranscriptLogSink([log], [])
+    out = transcript.TranscriptTee(io.StringIO(), lambda: sink)
+    err = transcript.TranscriptTee(io.StringIO(), lambda: sink)
+    out.write("before \x1b]0;title")
+    err.write("STDERR_DIAGNOSTIC\n")
+    out.write("\x07 after\n")
+    assert "STDERR_DIAGNOSTIC" in log.getvalue()
+    assert "title" not in log.getvalue()
+
+
+def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+
+    log_dir = tmp_path / "transcripts"
+    cfg = _cfg(tmp_path, log_dir)
+    result = "shell=bash\nexit=0\n--- stdout ---\n" + "\n".join(f"TOOL_LINE_{n}" for n in range(30)) + "\n"
+
+    def run_turn(cfg, system, messages, telemetry, **_kwargs):
+        context = SimpleNamespace(config=SimpleNamespace(settings={"TOOLS_DISPLAY": 1}))
+        opened = runtime._trace_call(telemetry, context, "shell", {"command": "make"})
+        runtime._trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
+        messages.append({"role": "assistant", "content": "FINAL_OK"})
+
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(runtime, "run_turn", run_turn)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+
+    cli._run_prompt("hello")
+
+    capsys.readouterr()
+    log = (log_dir / "sess.log").read_text(encoding="utf-8")
+    assert all(f"TOOL_LINE_{n}" in log for n in range(30)), log

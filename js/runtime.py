@@ -29,6 +29,7 @@ import ai
 
 from . import context_budget
 from . import display
+from . import fset
 from . import jail as _jail
 from . import messages as msgs
 from .text_bytes import byte_size, byte_prefix, cap_text, well_formed
@@ -48,8 +49,8 @@ from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
-from .toolkit.core import (ToolContext, ToolResult, call_is_read_only, call_scope, call_tool,
-                           call_tool_async, registry_scope)
+from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope,
+                           call_tool, call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_surface import SurfaceJournal
@@ -538,7 +539,7 @@ def _print_trace(telemetry: Telemetry, text: str) -> None:
     sink = getattr(telemetry, "transcript_log", None)
     mute = getattr(sink, "mute_tee", None)
     with mute() if callable(mute) else contextlib.nullcontext():
-        sys.stdout.write(text)
+        sys.stdout.write(msgs.for_stream(text))
         sys.stdout.flush()
 
 
@@ -558,9 +559,18 @@ class _Fold:
     """The quiet calls of one tool in the current run, shown as one row."""
 
     name: str
-    calls: list[dict | None] = field(default_factory=list)
+    # Each call as (key, args); the key is the call's own object, so two calls
+    # with equal arguments stay apart.
+    calls: list[tuple[object, dict | None]] = field(default_factory=list)
+    # id(key) -> the whole form of a call that returned, rendered once when it returned.
+    wholes: dict[int, str] = field(default_factory=dict)
     running: int = 0
     exchange: Any = None
+
+    def drop(self, key: object) -> None:
+        """Forget the call ``key``."""
+        self.calls = [call for call in self.calls if call[0] is not key]
+        self.wholes.pop(id(key), None)
 
 
 @dataclass
@@ -595,7 +605,8 @@ class ToolTrace:
     def _fold_text(self, fold: _Fold, settings: Any) -> str:
         if not fold.calls:
             return ""
-        return display.render_fold(fold.name, fold.calls, running=fold.running, settings=settings)
+        return display.render_fold(fold.name, [args for _key, args in fold.calls], running=fold.running,
+                                   settings=settings)
 
     def _draw(self, fold: _Fold, settings: Any) -> None:
         factory = self._factory()
@@ -605,8 +616,19 @@ class ToolTrace:
         if fold.exchange is None:
             fold.exchange = factory()
             fold.exchange.open(text)
+            if (whole := self._fold_whole(fold)) is not None:
+                # A call that reaches the trace with its result unfolds at once too.
+                fold.exchange.update(text, whole)
         else:
-            fold.exchange.update(text)
+            # The calls that have returned unfold at once, before the run ends.
+            fold.exchange.update(text, self._fold_whole(fold))
+
+    def _fold_whole(self, fold: _Fold) -> str | None:
+        """Every call of a fold row whole, as TOOLS_DISPLAY 3 draws it; None
+        for a row left with no call that returned."""
+        if not any(id(key) in fold.wholes for key, _args in fold.calls):
+            return None
+        return "".join(fold.wholes[id(key)] for key, _args in fold.calls if id(key) in fold.wholes)
 
     def settle(self, settings: Any = None) -> None:
         """End the run: the next quiet call starts a new row. Caller holds `_OUTPUT_LOCK`."""
@@ -615,7 +637,7 @@ class ToolTrace:
         if self._factory() is not None:
             for fold in folds.values():
                 if fold.exchange is not None and not fold.running:
-                    fold.exchange.close(self._fold_text(fold, settings))
+                    fold.exchange.close(self._fold_text(fold, settings), self._fold_whole(fold))
             return
         _print_trace(self._telemetry, "".join(
             [self._fold_text(fold, settings) for fold in folds.values()] + held))
@@ -628,11 +650,13 @@ class ToolTrace:
             return None
         opened = _OpenCall(name, args, malformed)
         with _OUTPUT_LOCK:
-            if level == 1 and not malformed and display.call_kind(name, args, settings) == "quiet":
+            # Quiet calls fold only on the screen, where the reasoning_toggle key unfolds them.
+            if (level == 1 and not malformed and self._factory() is not None
+                    and display.call_kind(name, args, settings) == "quiet"):
                 fold = self._folds.get(name)
                 if fold is None:
                     fold = self._folds[name] = _Fold(name)
-                fold.calls.append(args)
+                fold.calls.append((opened, args))
                 fold.running += 1
                 opened.fold = fold
                 self._draw(fold, settings)
@@ -679,25 +703,39 @@ class ToolTrace:
         finished = display.render_exchange(
             name, args, result, level=level, preview=display.preview_lines(settings),
             malformed=malformed, settings=settings)
+        # A folded row's or a preview's whole form, for the reasoning_toggle key to unfold.
+        whole = (display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
+                 if level < 3 else None)
+        if whole == finished:
+            whole = None  # shown whole already: nothing to unfold
         with _OUTPUT_LOCK:
             if opened is not None:
                 opened.done.set()
-            _write_transcript(self._telemetry, finished)
+            # The transcript is the record: every call whole, at every level.
+            _write_transcript(self._telemetry, whole if whole is not None else finished)
             fold = opened.fold if opened is not None else None
-            quiet = level == 1 and not malformed and display.call_kind(name, args, settings) == "quiet"
+            quiet = (level == 1 and not malformed and self._factory() is not None
+                     and display.call_kind(name, args, settings) == "quiet")
             failed = display.tool_output(name, result).failed
             if fold is None and quiet and not failed:
                 fold = self._folds.get(name)
                 if fold is None:
                     fold = self._folds[name] = _Fold(name)
-                fold.calls.append(args)
+                key = opened if opened is not None else object()
+                fold.calls.append((key, args))
+                fold.wholes[id(key)] = whole if whole is not None else finished
                 self._draw(fold, settings)
                 return
             if fold is not None:
                 fold.running -= 1
                 if failed:
-                    fold.calls.remove(args)
+                    fold.drop(opened)
+                else:
+                    fold.wholes[id(opened)] = whole if whole is not None else finished
                 self._draw(fold, settings)
+                if self._folds.get(fold.name) is not fold and not fold.running and fold.exchange is not None:
+                    # Its run ended while this call ran: the row closes now.
+                    fold.exchange.close(self._fold_text(fold, settings), self._fold_whole(fold))
                 if not failed:
                     return
             if fold is not None or (quiet and failed):
@@ -711,13 +749,14 @@ class ToolTrace:
                 else:
                     row = factory()
                     row.open(tight)
-                    row.close(tight)
+                    row.close(tight, whole)
                 return
             if opened is not None and opened.exchange is not None:
-                opened.exchange.close(finished)
+                opened.exchange.close(finished, whole)
                 return
             self.settle(settings)
-            _print_trace(self._telemetry, finished)
+            # Plain stdout has no key to unfold a row: every call is shown whole.
+            _print_trace(self._telemetry, whole if whole is not None else finished)
 
 
 def _tool_trace(telemetry: Telemetry) -> ToolTrace:
@@ -1368,13 +1407,23 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
+    output = as_output(result)
+    result = output.model
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes, context=context)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     if trace:
-        _trace_result(telemetry, context, tool.name, capped, args=args, exchange=opened)
+        _trace_result(telemetry, context, tool.name, _operator_sees(output, result), args=args, exchange=opened)
     return args, capped
+
+
+def _operator_sees(output: ToolOutput, model: Any) -> Any:
+    """What the operator sees of a call: everything it produced
+    (`ToolOutput.whole`), or, when the tool cut nothing itself, the result
+    before TOOL_RESULT_MAX and the spill cut it for the model. ``model`` is
+    that result, with the retry note the model gets."""
+    return model if output.whole is None else output.whole
 
 
 def _is_task_call(pc: _PendingToolCall) -> bool:
@@ -1600,9 +1649,11 @@ async def _dispatch_fan_out_async(
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
-    recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes, context=tool_context))
+    output = as_output(result)
+    recorded = error_tracker.record(tool.name, _cap_result(output.model, cap_bytes, context=tool_context))
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, recorded, args=args, exchange=opened)
+        _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, output.model), args=args,
+                      exchange=opened)
     return pc, args, recorded
 
 
@@ -1638,13 +1689,15 @@ async def _dispatch_async_tool(
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
         result = _jail.shown(f"ERROR running {tool.name}: {type(exc).__name__}: {exc}")
-    raw_result = result
-    result = _cap_result(result, cap_bytes, context=tool_context)
+    output = as_output(result)
+    raw_result = output.model
+    result = _cap_result(raw_result, cap_bytes, context=tool_context)
     _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     if trace:
-        _trace_result(telemetry, tool_context, tool.name, result, args=args, exchange=opened)
+        _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, raw_result), args=args,
+                      exchange=opened)
     return pc, args, result
 
 
@@ -1903,9 +1956,9 @@ def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolReg
 
 def _print_run_line(fields: list[str]) -> None:
     """The run line through its format, wrapped between two fields."""
-    rendered = msgs.line_for(msgs.RUN_LINE, fields="".join(display.FIELD_BREAK + field for field in fields))
-    for row in display.field_lines(rendered, display.block_width()):
-        print(row, flush=True)
+    parts = msgs.RUN_LINE.runs(fields="".join(display.FIELD_BREAK + display.clean(field) for field in fields))
+    for row in display.field_rows(parts, display.block_width()):
+        print(msgs.for_stream(fset.to_ansi(row)), flush=True)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:

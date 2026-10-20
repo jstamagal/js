@@ -238,10 +238,10 @@ def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
         return None
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
-        raise SkillInvocationError(msgs.USAGE.text(usage="/skill <name> [request]"))
+        raise SkillInvocationError(msgs.USAGE.said(usage="/skill <name> [request]"))
     loaded = load_skill(catalog, name, user=True)
     if loaded is None:
-        raise SkillInvocationError(msgs.NO_SUCH_SKILL.text(name=name))
+        raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))
     metadata = loaded.metadata
     header = [f"Base directory for this skill: {metadata.path.parent}"]
     if metadata.tools:
@@ -325,12 +325,12 @@ def discover_skills(
                 try:
                     record = _index_skill(path, source)
                 except (ValueError, OSError) as exc:
-                    _warn_once(msgs.SKILL_SKIPPED.text(path=path, error=exc))
+                    _warn_once(msgs.SKILL_SKIPPED.said(path=path, error=exc))
                     continue
                 key = record.metadata.name.casefold()
                 prior = root_records.get(key)
                 if prior is not None:
-                    _warn_once(msgs.SKILL_DUPLICATE.text(
+                    _warn_once(msgs.SKILL_DUPLICATE.said(
                         path=path, name=record.metadata.name, root=root, prior=prior.metadata.path))
                     continue
                 root_records[key] = record
@@ -338,7 +338,7 @@ def discover_skills(
                 prior = layer_records.get(key)
                 # A dir symlinked into both roots is one skill, not a collision.
                 if prior is not None and not _same_file(prior.metadata.path, record.metadata.path):
-                    _warn_once(msgs.SKILL_OVERRIDES.text(
+                    _warn_once(msgs.SKILL_OVERRIDES.said(
                         name=record.metadata.name, path=record.metadata.path, prior=prior.metadata.path))
             layer_records.update(root_records)
         selected.update(layer_records)
@@ -449,7 +449,7 @@ def _warn_once(message: str) -> None:
     if line in _WARNED:
         return
     _WARNED.add(line)
-    msgs.warn(msgs.FAILED_WARN, error=line)
+    msgs.warn(msgs.FAILED_WARN, error=message if isinstance(message, msgs.Said) else line)
 
 
 def _string_field(manifest: dict[str, Any], field: str) -> str:

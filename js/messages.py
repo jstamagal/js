@@ -94,14 +94,20 @@ class Message:
         return fset.to_plain(self.runs(**fields))
 
     def body_runs(self, **fields: Any) -> list[fset.Run]:
-        """The entry's runs without a leading `$BANNER`: a piece of a row, or
-        a line for a channel that adds the slot itself."""
+        """The entry's runs without the `$BANNER` its default format leads
+        with: a piece of a row, or a line for a channel that adds the slot
+        itself. A format set by the operator or a theme is drawn as written,
+        a `$BANNER` it writes included."""
         fmt = self.format()
-        for lead in ("$BANNER ", "$G "):
-            if fmt.startswith(lead):
-                fmt = fmt[len(lead):]
-                break
+        if fmt == self.default_format() and fmt.startswith("$BANNER "):
+            fmt = fmt[len("$BANNER "):]
         return fset.runs(fmt, _holes(self.template, fields))
+
+    def words(self, **fields: Any) -> str:
+        """The entry's wording through its /fset format, plain and without a
+        leading `$BANNER`: for a channel that takes text and no colour, such
+        as an argument parser's help or an input prompt."""
+        return fset.to_plain(self.body_runs(**fields))
 
     def body(self, **fields: Any) -> str:
         """`body_runs` as text with 24-bit colour escapes (`js.fset.to_ansi`)."""
@@ -129,6 +135,10 @@ class Said(str):
     def __getnewargs__(self) -> tuple[Message, dict[str, Any]]:
         return self.message, self.fields
 
+    def words(self) -> str:
+        """Its wording through its entry's format, plain (`Message.words`)."""
+        return self.message.words(**self.fields)
+
 
 def banner(text: str) -> str:
     """`text` behind the banner slot, the BANNER setting."""
@@ -141,16 +151,37 @@ def set_banner(value: str) -> None:
     BANNER = value
 
 
-def _holes(template: str, fields: dict[str, Any]) -> list[str]:
-    """The template's holes filled from ``fields``, in order, as text."""
-    values: list[str] = []
+def _holes(template: str, fields: dict[str, Any]) -> list[str | list[fset.Run]]:
+    """The template's holes filled from ``fields``, in order, as text. A
+    `said()` entry in a hole, or an error raised with one, is drawn through
+    its own format: its colour runs, which keep their colours whatever the
+    target (`fset.runs`)."""
+    values: list[str | list[fset.Run]] = []
     for _literal, name, spec, conversion in _FORMATTER.parse(template):
         if name is None:
             continue
         value = _FORMATTER.get_field(name, (), fields)[0]
+        if isinstance(value, BaseException) and len(value.args) == 1 and isinstance(value.args[0], Said):
+            value = value.args[0]
+        spec = _FORMATTER.vformat(spec or "", (), fields)
+        if isinstance(value, Said) and conversion is None:
+            values.append(_said_runs(value, spec))
+            continue
         value = _FORMATTER.convert_field(value, conversion)
-        values.append(format(value, _FORMATTER.vformat(spec or "", (), fields)))
+        values.append(format(value, spec))
     return values
+
+
+def _said_runs(said: Said, spec: str) -> list[fset.Run] | str:
+    """A `said()` entry's runs through its own format, padded as ``spec``
+    pads it; its words alone when ``spec`` does more than pad."""
+    parts = said.message.body_runs(**said.fields)
+    words = fset.to_plain(parts)
+    shaped = format(words, spec)
+    at = shaped.find(words)
+    if at < 0:
+        return shaped
+    return [("", shaped[:at]), *parts, ("", shaped[at + len(words):])]
 
 
 def is_terminal(stream: Any) -> bool:
@@ -158,6 +189,12 @@ def is_terminal(stream: Any) -> bool:
         return bool(stream.isatty())
     except (AttributeError, ValueError, OSError):
         return False
+
+
+def color_system(stream: Any) -> str | None:
+    """The colour a renderer writing straight to ``stream`` draws in, as rich
+    names it: 24-bit on a terminal with colour on, none anywhere else."""
+    return "truecolor" if is_terminal(stream) and fset.colour_on() else None
 
 
 def for_stream(text: str, stream: Any = None) -> str:
@@ -181,10 +218,18 @@ def say(message: Message, /, *, file: Any = None, flush: bool = False, **fields:
     print(line_for(message, file=stream, **fields), file=stream, flush=flush)
 
 
-def worded(text: str) -> str:
-    """``text`` as its entry's /fset format words it when it is a `said()`
-    entry, plain: for a message that carries another inside a hole."""
-    return fset.to_plain(text.message.body_runs(**text.fields)) if isinstance(text, Said) else text
+def words_of(text: str) -> str:
+    """``text`` as plain text for a dump or a file: a `said()` entry worded
+    through its format (`Said.words`), any other text as it is."""
+    return text.words() if isinstance(text, Said) else text
+
+
+def of_error(error: BaseException) -> str:
+    """What ``error`` says: the `said()` entry it was raised with, which keeps
+    its format for wherever it is shown, else its text."""
+    if len(error.args) == 1 and isinstance(error.args[0], Said):
+        return error.args[0]
+    return str(error)
 
 
 def failure_line(error: str) -> str:
@@ -212,10 +257,10 @@ class ArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args: Any, add_help: bool = True, **kwargs: Any) -> None:
         kwargs.setdefault("formatter_class", _HelpFormatter)
         super().__init__(*args, add_help=False, **kwargs)
-        self._positionals.title = ARGS_POSITIONALS.text()
-        self._optionals.title = ARGS_OPTIONS.text()
+        self._positionals.title = ARGS_POSITIONALS.words()
+        self._optionals.title = ARGS_OPTIONS.words()
         if add_help:
-            self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.text())
+            self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.words())
 
     def error(self, message: str) -> Any:
         self.print_usage(sys.stderr)
@@ -225,7 +270,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
 class _HelpFormatter(argparse.HelpFormatter):
     def add_usage(self, usage: Any, actions: Any, groups: Any, prefix: str | None = None) -> None:
-        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.text() if prefix is None else prefix)
+        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.words() if prefix is None else prefix)
 
 
 def plural(n: int, word: str) -> str:
@@ -239,6 +284,8 @@ def plural(n: int, word: str) -> str:
 
 # Any failure whose text is already a whole sentence (an exception, a returned error).
 FAILED = Message("{error}", GRAVE)
+# An error that is not js's own, named by its kind.
+ERROR_OF_KIND = Message("{kind}: {error}", banner=False)
 FAILED_WARN = Message("{error}", WARN)
 # A command's refusal that is not an entry of its own: a settings verb's
 # complaint, or a script line's.
@@ -1077,6 +1124,10 @@ TOOL_MORE_LINES = Message("… {count} lines hidden")
 TOOL_TRIES_LEFT = Message("{left} of {allowed} tries left")
 TOOL_NO_OUTPUT = Message("no output")
 TOOL_RUNNING = Message("running {elapsed}")
+# Before a call's last word on the row under its header.
+TOOL_RESULT_LEAD = Message("⎿")
+# After a folded tool row on the screen: the key that unfolds it.
+TOOL_EXPAND = Message("{key} to expand", banner=False)
 
 # --- The kernel panel --------------------------------------------------------
 

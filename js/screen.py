@@ -15,7 +15,6 @@ import sys
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 
-from rich.cells import cell_len
 from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
@@ -37,7 +36,7 @@ from prompt_toolkit.widgets import SearchToolbar
 from . import display, fset, keys, pastes
 from . import messages as msgs
 from . import session_store
-from .reasoning_display import grey
+from .reasoning_display import grey, settled_rows
 
 SCROLLBACK_LINES = 5000
 THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -93,7 +92,7 @@ def accent_clock(line: str) -> str:
     if not end:
         return line
     code = fset.fg("COLOR_STATUS_ACCENT")
-    return f"{code}{line[:end]}\x1b[39m{line[end:]}" if code else line
+    return f"{code}{line[:end]}{fset.FG_DEFAULT}{line[end:]}" if code else line
 
 
 @functools.lru_cache(maxsize=8)
@@ -130,13 +129,14 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
 
 
 def _field(message: msgs.Message, **fields) -> str:
-    """One status bar field through its /fset format, palette colours kept."""
-    return message.line(**fields)
+    """One status bar field through its /fset format, palette colours kept;
+    a tab is one space on the bar's one row."""
+    return message.line(**fields).replace("\t", " ")
 
 
 def _width(text: str) -> int:
-    """Columns ``text`` takes on the bar, colour escapes not counted."""
-    return len(fset.plain(text))
+    """Columns ``text`` takes on the bar (`js.display.cells`)."""
+    return display.cells(text)
 
 
 def status_line(
@@ -228,10 +228,10 @@ def status_line(
         session_text = _elide(session_text, room)
         left, centre, right = (fset.plain(group) for group in groups())
         tail = " ".join(filter(None, (centre, right)))
-        room = max(_width(clock_text), width - len(tail) - 1)
-        line = " ".join(filter(None, (left[:room], tail)))
+        room = max(_width(clock_text), width - _width(tail) - 1)
+        line = " ".join(filter(None, (_cut(left, room), tail)))
     if _width(line) > width:
-        line = fset.plain(line)[:width]
+        line = _cut(fset.plain(line), width)
     return line + " " * (width - _width(line))
 
 
@@ -242,11 +242,16 @@ def session_short(session_file) -> str:
     return stem.rsplit("-", 1)[-1][:8] if session_store.is_generated(stem) else stem
 
 
+def _cut(text: str, room: int) -> str:
+    """The head of plain ``text`` that fits in ``room`` columns."""
+    return text[:display.cut_points(text, max(room, 0), words=False)[0]] if room > 0 else ""
+
+
 def _elide(text: str, room: int) -> str:
     """`text` in at most `room` cells, cut short with an ellipsis."""
-    if len(text) <= room:
+    if _width(text) <= room:
         return text
-    return text[:room - 1] + "…" if room > 1 else ""
+    return _cut(text, room - 1) + "…" if room > 1 else ""
 
 
 async def tick(app: Application, busy: Callable[[], bool]) -> None:
@@ -296,9 +301,16 @@ class Scrollback:
         self._pending = ""
         self._set_text(text, doc.cursor_position, follow=doc.is_cursor_at_the_end)
 
+    def _unfolded_rows(self) -> int:
+        """The rows unfolded blocks, tool exchanges and reasoning alike, show
+        beyond their folded form (`unfolded_rows`): an unfolded block never
+        pushes earlier text, or its own top, out of the scrollback, and
+        folding it back gives the rows back."""
+        return sum(block.unfolded_rows() for block in self._spans)
+
     def _set_text(self, text: str, cursor: int, *, follow: bool) -> None:
         lines = text.split("\n")
-        trimmed = "\n".join(lines[-SCROLLBACK_LINES:])
+        trimmed = "\n".join(lines[-(SCROLLBACK_LINES + self._unfolded_rows()):])
         removed = len(text) - len(trimmed)
         if removed:
             for block in self._spans:
@@ -339,21 +351,28 @@ class Scrollback:
         """Show `rendered` at the tail as a block `exchange_close` can replace
         after later text has been appended."""
         self.flush()
-        span = AnswerSpan(len(self.buffer.text))
+        span = AnswerSpan(len(self.buffer.text), self)
         span.text = rendered
         self._render_span(span, new_text=True)
         return span
 
-    def exchange_update(self, span: AnswerSpan, rendered: str) -> None:
-        """Redraw an open exchange where it stands; it stays open."""
+    def exchange_update(self, span: AnswerSpan, rendered: str, expanded: str | None = None) -> None:
+        """Redraw an open exchange where it stands; it stays open. With
+        ``expanded``, the whole form of what it holds so far, the
+        reasoning_toggle key unfolds it already."""
         span.text = rendered
+        if expanded is not None:
+            span.expanded = expanded
         self._render_span(span)
 
-    def exchange_close(self, span: AnswerSpan, rendered: str) -> None:
-        """Replace an open exchange with its final text, where it stands."""
+    def exchange_close(self, span: AnswerSpan, rendered: str, expanded: str | None = None) -> None:
+        """Replace an open exchange with its final text, where it stands.
+        With ``expanded``, its whole form, the exchange stays folded with an
+        expand hint, and the reasoning_toggle key unfolds and folds it."""
         span.text = rendered
+        span.expanded = expanded
         self._render_span(span)
-        if span in self._spans:
+        if span in self._spans and expanded is None:
             self._spans.remove(span)
 
     def _render_span(self, block: ReasoningBlock | AnswerSpan, *, new_text: bool = False) -> None:
@@ -381,9 +400,12 @@ class Scrollback:
         self._set_text(text, cursor, follow=doc.is_cursor_at_the_end)
 
     def toggle_reasoning(self) -> bool:
+        """Unfold every reasoning block and folded tool exchange, or fold them
+        all back when none is folded."""
         blocks = [
             block for block in self._spans
-            if isinstance(block, ReasoningBlock) and block.level and block.text
+            if (isinstance(block, ReasoningBlock) and block.level and block.text)
+            or (isinstance(block, AnswerSpan) and block.expanded is not None)
         ]
         collapse = not any(block.collapsed for block in blocks)
         for block in blocks:
@@ -394,14 +416,52 @@ class Scrollback:
 
 
 class AnswerSpan:
-    """The live answer block: rendered Markdown that is replaced until committed."""
+    """The live answer block, or a tool exchange: rendered text that is
+    replaced until committed. A folded exchange keeps its whole form in
+    `expanded` and shows `text` with an expand hint while `collapsed`."""
 
-    def __init__(self, position: int) -> None:
+    def __init__(self, position: int, owner: Scrollback | None = None) -> None:
         self.start = self.end = position
         self.text = ""
+        self.expanded: str | None = None
+        self.collapsed = True
+        self.manual = False
+        self.owner = owner
+
+    def unfolded_rows(self) -> int:
+        """The rows it shows beyond its folded form while unfolded."""
+        if self.expanded is None or self.collapsed:
+            return 0
+        return max(0, self.expanded.count("\n") - self.text.count("\n"))
 
     def render(self) -> str:
-        return self.text
+        if self.expanded is None or not self.text.strip():
+            return self.text
+        if not self.collapsed:
+            return self.expanded
+        key = self.owner.toggle_key if self.owner is not None else ""
+        if not key:
+            return self.text
+        first, sep, rest = self.text.partition("\n")
+        hint = msgs.TOOL_EXPAND.body_runs(key=key)
+        width = display.block_width()
+        if display.cells(first) + 2 + display.cells(fset.to_plain(hint)) <= width and not _goes_on(first, rest, width):
+            return f"{first}  {display.drawn_rows(hint, width, 'COLOR_DIM')[0]}{sep}{rest}"
+        # On rows of its own after the block, wrapped like any row, so a
+        # header that wraps stays in one piece.
+        rows = display.drawn_rows(hint, max(width - 2, 1), "COLOR_DIM")
+        body = self.text.rstrip("\n")
+        return body + "".join(f"\n  {row}" for row in rows) + self.text[len(body):]
+
+
+def _goes_on(first: str, rest: str, width: int) -> bool:
+    """Whether the row after ``first`` may be ``first`` word-wrapped onto it:
+    its first word would not have fit on ``first``, so a wrap could have put
+    it there."""
+    following = fset.plain(rest.partition("\n")[0]).removeprefix(display.RAIL).split()
+    if not following:
+        return False
+    return display.cells(first.rstrip(" ")) + 1 + display.cells(following[0]) > width
 
 
 class ReasoningBlock:
@@ -415,22 +475,43 @@ class ReasoningBlock:
         self.collapsed = False
         self.manual = False
         self.tokens: int | None = None
+        self._cleaner = display.StreamCleaner()
         # The finished lines of `text` wrapped, kept between renders: a chunk
         # rewraps only the line still open. (width, length of text wrapped, rows)
         self._wrapped: tuple[int, int, str] = (0, 0, "")
+        # The rows of the open line that more text cannot change, tabs
+        # expanded: (columns of the line they hold, rows)
+        self._open: tuple[int, str] = (0, "")
 
     def _body(self) -> str:
-        """`text` word-wrapped to the window, reusing the lines wrapped before."""
+        """`text` word-wrapped to the window, reusing the rows wrapped before:
+        a chunk rewraps only the last row of the open line."""
         width = display.block_width()
         done_width, done, rows = self._wrapped
         if done_width != width:
             done, rows = 0, ""
+            self._open = (0, "")
         last = self.text.rfind("\n") + 1
         if last > done:
             rows += display.wrap_words(self.text[done:last - 1], width) + "\n"
             done = last
+            self._open = (0, "")
         self._wrapped = (width, done, rows)
-        return rows + display.wrap_words(self.text[done:], width) if done < len(self.text) else rows
+        if done == len(self.text):
+            return rows
+        line = self.text[done:].expandtabs(display.TAB)
+        held, open_rows = self._open
+        settled, start = settled_rows(line, held, width, whole=False)
+        open_rows += "".join(row + "\n" for row in settled)
+        self._open = (start, open_rows)
+        return rows + open_rows + (line[start:].lstrip(" ") if start else line)
+
+    def unfolded_rows(self) -> int:
+        """The rows it shows beyond its folded heading while open, at the
+        level that folds it."""
+        if self.level != 1 or self.collapsed:
+            return 0
+        return max(0, self.render().count("\n") - 1)
 
     def render(self) -> str:
         """Collapsed: `N tok reasoning  KEY to expand`, the count the provider
@@ -438,16 +519,24 @@ class ReasoningBlock:
         boundaries to the window."""
         if self.level == 0:
             return ""
-        count = msgs.REASONING_COUNT.body(tokens=f"{self.tokens:,}") if self.tokens is not None else ""
+        count = msgs.REASONING_COUNT.body_runs(tokens=f"{self.tokens:,}") if self.tokens is not None else []
         if self.collapsed:
-            hint = msgs.REASONING_EXPAND.body(key=self.owner.toggle_key) if self.owner.toggle_key else ""
-            return grey(" ".join(filter(None, (count, msgs.REASONING_HEADING.body()))) + hint + "\n")
-        heading = " ".join(filter(None, (count if self.level == 3 else "", msgs.REASONING_HEADING.body())))
+            hint = msgs.REASONING_EXPAND.body_runs(key=self.owner.toggle_key) if self.owner.toggle_key else []
+            return self._heading(count, hint)
         body = self._body()
-        return grey(heading + "\n" + body + ("" if body.endswith("\n") else "\n"))
+        heading = self._heading(count if self.level == 3 else [], [])
+        return heading + grey(body + ("" if body.endswith("\n") else "\n"))
+
+    @staticmethod
+    def _heading(count: list[fset.Run], hint: list[fset.Run]) -> str:
+        """`N tok reasoning` and the hint after it, in COLOR_REASONING,
+        wrapped to the window."""
+        parts = [*count, *([("", " ")] if count else []), *msgs.REASONING_HEADING.body_runs(), *hint]
+        return "\n".join(display.drawn_rows(parts, display.block_width(), "COLOR_REASONING")) + "\n"
 
     def append(self, text: str) -> None:
-        self.text += text
+        # Model text is cleaned here, before anything measures or wraps it.
+        self.text += self._cleaner.feed(text)
         self.owner._render_span(self, new_text=True)
 
     def answer_started(self) -> None:
@@ -457,6 +546,7 @@ class ReasoningBlock:
 
     def finish(self, tokens: int | None = None) -> None:
         self.tokens = tokens
+        self.text += self._cleaner.flush()  # the text of a string sequence never ended
         self.answer_started()
         self.owner._render_span(self)
 
@@ -523,26 +613,29 @@ class ScreenExchange:
         self._span = self._scrollback.exchange_open(rendered)
         self._app.invalidate()
 
-    def _close(self, rendered: str) -> None:
+    def _close(self, rendered: str, expanded: str | None) -> None:
         if self._span is None:
-            self._scrollback.append(rendered)
-        else:
-            self._scrollback.exchange_close(self._span, rendered)
+            self._span = self._scrollback.exchange_open(rendered)
+        self._scrollback.exchange_close(self._span, rendered, expanded)
         self._app.invalidate()
 
-    def _update(self, rendered: str) -> None:
+    def _update(self, rendered: str, expanded: str | None) -> None:
         if self._span is not None:
-            self._scrollback.exchange_update(self._span, rendered)
+            self._scrollback.exchange_update(self._span, rendered, expanded)
             self._app.invalidate()
 
     def open(self, rendered: str) -> None:
         self._loop.call_soon_threadsafe(self._open, rendered)
 
-    def update(self, rendered: str) -> None:
-        self._loop.call_soon_threadsafe(self._update, rendered)
+    def update(self, rendered: str, expanded: str | None = None) -> None:
+        """Redraw the running exchange; ``expanded`` is the whole form of the
+        calls in it that have returned."""
+        self._loop.call_soon_threadsafe(self._update, rendered, expanded)
 
-    def close(self, rendered: str) -> None:
-        self._loop.call_soon_threadsafe(self._close, rendered)
+    def close(self, rendered: str, expanded: str | None = None) -> None:
+        """Finish the exchange; ``expanded`` is its whole form when ``rendered``
+        is folded."""
+        self._loop.call_soon_threadsafe(self._close, rendered, expanded)
 
 
 class _ScreenStdout:
@@ -577,6 +670,16 @@ class _ScreenStdout:
 
     def fileno(self) -> int:
         return self._real.fileno()
+
+    def write_folded(self, folded: str, whole: str) -> None:
+        """A block shown as ``folded`` that the reasoning_toggle key unfolds
+        to ``whole``, as a folded tool row is."""
+        self._loop.call_soon_threadsafe(self._fold, folded, whole)
+
+    def _fold(self, folded: str, whole: str) -> None:
+        span = self._scrollback.exchange_open(folded)
+        self._scrollback.exchange_close(span, folded, whole)
+        self._app.invalidate()
 
 
 class InputEditor:
@@ -771,7 +874,7 @@ def build_app(
                        # A long line wraps; the box grows to half the screen before it scrolls.
                        height=_input_height, dont_extend_height=True, wrap_lines=True,
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
-                                                                                   else " " * cell_len(_plain(_prompt()))))),
+                                                                                   else " " * display.cells(_prompt())))),
                 ConditionalContainer(
                     Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                     filter=has_focus(ex_buffer),

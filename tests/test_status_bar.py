@@ -308,3 +308,13 @@ def test_every_number_on_the_bar_says_what_it_counts():
     line = screen.status_line(100, **BAR)
     numbers = re.findall(r"(\S+) (\d[\d,.]*k?)\b", line)
     assert numbers and all(label.isalpha() for label, _ in numbers), numbers
+
+
+def test_a_wide_status_field_keeps_the_bar_to_its_width_in_cells():
+    from prompt_toolkit.utils import get_cwidth
+
+    fset.set_entry("STATUS_CLOCK", "汉字汉字")
+    for width in (20, 40, 80):
+        line = fset.plain(screen.status_line(width, **BAR))
+        assert get_cwidth(line) == width, (width, line)
+    assert "b61643c8" in fset.plain(screen.status_line(40, **BAR))

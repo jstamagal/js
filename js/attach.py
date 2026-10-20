@@ -209,7 +209,7 @@ def build_user_message(
 
     text = "\n\n".join(block for block in text_blocks if block)
     if not text and not file_parts:
-        raise AttachmentError(msgs.PROMPT_EMPTY.text())
+        raise AttachmentError(msgs.PROMPT_EMPTY.said())
 
     if file_parts:
         content: list[object] = []
@@ -240,7 +240,7 @@ def _prepare_attachment(
 ) -> _PreparedAttachment:
     if raw_path == "-":
         if stdin_attachment is None:
-            raise AttachmentError(msgs.STDIN_ATTACHMENT_NOT_PIPED.text())
+            raise AttachmentError(msgs.STDIN_ATTACHMENT_NOT_PIPED.said())
         return _prepare_bytes(STDIN_ATTACHMENT_NAME, Path(STDIN_ATTACHMENT_NAME), stdin_attachment, cfg)
     pasted = clipimage.lookup(raw_path)
     if pasted is not None:
@@ -250,29 +250,29 @@ def _prepare_attachment(
     try:
         stat = path.stat()
     except OSError as exc:
-        raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.text(path=raw_path)) from exc
+        raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.said(path=raw_path)) from exc
     if not path.is_file():
-        raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.text(path=path))
+        raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.said(path=path))
     try:
         with path.open("rb") as fh:
             header = fh.read(16)
     except OSError as exc:
-        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
+        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
 
     mime = _image_mime(header)
     if mime:
         limit = cfg.max_file_bytes
         if stat.st_size > limit:
             raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=stat.st_size, limit=limit))
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=path, size=stat.st_size, limit=limit))
         try:
             with path.open("rb") as fh:
                 data = fh.read(limit + 1)
         except OSError as exc:
-            raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
+            raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
         if len(data) > limit:  # the file grew after the stat
             raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=path, size=len(data), limit=limit))
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=path, size=len(data), limit=limit))
         return _prepare_image(str(path), mime, len(data), data, cfg)
 
     cap = _text_cap(cfg)
@@ -280,7 +280,7 @@ def _prepare_attachment(
         with path.open("rb") as fh:
             data = fh.read(cap + 1)
     except OSError as exc:
-        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.text(path=path, error=exc)) from exc
+        raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
     return _prepare_bytes(str(path), path, data, cfg, total_size=stat.st_size)
 
 
@@ -297,7 +297,7 @@ def _prepare_bytes(
     if mime:
         if size > cfg.max_file_bytes:
             raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.text(path=display_path, size=size, limit=cfg.max_file_bytes))
+                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=display_path, size=size, limit=cfg.max_file_bytes))
         return _prepare_image(display_path, mime, size, data, cfg)
 
     cap = _text_cap(cfg)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """UTF-8 accounting for model-facing text budgets.
 
 A lone surrogate (from `json.loads('"\\ud800"')` or a surrogateescape read)

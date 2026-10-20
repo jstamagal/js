@@ -162,12 +162,13 @@
 
 # The model's thinking, on screen.
 #   0  hidden; you never see it
-#   1  streams in while it thinks, then folds into one line when the answer
-#      starts
+#   1  streams in while it thinks, then folds into one line,
+#      `N tok reasoning`, when the answer starts
 #   2  streams in and stays on screen
-#   3  like 2, plus a token count when the thinking ends
-# Ctrl-O folds and unfolds the thinking whatever the level. This only
-# changes the screen; the thinking is kept either way.
+#   3  like 2, plus the provider's token count when the thinking ends
+# Ctrl-O folds and unfolds the thinking whatever the level. Only the screen
+# folds: in js -p and the blocking REPL, 1 to 3 print the thinking and then
+# its token count. The thinking is kept either way.
 #   example:  fset REASONING_DISPLAY 2
 #fset REASONING_DISPLAY 1
 

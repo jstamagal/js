@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import jail as _jail
-from .core import Output, ToolContext, ToolResult, call_scope, call_tool, registry_scope
+from .core import Output, ToolContext, ToolResult, as_output, call_scope, call_tool, registry_scope
 
 # How long the server waits for one request's bytes after a connection opens.
 # The client sends its whole request before it waits, so this bounds only a
@@ -295,8 +295,11 @@ class ToolBridge:
                 observer(tool.name, arguments, result, time.monotonic() - started, failure)
             _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
             return {"error": result}
+        output = as_output(result)
+        result = output.model
         if observer is not None:
-            observer(tool.name, arguments, result, time.monotonic() - started, None)
+            # The trace shows the operator everything the call produced.
+            observer(tool.name, arguments, output.shown(), time.monotonic() - started, None)
         _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
         if isinstance(result, ToolResult) and result.is_error:
             return {"error": result.dehydrated()}
