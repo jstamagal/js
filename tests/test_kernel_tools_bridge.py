@@ -240,6 +240,20 @@ def test_a_cell_tool_call_is_logged_like_a_direct_call(ctx):
 
 
 @needs_kernel
+def test_restarting_a_kernel_closes_the_previous_client_channels(ctx):
+    cell("x = 1", ctx)
+    previous = ctx.kernel_session.client
+    try:
+        dispatch("kernel", ctx, restart=True)
+
+        assert not previous.channels_running
+        assert not previous.hb_channel.is_alive()
+        assert "NEW 2" in cell("print('NEW', 1 + 1)", ctx)
+    finally:
+        previous.stop_channels()
+
+
+@needs_kernel
 def test_a_dead_kernel_is_shut_down_before_its_replacement_starts(ctx):
     cell("x = 1", ctx)
     old = ctx.kernel_session

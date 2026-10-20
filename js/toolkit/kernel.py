@@ -547,6 +547,8 @@ class KernelSession:
             self.start()
             return
         self.manager.restart_kernel(now=True)
+        if self.client is not None:
+            self.client.stop_channels()
         self.client = self.manager.blocking_client()
         self.client.start_channels()
         self.client.wait_for_ready(timeout=60)
