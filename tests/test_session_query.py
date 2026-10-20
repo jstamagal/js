@@ -295,3 +295,11 @@ def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():
     assert len(spans) == 1
     assert shown[spans[0][0]:spans[0][1]] == "niri"
     assert len(shown) <= 82
+
+
+def test_registered_setting_can_show_quick_sessions():
+    from js import settings
+
+    settings.bind_live_settings({"SESSION_HIDDEN_KINDS": ["empty", "subagent", "script"]})
+    quick = _session("quick", turns=1, tool_calls=0, final_len=5)
+    assert Q.select([quick], _parse(""), show_all=False) == [quick]

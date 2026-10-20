@@ -2,8 +2,8 @@
 
 Pure functions over the catalog's session summaries (`js.session_index`):
 the kind of a session, the query grammar, the filters, the order, the views
-with branches nested under their parents, and the text of each row. Nothing
-here reads a file or the clock; the caller passes `now`, `home` and `cwd`.
+with branches nested under their parents, and the text of each row. Policy
+comes from registered settings; the caller passes `now`, `home` and `cwd`.
 
 Query grammar, terms combined with AND:
 
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import messages as msgs
-from . import session_store
+from . import session_store, settings as _settings
 from .memory import HARNESS_USER_TAGS
 
 # Kinds. Every kind but SHOWN is hidden until `a`.
@@ -40,9 +40,7 @@ QUICK = "quick"
 SUBAGENT = "subagent"
 SCRIPT = "script"
 
-QUICK_TOOL_CALLS = 2
-QUICK_REPLY_CHARS = 1000
-SCRIPT_MODES = frozenset({"commit"})
+
 
 VIEWS = ("flat", "dir", "agent")
 _VIEW_NAMES = {"flat": msgs.SESSIONS_VIEW_FLAT, "dir": msgs.SESSIONS_VIEW_DIR, "agent": msgs.SESSIONS_VIEW_AGENT}
@@ -165,12 +163,13 @@ def kind(session: Session) -> str:
     if (session.mode == "subagent" or session.parent is not None
             or session_store.is_task(Path(session.path).stem)):
         return SUBAGENT
-    if session.mode in SCRIPT_MODES:
+    if session.mode in _settings.live_value("SESSION_SCRIPT_MODES"):
         return SCRIPT
     if not session.replied:
         return EMPTY
-    if (session.turns <= 1 and session.tool_calls <= QUICK_TOOL_CALLS
-            and session.final_len < QUICK_REPLY_CHARS):
+    if (session.turns <= int(_settings.live_value("SESSION_QUICK_TURNS_MAX"))
+            and session.tool_calls <= int(_settings.live_value("SESSION_QUICK_TOOL_CALLS_MAX"))
+            and session.final_len < int(_settings.live_value("SESSION_QUICK_REPLY_CHARACTERS_MAX"))):
         return QUICK
     return SHOWN
 
@@ -405,7 +404,7 @@ def visible(session: Session, query: Query, *, show_all: bool) -> bool:
     """Shown sessions always; the hidden kinds with `a`, or when the query
     names their kind or mode."""
     session_kind = kind(session)
-    if session_kind == SHOWN or show_all:
+    if session_kind not in _settings.live_value("SESSION_HIDDEN_KINDS") or show_all:
         return True
     return any(mode in (session_kind, session.mode) for mode in query.modes)
 
@@ -602,7 +601,6 @@ def message_lines(rows: list[Any]) -> list[str]:
 
 # The agent's status line begins with 📌 (the 📌🔨🦍 group): what the preview
 # shows for it.
-_STATUS_MARK = "📌"
 _HARNESS_OPEN = tuple(f"<{tag}>" for tag in HARNESS_USER_TAGS)
 _HARNESS_CLOSE = tuple(f"</{tag}>" for tag in HARNESS_USER_TAGS)
 
@@ -651,6 +649,6 @@ def preview(messages: list[Any]) -> tuple[str, str]:
             if lines:
                 said.append(lines)
     pinned = next((line for lines in reversed(said) for line in reversed(lines)
-                   if line.lstrip().startswith(_STATUS_MARK)), None)
+                   if line.lstrip().startswith(_settings.live_value("SESSION_STATUS_MARK"))), None)
     agent = pinned if pinned is not None else (said[-1][-1] if said else "")
     return user, " ".join(agent.split())
