@@ -262,6 +262,28 @@ def test_undo_restores_the_notebook(nb):
     assert path.read_bytes() == before
 
 
+def test_failed_notebook_write_preserves_the_original(nb):
+    import resource
+    import signal
+
+    path, context = nb
+    tool("read", context, file_path=str(path))
+    before = path.read_bytes()
+    limits = resource.getrlimit(resource.RLIMIT_FSIZE)
+    handler = signal.getsignal(signal.SIGXFSZ)
+    try:
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (100, limits[1]))
+        result = tool("notebook_edit", context, file_path=str(path), cell_id="a1",
+                      new_source="replacement")
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, limits)
+        signal.signal(signal.SIGXFSZ, handler)
+
+    assert result.startswith("ERROR"), result
+    assert path.read_bytes() == before
+
+
 def test_edit_refuses_a_file_that_is_not_a_notebook(tmp_path):
     path = tmp_path / "plain.py"
     path.write_text("x = 1\n")

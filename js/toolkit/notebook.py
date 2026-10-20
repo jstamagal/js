@@ -9,8 +9,11 @@ raw JSON still needs a ranged `read` of the lines it edits.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -277,11 +280,23 @@ def notebook_edit(
     if original.endswith(("\n", "\r")):
         text += "\n"
     payload = _normalize_line_endings(text, _detect_line_ending(original)).encode("utf-8")
+    temporary = None
     try:
         context.snapshot(target)
-        target.write_bytes(payload)
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.",
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), target.stat().st_mode)
+            os.fsync(stream.fileno())
+        temporary.replace(target)
     except OSError as exc:
         return f"ERROR: {exc}"
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
     new_hash = _hash_bytes(payload)
     # The model knows the notebook it just changed; the raw JSON lines moved,
     # so no line coverage carries over.
