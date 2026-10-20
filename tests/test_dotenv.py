@@ -62,6 +62,19 @@ def test_load_fills_unset_names_and_never_overrides_real_env(
     assert tmp_path / ".env" in applied
 
 
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_load_quoted_key_with_a_trailing_comment(tmp_path, monkeypatch, quote):
+    _isolate(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(
+        f"EXA_API_KEY={quote}fixture#key{quote} # account\n", encoding="utf-8"
+    )
+    env = {}
+
+    dotenv.load(cwd=tmp_path, environ=env)
+
+    assert env == {"EXA_API_KEY": "fixture#key"}
+
+
 def test_load_walks_up_and_nearest_file_wins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

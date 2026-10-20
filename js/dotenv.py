@@ -21,8 +21,12 @@ FILENAME = ".env"
 
 
 def _unquote(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        return value[1:-1]
+    if value[:1] in ("'", '"'):
+        for index in range(1, len(value)):
+            if value[index] == value[0]:
+                tail = value[index + 1:].lstrip()
+                if not tail or tail.startswith("#"):
+                    return value[1:index]
     # Unquoted values stop at an inline comment, matching common .env readers.
     head, sep, _ = value.partition(" #")
     return (head if sep else value).strip()
