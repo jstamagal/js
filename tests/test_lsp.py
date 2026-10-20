@@ -277,4 +277,13 @@ def test_server_runs_in_the_jail(tmp_path, operator_home, monkeypatch):
     assert "2:1: error: found ERROR" in diagnostics
 
 
-# --- real language servers, when installed -----------------------------------
+
+def test_server_configuration_comes_from_its_caller(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    replies = []
+    server = lsp_mod.LanguageServer(spec=None, root=tmp_path, process=SimpleNamespace(),
+                                   configuration=lambda item: {"enabled": item["section"] == "example"})
+    monkeypatch.setattr(server, "_send", replies.append)
+    server._answer(7, "workspace/configuration", {"items": [{"section": "example"}]})
+    assert replies == [{"id": 7, "result": [{"enabled": True}]}]

@@ -197,6 +197,7 @@ class LanguageServer:
     spec: ServerSpec
     root: Path
     process: subprocess.Popen
+    configuration: Any = field(default=None, repr=False)
     documents: dict[str, _Document] = field(default_factory=dict)
     capabilities: dict = field(default_factory=dict)
     stderr_tail: deque = field(default_factory=lambda: deque(maxlen=_STDERR_LINES))
@@ -318,12 +319,12 @@ class LanguageServer:
                     self._cond.notify_all()
 
     def _answer(self, request_id: Any, method: str, params: Any) -> None:
-        """Reply to a request the server sent. js offers no settings, so a
-        configuration request gets null for every item."""
+        """Reply to a server request with the caller's configuration, null by default."""
         result: Any = None
         if method == "workspace/configuration":
             items = params.get("items") if isinstance(params, dict) else None
-            result = [None] * (len(items) if isinstance(items, list) else 0)
+            result = [self.configuration(item) if self.configuration is not None else None
+                      for item in (items if isinstance(items, list) else [])]
         elif method == "workspace/workspaceFolders":
             result = [{"uri": file_uri(self.root), "name": self.root.name}]
         elif method not in {"client/registerCapability", "client/unregisterCapability",
@@ -577,10 +578,11 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
     env = _server_env(context)
+    configuration = getattr(context, "lsp_configuration", None)
     key = (spec, executable, str(root), tuple(sorted(env.items())),
            None if jail is None else str(jail.root),
            tuple(context.jail_bind) if jail is not None else (),
-           tuple(context.jail_hide) if jail is not None else ())
+           tuple(context.jail_hide) if jail is not None else (), id(configuration))
     with _SERVERS_LOCK:
         server = _SERVERS.get(key)
         if server is not None and server.alive:
@@ -600,7 +602,8 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
             )
         except OSError as exc:
             raise LspError(f"could not start {executable}: {exc}") from exc
-        server = LanguageServer(spec=spec, root=root, process=process)
+        server = LanguageServer(spec=spec, root=root, process=process,
+                                configuration=configuration)
         server.start_threads()
         try:
             server.initialize(timeout)
