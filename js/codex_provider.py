@@ -375,18 +375,15 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
                 items.append({"type": "message", "role": "user", "content": content})
             continue
         if msg.role == "assistant":
-            text = _text_from_parts(msg.parts)
             produced: list[dict[str, Any]] = []
-            text_sent = False
             for part in msg.parts:
                 if isinstance(part, ai.types.messages.ReasoningPart):
                     reasoning_item = replayed_reasoning_item(part.provider_metadata)
                     if reasoning_item is not None:
                         produced.append(reasoning_item)
                 elif isinstance(part, ai.types.messages.TextPart):
-                    if not text_sent and text.strip():
-                        produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
-                        text_sent = True
+                    if part.text.strip():
+                        produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": part.text}]})
                 elif isinstance(part, ai.types.messages.ToolCallPart):
                     produced.append(
                         {
