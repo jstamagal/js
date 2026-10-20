@@ -582,7 +582,8 @@ def test_dialect_map_tags_anthropic_models():
     assert dialects.get("glm-5.2") == "openai"
 
 
-def test_mask_does_not_reveal_complete_keys_even_across_separators():
+def test_mask_does_not_reveal_complete_keys_even_across_separators(monkeypatch):
+    monkeypatch.setenv("JS_PARANOID_MODE", "on")
     for key in ("short", "sk-12345678x", "x" * 11, "sk-1234567890abcd"):
         masked = login_cli._mask(key)
         assert masked
@@ -590,6 +591,11 @@ def test_mask_does_not_reveal_complete_keys_even_across_separators():
         # short key. Checking contiguous substrings would miss that regression.
         displayed = iter(masked)
         assert not all(character in displayed for character in key)
+
+
+def test_mask_shows_the_whole_key_when_paranoid_mode_is_off(monkeypatch):
+    monkeypatch.setenv("JS_PARANOID_MODE", "off")
+    assert login_cli._mask("sk-1234567890abcd") == "sk-1234567890abcd"
 
 
 def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):

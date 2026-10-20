@@ -43,13 +43,38 @@ def _empty_display(spec: _s.SettingSpec) -> str:
     return "<none>"
 
 
-def render_value(spec: _s.SettingSpec, value) -> str:
-    """Render a setting's current value with honest empty states."""
+def masks_secrets(settings: dict | None) -> bool:
+    """True when ``settings``' PARANOID_MODE hides secret values."""
+    from . import paranoid
+
+    # The store alone: `js/jsrc` itself is applied through `apply_set`.
+    return paranoid.masks(paranoid.read(_s.get_dotted(settings or {}, ("PARANOID_MODE",))))
+
+
+def masked_store(settings: dict, *, masked: bool) -> dict:
+    """A copy of ``settings`` for printing or a snapshot: each secret
+    setting's value rendered as `render_value` shows it when ``masked``."""
+    out = copy.deepcopy(settings)
+    if not masked:
+        return out
+    for spec in _s.REGISTRY:
+        if not spec.secret:
+            continue
+        missing = object()
+        value = _s.get_dotted(out, spec.path, missing)
+        if value is not missing:
+            _s.set_dotted(out, spec.path, render_value(spec, value, masked=True))
+    return out
+
+
+def render_value(spec: _s.SettingSpec, value, *, masked: bool = True) -> str:
+    """Render a setting's current value with honest empty states. A secret
+    shows as <set> when ``masked``."""
     if value is None:
         return _empty_display(spec)
     if spec.type == "bool":
         return "on" if value else "off"
-    if spec.secret:
+    if spec.secret and masked:
         return "<set>" if value else _empty_display(spec)
     if isinstance(value, dict):
         if not value:
@@ -102,7 +127,7 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
 class LiveValue:
     """One setting's effective value plus where it actually comes from."""
 
-    display: str   # already rendered + masked (secrets stay <set>)
+    display: str   # already rendered; a secret masked per PARANOID_MODE
     source: str    # e.g. "--model flag", "login testes", "env JS_TEMPERATURE"
 
 
@@ -124,9 +149,11 @@ def show_lines_effective(
     specs, one = selected
     lines: list[str] = []
     width = max(len(spec.key) for spec in specs)
+    masked = masks_secrets(settings)
     for spec in specs:
         live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
+        display = live.display if live is not None else render_value(
+            spec, _s.knob(settings, spec.key), masked=masked)
         name = spec.key.upper()
         if one:
             line = msgs.SETTING_IS.line(colour=False, key=name, value=display)
@@ -152,7 +179,8 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
             handled=True,
             changed=True,
             lines=[msgs.SETTING_CHANGED.line(colour=False, key=spec.key.upper(),
-                                             value=render_value(spec, value) if spec.secret else raw.strip())],
+                                             value=render_value(spec, value, masked=masks_secrets(settings))
+                                             if spec.secret else raw.strip())],
             changed_keys=[spec.key],
         )
 
@@ -168,7 +196,10 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[msgs.SETTING_CHANGED.line(colour=False, key=key, value=raw.strip())],
+            lines=[msgs.SETTING_CHANGED.line(
+                colour=False, key=key,
+                value="<set>" if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
+                else raw.strip())],
             changed_keys=[key],
         )
 
@@ -215,14 +246,14 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
     changed = before is not after and before != after
     if spec is not None:
         key = spec.key
-        display = render_value(spec, None if after is missing else after)
+        display = render_value(spec, None if after is missing else after, masked=masks_secrets(settings))
         name = key.upper()
     else:
         prefix_spec = _s.parent_spec(key)
         secret = prefix_spec is not None and prefix_spec.secret
         if after is missing:
             display = "<unset>"
-        elif secret:
+        elif secret and masks_secrets(settings):
             display = "<set>"
         else:
             display = str(after)

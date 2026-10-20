@@ -63,6 +63,7 @@ def test_add_custom_is_first_and_selectable(monkeypatch):
 
 
 def test_manager_displays_saved_details_with_masked_credentials(monkeypatch):
+    monkeypatch.setenv("JS_PARANOID_MODE", "on")
     logins.save_login(logins.Login("mine", provider_base_url="http://localhost:8000/v1", provider_api_key="private"))
     logins.cache_models("mine", [f"model-{i}" for i in range(37)])
     screen = Screen([curses.KEY_DOWN, ord("q")])

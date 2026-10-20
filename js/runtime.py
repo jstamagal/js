@@ -1573,9 +1573,7 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
         effort=cfg.reasoning_effort if reasoning_effort_override is _UNSET else reasoning_effort_override,
         max_out=max_out,
         thinking_budget=getattr(cfg, "thinking_budget", None),
-        headers=model_client.with_extra_headers(
-            getattr(cfg, "provider_headers", None), getattr(cfg, "extra_headers", None),
-        ),
+        headers=model_client.turn_headers(getattr(cfg, "provider_headers", None), cfg),
         extra=routing.provider_extra_params(cfg),
         sampling=sampling,
         cache_key=_cache_key(cfg),
@@ -1988,7 +1986,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         from .mcp.host import MCPHost
 
-        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry)
+        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
@@ -2001,6 +1999,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
         mcp_host.event_sink = events.emit
+        mcp_host.paranoid_mode = getattr(cfg, "paranoid_mode", "off")
     events.start(len(messages))
 
     trace = trace_override if trace_override is not None else cfg.trace

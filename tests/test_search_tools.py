@@ -330,7 +330,7 @@ def test_http_error_redacts_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path))
+    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, paranoid_mode="on"))
 
     assert actual == 'ERROR: HTTP 401 from google.serper.dev: {"message":"Unauthorized: bad api key [REDACTED]"}'
 

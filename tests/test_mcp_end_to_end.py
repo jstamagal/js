@@ -170,6 +170,7 @@ def test_configured_hosts_run_over_both_real_transports_and_reload_session(monke
             f"set MCP_SERVERS {json.dumps(servers, separators=(',', ':'))}\n"
             f"set MCP_AGENT_POLICY {json.dumps(policy, separators=(',', ':'))}\n"
             "set TURN_ROUNDS_MAX 12\n"
+            "set PARANOID_MODE on\n"
             "set OUTPUT_TOKENS_MAX 10\n",
             encoding="utf-8",
         )

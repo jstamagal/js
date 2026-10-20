@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .. import paranoid
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
@@ -128,6 +129,14 @@ def _key(name: str) -> str | None:
     return value or None
 
 
+def _hidden(context: ToolContext, *keys: str | None) -> tuple[str, ...]:
+    """The keys an error to the model shows as [REDACTED]: all of them when
+    PARANOID_MODE masks, none when it is off."""
+    if not paranoid.masks(getattr(context, "paranoid_mode", "off")):
+        return ()
+    return tuple(key for key in keys if key)
+
+
 def _cap(text: str, context: ToolContext) -> str:
     limit = context.max_tool_result_bytes
     encoded = text.encode("utf-8")
@@ -176,7 +185,7 @@ def serper_search(
         method="POST",
         headers={"X-API-KEY": key},
         payload={"q": query, "num": _bounded_int(num, 8, minimum=1, maximum=100)},
-        secrets=(key,),
+        secrets=_hidden(context, key),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
     )
@@ -222,7 +231,7 @@ def tavily_search(
             "max_results": _bounded_int(max_results, 8, minimum=1, maximum=20),
             "include_answer": True,
         },
-        secrets=(key,),
+        secrets=_hidden(context, key),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
     )
@@ -265,7 +274,7 @@ def exa_search(
             "type": "auto",
             "contents": {"text": {"maxCharacters": _bounded_int(text_chars, 1500, minimum=100)}},
         },
-        secrets=(key,),
+        secrets=_hidden(context, key),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
     )
@@ -337,7 +346,7 @@ def docs_search(
     found = _http_json(
         "https://context7.com/api/v1/search?query=" + urllib.parse.quote(library),
         headers=headers,
-        secrets=(key,) if key is not None else (),
+        secrets=_hidden(context, key),
         retry_without_auth_on=(401, 403) if key is not None else (),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,
@@ -374,7 +383,7 @@ def docs_search(
     body = _http_body(
         doc_url,
         headers=headers,
-        secrets=(key,) if key is not None else (),
+        secrets=_hidden(context, key),
         retry_without_auth_on=(401, 403) if key is not None else (),
         timeout=context.fetch_timeout_s,
         user_agent=context.user_agent,

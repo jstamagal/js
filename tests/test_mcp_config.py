@@ -105,6 +105,7 @@ def test_jsrc_env_extra_layering_reaches_active_config(monkeypatch, tmp_path):
 
 def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
     live = settings.seed_defaults()
+    setcmd.set_command(live, "PARANOID_MODE on")
     raw = json.dumps(_servers())
 
     changed = setcmd.set_command(live, f"MCP_SERVERS {raw}")

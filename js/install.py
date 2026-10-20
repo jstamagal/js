@@ -20,7 +20,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
-from . import dotenv, home, logins, paths, providers, routing
+from . import dotenv, home, logins, paranoid, paths, providers, routing
 from . import messages as msgs
 from . import settings as settings_mod
 
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None, environ: MutableMapping[str, str] | None
             _say_unrouted(model_id)
         return 0
     try:
-        ask_keys(env, env_file, _asker(getpass))
+        ask_keys(env, env_file, _asker(getpass if paranoid.masks(paranoid.mode()) else input))
     except Cancelled:
         return 130
     ask_model(env, _asker(input), pick=_pick, add_provider=_add_provider)

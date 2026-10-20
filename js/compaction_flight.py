@@ -12,7 +12,7 @@ import time
 import traceback
 from uuid import uuid4
 
-from . import paths
+from . import paranoid, paths
 from . import messages as msgs
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
@@ -34,6 +34,16 @@ def _redact(value):
     if isinstance(value, (list, tuple)):
         return [_redact(item) for item in value]
     return value
+
+
+def _snapshot_settings(settings: dict, mode: str) -> dict:
+    """The settings a flight records: each secret setting masked the way
+    `/set` shows it, and credential-named keys dropped, when ``mode`` masks."""
+    from . import setcmd
+
+    if not paranoid.masks(mode):
+        return settings
+    return setcmd.masked_store(_redact(settings), masked=True)
 
 
 _LIFECYCLE = frozenset({"start", "success", "failure", "cancelled", "skipped"})
@@ -76,7 +86,8 @@ class CompactionFlight:
                     base_url=cfg.provider_base_url, session=str(cfg.session_file),
                     pid=os.getpid(), parent_pid=os.getppid(),
                     trigger=trigger, forced=forced, focus=focus, preserve_from=preserve_from,
-                    settings=_redact(settings), max_output_tokens=cfg.max_output_tokens,
+                    settings=_snapshot_settings(settings, getattr(cfg, "paranoid_mode", "off")),
+                    max_output_tokens=cfg.max_output_tokens,
                     model_context_window=getattr(cfg, "model_context_window", None),
                     caller_stack=traceback.format_stack(), details=details,
                     disk_compaction_source_sha256=hashlib.sha256(Path(__file__).with_name("compaction.py").read_bytes()).hexdigest())

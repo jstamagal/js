@@ -49,7 +49,7 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
     assert changed.error is None
     assert settings.get_dotted(live_settings, spec.path) == expected
     assert shown.error is None
-    assert shown.lines == [_is(key.upper(), setcmd.render_value(spec, expected))]
+    assert shown.lines == [_is(key.upper(), setcmd.render_value(spec, expected, masked=False))]
 
 
 @pytest.mark.parametrize("raw", ['"PATH"', '["PATH",""]', '["PATH",7]'])
@@ -304,6 +304,7 @@ def test_empty_state_rendering_distinguishes_off_none_and_unset():
 
 def test_secret_values_are_masked_when_shown():
     live_settings = settings.seed_defaults()
+    setcmd.set_command(live_settings, "PARANOID_MODE on")
 
     changed = setcmd.set_command(live_settings, "API_KEY sk-test")
     shown = setcmd.show_lines(live_settings, "API_KEY")
@@ -312,6 +313,16 @@ def test_secret_values_are_masked_when_shown():
     assert changed.lines == [_changed("API_KEY", "<set>")]
     assert settings.get_dotted(live_settings, ("API_KEY",)) == "sk-test"
     assert shown.lines[0] == _is("API_KEY", "<set>")
+
+
+def test_secret_values_show_in_full_when_paranoid_mode_is_off():
+    live_settings = settings.seed_defaults()
+
+    changed = setcmd.set_command(live_settings, "API_KEY sk-test")
+    shown = setcmd.show_lines(live_settings, "API_KEY")
+
+    assert changed.lines == [_changed("API_KEY", "sk-test")]
+    assert shown.lines[0] == _is("API_KEY", "sk-test")
 
 
 @pytest.mark.parametrize("key", ["MODEL.foo", "PROVIDER.foo", "FETCH_TIMEOUT.foo"])

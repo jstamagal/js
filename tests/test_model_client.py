@@ -741,6 +741,27 @@ def test_set_refuses_extra_headers_a_request_cannot_carry(raw):
 
     value, error = settings.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], raw)
     assert value is None and error
+
+
+def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path):
+    from js import runtime, turn_settings
+    from js.config import Config
+
+    cfg = Config(
+        agent_id="a", agent_dir=tmp_path, model="m", provider_id=None,
+        provider_base_url="http://x", provider_api_key=None, reasoning_effort=None,
+        debug_log=None, history_file=tmp_path / "h", sessions_dir=tmp_path,
+        session_file=tmp_path / "s.jsonl", prompts_dir=tmp_path,
+        **turn_settings.project({"PARANOID_MODE": "extra"}),
+    )
+    request = runtime._turn_request(
+        cfg, model_override=None, provider_id_override=None,
+        provider_base_url_override=None, provider_api_key_override=None,
+        reasoning_effort_override=runtime._UNSET, max_output_override=1, sampling=None,
+    )
+    assert request.headers == {"X-JS-Scrub": "on"}
+
+
 def _sent_headers(monkeypatch, *, provider_id, base, headers):
     """The headers of the one request a turn sends with ``headers``."""
     import asyncio
@@ -798,6 +819,7 @@ def test_an_extra_anthropic_version_reaches_the_request(monkeypatch):
     assert sent.get_list("anthropic-version") == ["2099-01-01"]
     assert sent.get_list("x-api-key") == ["login-key"]
 
+
 _FRAMING = {"Content-Length": "1", "Content-Type": "text/plain", "Transfer-Encoding": "chunked",
             "Host": "elsewhere.invalid"}
 
@@ -810,5 +832,3 @@ def test_configured_framing_headers_never_reach_the_request(monkeypatch, provide
     assert sent.get_list("content-type") == ["application/json"]
     assert sent.get_list("transfer-encoding") == []
     assert "elsewhere.invalid" not in sent.get_list("host")
-
-

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -519,7 +520,7 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
 
         owned_hosts: list[MCPHost] = []
 
-        def host_factory(mcp_config, *, telemetry=None):
+        def host_factory(mcp_config, *, telemetry=None, paranoid_mode="on"):
             owned = MCPHost(mcp_config, telemetry=telemetry, client_factory=FakeClient)
             owned_hosts.append(owned)
             return owned
@@ -653,7 +654,8 @@ def test_successful_server_data_is_redacted_everywhere(config):
 
 def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, config, tmp_path):
     async def drive():
-        host = MCPHost(config, client_factory=FakeClient)
+        # The mode the turn runs with, so the turn does not list tools again.
+        host = MCPHost(config, client_factory=FakeClient, paranoid_mode="off")
         await host.discover(query="mcp")
         client = FakeClient.instances[-1]
         delivered = []
@@ -1219,3 +1221,124 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
             client._raise_redacted(MCPClientError(f"remote error echoed {variant}"))
         assert variant not in str(raised.value)
         assert "[REDACTED]" in str(raised.value)
+
+
+def test_record_server_error_keeps_credentials_when_paranoid_mode_is_off():
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+    shown = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="off")
+    hidden = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="on")
+    for host in (shown, hidden):
+        host._record_server_error(server, RuntimeError("server rejected abc123"))
+    assert "abc123" in shown._server_errors["s"]
+    assert "abc123" not in hidden._server_errors["s"]
+
+
+def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+    events = []
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off",
+                   event_sink=lambda *a, **k: events.append(k))
+    FakeClient.instances.clear()
+    asyncio.run(host._ensure_server(server))
+    client = FakeClient.instances[-1]
+
+    assert "abc123" in client.kwargs["redactor"]("rejected abc123")
+    host.paranoid_mode = "on"
+    assert "abc123" not in client.kwargs["redactor"]("rejected abc123")
+    client.kwargs["log_sink"]({"data": "token abc123"})
+    assert "abc123" not in repr(events)
+
+
+def test_run_turn_gives_a_reused_host_the_turns_paranoid_mode(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from js import runtime
+    from test_lazy_tool_discovery import _cfg
+
+    host = MCPHost(MCPConfiguration((), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
+    cfg = replace(_cfg(tmp_path), paranoid_mode="on")
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", AsyncMock(side_effect=RuntimeError("stop")))
+    with pytest.raises(Exception):
+        asyncio.run(runtime.run_turn_async(cfg, "s", [{"role": "user", "content": "hi"}],
+                                           runtime.Telemetry(None), mcp_host=host))
+    assert host.paranoid_mode == "on"
+
+
+def test_tool_metadata_is_redacted_again_when_masking_turns_on():
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+
+    class LeakyClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
+
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=LeakyClient, paranoid_mode="off")
+
+    async def scenario():
+        await host._ensure_server(server)
+        await host.refresh()
+        before = repr(host.remote_tools)
+        host.paranoid_mode = "on"
+        await host.before_model_call()
+        return before, repr(host.remote_tools)
+
+    before, after = asyncio.run(scenario())
+    assert "abc123" in before
+    assert "abc123" not in after
+
+
+def test_turning_masking_on_redacts_cached_metadata_even_if_the_refresh_fails():
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+
+    class FlakyClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
+            self.down = False
+
+        async def list_tools(self, *, timeout=None):
+            if self.down:
+                raise ConnectionError("server gone")
+            return self.tools
+
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient, paranoid_mode="off")
+
+    async def scenario():
+        await host._ensure_server(server)
+        await host.refresh()
+        FlakyClient.instances[-1].down = True
+        host.paranoid_mode = "on"
+        await host.before_model_call()
+        return repr(host.remote_tools), repr([t.description for t in host.tools(set(host.remote_tools))])
+
+    cached, tools = asyncio.run(scenario())
+    assert "abc123" not in cached
+    assert "abc123" not in tools
+
+
+def test_a_cached_server_error_is_masked_once_masking_turns_on():
+    leaky = MCPServer(
+        name="leaky", normalized_name="leaky", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+    other = MCPServer(name="other", normalized_name="other", transport="stdio", command="true")
+    host = MCPHost(MCPConfiguration((leaky, other), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
+    host._record_server_error(leaky, RuntimeError("server rejected abc123"))
+
+    host.paranoid_mode = "on"
+    entries = asyncio.run(host.discover("other rejected"))
+
+    assert any(entry.source == "leaky" for entry in entries)
+    assert "abc123" not in repr(entries)

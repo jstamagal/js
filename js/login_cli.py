@@ -8,10 +8,12 @@ import os
 import sys
 from getpass import getpass
 from dataclasses import replace
+from types import SimpleNamespace
 
 import ai
 
-from . import codex_auth, model_client, providers, retry, xai_auth
+from . import codex_auth, model_client, paranoid, providers, retry, xai_auth
+from . import config, turn_settings
 from . import messages as msgs
 from .logins import (
     Login,
@@ -37,6 +39,9 @@ _MODEL_LIST_LIMIT = 20
 
 
 def _mask(value: str) -> str:
+    # PARANOID_MODE off shows a key in full.
+    if not paranoid.masks(paranoid.mode()):
+        return value
     # Revealing an 8-char prefix + 4-char suffix only hides something when the
     # string is long enough that the two slices can't cover the whole value
     # (8 + 4 = 12) — otherwise every character comes through around the fake
@@ -332,7 +337,8 @@ def _select_api_shape() -> tuple[str, str] | None:
 def _input(prompt: str, *, default: str | None = None, secret: bool = False) -> str | None:
     label = prompt if default in (None, "") else f"{prompt} [{default}]"
     try:
-        value = getpass(f"{label}: ") if secret else input(f"{label}: ")
+        hidden = secret and paranoid.masks(paranoid.mode())
+        value = getpass(f"{label}: ") if hidden else input(f"{label}: ")
     except (EOFError, KeyboardInterrupt):
         print()
         return None
@@ -496,12 +502,13 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
         chunks.append(chunk)
 
     try:
+        run = SimpleNamespace(**turn_settings.project(config.run_settings()))
         result = model_client.stream_model(
             model_id=model_id,
             provider_id=login.provider_id,
             provider_base_url=login.provider_base_url,
             provider_api_key=login.provider_api_key,
-            provider_headers=login.provider_headers,
+            provider_headers=model_client.turn_headers(login.provider_headers, run),
             messages=[ai.user_message(_SECONDARY_TEST_PROMPT)],
             tools=None,
             max_output_tokens=None,

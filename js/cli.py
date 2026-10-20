@@ -82,6 +82,7 @@ from .config import (
     from_env,
     jsrc_paths,
     resolve_agent_id,
+    set_invocation,
     validate_agent_id,
     vision_enabled_for_model,
 )
@@ -880,7 +881,10 @@ def _live_settings_overlay(
 
     def _mark(key: str, value, source: str) -> None:
         spec = settings.SPEC_BY_KEY[key]
-        overlay[key] = setcmd.LiveValue(display=setcmd.render_value(spec, value), source=source)
+        overlay[key] = setcmd.LiveValue(
+            display=setcmd.render_value(spec, value, masked=setcmd.masks_secrets(settings_store)),
+            source=source,
+        )
 
     # MODEL — the --model flag / `/model` command never lands in the store.
     store_model = settings.get_dotted(settings_store, ("MODEL",))
@@ -908,7 +912,7 @@ def _live_settings_overlay(
             source = f"login {provider_id}"
         else:
             source = "session"
-        _mark("API_KEY", provider_api_key, source)  # render masks it to <set>
+        _mark("API_KEY", provider_api_key, source)
 
     # Sampling — js/sampling.py reads JS_TEMPERATURE/JS_TOP_K/... itself, and
     # the agent manifest is off-store too.
@@ -3240,7 +3244,7 @@ def _session_mcp_host(cfg, telemetry):
         return None
     from .mcp.host import MCPHost
 
-    return MCPHost(cfg.mcp, telemetry=telemetry)
+    return MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
 
 
 async def _close_session_mcp_host(state: dict) -> None:
@@ -4330,6 +4334,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
+    set_invocation(extras=args.extras, presets=presets,
+                   ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global)
     if args.session == "":
         # A bare --session opens the picker; the chosen session is resumed in
         # its own directory and agent, jailed there when it started under -C.

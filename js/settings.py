@@ -181,9 +181,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PROVIDER", "str", empty=EMPTY_NONE, aliases=("provider",), group="providers"),
     SettingSpec("BASE_URL", "str", empty=EMPTY_NONE, aliases=("baseurl",), group="providers"),
     SettingSpec("API_KEY", "str", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="providers"),
-    SettingSpec("EXTRA_HEADERS", "str", empty=EMPTY_NONE, group="providers"),
+    SettingSpec("EXTRA_HEADERS", "str", empty=EMPTY_NONE, secret=True, group="providers"),
+    SettingSpec("PARANOID_MODE", "str", group="providers"),
     SettingSpec("EXTRA_PARAMS", "map",
-                empty=EMPTY_NONE, group="providers"),
+                empty=EMPTY_NONE, secret=True, group="providers"),
     # --- limits ---
     SettingSpec("TURN_ROUNDS_MAX", "int", group="limits"),
     SettingSpec("REPLY_TOOL_CALLS_MAX", "int", group="limits"),
@@ -385,7 +386,25 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
     VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
     special-casing); the only way to clear a setting back to its default/unset
-    state is `set -key` (see `apply_unset` in `js.setcmd`)."""
+    state is `set -key` (see `apply_unset` in `js.setcmd`). The error for a
+    secret setting never repeats any part of the value."""
+    value, error = _coerce_value(spec, raw)
+    if error is not None and spec.secret:
+        # Both forms: as typed, and as decoded from a quoted JSON string.
+        error = _without_value(_without_value(error, _unquoted(spec, raw.strip())), raw)
+    return value, error
+
+
+def _without_value(error: str, raw: str) -> str:
+    """``error`` with every piece of ``raw`` in it shown as <set>."""
+    pieces = sorted({raw.strip(), *re.split(r"[\s;:=,\"'{}\[\]]+", raw)}, key=len, reverse=True)
+    for piece in pieces:
+        if len(piece) >= 3:
+            error = error.replace(piece, "<set>")
+    return error
+
+
+def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     text = _unquoted(spec, raw.strip())
     if spec.key == "EFFORT":
         v = text.lower()
@@ -396,6 +415,11 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         v = text.lower()
         if v not in STEER_MODES:
             return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(STEER_MODES))
+        return v, None
+    if spec.key == "PARANOID_MODE":
+        v = text.lower()
+        if v not in ("off", "on", "extra"):
+            return None, msgs.EXPECTED_ONE_OF.text(choices="off|on|extra")
         return v, None
     if spec.key == "PROVIDER" and text:
         from . import providers as _providers

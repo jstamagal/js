@@ -332,6 +332,31 @@ def _preset_config_paths(
     return paths
 
 
+# What this process's command line adds to the settings it loads: --extra
+# (and the flags turned into it), --preset and the --ignore-* switches. The
+# CLI records them once (`set_invocation`); `run_settings` loads with them.
+_invocation: dict = {}
+
+
+def set_invocation(*, extras: list[str] | None = None, presets: list[str] | None = None,
+                   ignore_local_config: bool = False, ignore_global_config: bool = False) -> None:
+    _invocation.clear()
+    _invocation.update(extras=list(extras or []), presets=list(presets or []),
+                       ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config)
+
+
+def run_settings(cwd: Path | None = None) -> dict:
+    """The settings a run started in ``cwd`` (default: here) loads: every
+    jsrc layer, the environment and this process's command line."""
+    paths = jsrc_paths(
+        (cwd or Path.cwd()).resolve(strict=False),
+        ignore_local_config=_invocation.get("ignore_local_config", False),
+        ignore_global_config=_invocation.get("ignore_global_config", False),
+        presets=_invocation.get("presets") or None,
+    )
+    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None)
+
+
 def jsrc_paths(
     project_dir: Path,
     *,

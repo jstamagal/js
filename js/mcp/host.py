@@ -337,6 +337,7 @@ class MCPHost:
         telemetry: Any = None,
         event_sink: Callable[..., Any] | None = None,
         request_timeout: float | None = None,
+        paranoid_mode: str = "on",
     ) -> None:
         if request_timeout is None:
             request_timeout = getattr(config, "request_timeout_s", None)
@@ -352,6 +353,12 @@ class MCPHost:
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
+        # Each server's last tool listing as it came, so a mode change can
+        # index it again at once, without a call to the server.
+        self._raw_tools: dict[str, list[dict[str, Any]]] = {}
+        # Each server's last error as raised, and as shown under the current
+        # PARANOID_MODE.
+        self._raw_server_errors: dict[str, str] = {}
         self._server_errors: dict[str, str] = {}
         self._server_collisions: dict[str, tuple[CatalogEntry, ...]] = {}
         self._cross_server_collisions: tuple[CatalogEntry, ...] = ()
@@ -359,6 +366,38 @@ class MCPHost:
         self._reserved_public_names: set[str] = set()
         self._reported_public_collisions: set[str] = set()
         self._closed = False
+        # PARANOID_MODE: off shows a server's configured credentials in
+        # results, errors and events; on and extra replace them with [REDACTED].
+        self._paranoid_mode = paranoid_mode
+
+    @property
+    def paranoid_mode(self) -> str:
+        return self._paranoid_mode
+
+    @paranoid_mode.setter
+    def paranoid_mode(self, mode: str) -> None:
+        """A new mode indexes every server's cached tool listing again at
+        once, redacted for it, before anything reads the metadata; the next
+        model call also lists the tools again."""
+        changed = mode != self._paranoid_mode
+        self._paranoid_mode = mode
+        if not changed:
+            return
+        for name, tools in self._raw_tools.items():
+            server = next((s for s in self.config.servers if s.name == name), None)
+            if server is not None:
+                self._index_server_tools(server, tools)
+        if self._raw_tools:
+            self._regroup_tools()
+        for name in self.clients:
+            self._dirty.setdefault(name, set()).add("tools")
+        for name, message in self._raw_server_errors.items():
+            server = next((s for s in self.config.servers if s.name == name), None)
+            self._server_errors[name] = message if server is None else _redact_text(message, self._secrets(server))
+
+    def _secrets(self, server: MCPServer) -> tuple[str, ...]:
+        """What this host redacts for ``server``: nothing when PARANOID_MODE is off."""
+        return _secret_values(server) if self.paranoid_mode != "off" else ()
 
     def reserve_public_names(self, names: set[str]) -> None:
         """Withhold MCP names already claimed by the turn's native surface."""
@@ -415,7 +454,7 @@ class MCPHost:
         for server in servers:
             try:
                 await self._ensure_server(server)
-                self._server_errors.pop(server.name, None)
+                self._forget_server_error(server.name)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -477,10 +516,15 @@ class MCPHost:
         return tuple(ranked_entries(result, " ".join(sorted(terms))))
 
     def _record_server_error(self, server: MCPServer, exc: Exception) -> None:
-        message = str(exc).strip() or type(exc).__name__
-        message = _redact_text(message, _secret_values(server))
+        raw = str(exc).strip() or type(exc).__name__
+        self._raw_server_errors[server.name] = raw
+        message = _redact_text(raw, self._secrets(server))
         self._server_errors[server.name] = message
         self._event("mcp_server_error", server=server.name, error=message)
+
+    def _forget_server_error(self, name: str) -> None:
+        self._raw_server_errors.pop(name, None)
+        self._server_errors.pop(name, None)
 
     async def _ensure_server(self, server: MCPServer) -> MCPClient:
         client = self.clients.get(server.name)
@@ -492,16 +536,19 @@ class MCPHost:
         def changed(feature: str, name: str = server.name) -> None:
             self._dirty.setdefault(name, set()).add(feature)
 
-        secrets = _secret_values(server)
+        # Every callback reads PARANOID_MODE when it runs: the mode can change
+        # while the server stays connected.
+        def secrets() -> tuple[str, ...]:
+            return self._secrets(server)
 
         def resource_updated(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_resource_updated", server=name, **_redact_value(params, secrets))
+            self._event("mcp_resource_updated", server=name, **_redact_value(params, secrets()))
 
         def log(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_log", server=name, **_redact_value(params, secrets))
+            self._event("mcp_log", server=name, **_redact_value(params, secrets()))
 
         def progress(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_progress", server=name, **_redact_value(params, secrets))
+            self._event("mcp_progress", server=name, **_redact_value(params, secrets()))
 
         client = self._client_factory(
             transport_factory(server),
@@ -511,12 +558,10 @@ class MCPHost:
             on_resource_updated=resource_updated,
             log_sink=log,
             progress_sink=progress,
-            secrets=secrets,
-            # The client's own replacement is literal; give it the host's
-            # encoding-aware scrubber so a server echoing a%3Ab for a:b in a
-            # JSON-RPC error cannot carry the credential out through an
-            # exception message.
-            redactor=(lambda text: _redact_text(text, secrets)),
+            # The host's encoding-aware scrubber does the client's redaction,
+            # so a server echoing a%3Ab for a:b in a JSON-RPC error cannot
+            # carry the credential out through an exception message.
+            redactor=(lambda text: _redact_text(text, secrets())),
         )
         self.clients[server.name] = client
         await client.initialize(timeout=self.request_timeout)
@@ -554,73 +599,83 @@ class MCPHost:
                 self._record_server_error(server, exc)
                 self._dirty.setdefault(server_name, set()).add("tools")
                 continue
-            replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
-            grouped_tools: dict[
-                str, list[tuple[str, dict[str, Any], str]]
-            ] = {}
-            secrets = _secret_values(server)
-            for raw in tools:
-                remote = raw.get("name")
-                if not isinstance(remote, str):
-                    continue
-                safe_raw = _redact_value(dict(raw), secrets)
-                component = normalize_tool_name(safe_raw["name"])
-                public = _bounded_public_name(server.normalized_name, component)
-                if not component:
-                    continue
-                grouped_tools.setdefault(public, []).append((remote, safe_raw, component))
-            collision_entries: list[CatalogEntry] = []
-            for public, candidates in grouped_tools.items():
-                if len(candidates) == 1:
-                    remote, safe_raw, _component = candidates[0]
-                    if (
-                        self.config.allows_tool(public)
-                        and not self._public_name_reserved(public)
-                    ):
-                        replacement[public] = (server_name, remote, safe_raw)
-                    continue
-                self._event(
-                    "mcp_catalog_collision",
-                    tool=public,
-                    server=server_name,
-                    remote_names=[remote for remote, _safe, _component in candidates],
-                )
-                exposed: list[tuple[str, str]] = []
-                occurrences: dict[str, int] = {}
-                for remote, safe_raw, component in candidates:
-                    occurrence = occurrences.get(remote, 0)
-                    occurrences[remote] = occurrence + 1
-                    disambiguated = _collision_public_name(
-                        server.normalized_name, component, remote, occurrence
-                    )
-                    if (
-                        not self.config.allows_tool(disambiguated)
-                        or self._public_name_reserved(disambiguated)
-                    ):
-                        continue
-                    replacement[disambiguated] = (server_name, remote, safe_raw)
-                    exposed.append((str(safe_raw["name"]), disambiguated))
-                if exposed:
-                    digest = hashlib.sha256(
-                        f"{server.name}\0{public}".encode()
-                    ).hexdigest()[:6]
-                    names = ", ".join(name for name, _alias in exposed)
-                    aliases = ", ".join(alias for _name, alias in exposed)
-                    collision_entries.append(CatalogEntry(
-                        f"mcp:collision:{server.normalized_name}:{digest}",
-                        public,
-                        (
-                            f"MCP tool names {names} normalize to the same public name; "
-                            f"exposed with disambiguated names: {aliases}"
-                        )[:240],
-                        "mcp",
-                        server.name,
-                        loadable=False,
-                    ))
-            self._server_errors.pop(server_name, None)
-            self._server_collisions[server_name] = tuple(collision_entries)
-            self._server_tools[server_name] = replacement
+            self._raw_tools[server_name] = list(tools)
+            self._index_server_tools(server, tools)
+        self._regroup_tools()
 
+    def _index_server_tools(self, server: MCPServer, tools: list[dict[str, Any]]) -> None:
+        """Index one server's listed tools, redacted for the current mode."""
+        server_name = server.name
+        replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        grouped_tools: dict[
+            str, list[tuple[str, dict[str, Any], str]]
+        ] = {}
+        secrets = self._secrets(server)
+        for raw in tools:
+            remote = raw.get("name")
+            if not isinstance(remote, str):
+                continue
+            safe_raw = _redact_value(dict(raw), secrets)
+            component = normalize_tool_name(safe_raw["name"])
+            public = _bounded_public_name(server.normalized_name, component)
+            if not component:
+                continue
+            grouped_tools.setdefault(public, []).append((remote, safe_raw, component))
+        collision_entries: list[CatalogEntry] = []
+        for public, candidates in grouped_tools.items():
+            if len(candidates) == 1:
+                remote, safe_raw, _component = candidates[0]
+                if (
+                    self.config.allows_tool(public)
+                    and not self._public_name_reserved(public)
+                ):
+                    replacement[public] = (server_name, remote, safe_raw)
+                continue
+            self._event(
+                "mcp_catalog_collision",
+                tool=public,
+                server=server_name,
+                remote_names=[remote for remote, _safe, _component in candidates],
+            )
+            exposed: list[tuple[str, str]] = []
+            occurrences: dict[str, int] = {}
+            for remote, safe_raw, component in candidates:
+                occurrence = occurrences.get(remote, 0)
+                occurrences[remote] = occurrence + 1
+                disambiguated = _collision_public_name(
+                    server.normalized_name, component, remote, occurrence
+                )
+                if (
+                    not self.config.allows_tool(disambiguated)
+                    or self._public_name_reserved(disambiguated)
+                ):
+                    continue
+                replacement[disambiguated] = (server_name, remote, safe_raw)
+                exposed.append((str(safe_raw["name"]), disambiguated))
+            if exposed:
+                digest = hashlib.sha256(
+                    f"{server.name}\0{public}".encode()
+                ).hexdigest()[:6]
+                names = ", ".join(name for name, _alias in exposed)
+                aliases = ", ".join(alias for _name, alias in exposed)
+                collision_entries.append(CatalogEntry(
+                    f"mcp:collision:{server.normalized_name}:{digest}",
+                    public,
+                    (
+                        f"MCP tool names {names} normalize to the same public name; "
+                        f"exposed with disambiguated names: {aliases}"
+                    )[:240],
+                    "mcp",
+                    server.name,
+                    loadable=False,
+                ))
+        self._forget_server_error(server_name)
+        self._server_collisions[server_name] = tuple(collision_entries)
+        self._server_tools[server_name] = replacement
+
+
+    def _regroup_tools(self) -> None:
+        """Build the public tool table from every server's index."""
         grouped: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
         for catalog in self._server_tools.values():
             for public, value in catalog.items():
@@ -738,7 +793,7 @@ class MCPHost:
                     await client.call_tool(
                         current[1], kwargs, timeout=self.request_timeout
                     ),
-                    _secret_values(server_config),
+                    self._secrets(server_config),
                 )
 
             valid_input_schema = (
@@ -766,7 +821,7 @@ class MCPHost:
 
         def secrets(server: str) -> tuple[str, ...]:
             config = next(item for item in self.config.servers if item.name == server)
-            return _secret_values(config)
+            return self._secrets(config)
 
         if name == "mcp_resource_list":
             async def handler(server: str, context=None):

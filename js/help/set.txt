@@ -187,6 +187,13 @@ EXTRA_HEADERS
     chatgpt-account-id, OpenAI-Beta, accept and content-type stay js's
     own; User-Agent and originator can be replaced.
 
+PARANOID_MODE
+    How much js hides keys: off, on or extra. off: nothing hidden; keys
+    echo as typed and print in full. on: login and install prompts do not
+    echo, /set shows a secret as <set>, js --login shows a key's ends only,
+    compaction logs and search errors drop keys. extra: on, and every model
+    request carries X-JS-Scrub: on for the CLIProxyAPI secret-scrub plugin.
+
 EXTRA_PARAMS
     Free-form extra params passed through to the provider SDK.
 

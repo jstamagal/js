@@ -843,9 +843,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 max_output_tokens=get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=8192),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
-                provider_headers=model_client.with_extra_headers(
-                    route.headers, getattr(cfg, "extra_headers", None),
-                ),
+                provider_headers=model_client.turn_headers(route.headers, cfg),
                 provider_extra=routing.provider_extra_params(cfg),
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),

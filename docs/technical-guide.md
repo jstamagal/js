@@ -471,7 +471,7 @@ retain phase, context-token count, window and effective input limit.
 Every call to the central compaction function writes a unique attempt under
 `logs/<agent>/compactions/<session>-<attempt>.jsonl`. `COMPACTION_LOG_DIR`
 changes that directory. Records contain caller stack/PIDs, active model and
-settings (credential fields redacted), exact system/messages before and after,
+settings (secret settings and credential fields masked under `PARANOID_MODE` `on`/`extra`), exact system/messages before and after,
 content hashes, retention decision, summary input/output and provider trace,
 plus success, skip, failure or cancellation. Runtime-triggered records also
 include the tool schemas, request budget and usage anchor. Files are created

@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import asyncio
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -22,7 +23,8 @@ def read_flight(cfg):
 
 @pytest.mark.parametrize("failure", [None, RuntimeError("summary failed"), asyncio.CancelledError()])
 def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path, capsys, failure):
-    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"), "COMPACTION_KEEP_RECENT_TOKENS": 1})
+    cfg = replace(_compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"),
+                                               "COMPACTION_KEEP_RECENT_TOKENS": 1}), paranoid_mode="on")
     cfg.settings["API_KEY"] = "private-key"
     original = [{"role": "user", "content": "old content " * 100}, {"role": "user", "content": "new content"}]
     messages = list(original)
@@ -44,7 +46,7 @@ def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path
             asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
         assert messages == original
     path, records = read_flight(cfg)
-    assert records[0]["settings"]["API_KEY"] == "[redacted]"
+    assert records[0]["settings"]["API_KEY"] == "<set>"
     assert records[0]["caller_stack"]
     assert records[1]["system"] == "SYSTEM"
     assert records[-2]["event"] == "after"

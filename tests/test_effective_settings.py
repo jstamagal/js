@@ -58,6 +58,7 @@ def test_show_lines_effective_annotates_and_masks():
     settings.set_dotted(store, ("MODEL",), "stored/model")
     settings.set_dotted(store, ("API_KEY",), "private-store-key")
     settings.set_dotted(store, ("PROVIDER",), "stored-provider")
+    settings.set_dotted(store, ("PARANOID_MODE",), "on")
     overlay = {"MODEL": setcmd.LiveValue("live/model", "--model flag")}
 
     one = setcmd.show_lines_effective(store, overlay, "MODEL")
@@ -143,6 +144,7 @@ def test_overlay_login_provider_and_masked_key():
         provider_api_key = "sk-login"
 
     store = settings.seed_defaults()
+    settings.set_dotted(store, ("PARANOID_MODE",), "on")
     overlay = cli._live_settings_overlay(
         store,
         live_model=None,

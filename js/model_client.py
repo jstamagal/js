@@ -24,7 +24,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import ai
 import httpx2
 
-from . import codex_auth, codex_provider, messages as msgs, activity, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, messages as msgs, activity, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -242,6 +242,13 @@ def with_extra_headers(
             del merged[existing]
         merged[name] = value
     return merged
+
+
+def turn_headers(headers: dict[str, str] | None, cfg: Any) -> dict[str, str]:
+    """The headers a turn's model request sends: the login's ``headers``,
+    then ``cfg``'s EXTRA_HEADERS, then what PARANOID_MODE adds."""
+    merged = with_extra_headers(headers, getattr(cfg, "extra_headers", None))
+    return with_extra_headers(merged, paranoid.wire_headers(getattr(cfg, "paranoid_mode", "off")))
 
 
 def resolve_model(

@@ -49,8 +49,9 @@ help text is its entry in `js/help/set.txt` and its default is its line in
 `js/jsrc`. `/set` with no argument lists every setting and its current value,
 `/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
 a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
-settings, and `<unset>` for settings that explicitly defer to provider defaults. A set
-`API_KEY` is masked as `<set>`.
+settings, and `<unset>` for settings that explicitly defer to provider defaults. With
+`PARANOID_MODE` `on` or `extra`, a set secret setting (`API_KEY`, `EXTRA_HEADERS`,
+`EXTRA_PARAMS`, `MCP_SERVERS`) shows as `<set>`; with the default `off` it shows in full.
 
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
@@ -100,9 +101,10 @@ the current turn. A normal turn-owned host closes every stdio process and HTTP
 session on exit. Session-owned hosts may retain connections across turns, but
 loaded MCP schemas do not carry into the next turn.
 
-Configured credential values are redacted from remote schemas, text/structured
-results, resources, prompts, errors, progress/log notifications, provider tool
-results, and append-only session JSONL. Credential sources include environment
+With `PARANOID_MODE` `on` or `extra`, configured credential values are redacted
+from remote schemas, text/structured results, resources, prompts, errors,
+progress/log notifications, provider tool results, and append-only session
+JSONL; with the default `off` they pass through unchanged. Credential sources include environment
 values, header values and authorization payloads, URL query values, and stdio
 flag values (`--token value` or `--token=value`). Stdio stderr is drained but
 never surfaced. Redaction is a last-resort output boundary, not a reason to put
@@ -202,8 +204,9 @@ first `=` only, so values may contain `=`.
 In the REPL, `set [key [val]]` uses the same registry: `set` lists settings,
 `set key` shows one value, `set key value` changes the live setting, and
 `set -key` puts it back to the value the session started with.
-`show [key]` lists every current value or only the requested key. Secret values
-such as `API_KEY` render as `<set>` once set.
+`show [key]` lists every current value or only the requested key. Under
+`PARANOID_MODE` `on` or `extra`, secret values such as `API_KEY` render as
+`<set>` once set; under the default `off` they print in full.
 
 `set` also accepts a setting's short name: `model` (`MODEL`), `provider`
 (`PROVIDER`), `baseurl` (`BASE_URL`), and `apikey`

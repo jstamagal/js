@@ -60,6 +60,7 @@ set -PROVIDER
 set -BASE_URL
 set -API_KEY
 set -EXTRA_HEADERS
+set PARANOID_MODE off
 set EXTRA_PARAMS {}
 
 # --- limits ---

@@ -49,6 +49,10 @@ def isolated_user_profile(monkeypatch, tmp_path):
     # override behind for the next test on its worker; each test starts on
     # the store under this HOME.
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", None)
+    # A command line one test ran must not shape the next test's settings.
+    from js import config as _config
+
+    _config.set_invocation()
     # `js -C` puts the whole process in a jail; one test's jail must not
     # confine the next test's tools.
     yield
