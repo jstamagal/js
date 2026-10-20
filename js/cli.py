@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import errno
 import functools
 import io
 import json
@@ -3573,6 +3574,9 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         raise
     except Exception as e:  # noqa: BLE001
         msgs.say(msgs.FAILED, error=_error_text(e))
+        if isinstance(e, OSError) and e.errno == errno.ESTALE:
+            state["messages"] = M.load_replay_messages(turn_cfg.session_file)
+            return
         if _turn_has_progress(state["messages"], user_bundle.runtime_message):
             _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(turn_cfg, state["messages"])
