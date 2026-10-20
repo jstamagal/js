@@ -1419,6 +1419,12 @@ TOOL_EDIT_NOUN = Message("edit", banner=False)
 
 TOOL_FAILURE_TRIES_LEFT = Message("failed · {left} of {allowed} tries left", banner=False)
 
+STATUS_TOOL_EXTRA = Message(" +{tool_extra}", banner=False)
+
+STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
+
+STATUS_RESPONSE_BYTES = Message("{value:,}B", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

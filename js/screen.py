@@ -120,13 +120,13 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
     token (when the net channel shows them), then the output-token count.
     """
     if status.tool:
-        extra = f" +{status.tool_extra}" if status.tool_extra else ""
+        extra = msgs.STATUS_TOOL_EXTRA.words(tool_extra=status.tool_extra) if status.tool_extra else ""
         elapsed = int(max(0.0, now - status.tool_started))
-        return f"{status.tool}{extra} {elapsed}s", None
+        return msgs.STATUS_TOOL_ELAPSED.words(tool=status.tool, extra=extra, elapsed=elapsed), None
     if status.compacting:
         return _field(msgs.STATUS_COMPACTING), None
     if show_bytes and status.net_bytes:
-        return f"{status.net_bytes // 100 * 100:,}B", None
+        return msgs.STATUS_RESPONSE_BYTES.words(value=status.net_bytes // 100 * 100), None
     return "", status.output_tokens or None
 
 
