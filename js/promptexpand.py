@@ -178,9 +178,7 @@ def expand_prompt(
                 )
                 if re.search(r"(?m)^[ ]{0,3}```", fbody):
                     raise PromptExpansionError(
-                        "fenced directive body carries a ``` line; the closing "
-                        "fence is ambiguous, so the directive is not run - indent "
-                        "the nested fence four spaces or split the directives"
+                        msgs.DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE.words()
                     )
                 # Put the markdown indent back. The fence may sit up to three
                 # spaces in because it is nested in a list; dropping the indent
@@ -251,7 +249,7 @@ def _run_subsystem(
             return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
         return runner(body, environ=environ, timeout_s=timeout_s)
     except OSError as exc:
-        raise PromptExpansionError(f"!{{{name}}}: {type(exc).__name__}: {exc}") from exc
+        raise PromptExpansionError(msgs.DIRECTIVE_.words(name=name, __name__=type(exc).__name__, exc=exc)) from exc
 
 
 # ---- read-only subsystems (always on) ----
@@ -276,7 +274,7 @@ def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
         # OSError. Do not embed nothing silently: surface the unreadable
         # include through the standard directive-failure warn, or a path
         # typo hides as an empty embed.
-        raise PromptExpansionError(f"unreadable as text: {path} ({exc})") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_UNREADABLE_AS_TEXT.format(path=path, exc=exc)) from None
 
 
 # ---- code subsystems (gated) ----

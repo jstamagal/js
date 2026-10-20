@@ -1359,6 +1359,12 @@ LOOP_CHILD_RETRY = "Child exited {code}; retrying in {delay}s ({failures}/{failu
 
 LOOP_STOPPED = Message("Stopped by operator; owned child has exited.", banner=False)
 
+DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE = Message("fenced directive body carries a ``` line; the closing fence is ambiguous, so the directive is not run - indent the nested fence four spaces or split the directives", banner=False)
+
+DIRECTIVE_ = Message("!{{{name}}}: {__name__}: {exc}", banner=False)
+
+DIRECTIVE_UNREADABLE_AS_TEXT = "unreadable as text: {path} ({exc})"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
