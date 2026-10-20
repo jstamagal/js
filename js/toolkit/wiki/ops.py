@@ -84,7 +84,13 @@ def wiki_finish_ingest(
                 log.write(entry)
         except OSError as exc:
             if dest.exists() and not src.exists():
-                shutil.move(str(dest), str(src))
+                try:
+                    shutil.move(str(dest), str(src))
+                except OSError as rollback_error:
+                    return (
+                        f"ERROR: close-out failed: {exc}; archive rollback failed: {rollback_error}. "
+                        f"The unit remains at {dest}; restore it before retrying."
+                    )
             return f"ERROR: close-out failed and archive rolled back: {exc}"
         git = _commit(vp, f"ingest: {title}", context)
 

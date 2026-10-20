@@ -745,3 +745,38 @@ def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, 
 
     assert len(result.encode()) <= cap
     assert truncation_marker(cap, "TOOL_RESULT_MAX") in result
+
+
+def test_ingest_reports_the_cause_when_archive_rollback_also_fails(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    source = vault / "inbox" / "unit.md"
+    source.parent.mkdir()
+    source.write_text("raw source\n")
+    archived = vault / "Clippings" / source.name
+    log_error = PermissionError("log append denied")
+    rollback_error = PermissionError("inbox restore denied")
+    real_open = Path.open
+    real_move = wiki_ops_module.shutil.move
+
+    def open_path(path, *args, **kwargs):
+        if path == vault / "log.md":
+            raise log_error
+        return real_open(path, *args, **kwargs)
+
+    def move(src, dest):
+        if Path(src) == archived:
+            raise rollback_error
+        return real_move(src, dest)
+
+    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(wiki_ops_module.shutil, "move", move)
+
+    result = wiki_finish_ingest(str(vault), source.name, "Unit", context=_ctx(tmp_path))
+
+    assert result.startswith("ERROR:")
+    assert str(log_error) in result
+    assert str(rollback_error) in result
+    assert str(archived) in result
+    assert archived.read_text() == "raw source\n"
+    assert not source.exists()
