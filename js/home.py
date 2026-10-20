@@ -539,13 +539,13 @@ def _file_latest(folder: Path, targets: dict[Path, Path]) -> None:
     old = payload.get("session_file") if isinstance(payload, dict) else None
     old_parts = Path(old).parts if isinstance(old, str) else ()
     moved = next((new for path, new in targets.items()
-                  if path.is_relative_to(folder) and new.is_file()
+                  if path.is_relative_to(folder) and not path.exists() and new.is_file()
                   and old_parts[-len(path.relative_to(folder).parts) - 1:]
                   == (folder.name, *path.relative_to(folder).parts)), None)
     if moved is not None:
         session_store.write_latest(paths.state_root() / folder.name, moved)
-    with contextlib.suppress(OSError):
-        latest.unlink()
+        with contextlib.suppress(OSError):
+            latest.unlink()
 
 
 def refile_sessions(*, apply: bool) -> Iterator[Step]:
