@@ -1,0 +1,8 @@
+{
+  "confine_has_too_many_symbolic_links": "{path} has too many symbolic links",
+  "confine_is_outside_the_jail_js_c": "{path} is outside the jail: js -C keeps the tools in {self_root} and its bound paths",
+  "confine_is_hidden_in_the_jail_jail": "{path} is hidden in the jail (JAIL_HIDE)",
+  "confine_holds_a_path_hidden_in_the": "{path} holds a path hidden in the jail (JAIL_HIDE); a tool may not change it",
+  "confine_is_read_only_in_the_jail": "{path} is read-only in the jail (bound from {best_path})",
+  "confine_holds_a_read_only_path_in": "{path} holds a read-only path in the jail; a tool may not change it"
+}
