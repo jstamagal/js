@@ -217,13 +217,7 @@ class StdioTransport:
                     if not await self._wait(process, self._terminate_timeout):
                         with contextlib.suppress(ProcessLookupError):
                             process.kill()
-                        await process.wait()
-                else:
-                    await process.wait()
-                stderr_task, self._stderr_task = self._stderr_task, None
-                if stderr_task is not None:
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await stderr_task
+                await self._finish_process(process)
 
     async def _abort(self) -> None:
         """Reap a broken child without waiting for stdin-driven graceful exit."""
@@ -243,13 +237,17 @@ class StdioTransport:
                     if not await self._wait(process, self._terminate_timeout):
                         with contextlib.suppress(ProcessLookupError):
                             process.kill()
-                        await process.wait()
-                else:
-                    await process.wait()
-                stderr_task, self._stderr_task = self._stderr_task, None
-                if stderr_task is not None:
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await stderr_task
+                await self._finish_process(process)
+
+    async def _finish_process(self, process: asyncio.subprocess.Process) -> None:
+        # Helpers can retain the pipes after the immediate child exits.
+        process._transport.close()
+        await process.wait()
+        stderr_task, self._stderr_task = self._stderr_task, None
+        if stderr_task is not None:
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
 
     async def __aenter__(self) -> StdioTransport:
         return await self.start()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import sys
 from pathlib import Path
 
@@ -188,6 +190,32 @@ def test_close_terminates_stubborn_child_with_bounded_fallback():
         await transport.close()
         assert process.returncode is not None
         await transport.close()
+
+    run(scenario())
+
+
+def test_close_finishes_when_a_helper_inherits_stderr():
+    async def scenario():
+        program = (
+            "import subprocess, sys; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL); "
+            "print(child.pid, flush=True); sys.stdin.read()"
+        )
+        transport = StdioTransport(
+            sys.executable, ("-c", program), close_timeout=0.02, terminate_timeout=0.02,
+        )
+        await transport.start()
+        process = transport.process
+        helper = int(await asyncio.wait_for(process.stdout.readline(), 2))
+        closing = asyncio.create_task(transport.close())
+        try:
+            done, _pending = await asyncio.wait({closing}, timeout=0.5)
+            assert closing in done
+            assert process.returncode is not None
+        finally:
+            os.kill(helper, signal.SIGKILL)
+            await asyncio.wait_for(closing, 2)
 
     run(scenario())
 
