@@ -230,11 +230,13 @@ class SkillPicker:
                            input=input, output=output)
 
 
-def pick_skills(cwd: str | Path, disabled: Iterable[str] = ()) -> tuple[str, ...] | None:
+def pick_skills(cwd: str | Path, disabled: Iterable[str] = (), *, input=None, output=None, picker_factory=None) -> tuple[str, ...] | None:
     """Run the picker over every skill discovered from ``cwd`` and return the
     new SKILLS_DISABLED value, or None when closed."""
     from . import picker, skills
 
-    state = SkillPicker(skills.discover_skills(Path(cwd)).skills, disabled)
-    app = state.application(input=create_input(sys.__stdin__), output=create_output(sys.__stdout__))
+    factory = SkillPicker if picker_factory is None else picker_factory
+    state = factory(skills.discover_skills(Path(cwd)).skills, disabled)
+    app = state.application(input=create_input(sys.__stdin__) if input is None else input,
+                            output=create_output(sys.__stdout__) if output is None else output)
     return picker.run_modal(app)

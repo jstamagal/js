@@ -22,3 +22,17 @@ def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tm
 
     assert settings.knob(state["settings"], "SKILLS_DISABLED") == ["alpha"]
     assert cli._cfg_for_live_state(cfg, state).skills_disabled == ("alpha",)
+
+
+def test_skill_picker_accepts_its_view_and_streams(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from js import picker, skills
+
+    source, target = object(), object()
+    seen = []
+    monkeypatch.setattr(skills, "discover_skills", lambda path: SimpleNamespace(skills=()))
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    assert skill_picker.pick_skills(tmp_path, input=source, output=target,
+                                    picker_factory=lambda *args: state) == "app"
+    assert seen == [{"input": source, "output": target}]
