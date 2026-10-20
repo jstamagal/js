@@ -885,18 +885,23 @@ def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *,
 _package_cache: tuple[Path, dict] | None = None
 
 
-def _package_settings() -> dict:
+def _defaults_error(message: msgs.Message, **fields) -> BaseException:
+    return DefaultsError(msgs.line_for(message, file=sys.stderr, **fields))
+
+
+def _package_settings(*, error_factory=None) -> dict:
     """The settings `js/jsrc` sets, read once per path. Raises `DefaultsError`
     naming the file when it is missing, a line in it does not apply, or a
     registered setting has no line in it."""
     global _package_cache
+    fail = _defaults_error if error_factory is None else error_factory
     path = PACKAGE_JSRC
     if _package_cache is not None and _package_cache[0] == path:
         return _package_cache[1]
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_MISSING, file=sys.stderr, path=path)) from None
+        raise fail(msgs.DEFAULTS_MISSING, path=path) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -905,8 +910,7 @@ def _package_settings() -> dict:
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
             problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
-            raise DefaultsError(msgs.line_for(msgs.DEFAULTS_BAD_LINE, file=sys.stderr, location=f"{path}:{lineno}",
-                                              error=problem))
+            raise fail(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = setcmd.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
@@ -915,14 +919,15 @@ def _package_settings() -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_UNLISTED, file=sys.stderr, path=path, keys=", ".join(unlisted)))
+        raise fail(msgs.DEFAULTS_UNLISTED, path=path, keys=", ".join(unlisted))
     _package_cache = (path, settings)
     return settings
 
 
-def seed_defaults() -> dict:
+def seed_defaults(*, error_factory=None) -> dict:
     """A fresh copy of the settings `js/jsrc` sets: the bottom config layer."""
-    return copy.deepcopy(_package_settings())
+    source = _package_settings() if error_factory is None else _package_settings(error_factory=error_factory)
+    return copy.deepcopy(source)
 
 
 def default_value(key: str) -> Any:
@@ -1095,17 +1100,20 @@ def collect_settings(
     env: dict[str, str] | None = None,
     extras: list[str] | None = None,
     migrate: bool | None = None,
+    *,
+    defaults=None,
+    reset_formats=None,
 ) -> dict:
     """Run precedence: js/jsrc < jsrc files (in order) < env < CLI extras.
 
     ``config_paths`` defaults to ``~/.js/jsrc``. ``js.config.from_env``
     passes the global, project, and project-local files explicitly.
     """
-    settings = seed_defaults()
+    settings = (seed_defaults if defaults is None else defaults)()
     from . import fset
 
     # The /fset entries the jsrc files set are rebuilt with the settings.
-    fset.reset()
+    (fset.reset if reset_formats is None else reset_formats)()
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]

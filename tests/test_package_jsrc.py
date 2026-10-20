@@ -356,3 +356,13 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
 
     assert cli.compaction.compacted(result)
     assert any("rehydrated-marker" in str(m.get("content")) for m in messages) is reattached
+
+
+def test_collect_settings_can_preserve_operator_formats():
+    from js import fset, settings
+
+    settings.seed_defaults()
+    fset.set_entry("MODEL_SET", "custom")
+    before = dict(fset.overrides())
+    settings.collect_settings(config_paths=[], env={}, reset_formats=lambda: None)
+    assert dict(fset.overrides()) == before
