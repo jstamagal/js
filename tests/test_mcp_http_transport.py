@@ -566,6 +566,27 @@ class ReadlineStream:
         return chunk
 
 
+def test_post_event_ids_do_not_change_get_resume_header(monkeypatch):
+    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
+    transport._consume_sse(ReadlineStream(b"id: get-one\n\n"), lambda _message: None)
+    run(transport._consume_post_stream(ReadlineStream(b"id: post-one\n\n")))
+    requests = []
+
+    class Unsupported:
+        status = 405
+
+        def close(self):
+            pass
+
+    def open_request(request, **_kwargs):
+        requests.append(request)
+        return Unsupported()
+
+    monkeypatch.setattr(transport, "_open", open_request)
+    transport._get_once()
+    assert requests[0].get_header("Last-event-id") == "get-one"
+
+
 def test_sse_grammar_cr_terminators_bom_and_empty_id_reset():
     received = []
     transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")

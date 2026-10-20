@@ -358,6 +358,7 @@ class StreamableHTTPTransport:
         self._reconnect_backoff = max(0.0, reconnect_backoff)
         self._session_id: str | None = None
         self._last_event_id: str | None = None
+        self._get_last_event_id: str | None = None
         self._retry_seconds = self._reconnect_backoff
         self._queue: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
         self._send_lock = asyncio.Lock()
@@ -537,8 +538,8 @@ class StreamableHTTPTransport:
         headers = self._headers()
         # An empty committed id resets resume state: the header must be
         # omitted, not sent empty.
-        if self._last_event_id:
-            headers["Last-Event-ID"] = self._last_event_id
+        if self._get_last_event_id:
+            headers["Last-Event-ID"] = self._get_last_event_id
         request = urllib.request.Request(self._url, headers=headers, method="GET")
         try:
             response = self._open(request, allowed_errors={405})
@@ -570,7 +571,7 @@ class StreamableHTTPTransport:
 
     async def _consume_post_stream(self, response: Any) -> None:
         try:
-            await asyncio.to_thread(self._consume_sse, response, self._emit_from_thread)
+            await asyncio.to_thread(self._consume_sse, response, self._emit_from_thread, resume_get=False)
         except asyncio.CancelledError:
             self._release(response)
             raise
@@ -671,7 +672,9 @@ class StreamableHTTPTransport:
             raise StreamableHTTPTransportError(self._diagnostic("response was too large"))
         return data
 
-    def _consume_sse(self, response: Any, emit: Callable[[dict[str, Any]], None]) -> None:
+    def _consume_sse(
+        self, response: Any, emit: Callable[[dict[str, Any]], None], *, resume_get: bool = True
+    ) -> None:
         data_lines: list[bytes] = []
         pending_event_id: str | None = None
         event_size = 0
@@ -686,6 +689,8 @@ class StreamableHTTPTransport:
                 # reconnect skip an event whose data never arrived.
                 if pending_event_id is not None:
                     self._last_event_id = pending_event_id
+                    if resume_get:
+                        self._get_last_event_id = pending_event_id
                 if data_lines:
                     emit(self._decode_message(b"\n".join(data_lines)))
                 data_lines.clear()
@@ -699,7 +704,7 @@ class StreamableHTTPTransport:
                 data_lines.append(value)
             elif field == b"id" and b"\x00" not in value:
                 pending_event_id = value.decode("utf-8", "replace")
-            elif field == b"retry" and value.isdigit():
+            elif field == b"retry" and value.isdigit() and resume_get:
                 self._retry_seconds = int(value) / 1000
 
         buffer = b""
