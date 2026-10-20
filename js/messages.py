@@ -1321,6 +1321,12 @@ STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)
 
 RESPONSES_STREAM_FAILED = Message("OpenAI Responses stream failed", banner=False)
 
+SAMPLING_SAMPLING_MUST_BE_A_NUMBER = Message("sampling.{key} must be a number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER = Message("sampling.{key} must be a finite number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_AN_INTEGER = Message("sampling.{key} must be an integer", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

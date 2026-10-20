@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -127,25 +129,25 @@ class Sampling:
 
 def _coerce_float(key: str, raw: Any) -> float:
     if isinstance(raw, bool):
-        raise ValueError(f"sampling.{key} must be a number")
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_A_NUMBER.words(key=key))
     try:
         value = float(raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"sampling.{key} must be a number") from exc
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_A_NUMBER.words(key=key)) from exc
     if not math.isfinite(value):  # nan/inf serialize as invalid JSON
-        raise ValueError(f"sampling.{key} must be a finite number")
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER.words(key=key))
     return value
 
 
 def _coerce_int(key: str, raw: Any) -> int:
     if isinstance(raw, bool):
-        raise ValueError(f"sampling.{key} must be an integer")
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_AN_INTEGER.words(key=key))
     if isinstance(raw, int):
         return raw
     if isinstance(raw, float):
         if raw.is_integer():
             return int(raw)
-        raise ValueError(f"sampling.{key} must be an integer")
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_AN_INTEGER.words(key=key))
     text = str(raw).strip()
     try:
         return int(text)
@@ -153,10 +155,10 @@ def _coerce_int(key: str, raw: Any) -> int:
         try:
             as_float = float(text)
         except ValueError as exc:
-            raise ValueError(f"sampling.{key} must be an integer") from exc
+            raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_AN_INTEGER.words(key=key)) from exc
         if as_float.is_integer():
             return int(as_float)
-        raise ValueError(f"sampling.{key} must be an integer")
+        raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_AN_INTEGER.words(key=key))
 
 
 def call_params(sampling: Sampling, transport: str | None) -> dict[str, Any]:
