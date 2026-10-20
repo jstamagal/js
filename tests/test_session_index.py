@@ -13,7 +13,7 @@ import pytest
 from js import memory as M
 from js import session_index, session_store, session_text
 from js import session_query as Q
-from js.session_catalog import append_title, record_session_start
+from js.session_catalog import append_title, record_model_switch, record_session_start
 
 STAMP = M.stamp_for("deepseek-v4-flash", "deepseek", "high")
 
@@ -65,6 +65,17 @@ def test_every_write_keeps_the_catalog_entry_current_without_a_reparse(tmp_path,
     assert entry["cwd"] == str((tmp_path / "proj").resolve())
     assert entry["replied"] is True
     assert entry["models"] == ["deepseek-v4-flash"]
+
+
+def test_the_picker_model_tracks_a_switch_before_the_next_reply(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "hello", "reply")
+    switched = M.stamp_for("other-model", "other-provider", "low")
+    record_model_switch(path, stamp=switched, previous=STAMP)
+
+    entry = _by_path(session_index.catalog())[_key(path)]
+    assert entry["last_stamp"] == switched
+    assert Q.Session.from_summary(entry).model == "other-model"
 
 
 def test_a_file_written_behind_the_index_is_caught_up_on_open(tmp_path):

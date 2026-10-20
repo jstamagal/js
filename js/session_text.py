@@ -232,6 +232,10 @@ class _Transcript:
         kind = record.get("kind")
         if kind == "session_metadata":
             self._metadata(record)
+        elif kind == "model_switch":
+            stamp = record.get("stamp")
+            if isinstance(stamp, dict) and isinstance(stamp.get("model"), str) and stamp["model"]:
+                self.last_stamp = dict(stamp)
         elif kind == "message":
             self._message(record.get("message"), ts, record.get("stamp"), replayed=True)
             self._number(record)
