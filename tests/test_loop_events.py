@@ -250,3 +250,19 @@ def test_download_fallback_helper_emits_once(monkeypatch, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["purpose"] == "installer"
     assert capsys.readouterr() == ("", "")
+
+
+def test_skipped_session_records_emit_a_warning(tmp_path, capsys):
+    import json
+
+    from js import memory
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps({"kind": "message", "version": memory.SCHEMA_VERSION + 1,
+                               "message": {"role": "user", "content": "future"}}) + "\n")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert memory.load_replay_messages(path) == []
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["path"] == path
+    assert capsys.readouterr() == ("", "")

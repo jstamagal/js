@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import messages as msgs
+from . import output
 from . import session_store
 from . import session_text
 
@@ -363,7 +364,7 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     except FileNotFoundError:
         messages, skipped_versions, revision = [], 0, None
     if skipped_versions:
-        msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
+        output.notice(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
                   records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
     return _Snapshot(messages, memory_file, revision)
 
