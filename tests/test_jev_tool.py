@@ -69,3 +69,20 @@ def test_jev_refuses_choice_options_with_duplicate_names(tmp_path, monkeypatch):
 
     assert out.startswith("ERROR:"), out
     assert not seen
+
+
+def test_registered_typesafe_key_reaches_client(tmp_path, monkeypatch):
+    import typesafe_sdk
+    from js import turn_settings
+
+    seen = {}
+
+    def client(**kwargs):
+        seen.update(kwargs)
+        return _Client({}, [])
+
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", client)
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"TYPESAFE_API_KEY": "configured-key"})))
+    jev.jev("state", [{"question": "ready?"}], context=context)
+    assert seen["api_key"] == "configured-key"

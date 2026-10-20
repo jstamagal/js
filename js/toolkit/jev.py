@@ -18,10 +18,10 @@ API_KEY_ENV = "TYPESAFE_API_KEY"
 KINDS = ("noul", "choice", "score")
 
 
-def _client(model: str) -> Any:
+def _client(model: str, api_key: str | None = None) -> Any:
     from typesafe_sdk import TypeSafeClient
 
-    return TypeSafeClient(model=model)
+    return TypeSafeClient(model=model, api_key=api_key)
 
 
 def _state(raw: str) -> Any:
@@ -103,11 +103,12 @@ def jev(
         if check_order and built["type"] == "choice":
             reversed_criteria = dict(reversed(list(built["criteria"].items())))
             asked[f"q{n}_reversed"] = dict(built, criteria=reversed_criteria)
-    if not os.environ.get(API_KEY_ENV, "").strip():
+    configured_key = context.typesafe_api_key.strip()
+    if not (configured_key or os.environ.get(API_KEY_ENV, "").strip()):
         return f"ERROR: {API_KEY_ENV} is not set"
     model = getattr(context, "jev_model", None) or "jev-latest"
     try:
-        with _client(model) as client:
+        with (_client(model, api_key=configured_key) if configured_key else _client(model)) as client:
             response = client.system_one(_state(state), asked)
     except ImportError:
         return "ERROR: typesafe-sdk is not installed; run `just sync`"

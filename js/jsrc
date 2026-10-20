@@ -241,3 +241,5 @@ set TERMINAL_ENVIRONMENT_INHERIT on
 set BROWSER_FALLBACK_FILE /opt/chrome-for-testing/chrome-linux64/chrome
 
 set SUBAGENT_RESULT_SHARE on
+
+set TYPESAFE_API_KEY ""
