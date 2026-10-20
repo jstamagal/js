@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from js.capped_process import CappedProcessResult, truncation_marker
-from js.toolkit import search
+from js.toolkit import fs, search
 from js.toolkit.core import ToolContext
 
 
@@ -466,3 +466,23 @@ def test_browse_normalizes_dump(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     actual = search.browse("https://example.com", dump=dump, context=ToolContext(cwd=tmp_path))
 
     assert actual == "normalized markdown"
+
+
+def test_browse_screenshot_overwrite_can_be_undone(monkeypatch, tmp_path):
+    target = tmp_path / "screenshot.png"
+    original = b"original screenshot bytes"
+    target.write_bytes(original)
+    context = ToolContext(cwd=tmp_path)
+
+    def run(argv, **_kwargs):
+        Path(argv[argv.index("--screenshot") + 1]).write_bytes(b"new screenshot bytes")
+        return CappedProcessResult(0, b"", b"")
+
+    _browse_stub(monkeypatch, run)
+
+    result = search.browse("https://example.test/", screenshot=str(target), context=context)
+    assert not result.startswith("ERROR"), result
+    assert target.read_bytes() != original
+    fs.undo(str(target), context=context)
+
+    assert target.read_bytes() == original

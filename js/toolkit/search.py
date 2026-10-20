@@ -554,6 +554,8 @@ def browse(
         else _obscura_status(binary, url, min(10.0, float(process_timeout)))
     )
     try:
+        if shot_path is not None:
+            context.snapshot(shot_path)
         result = _run_capped(
             argv,
             timeout=process_timeout,
