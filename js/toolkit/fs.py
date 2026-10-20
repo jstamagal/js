@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import difflib
 import hashlib
 import json
@@ -11,6 +12,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import textwrap
 import threading
 import functools
 from functools import lru_cache
@@ -1732,6 +1734,63 @@ def _ast_match_output(records: list[dict], context: ToolContext) -> str:
     return "\n".join(blocks) if blocks else "(no matches)"
 
 
+# A metavariable, rewritten to a plain name so the pattern parses as Python.
+_AST_METAVARIABLE = re.compile(r"\$\$\$([A-Z_][A-Z0-9_]*)?|\$([A-Z_][A-Z0-9_]*)")
+_HEADER_BODY_VAR = "JS_BODY"
+
+
+def _body_var(pattern: str) -> str:
+    """A metavariable name for the body the retry adds that the caller's
+    pattern does not use."""
+    names = {m.group(1) or m.group(2) for m in _AST_METAVARIABLE.finditer(pattern)}
+    name, n = _HEADER_BODY_VAR, 1
+    while name in names:
+        n += 1
+        name = f"{_HEADER_BODY_VAR}_{n}"
+    return name
+
+
+def _parses(source: str) -> ast.Module | None:
+    try:
+        return ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _bodyless_python_header(pattern: str, language: str | None, root: Path) -> str | None:
+    """The pattern, dedented, when it is a `def` or `class` (decorated or not,
+    over any number of lines) that stops at its colon. Such a pattern is not
+    parseable Python, so ast-grep matches nothing for it."""
+    if language is not None and language != "Python":
+        return None
+    if language is None and root.is_file() and root.suffix not in (".py", ".pyi"):
+        return None
+    header = textwrap.dedent(pattern).strip()
+    plain = _AST_METAVARIABLE.sub(lambda m: m.group(1) or m.group(2) or "_", header)
+    if _parses(plain) is not None:
+        return None
+    module = _parses(f"{plain}\n    pass\n")
+    if module is None or len(module.body) != 1:
+        return None
+    if not isinstance(module.body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
+    return header
+
+
+def _trim_to_header(records: list[dict], body_var: str) -> None:
+    """Cut each match's source lines to those before its body, captured as
+    `body_var`, starts."""
+    for record in records:
+        body = (record.get("metaVariables") or {}).get("multi", {}).get(body_var) or []
+        start = (record.get("range") or {}).get("start", {}).get("line")
+        source = record.get("lines")
+        if not body or not isinstance(start, int) or not isinstance(source, str):
+            continue
+        body_line = body[0].get("range", {}).get("start", {}).get("line")
+        if isinstance(body_line, int) and body_line > start:
+            record["lines"] = "\n".join(source.splitlines()[: body_line - start])
+
+
 def _ast_warning(stderr: str) -> str:
     """Promote ast-grep's first stderr line into a model-visible note.
 
@@ -1802,6 +1861,20 @@ def _ast_rewrite_diff(prepared: dict[Path, tuple[bytes, bytes]]) -> str:
     return "".join(chunks).rstrip()
 
 
+def _ast_failure(rc: int | None, stderr: str, timed_out: bool, parse_error: str | None) -> str | None:
+    """The error line for an ast-grep run that failed, or None. Exit 1 is a
+    clean no-match."""
+    if timed_out:
+        return f"ERROR: search timed out after {_AST_GREP_TIMEOUT_S}s"
+    if parse_error:
+        return f"ERROR: {parse_error}"
+    if rc is not None and rc not in (0, 1):
+        detail = stderr.strip()
+        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
+        return f"ERROR: {first}"
+    return None
+
+
 def ast_search(
     pattern: str,
     path: str | None = None,
@@ -1850,16 +1923,33 @@ def ast_search(
     records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
         binary, pattern, root, language, rewrite, limit + 1
     )
-    if timed_out:
-        return f"ERROR: search timed out after {_AST_GREP_TIMEOUT_S}s"
-    if parse_error:
-        return f"ERROR: {parse_error}"
-    if rc is not None and rc not in (0, 1):
-        detail = stderr.strip()
-        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
-        return f"ERROR: {first}"
+    failure = _ast_failure(rc, stderr, timed_out, parse_error)
+    if failure is not None:
+        return failure
 
     warning = _ast_warning(stderr)
+    header = _bodyless_python_header(pattern, language, root) if not records else None
+    if header is not None:
+        if rewrite is not None:
+            return (
+                "ERROR: a Python def/class pattern without a body does not parse; "
+                "add a body such as `$$$BODY` on the next line to rewrite it"
+            )
+        body_var = _body_var(header)
+        headed = f"{header}\n    $$${body_var}"
+        records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
+            binary, headed, root, language, None, limit + 1
+        )
+        failure = _ast_failure(rc, stderr, timed_out, parse_error)
+        if failure is not None:
+            return failure
+        _trim_to_header(records, body_var)
+        warning = _ast_warning(stderr) or (
+            ""
+            if records
+            else "WARNING: a Python def/class pattern without a body does not parse; "
+            f"searched again with a `$$${body_var}` body"
+        )
     overflow = len(records) > limit
     visible = records[:limit]
     if rewrite is None:

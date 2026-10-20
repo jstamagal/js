@@ -10,6 +10,10 @@ Under `lang="C"` a bare call pattern like `call($A)` matches nothing, because
 tree-sitter-c parses that fragment as a type rather than a call; write it as an
 expression statement (`call($A);`), or pass `lang="Cpp"` when `path` is a
 single C file.
+A Python `def` or `class` pattern that stops at its colon has no body and does
+not parse; the search retries it with a `$$$` body and shows each match down
+to its signature. A rewrite needs the body written out (`$$$BODY` on the next
+line). A pattern without `-> $R` matches only defs with no return annotation.
 Matches come back as an absolute `path:line` heading followed by numbered
 source lines, `12|code`. When more matches exist than `max_results`, the
 extra ones are dropped and the result says so; a pattern ast-grep warns about
