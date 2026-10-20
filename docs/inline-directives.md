@@ -106,8 +106,11 @@ the inline form when both could match.
 for opting out).
 
 Command execution captures stdout only; a trailing newline is stripped. A
-directive that fails to resolve — nonzero exit, missing interpreter/compiler,
-timeout, unknown subsystem — is left **literal** in the prompt with a one-line
+directive that exits nonzero after printing to stdout (grep with no match, a
+script ending on a false test) injects that stdout and warns with the exit
+code on stderr. A directive that fails to resolve — nonzero exit with no
+stdout, a failed `c` compile, missing interpreter/compiler, timeout, unknown
+subsystem — is left **literal** in the prompt with a one-line
 warning on stderr; it does not abort prompt assembly. (Callers of
 `expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
 default per-directive timeout is 300 seconds; set

@@ -156,6 +156,18 @@ def test_failed_code_run_degrades_to_literal(capsys):
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
+def test_nonzero_exit_with_output_uses_the_output_and_warns(capsys):
+    """grep with no match, or a script ending on a false test, exits nonzero
+    after printing what the prompt wants."""
+    out = expand_prompt("gpu: !{sh echo none; false}", allow_code=True)
+    assert out == "gpu: none"
+    assert capsys.readouterr().err
+
+
+def test_nonzero_exit_with_only_whitespace_output_still_uses_it():
+    assert expand_prompt("a!{sh printf ' '; exit 7}b", allow_code=True) == "a b"
+
+
 def test_sh_nonzero_exit_errors():
     with pytest.raises(PromptExpansionError) as e:
         expand_prompt("!{sh sh -c 'echo boom >&2; exit 4'}", allow_code=True, on_error="raise")
