@@ -37,7 +37,7 @@ from typing import Any
 
 import yaml
 
-from .. import paths
+from .. import output, paths
 from .. import messages as msgs
 from .core import Tool
 
@@ -225,15 +225,15 @@ def resolve(tools: Sequence[Tool], rules: Sequence[Rule]) -> tuple[Decision, ...
 
 
 def warn_unmatched(tools: Sequence[Tool], rules: Sequence[Rule], agent_id: str | None = None) -> None:
-    """One stderr line per exact noun that names no tool at all."""
+    """One warning event per exact noun that names no tool at all."""
     for rule in rules:
         if rule.entry.noun == "tag" or rule.entry.is_glob:
             continue
         if not any(rule.matches(tool) for tool in tools):
             if agent_id:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
             else:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
 
 
 @dataclass(frozen=True)

@@ -77,3 +77,15 @@ def test_agent_registry_warning_is_an_event(tmp_path, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["agent"] == "read"
     assert capsys.readouterr() == ("", "")
+
+
+def test_unmatched_policy_entry_is_an_event(capsys):
+    from js.toolkit import policy
+
+    rules = policy.expand(["absent:eager"], policy.ToolsConfig(), "test")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        policy.warn_unmatched([], rules)
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["entry"] == rules[0].label
+    assert capsys.readouterr() == ("", "")
